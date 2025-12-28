@@ -1,0 +1,15 @@
+[package]
+name = "rust_starter_app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+wgpu = "0.19"
+winit = "0.29"
+pollster = "0.3"
+bytemuck = { version = "1.14", features = ["derive"] }
+cgmath = "0.18"
+hecs = "0.10"
+egui = "0.27"
+egui-wgpu = "0.27"
+egui-winit = "0.27"
