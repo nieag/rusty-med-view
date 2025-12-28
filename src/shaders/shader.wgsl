@@ -7,10 +7,16 @@ struct VertexOutput {
     @location(0) uv: vec2<f32>,
 }
 struct Uniforms {
+    cursor_pos: vec4<f32>,
     resolution: vec2<f32>,
+    mouse_uv: vec2<f32>,
+    pan: vec2<f32>,
+    zoom: f32,
     time: f32,
-    view_mode: u32, // 0=3D, 1=Top(XY), 2=Front(XZ), 3=Side(YZ)
-    cursor_pos: vec4<f32>
+    view_mode: u32,
+    pad_a: u32,
+    pad_b: u32,
+    pad_c: u32,
 };
 
 @group(0) @binding(0) var t_diffuse: texture_3d<f32>;
@@ -73,25 +79,38 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         var sample_pos = vec3<f32>(0.0);
         let cursor = uniforms.cursor_pos.xyz;
 
-        // Map cursor 3D position to 2D Screen UVs for each view
-        if (uniforms.view_mode == 1u) {
-            // Top View (XY)
-            sample_pos = vec3<f32>(uv.x, uv.y, cursor.z);
-            crosshair_screen_pos = cursor.xy;
-        }
-        if (uniforms.view_mode == 2u) {
-            // Front View (XZ)
-            sample_pos = vec3<f32>(uv.x, cursor.y, uv.y);
-            crosshair_screen_pos = vec2<f32>(cursor.x, cursor.z);
-        }
-        if (uniforms.view_mode == 3u) {
-            // Side View (YZ)
-            sample_pos = vec3<f32>(cursor.x, uv.x, uv.y);
-            crosshair_screen_pos = vec2<f32>(cursor.y, cursor.z);
-        }
+        // Apply zoom and pan: scale UV around mouse position
+        let zoom = uniforms.zoom;
+        let pivot = uniforms.mouse_uv;
+        let pan = uniforms.pan;
+        
+        let zoomed_uv = (uv + pan - pivot) / zoom + pivot;
 
-        final_color = textureSample(t_diffuse, s_diffuse, sample_pos);
-        draw_crosshair = true;
+        if (any(zoomed_uv < vec2<f32>(0.0)) || any(zoomed_uv > vec2<f32>(1.0))) {
+            final_color = vec4<f32>(0.05, 0.05, 0.05, 1.0);
+            draw_crosshair = false; 
+        } else {
+            if (uniforms.view_mode == 1u) {
+                // Top View (XY) - looking down Z axis
+                sample_pos = vec3<f32>(zoomed_uv.x, zoomed_uv.y, cursor.z);
+                crosshair_screen_pos = (cursor.xy - pivot) * zoom + pivot - pan;
+            }
+            if (uniforms.view_mode == 2u) {
+                // Front View (XZ) - looking along Y axis
+                let cursor_2d = vec2<f32>(cursor.x, cursor.z);
+                sample_pos = vec3<f32>(zoomed_uv.x, cursor.y, zoomed_uv.y);
+                crosshair_screen_pos = (cursor_2d - pivot) * zoom + pivot - pan;
+            }
+            if (uniforms.view_mode == 3u) {
+                // Side View (YZ) - looking along X axis
+                let cursor_2d = vec2<f32>(cursor.y, cursor.z);
+                sample_pos = vec3<f32>(cursor.x, zoomed_uv.x, zoomed_uv.y);
+                crosshair_screen_pos = (cursor_2d - pivot) * zoom + pivot - pan;
+            }
+
+            final_color = textureSample(t_diffuse, s_diffuse, sample_pos);
+            draw_crosshair = true;
+        }
 
     } else {
         // --- MODE 0: 3D X-RAY WITH PROJECTED CURSOR ---
@@ -100,7 +119,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let uv = (in.uv - 0.5);
         let screen_pos = vec2<f32>(uv.x * aspect, uv.y);
 
-        let radius = 3.5;
+        let radius = uniforms.zoom;  // Use zoom as camera radius
         let cam_pos = vec3<f32>(0.0, 0.0, -radius);
         let cam_target = vec3<f32>(0.0, 0.0, 0.0);
 

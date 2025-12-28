@@ -1,7 +1,7 @@
 pub fn create_voxel_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler) {
+) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler, Vec<u8>) {
     let size = 64u32; // Increased resolution for better details
     let mut texture_data = vec![0u8; (size * size * size * 4) as usize];
 
@@ -102,5 +102,5 @@ pub fn create_voxel_texture(
         ..Default::default()
     });
 
-    (texture, view, sampler)
+    (texture, view, sampler, texture_data)
 }

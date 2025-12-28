@@ -27,21 +27,32 @@ pub struct WindowSettings {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Uniforms {
-    pub resolution: [f32; 2],
-    pub time: f32,
-    pub view_mode: u32,
-    pub cursor_pos: [f32; 4],
-    pub zoom: f32,          // <--- NEW
-    pub _padding: [f32; 3], // <--- NEW: Pad to 48 bytes (16-byte alignment rule)
+    pub cursor_pos: [f32; 4],   // 0
+    pub resolution: [f32; 2],   // 16
+    pub mouse_uv: [f32; 2],     // 24
+    pub pan: [f32; 2],          // 32
+    pub zoom: f32,              // 40
+    pub time: f32,              // 44
+    pub view_mode: u32,         // 48
+    pub _pad: [u32; 3],         // 52 (total 64)
 }
 
 pub struct ViewState {
-    // Index 0=3D, 1=XY, 2=XZ, 3=YZ
     pub zoom: [f32; 4],
+    pub pan: [[f32; 2]; 4], // NEW: Per-viewport pan offsets
+}
+
+pub struct VolumeData {
+    pub size: u32,
+    pub densities: Vec<u8>, // Store the raw density values for CPU-side picking
 }
 
 pub struct InputState {
     pub last_mouse_pos: [f64; 2],
-    pub active_viewport: u8,       // 0=3D, 1=Top(XY), 2=Front(XZ), 3=Side(YZ)
-    pub modifiers: ModifiersState, // <--- NEW FIELD
+    pub mouse_uv: [f32; 2],
+    pub active_viewport: u8,
+    pub modifiers: ModifiersState,
+    pub is_dragging: bool,        // NEW: Dragging state
+    pub drag_start_pos: [f32; 2], // NEW: Screen pos at drag start
+    pub drag_start_pan: [f32; 2], // NEW: Pan offset at drag start
 }

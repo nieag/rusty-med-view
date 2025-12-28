@@ -52,12 +52,16 @@ fn main() {
     surface.configure(&device, &config);
 
     // --- 2. Initialize Data & ECS ---
-
-    // Create the Voxel Texture (Heavy lifting moved to volume.rs)
-    let (_, diffuse_view, diffuse_sampler) = volume::create_voxel_texture(&device, &queue);
-
-    // Initialize the ECS World
     let mut world = World::new();
+
+    // Generate Volume (CPU + GPU)
+    let (_, diffuse_view, diffuse_sampler, voxel_data) =
+        volume::create_voxel_texture(&device, &queue);
+    
+    world.spawn((VolumeData {
+        size: 64, // Must match volume::create_voxel_texture size
+        densities: voxel_data,
+    },));
 
     // Spawn Camera Rig
     world.spawn((CameraRig {
@@ -84,7 +88,18 @@ fn main() {
     // Spawn Input State
     world.spawn((InputState {
         last_mouse_pos: [0.0, 0.0],
+        mouse_uv: [0.0, 0.0],
         active_viewport: 0,
+        modifiers: winit::keyboard::ModifiersState::empty(),
+        is_dragging: false,
+        drag_start_pos: [0.0, 0.0],
+        drag_start_pan: [0.0, 0.0],
+    },));
+
+    // Spawn View State (zoom levels and pan offsets per viewport)
+    world.spawn((ViewState {
+        zoom: [3.5, 1.0, 1.0, 1.0],
+        pan: [[0.0, 0.0]; 4],
     },));
     // --- 3. Pipeline Setup ---
 
@@ -239,6 +254,11 @@ fn main() {
                     systems::sys_update_mouse(&mut world, position.x, position.y);
                 }
 
+                // NEW: Handle Mouse Buttons
+                WindowEvent::MouseInput { button, state, .. } => {
+                    systems::sys_handle_mouse_button(&mut world, button, state);
+                }
+
                 // NEW: Track Scrolling
                 WindowEvent::MouseWheel { delta, .. } => {
                     // Normalize delta (LineDelta is usually 1.0, PixelDelta varies)
@@ -251,6 +271,11 @@ fn main() {
                         systems::sys_handle_input_scroll(&mut world, y_delta);
                         window.request_redraw(); // Force a redraw so we see the update instantly
                     }
+                }
+
+                // Track keyboard modifiers (Ctrl, Shift, Alt)
+                WindowEvent::ModifiersChanged(modifiers) => {
+                    systems::sys_update_modifiers(&mut world, modifiers.state());
                 }
 
                 WindowEvent::Resized(size) => {
@@ -372,6 +397,7 @@ fn main() {
         }
 
         Event::AboutToWait => {
+            systems::sys_handle_mouse_drag(&mut world);
             window.request_redraw();
         }
         _ => {}
