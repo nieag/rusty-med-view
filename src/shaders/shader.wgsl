@@ -14,10 +14,14 @@ struct Uniforms {
     zoom: f32,
     time: f32,
     view_mode: u32,
-    pad_a: u32,
-    pad_b: u32,
-    pad_c: u32,
+    _pad_a: u32,
+    _pad_b: u32,
+    _pad_c: u32,
+    volume_dims: vec4<u32>,
+    volume_spacing: vec4<f32>,
 };
+
+
 
 @group(0) @binding(0) var t_diffuse: texture_3d<f32>;
 @group(0) @binding(1) var s_diffuse: sampler;
@@ -90,22 +94,31 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             final_color = vec4<f32>(0.05, 0.05, 0.05, 1.0);
             draw_crosshair = false; 
         } else {
+            // Aspect ratio of the volume face
+            let dims = vec3<f32>(uniforms.volume_dims.xyz);
+            let spacing = uniforms.volume_spacing.xyz;
+            let physical_size = dims * spacing;
+            
             if (uniforms.view_mode == 1u) {
                 // Top View (XY) - looking down Z axis
+                // Aspect adjustment for XY face
+                let face_aspect = physical_size.x / physical_size.y;
+                let view_aspect = aspect; // Screen aspect
+                
+                // For simplicity, we just sample the face. 
+                // To be perfect, we'd adjust zoomed_uv to keep physical aspect.
                 sample_pos = vec3<f32>(zoomed_uv.x, zoomed_uv.y, cursor.z);
                 crosshair_screen_pos = (cursor.xy - pivot) * zoom + pivot - pan;
             }
             if (uniforms.view_mode == 2u) {
                 // Front View (XZ) - looking along Y axis
-                let cursor_2d = vec2<f32>(cursor.x, cursor.z);
                 sample_pos = vec3<f32>(zoomed_uv.x, cursor.y, zoomed_uv.y);
-                crosshair_screen_pos = (cursor_2d - pivot) * zoom + pivot - pan;
+                crosshair_screen_pos = (cursor.xz - pivot) * zoom + pivot - pan;
             }
             if (uniforms.view_mode == 3u) {
                 // Side View (YZ) - looking along X axis
-                let cursor_2d = vec2<f32>(cursor.y, cursor.z);
                 sample_pos = vec3<f32>(cursor.x, zoomed_uv.x, zoomed_uv.y);
-                crosshair_screen_pos = (cursor_2d - pivot) * zoom + pivot - pan;
+                crosshair_screen_pos = (cursor.yz - pivot) * zoom + pivot - pan;
             }
 
             final_color = textureSample(t_diffuse, s_diffuse, sample_pos);
@@ -149,8 +162,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             draw_crosshair = true;
         }
 
-        // 3. Standard Raymarching (Simplified for brevity)
-        let t_hit = intersectAABB(cam_pos, ray_dir, vec3<f32>(-0.5), vec3<f32>(0.5));
+        // 3. Standard Raymarching
+        let dims = vec3<f32>(uniforms.volume_dims.xyz);
+        let spacing = uniforms.volume_spacing.xyz;
+        let physical_size = dims * spacing;
+        let max_dim = max(max(physical_size.x, physical_size.y), physical_size.z);
+        let aspect_ratio_vol = physical_size / max_dim;
+        let box_min = -0.5 * aspect_ratio_vol;
+        let box_max = 0.5 * aspect_ratio_vol;
+
+        let t_hit = intersectAABB(cam_pos, ray_dir, box_min, box_max);
 
         if (t_hit.x > t_hit.y || t_hit.y < 0.0) {
              final_color = vec4<f32>(0.05, 0.05, 0.05, 1.0);
@@ -165,7 +186,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             var acc_color = vec3<f32>(0.0);
 
             for (var i = 0; i < steps; i++) {
-                let tex_coord = current_pos + 0.5;
+                // Map current_pos (relative to box_min/box_max) to [0, 1] texture space
+                let tex_coord = (current_pos / aspect_ratio_vol) + 0.5;
                 let voxel = textureSampleLevel(t_diffuse, s_diffuse, tex_coord, 0.0);
                 if (voxel.a > 0.0) {
                      let weight = voxel.a * 0.05;
@@ -177,6 +199,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
             final_color = vec4<f32>(acc_color + 0.05, 1.0);
         }
+
     }
 
     // --- DRAW CROSSHAIR ---

@@ -1,8 +1,10 @@
 // src/lib.rs
 
 mod components;
+mod file_dialog;
 mod geometry;
 mod gui;
+mod nifti_loader;
 mod systems;
 mod volume;
 
@@ -29,16 +31,28 @@ pub struct RenderingContext {
 
     // Pipelines and Buffers
     render_pipeline: wgpu::RenderPipeline,
+    texture_bind_group_layout: wgpu::BindGroupLayout,
     diffuse_bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
 
+    // Volume resources (texture, view, sampler)
+    volume_texture: wgpu::Texture,
+    volume_view: wgpu::TextureView,
+    volume_sampler: wgpu::Sampler,
+
     // ECS and GUI
     world: World,
     gui: gui::Gui,
     settings_entity: hecs::Entity,
+
+    // Async file loading channel
+    volume_receiver:
+        std::sync::mpsc::Receiver<Result<nifti_loader::LoadedVolume, nifti_loader::LoadError>>,
+    volume_sender:
+        std::sync::mpsc::Sender<Result<nifti_loader::LoadedVolume, nifti_loader::LoadError>>,
 }
 
 pub struct AppState {
@@ -100,12 +114,17 @@ impl App {
 
         // --- Initialize Data & ECS ---
         let mut world = World::new();
-        let (_, diffuse_view, diffuse_sampler, voxel_data) =
-            volume::create_voxel_texture(&device, &queue);
+        let (volume_texture, volume_view, volume_sampler, volume_info) =
+            volume::create_demo_voxel_texture(&device, &queue);
+
+        // Create async channel for volume loading
+        let (volume_sender, volume_receiver) = std::sync::mpsc::channel();
 
         world.spawn((VolumeData {
-            size: 64,
-            densities: voxel_data,
+            dimensions: volume_info.dimensions,
+            spacing: volume_info.spacing,
+            intensities: volume_info.intensities,
+            intensity_range: volume_info.intensity_range,
         },));
         world.spawn((CameraRig {
             radius: 3.5,
@@ -188,11 +207,11 @@ impl App {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&diffuse_view),
+                    resource: wgpu::BindingResource::TextureView(&volume_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&diffuse_sampler),
+                    resource: wgpu::BindingResource::Sampler(&volume_sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -276,14 +295,20 @@ impl App {
             queue,
             config,
             render_pipeline,
+            texture_bind_group_layout,
             diffuse_bind_group,
             uniform_buffer,
             vertex_buffer,
             index_buffer,
             num_indices,
+            volume_texture,
+            volume_view,
+            volume_sampler,
             world,
             gui,
             settings_entity,
+            volume_receiver,
+            volume_sender,
         }
     }
 }
@@ -472,6 +497,95 @@ impl ApplicationHandler for App {
         let mut state = self.state.lock().unwrap();
         if let Some(ctx) = &mut state.context {
             systems::sys_handle_mouse_drag(&mut ctx.world);
+
+            // Check if user clicked the load button
+            if ctx.gui.load_requested {
+                ctx.gui.status_message = Some("Loading...".to_string());
+                let sender = ctx.volume_sender.clone();
+
+                file_dialog::spawn_file_picker(move |result| {
+                    if let Some((_filename, data)) = result {
+                        let load_result = nifti_loader::load_nifti_from_bytes(&data);
+                        let _ = sender.send(load_result);
+                    }
+                });
+            }
+
+            // Check for loaded volumes from async task
+            if let Ok(result) = ctx.volume_receiver.try_recv() {
+                match result {
+                    Ok(loaded) => {
+                        log::info!("Volume loaded: {:?} dimensions", loaded.dimensions);
+
+                        // Create new texture from loaded data
+                        let (new_texture, new_view, new_sampler, volume_info) =
+                            volume::create_texture_from_nifti(&ctx.device, &ctx.queue, &loaded);
+
+                        // Update volume resources
+                        ctx.volume_texture = new_texture;
+                        ctx.volume_view = new_view;
+                        ctx.volume_sampler = new_sampler;
+
+                        // Recreate bind group with new texture
+                        ctx.diffuse_bind_group =
+                            ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                layout: &ctx.texture_bind_group_layout,
+                                entries: &[
+                                    wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: wgpu::BindingResource::TextureView(
+                                            &ctx.volume_view,
+                                        ),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 1,
+                                        resource: wgpu::BindingResource::Sampler(
+                                            &ctx.volume_sampler,
+                                        ),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 2,
+                                        resource: wgpu::BindingResource::Buffer(
+                                            wgpu::BufferBinding {
+                                                buffer: &ctx.uniform_buffer,
+                                                offset: 0,
+                                                size: Some(
+                                                    std::num::NonZeroU64::new(std::mem::size_of::<
+                                                        Uniforms,
+                                                    >(
+                                                    )
+                                                        as u64)
+                                                    .unwrap(),
+                                                ),
+                                            },
+                                        ),
+                                    },
+                                ],
+                                label: Some("diffuse_bind_group"),
+                            });
+
+                        // Update VolumeData in ECS
+                        for (_, vol) in ctx.world.query_mut::<&mut VolumeData>() {
+                            vol.dimensions = volume_info.dimensions;
+                            vol.spacing = volume_info.spacing;
+                            vol.intensities = volume_info.intensities.clone();
+                            vol.intensity_range = volume_info.intensity_range;
+                        }
+
+                        ctx.gui.status_message = Some(format!(
+                            "Loaded: {}x{}x{}",
+                            volume_info.dimensions[0],
+                            volume_info.dimensions[1],
+                            volume_info.dimensions[2]
+                        ));
+                    }
+                    Err(e) => {
+                        log::error!("Failed to load NIfTI: {:?}", e);
+                        ctx.gui.status_message = Some(format!("Error: {:?}", e));
+                    }
+                }
+            }
+
             ctx.window.request_redraw();
         }
     }
@@ -483,6 +597,14 @@ pub fn run() {
     {
         std::panic::set_hook(Box::new(console_error_panic_hook::hook));
         console_log::init_with_level(log::Level::Info).expect("Could not initialize logger");
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // Simple console logger for native
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Info)
+            .is_test(true)
+            .try_init();
     }
 
     let event_loop = EventLoop::new().unwrap();
