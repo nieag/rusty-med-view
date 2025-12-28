@@ -32,16 +32,10 @@ pub struct RenderingContext {
     // Pipelines and Buffers
     render_pipeline: wgpu::RenderPipeline,
     texture_bind_group_layout: wgpu::BindGroupLayout,
-    diffuse_bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
-
-    // Volume resources (texture, view, sampler)
-    volume_texture: wgpu::Texture,
-    volume_view: wgpu::TextureView,
-    volume_sampler: wgpu::Sampler,
 
     // ECS and GUI
     world: World,
@@ -120,12 +114,7 @@ impl App {
         // Create async channel for volume loading
         let (volume_sender, volume_receiver) = std::sync::mpsc::channel();
 
-        world.spawn((VolumeData {
-            dimensions: volume_info.dimensions,
-            spacing: volume_info.spacing,
-            intensities: volume_info.intensities,
-            intensity_range: volume_info.intensity_range,
-        },));
+        // Initialize world and camera
         world.spawn((CameraRig {
             radius: 3.5,
             speed: 1.0,
@@ -142,6 +131,15 @@ impl App {
             width: config.width,
             height: config.height,
         },));
+
+        // Initialize GUI State
+        world.spawn((GuiState {
+            load_requested: false,
+            status_message: None,
+        },));
+
+        // Initial loading state
+        world.spawn((VolumeLoadingState::Ready,));
         world.spawn((InputState {
             last_mouse_pos: [0.0, 0.0],
             mouse_uv: [0.0, 0.0],
@@ -152,8 +150,9 @@ impl App {
             drag_start_pan: [0.0, 0.0],
         },));
         world.spawn((ViewState {
-            zoom: [3.5, 1.0, 1.0, 1.0],
+            zoom: [1.0, 1.0, 1.0, 1.0],
             pan: [[0.0, 0.0]; 4],
+            pivot: [[0.5, 0.5]; 4],
         },));
 
         // --- Pipeline Setup ---
@@ -228,6 +227,23 @@ impl App {
             label: Some("diffuse_bind_group"),
         });
 
+        // Store persistent WGPU volume resources in ECS
+        world.spawn((
+            VolumeData {
+                dimensions: volume_info.dimensions,
+                spacing: volume_info.spacing,
+                intensities: volume_info.intensities,
+                intensity_range: volume_info.intensity_range,
+            },
+            GpuVolumeResources {
+                texture: volume_texture,
+                view: volume_view,
+                sampler: volume_sampler,
+                bind_group: diffuse_bind_group,
+            },
+            MainVolumeTag,
+        ));
+
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shader.wgsl").into()),
@@ -296,14 +312,10 @@ impl App {
             config,
             render_pipeline,
             texture_bind_group_layout,
-            diffuse_bind_group,
             uniform_buffer,
             vertex_buffer,
             index_buffer,
             num_indices,
-            volume_texture,
-            volume_view,
-            volume_sampler,
             world,
             gui,
             settings_entity,
@@ -415,7 +427,7 @@ impl ApplicationHandler for App {
                 }
                 ctx.queue
                     .write_buffer(&ctx.uniform_buffer, 0, &all_uniforms_bytes);
-                ctx.gui.prepare(&ctx.window, &ctx.world);
+                ctx.gui.prepare(&ctx.window, &mut ctx.world);
 
                 let frame = ctx.surface.get_current_texture().unwrap();
                 let view = frame
@@ -457,21 +469,35 @@ impl ApplicationHandler for App {
                     let hw = ctx.config.width / 2;
                     let hh = ctx.config.height / 2;
 
-                    render_pass.set_viewport(0.0, 0.0, hw as f32, hh as f32, 0.0, 1.0);
-                    render_pass.set_bind_group(0, &ctx.diffuse_bind_group, &[0]);
-                    render_pass.draw_indexed(0..ctx.num_indices, 0, 0..1);
+                    // Query the bind group from ECS
+                    // Query the bind group from ECS and render
+                    {
+                        let mut query = ctx
+                            .world
+                            .query::<&GpuVolumeResources>()
+                            .with::<&MainVolumeTag>();
+                        if let Some((_, res)) = query.iter().next() {
+                            let bg = &res.bind_group;
+                            render_pass.set_viewport(0.0, 0.0, hw as f32, hh as f32, 0.0, 1.0);
+                            render_pass.set_bind_group(0, bg, &[0]);
+                            render_pass.draw_indexed(0..ctx.num_indices, 0, 0..1);
 
-                    render_pass.set_viewport(hw as f32, 0.0, hw as f32, hh as f32, 0.0, 1.0);
-                    render_pass.set_bind_group(0, &ctx.diffuse_bind_group, &[256]);
-                    render_pass.draw_indexed(0..ctx.num_indices, 0, 0..1);
+                            render_pass
+                                .set_viewport(hw as f32, 0.0, hw as f32, hh as f32, 0.0, 1.0);
+                            render_pass.set_bind_group(0, bg, &[256]);
+                            render_pass.draw_indexed(0..ctx.num_indices, 0, 0..1);
 
-                    render_pass.set_viewport(0.0, hh as f32, hw as f32, hh as f32, 0.0, 1.0);
-                    render_pass.set_bind_group(0, &ctx.diffuse_bind_group, &[512]);
-                    render_pass.draw_indexed(0..ctx.num_indices, 0, 0..1);
+                            render_pass
+                                .set_viewport(0.0, hh as f32, hw as f32, hh as f32, 0.0, 1.0);
+                            render_pass.set_bind_group(0, bg, &[512]);
+                            render_pass.draw_indexed(0..ctx.num_indices, 0, 0..1);
 
-                    render_pass.set_viewport(hw as f32, hh as f32, hw as f32, hh as f32, 0.0, 1.0);
-                    render_pass.set_bind_group(0, &ctx.diffuse_bind_group, &[768]);
-                    render_pass.draw_indexed(0..ctx.num_indices, 0, 0..1);
+                            render_pass
+                                .set_viewport(hw as f32, hh as f32, hw as f32, hh as f32, 0.0, 1.0);
+                            render_pass.set_bind_group(0, bg, &[768]);
+                            render_pass.draw_indexed(0..ctx.num_indices, 0, 0..1);
+                        }
+                    }
                 }
 
                 let screen_descriptor = egui_wgpu::ScreenDescriptor {
@@ -498,11 +524,18 @@ impl ApplicationHandler for App {
         if let Some(ctx) = &mut state.context {
             systems::sys_handle_mouse_drag(&mut ctx.world);
 
-            // Check if user clicked the load button
-            if ctx.gui.load_requested {
-                ctx.gui.status_message = Some("Loading...".to_string());
-                let sender = ctx.volume_sender.clone();
+            // Check if user clicked the load button (read from GuiState)
+            let mut load_requested = false;
+            for (_, gui_state) in ctx.world.query_mut::<&mut GuiState>() {
+                if gui_state.load_requested {
+                    load_requested = true;
+                    gui_state.load_requested = false; // Reset
+                    gui_state.status_message = Some("Loading...".to_string());
+                }
+            }
 
+            if load_requested {
+                let sender = ctx.volume_sender.clone();
                 file_dialog::spawn_file_picker(move |result| {
                     if let Some((_filename, data)) = result {
                         let load_result = nifti_loader::load_nifti_from_bytes(&data);
@@ -521,27 +554,18 @@ impl ApplicationHandler for App {
                         let (new_texture, new_view, new_sampler, volume_info) =
                             volume::create_texture_from_nifti(&ctx.device, &ctx.queue, &loaded);
 
-                        // Update volume resources
-                        ctx.volume_texture = new_texture;
-                        ctx.volume_view = new_view;
-                        ctx.volume_sampler = new_sampler;
-
                         // Recreate bind group with new texture
-                        ctx.diffuse_bind_group =
+                        let new_bind_group =
                             ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
                                 layout: &ctx.texture_bind_group_layout,
                                 entries: &[
                                     wgpu::BindGroupEntry {
                                         binding: 0,
-                                        resource: wgpu::BindingResource::TextureView(
-                                            &ctx.volume_view,
-                                        ),
+                                        resource: wgpu::BindingResource::TextureView(&new_view),
                                     },
                                     wgpu::BindGroupEntry {
                                         binding: 1,
-                                        resource: wgpu::BindingResource::Sampler(
-                                            &ctx.volume_sampler,
-                                        ),
+                                        resource: wgpu::BindingResource::Sampler(&new_sampler),
                                     },
                                     wgpu::BindGroupEntry {
                                         binding: 2,
@@ -564,24 +588,39 @@ impl ApplicationHandler for App {
                                 label: Some("diffuse_bind_group"),
                             });
 
-                        // Update VolumeData in ECS
-                        for (_, vol) in ctx.world.query_mut::<&mut VolumeData>() {
+                        // Update VolumeData and GpuVolumeResources in ECS
+                        for (_, (vol, gpu_res)) in ctx
+                            .world
+                            .query_mut::<(&mut VolumeData, &mut GpuVolumeResources)>()
+                        {
                             vol.dimensions = volume_info.dimensions;
                             vol.spacing = volume_info.spacing;
                             vol.intensities = volume_info.intensities.clone();
                             vol.intensity_range = volume_info.intensity_range;
+
+                            gpu_res.texture = new_texture;
+                            gpu_res.view = new_view;
+                            gpu_res.sampler = new_sampler;
+                            gpu_res.bind_group = new_bind_group;
+
+                            // Break out after first match assuming one main volume entity
+                            break;
                         }
 
-                        ctx.gui.status_message = Some(format!(
-                            "Loaded: {}x{}x{}",
-                            volume_info.dimensions[0],
-                            volume_info.dimensions[1],
-                            volume_info.dimensions[2]
-                        ));
+                        for (_, gui_state) in ctx.world.query_mut::<&mut GuiState>() {
+                            gui_state.status_message = Some(format!(
+                                "Loaded: {}x{}x{}",
+                                volume_info.dimensions[0],
+                                volume_info.dimensions[1],
+                                volume_info.dimensions[2]
+                            ));
+                        }
                     }
                     Err(e) => {
                         log::error!("Failed to load NIfTI: {:?}", e);
-                        ctx.gui.status_message = Some(format!("Error: {:?}", e));
+                        for (_, gui_state) in ctx.world.query_mut::<&mut GuiState>() {
+                            gui_state.status_message = Some(format!("Error: {:?}", e));
+                        }
                     }
                 }
             }

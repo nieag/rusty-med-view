@@ -12,10 +12,6 @@ pub struct Gui {
     renderer: Renderer,
     // We must store the output frame between 'prepare' and 'render'
     output: Option<egui::FullOutput>,
-    // Track if user requested to load a file
-    pub load_requested: bool,
-    // Current loading status message
-    pub status_message: Option<String>,
 }
 
 impl Gui {
@@ -38,8 +34,6 @@ impl Gui {
             state,
             renderer,
             output: None,
-            load_requested: false,
-            status_message: None,
         }
     }
 
@@ -52,15 +46,8 @@ impl Gui {
         response.consumed
     }
 
-    pub fn prepare(&mut self, window: &WinitWindow, world: &World) {
-        // Reset load request each frame
-        self.load_requested = false;
-
+    pub fn prepare(&mut self, window: &WinitWindow, world: &mut World) {
         let raw_input = self.state.take_egui_input(window);
-
-        // Use Cell for interior mutability in closure
-        let load_clicked = std::cell::Cell::new(false);
-        let status_msg = self.status_message.clone();
 
         // CAPTURE THE OUTPUT HERE
         let full_output = self.context.run(raw_input, |ctx| {
@@ -69,6 +56,8 @@ impl Gui {
             let mut width = 100.0;
             let mut height = 100.0;
             let mut active_viewport = 99;
+            let mut status_msg = None;
+            let mut loading_state = VolumeLoadingState::Ready;
 
             // 1. Get the Scale Factor (DPI)
             let pixels_per_point = window.scale_factor() as f32;
@@ -81,6 +70,14 @@ impl Gui {
             }
             for (_, inp) in world.query::<&InputState>().iter() {
                 active_viewport = inp.active_viewport;
+            }
+            // Get GUI State
+            for (_, gui_state) in world.query::<&GuiState>().iter() {
+                status_msg = gui_state.status_message.clone();
+            }
+            // Get Loading State
+            for (_, state) in world.query::<&VolumeLoadingState>().iter() {
+                loading_state = state.clone();
             }
 
             let hw = width / 2.0;
@@ -106,10 +103,26 @@ impl Gui {
                     draw_label(ui, "3D View", active_viewport == 0);
                     ui.add_space(4.0);
                     if ui.button("📂 Load NIfTI...").clicked() {
-                        load_clicked.set(true);
+                        // Update load request in ECS
+                        for (_, gui_state) in world.query_mut::<&mut GuiState>() {
+                            gui_state.load_requested = true;
+                        }
                     }
+
+                    // Display status from GuiState
                     if let Some(msg) = &status_msg {
                         ui.label(msg);
+                    }
+
+                    // Display loading status based on VolumeLoadingState
+                    match loading_state {
+                        VolumeLoadingState::Loading => {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label("Processing NIfTI...");
+                            });
+                        }
+                        _ => {}
                     }
                 });
 
@@ -134,9 +147,6 @@ impl Gui {
                     ui.label(format!("Slice X: {:.2}", cursor_pos[0]));
                 });
         });
-
-        // Copy button click state to self after closure
-        self.load_requested = load_clicked.get();
 
         // Store it for the render step
         self.output = Some(full_output);

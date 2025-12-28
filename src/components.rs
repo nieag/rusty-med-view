@@ -23,27 +23,41 @@ pub struct WindowSettings {
     pub height: u32,
 }
 
+/// GUI state component to decouple UI from main logic
+pub struct GuiState {
+    pub load_requested: bool,
+    pub status_message: Option<String>,
+}
+
+/// GPU resources for a volume, stored as a component
+pub struct GpuVolumeResources {
+    pub texture: wgpu::Texture,
+    pub view: wgpu::TextureView,
+    pub sampler: wgpu::Sampler,
+    pub bind_group: wgpu::BindGroup,
+}
+
 // GPU Data Structures (Uniforms)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Uniforms {
-    pub cursor_pos: [f32; 4],
-    pub resolution: [f32; 2],
-    pub mouse_uv: [f32; 2],
-    pub pan: [f32; 2],
-    pub zoom: f32,
-    pub time: f32,
-    pub view_mode: u32,
-    pub _pad_a: u32,
-    pub _pad_b: u32,
-    pub _pad_c: u32,
-    pub volume_dims: [u32; 4],
-    pub volume_spacing: [f32; 4],
+    pub cursor_pos: [f32; 4],     // offset 0
+    pub volume_dims: [u32; 4],    // offset 16
+    pub volume_spacing: [f32; 4], // offset 32
+    pub resolution: [f32; 2],     // offset 48
+    pub mouse_uv: [f32; 2],       // offset 56
+    pub pan: [f32; 2],            // offset 64
+    pub zoom_pivot: [f32; 2],     // offset 72
+    pub zoom: f32,                // offset 80
+    pub time: f32,                // offset 84
+    pub view_mode: u32,           // offset 88
+    pub _pad: u32,                // offset 92 to reach 96 (multiple of 16)
 }
 
 pub struct ViewState {
     pub zoom: [f32; 4],
-    pub pan: [[f32; 2]; 4], // NEW: Per-viewport pan offsets
+    pub pan: [[f32; 2]; 4],   // Per-viewport pan offsets
+    pub pivot: [[f32; 2]; 4], // NEW: Per-viewport zoom pivot
 }
 
 /// Volume data component - stores loaded volume information
@@ -70,12 +84,15 @@ impl VolumeData {
     pub fn aspect_ratios(&self) -> [f32; 3] {
         let max = self.max_dimension() as f32;
         [
-            self.dimensions[0] as f32 / max,
-            self.dimensions[1] as f32 / max,
-            self.dimensions[2] as f32 / max,
+            (self.dimensions[0] as f32 * self.spacing[0]) / max,
+            (self.dimensions[1] as f32 * self.spacing[1]) / max,
+            (self.dimensions[2] as f32 * self.spacing[2]) / max,
         ]
     }
 }
+
+/// Tag to identify the primary volume
+pub struct MainVolumeTag;
 
 /// State for async volume loading operations
 #[derive(Clone)]

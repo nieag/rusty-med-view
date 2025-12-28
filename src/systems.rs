@@ -31,9 +31,11 @@ pub fn sys_prepare_render_data(world: &mut World, view_mode: u32) -> Uniforms {
 
     let mut zoom_val = 1.0;
     let mut pan = [0.0, 0.0];
+    let mut zoom_pivot = [0.5, 0.5];
     for (_, view) in world.query::<&ViewState>().iter() {
         zoom_val = view.zoom[view_mode as usize];
         pan = view.pan[view_mode as usize];
+        zoom_pivot = view.pivot[view_mode as usize];
     }
 
     // 4. Get Mouse UV
@@ -52,49 +54,50 @@ pub fn sys_prepare_render_data(world: &mut World, view_mode: u32) -> Uniforms {
 
     Uniforms {
         cursor_pos,
+        volume_dims,
+        volume_spacing,
         resolution,
         mouse_uv,
         pan,
         zoom: zoom_val,
+        zoom_pivot,
         time: time_val,
         view_mode,
-        _pad_a: 0,
-        _pad_b: 0,
-        _pad_c: 0,
-        volume_dims,
-        volume_spacing,
+        _pad: 0,
     }
 }
 
 pub fn sys_handle_input_scroll(world: &mut World, delta: f32) {
-    // 1. Find out which viewport is active
+    let mut mouse_uv = [0.5, 0.5];
     let mut mode = 0;
     let mut is_zoom = false;
-    for (_, input) in world.query::<&InputState>().iter() {
-        mode = input.active_viewport;
-    }
 
+    // Collect input state first to avoid borrow-check issues
     for (_, input) in world.query::<&InputState>().iter() {
         mode = input.active_viewport;
-        // .state() is not needed on newer winit, depends on version.
-        // For winit 0.29, modifiers has control_key() directly:
+        mouse_uv = input.mouse_uv;
         is_zoom = input.modifiers.control_key();
     }
 
     if is_zoom {
-        // --- ZOOM MODE ---
         for (_, view) in world.query::<&mut ViewState>().iter() {
             let idx = mode as usize;
             let sensitivity = 0.1;
             let scale_factor = 1.0 + (delta * sensitivity);
 
-            if mode == 0 {
-                // 3D View: Zooming IN (Scroll Up) -> Radius gets SMALLER
-                view.zoom[idx] = (view.zoom[idx] / scale_factor).clamp(0.1, 20.0);
-            } else {
-                // 2D View: Zooming IN (Scroll Up) -> Scale gets LARGER
-                view.zoom[idx] = (view.zoom[idx] * scale_factor).clamp(0.5, 50.0);
-            }
+            let old_zoom = view.zoom[idx];
+            let new_zoom = (old_zoom * scale_factor).clamp(0.5, 50.0);
+
+            let old_pivot = view.pivot[idx];
+            let new_pivot = mouse_uv;
+
+            // Adjust pan to transition to the new pivot position
+            // Formula: Pan' = Pan + (P' - P) * (1/Zoom - 1)
+            view.pan[idx][0] += (new_pivot[0] - old_pivot[0]) * (1.0 / old_zoom - 1.0);
+            view.pan[idx][1] += (new_pivot[1] - old_pivot[1]) * (1.0 / old_zoom - 1.0);
+
+            view.pivot[idx] = new_pivot;
+            view.zoom[idx] = new_zoom;
         }
     } else {
         // --- SLICE MODE (Existing Logic) ---
@@ -221,15 +224,16 @@ pub fn sys_handle_mouse_button(world: &mut World, button: MouseButton, state: El
             // 2D View Logic (Existing)
             let mut zoom = 1.0;
             let mut pan = [0.0, 0.0];
+            let mut pivot = [0.5, 0.5];
             for (_, view) in world.query::<&ViewState>().iter() {
                 zoom = view.zoom[viewport as usize];
                 pan = view.pan[viewport as usize];
+                pivot = view.pivot[viewport as usize];
             }
 
-            let pivot = click_pos;
             let volume_uv = [
-                (click_pos[0] + pan[0] - pivot[0]) / zoom + pivot[0],
-                (click_pos[1] + pan[1] - pivot[1]) / zoom + pivot[1],
+                (click_pos[0] - pivot[0]) / zoom + pivot[0] + pan[0],
+                (click_pos[1] - pivot[1]) / zoom + pivot[1] + pan[1],
             ];
 
             for (_, (t, _tag)) in world.query::<(&mut Transform, &CursorTag)>().iter() {
@@ -249,102 +253,128 @@ pub fn sys_handle_mouse_button(world: &mut World, button: MouseButton, state: El
             }
         } else {
             // --- 3D VIEW PICKING ---
-            let mut zoom = 3.5;
+            let mut zoom = 1.0;
+            let mut pan = [0.0, 0.0];
+            let mut pivot = [0.5, 0.5];
             for (_, view) in world.query::<&ViewState>().iter() {
-                zoom = view.zoom[0]; // Camera radius
+                zoom = view.zoom[0];
+                pan = view.pan[0];
+                pivot = view.pivot[0];
             }
 
             let mut aspect = 1.0;
             for (_, win) in world.query::<&WindowSettings>().iter() {
-                // Each quadrant is half width, half height
                 aspect = (win.width as f32) / (win.height as f32);
             }
 
-            // Ray construction (matches shader vs_main/fs_main logic)
-            let uv = [click_pos[0] - 0.5, click_pos[1] - 0.5];
-            let screen_pos = [uv[0] * aspect, uv[1]];
+            let mut vol_info = None;
+            for (_, vol) in world.query::<&VolumeData>().iter() {
+                vol_info = Some((vol.dimensions, vol.aspect_ratios()));
+            }
 
-            let eye = [0.0, 0.0, -zoom];
-            let forward = [0.0, 0.0, 1.0];
-            let right = [1.0, 0.0, 0.0];
-            let up = [0.0, 1.0, 0.0];
+            if let Some(([width, height, depth], aspect_ratios)) = vol_info {
+                let half_ar = [
+                    aspect_ratios[0] * 0.5,
+                    aspect_ratios[1] * 0.5,
+                    aspect_ratios[2] * 0.5,
+                ];
 
-            // ray_dir = normalize(forward + right * screen_pos.x + up * screen_pos.y)
-            let raw_dir = [
-                forward[0] + right[0] * screen_pos[0] + up[0] * screen_pos[1],
-                forward[1] + right[1] * screen_pos[0] + up[1] * screen_pos[1],
-                forward[2] + right[2] * screen_pos[0] + up[2] * screen_pos[1],
-            ];
-            let mag = (raw_dir[0] * raw_dir[0] + raw_dir[1] * raw_dir[1] + raw_dir[2] * raw_dir[2])
-                .sqrt();
-            let ray_dir = [raw_dir[0] / mag, raw_dir[1] / mag, raw_dir[2] / mag];
+                // Ray construction with zoom/pan
+                let zoomed_uv = [
+                    (click_pos[0] - pivot[0]) / zoom + pivot[0] + pan[0],
+                    (click_pos[1] - pivot[1]) / zoom + pivot[1] + pan[1],
+                ];
 
-            if let Some(t_entry) = intersect_aabb(eye, ray_dir, [-0.5, -0.5, -0.5], [0.5, 0.5, 0.5])
-            {
-                // Find t_exit as well for raymarching bounds
-                let mut t_exit = f32::INFINITY;
-                for i in 0..3 {
-                    if ray_dir[i].abs() > f32::EPSILON {
-                        let t1 = (-0.5 - eye[i]) / ray_dir[i];
-                        let t2 = (0.5 - eye[i]) / ray_dir[i];
-                        t_exit = t_exit.min(t1.max(t2));
+                let uv = [zoomed_uv[0] - 0.5, zoomed_uv[1] - 0.5];
+                let screen_pos = [uv[0] * aspect, uv[1]];
+
+                let radius = 3.5;
+                let eye = [0.0, 0.0, -radius];
+                let forward = [0.0, 0.0, 1.0];
+                let right = [1.0, 0.0, 0.0];
+                let up = [0.0, 1.0, 0.0];
+
+                let raw_dir = [
+                    forward[0] + right[0] * screen_pos[0] + up[0] * screen_pos[1],
+                    forward[1] + right[1] * screen_pos[0] + up[1] * screen_pos[1],
+                    forward[2] + right[2] * screen_pos[0] + up[2] * screen_pos[1],
+                ];
+                let mag =
+                    (raw_dir[0] * raw_dir[0] + raw_dir[1] * raw_dir[1] + raw_dir[2] * raw_dir[2])
+                        .sqrt();
+                let ray_dir = [raw_dir[0] / mag, raw_dir[1] / mag, raw_dir[2] / mag];
+
+                let min_bound = [-half_ar[0], -half_ar[1], -half_ar[2]];
+                let max_bound = [half_ar[0], half_ar[1], half_ar[2]];
+
+                if let Some(t_entry) = intersect_aabb(eye, ray_dir, min_bound, max_bound) {
+                    let mut t_exit = f32::INFINITY;
+                    for i in 0..3 {
+                        if ray_dir[i].abs() > f32::EPSILON {
+                            let t1 = (min_bound[i] - eye[i]) / ray_dir[i];
+                            let t2 = (max_bound[i] - eye[i]) / ray_dir[i];
+                            t_exit = t_exit.min(t1.max(t2));
+                        }
                     }
-                }
 
-                let mut best_t = t_entry;
-                let mut max_density = 0u8;
+                    let mut best_t = t_entry;
+                    let mut max_density = 0u8;
 
-                // Smart Picking: find the highest density (MIP) along the ray
-                for (_, vol) in world.query::<&VolumeData>().iter() {
-                    let steps = 128;
-                    let step_size = (t_exit - t_entry) / steps as f32;
-                    let [width, height, depth] = vol.dimensions;
+                    for (_, vol) in world.query::<&VolumeData>().iter() {
+                        let steps = 128;
+                        let step_size = (t_exit - t_entry) / steps as f32;
 
-                    for i in 0..steps {
-                        let t = t_entry + step_size * i as f32;
-                        let p = [
-                            eye[0] + ray_dir[0] * t + 0.5,
-                            eye[1] + ray_dir[1] * t + 0.5,
-                            eye[2] + ray_dir[2] * t + 0.5,
-                        ];
+                        for i in 0..steps {
+                            let t = t_entry + step_size * i as f32;
+                            let p = [
+                                eye[0] + ray_dir[0] * t,
+                                eye[1] + ray_dir[1] * t,
+                                eye[2] + ray_dir[2] * t,
+                            ];
 
-                        let ix = (p[0] * width as f32) as i32;
-                        let iy = (p[1] * height as f32) as i32;
-                        let iz = (p[2] * depth as f32) as i32;
+                            // Map P back to 0..1 range within the aspect-ratio-scaled box
+                            let uvw = [
+                                (p[0] / aspect_ratios[0]) + 0.5,
+                                (p[1] / aspect_ratios[1]) + 0.5,
+                                (p[2] / aspect_ratios[2]) + 0.5,
+                            ];
 
-                        if ix >= 0
-                            && ix < width as i32
-                            && iy >= 0
-                            && iy < height as i32
-                            && iz >= 0
-                            && iz < depth as i32
-                        {
-                            let idx = (iz as u32 * height * width + iy as u32 * width + ix as u32)
-                                as usize;
-                            // Intensities are stored as f32, convert to u8 for comparison
-                            let intensity = vol.intensities.get(idx).copied().unwrap_or(0.0);
-                            let d = (intensity * 255.0) as u8;
-                            if d > max_density {
-                                max_density = d;
-                                best_t = t;
+                            let ix = (uvw[0] * width as f32) as i32;
+                            let iy = (uvw[1] * height as f32) as i32;
+                            let iz = (uvw[2] * depth as f32) as i32;
+
+                            if ix >= 0
+                                && ix < width as i32
+                                && iy >= 0
+                                && iy < height as i32
+                                && iz >= 0
+                                && iz < depth as i32
+                            {
+                                let idx = (iz as u32 * height * width
+                                    + iy as u32 * width
+                                    + ix as u32) as usize;
+                                let intensity = vol.intensities.get(idx).copied().unwrap_or(0.0);
+                                let d = (intensity * 255.0) as u8;
+                                if d > max_density {
+                                    max_density = d;
+                                    best_t = t;
+                                }
                             }
                         }
                     }
-                }
 
-                // If we found something dense, jump to it; otherwise stay at surface
-                let final_t = if max_density > 20 { best_t } else { t_entry };
-                let hit_point = [
-                    eye[0] + ray_dir[0] * final_t,
-                    eye[1] + ray_dir[1] * final_t,
-                    eye[2] + ray_dir[2] * final_t,
-                ];
+                    let final_t = if max_density > 20 { best_t } else { t_entry };
+                    let hit_point = [
+                        eye[0] + ray_dir[0] * final_t,
+                        eye[1] + ray_dir[1] * final_t,
+                        eye[2] + ray_dir[2] * final_t,
+                    ];
 
-                // Update 3D Cursor (map -0.5..0.5 back to 0..1)
-                for (_, (t, _tag)) in world.query::<(&mut Transform, &CursorTag)>().iter() {
-                    t.position[0] = (hit_point[0] + 0.5).clamp(0.0, 1.0);
-                    t.position[1] = (hit_point[1] + 0.5).clamp(0.0, 1.0);
-                    t.position[2] = (hit_point[2] + 0.5).clamp(0.0, 1.0);
+                    for (_, (t, _tag)) in world.query::<(&mut Transform, &CursorTag)>().iter() {
+                        t.position[0] = ((hit_point[0] / aspect_ratios[0]) + 0.5).clamp(0.0, 1.0);
+                        t.position[1] = ((hit_point[1] / aspect_ratios[1]) + 0.5).clamp(0.0, 1.0);
+                        t.position[2] = ((hit_point[2] / aspect_ratios[2]) + 0.5).clamp(0.0, 1.0);
+                    }
                 }
             }
         }
@@ -353,30 +383,28 @@ pub fn sys_handle_mouse_button(world: &mut World, button: MouseButton, state: El
 
 pub fn sys_handle_mouse_drag(world: &mut World) {
     let mut viewport = 0;
-    let mut delta = [0.0, 0.0];
-    let mut is_dragging = false;
 
     for (_, input) in world.query::<&InputState>().iter() {
         if input.is_dragging {
-            is_dragging = true;
             viewport = input.active_viewport;
-            delta = [
-                input.drag_start_pos[0] - input.mouse_uv[0],
-                input.drag_start_pos[1] - input.mouse_uv[1],
-            ];
+        } else {
+            return;
         }
     }
 
-    if is_dragging {
-        for (_, view) in world.query::<&mut ViewState>().iter() {
-            let start_pan = {
-                let mut p = [0.0, 0.0];
-                for (_, input) in world.query::<&InputState>().iter() {
-                    p = input.drag_start_pan;
-                }
-                p
-            };
-            view.pan[viewport as usize] = [start_pan[0] + delta[0], start_pan[1] + delta[1]];
+    for (_, view) in world.query::<&mut ViewState>().iter() {
+        let mut drag_info = None;
+        for (_, input) in world.query::<&InputState>().iter() {
+            drag_info = Some((input.drag_start_pan, input.drag_start_pos, input.mouse_uv));
+        }
+
+        if let Some((start_pan, start_pos, current_pos)) = drag_info {
+            let zoom = view.zoom[viewport as usize];
+            // Pan delta must be scaled by 1/zoom to follow mouse 1:1
+            view.pan[viewport as usize] = [
+                start_pan[0] + (start_pos[0] - current_pos[0]) / zoom,
+                start_pan[1] + (start_pos[1] - current_pos[1]) / zoom,
+            ];
         }
     }
 }
