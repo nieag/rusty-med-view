@@ -1,5 +1,5 @@
 use crate::components::*;
-use egui::Window;
+// use egui::Window;
 use egui_wgpu::Renderer;
 use egui_winit::State;
 use hecs::World;
@@ -18,19 +18,20 @@ impl Gui {
     pub fn new(
         device: &Device,
         format: TextureFormat,
-        event_loop: &winit::event_loop::EventLoopWindowTarget<()>,
+        window: &WinitWindow,
     ) -> Self {
         let context = egui::Context::default();
 
         let state = State::new(
             context.clone(),
             egui::ViewportId::ROOT,
-            event_loop,
-            Some(1.0),
+            window,
+            Some(window.scale_factor() as f32),
             None,
+            None, // Added 6th argument (max_inner_size)
         );
 
-        let renderer = Renderer::new(device, format, None, 1);
+        let renderer = Renderer::new(device, format, egui_wgpu::RendererOptions::default());
 
         Self {
             context,
@@ -65,11 +66,11 @@ impl Gui {
             for (_, (t, _)) in world.query::<(&Transform, &CursorTag)>().iter() {
                 cursor_pos = t.position;
             }
-            for (_, set) in world.query::<(&WindowSettings)>().iter() {
+            for (_, set) in world.query::<&WindowSettings>().iter() {
                 width = (set.width as f32) / pixels_per_point;
                 height = (set.height as f32) / pixels_per_point;
             }
-            for (_, inp) in world.query::<(&InputState)>().iter() {
+            for (_, inp) in world.query::<&InputState>().iter() {
                 active_viewport = inp.active_viewport;
             }
 
@@ -149,7 +150,7 @@ impl Gui {
         self.renderer
             .update_buffers(device, queue, encoder, &tessellation, screen_descriptor);
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Egui Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
@@ -158,6 +159,7 @@ impl Gui {
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
+                    depth_slice: None,
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
@@ -165,7 +167,7 @@ impl Gui {
             });
 
             self.renderer
-                .render(&mut render_pass, &tessellation, screen_descriptor);
+                .render(&mut render_pass.forget_lifetime(), &tessellation, screen_descriptor);
         }
         // Cleanup textures that are no longer needed
         for id in &output.textures_delta.free {
