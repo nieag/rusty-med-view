@@ -32,10 +32,12 @@ pub fn sys_prepare_render_data(world: &mut World, view_mode: u32) -> Uniforms {
     let mut zoom_val = 1.0;
     let mut pan = [0.0, 0.0];
     let mut zoom_pivot = [0.5, 0.5];
+    let mut rotation = [0.0, 0.0, 0.0];
     for (_, view) in world.query::<&ViewState>().iter() {
         zoom_val = view.zoom[view_mode as usize];
         pan = view.pan[view_mode as usize];
         zoom_pivot = view.pivot[view_mode as usize];
+        rotation = view.rotation[view_mode as usize];
     }
 
     // 4. Get Mouse UV
@@ -52,18 +54,38 @@ pub fn sys_prepare_render_data(world: &mut World, view_mode: u32) -> Uniforms {
         volume_spacing = [vol.spacing[0], vol.spacing[1], vol.spacing[2], 0.0];
     }
 
+    // 6. Get Overlay Info
+    let mut overlay_flags = 0u32;
+    let mut overlay_opacities = [0.0f32; 4];
+    let mut layer_count = 0;
+
+    for (_, (seg, settings)) in world.query::<(&Segmentation, &LayerSettings)>().iter() {
+        if !seg.is_visible {
+            continue;
+        }
+        if layer_count >= 4 {
+            break;
+        }
+
+        overlay_flags |= 1 << layer_count;
+        overlay_opacities[layer_count] = settings.opacity;
+        layer_count += 1;
+    }
+
     Uniforms {
         cursor_pos,
         volume_dims,
         volume_spacing,
+        overlay_opacities,
         resolution,
         mouse_uv,
         pan,
-        zoom: zoom_val,
         zoom_pivot,
+        rotation: [rotation[0], rotation[1], rotation[2], 0.0],
+        zoom: zoom_val,
         time: time_val,
         view_mode,
-        _pad: 0,
+        overlay_flags,
     }
 }
 
@@ -206,6 +228,9 @@ pub fn sys_handle_mouse_button(world: &mut World, button: MouseButton, state: El
         let drag_trigger =
             button == MouseButton::Middle || (button == MouseButton::Left && alt_pressed);
 
+        // Start rotating on Right Click
+        let rotate_trigger = button == MouseButton::Right;
+
         if drag_trigger && state == ElementState::Pressed {
             input.is_dragging = true;
             input.drag_start_pos = input.mouse_uv;
@@ -213,8 +238,16 @@ pub fn sys_handle_mouse_button(world: &mut World, button: MouseButton, state: El
             for (_, view) in world.query::<&ViewState>().iter() {
                 input.drag_start_pan = view.pan[viewport as usize];
             }
+        } else if rotate_trigger && state == ElementState::Pressed {
+            input.is_rotating = true;
+            input.rotation_start_pos = input.mouse_uv;
+            // Capture current rotation
+            for (_, view) in world.query::<&ViewState>().iter() {
+                input.rotation_start_val = view.rotation[viewport as usize];
+            }
         } else if state == ElementState::Released {
             input.is_dragging = false;
+            input.is_rotating = false;
         }
     }
 
@@ -383,28 +416,65 @@ pub fn sys_handle_mouse_button(world: &mut World, button: MouseButton, state: El
 
 pub fn sys_handle_mouse_drag(world: &mut World) {
     let mut viewport = 0;
+    let mut is_dragging = false;
+    let mut is_rotating = false;
 
     for (_, input) in world.query::<&InputState>().iter() {
-        if input.is_dragging {
-            viewport = input.active_viewport;
-        } else {
-            return;
-        }
+        viewport = input.active_viewport;
+        is_dragging = input.is_dragging;
+        is_rotating = input.is_rotating;
+    }
+
+    if !is_dragging && !is_rotating {
+        return;
     }
 
     for (_, view) in world.query::<&mut ViewState>().iter() {
         let mut drag_info = None;
+        let mut rotate_info = None;
+
         for (_, input) in world.query::<&InputState>().iter() {
-            drag_info = Some((input.drag_start_pan, input.drag_start_pos, input.mouse_uv));
+            if is_dragging {
+                drag_info = Some((input.drag_start_pan, input.drag_start_pos, input.mouse_uv));
+            }
+            if is_rotating {
+                rotate_info = Some((
+                    input.rotation_start_val,
+                    input.rotation_start_pos,
+                    input.mouse_uv,
+                ));
+            }
         }
 
         if let Some((start_pan, start_pos, current_pos)) = drag_info {
             let zoom = view.zoom[viewport as usize];
-            // Pan delta must be scaled by 1/zoom to follow mouse 1:1
             view.pan[viewport as usize] = [
                 start_pan[0] + (start_pos[0] - current_pos[0]) / zoom,
                 start_pan[1] + (start_pos[1] - current_pos[1]) / zoom,
             ];
+        }
+
+        if let Some((start_rot, start_pos, current_pos)) = rotate_info {
+            let sensitivity = 3.0; // Radians per screen unit
+            let mut current_rotation = start_rot;
+
+            // Check for Shift modifier
+            let mut has_shift = false;
+            for (_, input) in world.query::<&InputState>().iter() {
+                has_shift = input.modifiers.shift_key();
+            }
+
+            if has_shift {
+                // Planar rotation: Roll
+                current_rotation[2] = start_rot[2] + (current_pos[0] - start_pos[0]) * sensitivity;
+            } else {
+                // Orbital rotation: Yaw and Pitch
+                current_rotation[0] = start_rot[0] + (current_pos[0] - start_pos[0]) * sensitivity;
+                current_rotation[1] =
+                    (start_rot[1] + (current_pos[1] - start_pos[1]) * sensitivity).clamp(-1.5, 1.5);
+                // Clamp pitch to avoid gimbal lock at poles
+            }
+            view.rotation[viewport as usize] = current_rotation;
         }
     }
 }

@@ -44,9 +44,12 @@ pub struct RenderingContext {
 
     // Async file loading channel
     volume_receiver:
-        std::sync::mpsc::Receiver<Result<nifti_loader::LoadedVolume, nifti_loader::LoadError>>,
-    volume_sender:
-        std::sync::mpsc::Sender<Result<nifti_loader::LoadedVolume, nifti_loader::LoadError>>,
+        std::sync::mpsc::Receiver<Result<components::LoadResult, nifti_loader::LoadError>>,
+    volume_sender: std::sync::mpsc::Sender<Result<components::LoadResult, nifti_loader::LoadError>>,
+
+    // Shared Resources
+    dummy_r8: (wgpu::Texture, wgpu::TextureView, wgpu::Sampler),
+    default_lut: (wgpu::Texture, wgpu::TextureView),
 }
 
 pub struct AppState {
@@ -111,8 +114,16 @@ impl App {
         let (volume_texture, volume_view, volume_sampler, volume_info) =
             volume::create_demo_voxel_texture(&device, &queue);
 
+        // Create shared resources
+        let dummy_r8 = volume::create_dummy_r8_texture(&device, &queue);
+        let default_lut = volume::create_default_colormap(&device, &queue);
+
+        // Create Demo Labelmap
+        let (label_tex, label_view, label_sampler) = volume::create_demo_labelmap(&device, &queue);
+
         // Create async channel for volume loading
-        let (volume_sender, volume_receiver) = std::sync::mpsc::channel();
+        let (volume_sender, volume_receiver) =
+            std::sync::mpsc::channel::<Result<components::LoadResult, nifti_loader::LoadError>>();
 
         // Initialize world and camera
         world.spawn((CameraRig {
@@ -135,6 +146,7 @@ impl App {
         // Initialize GUI State
         world.spawn((GuiState {
             load_requested: false,
+            load_label_requested: false,
             status_message: None,
         },));
 
@@ -148,11 +160,15 @@ impl App {
             is_dragging: false,
             drag_start_pos: [0.0, 0.0],
             drag_start_pan: [0.0, 0.0],
+            is_rotating: false,
+            rotation_start_pos: [0.0, 0.0],
+            rotation_start_val: [0.0, 0.0, 0.0],
         },));
         world.spawn((ViewState {
             zoom: [1.0, 1.0, 1.0, 1.0],
             pan: [[0.0, 0.0]; 4],
             pivot: [[0.5, 0.5]; 4],
+            rotation: [[0.0, 0.0, 0.0]; 4],
         },));
 
         // --- Pipeline Setup ---
@@ -168,6 +184,7 @@ impl App {
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[
+                    // 0: Main Volume Texture
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
                         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -178,12 +195,14 @@ impl App {
                         },
                         count: None,
                     },
+                    // 1: Main Volume Sampler
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    // 2: Uniforms
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
                         visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::VERTEX,
@@ -194,6 +213,50 @@ impl App {
                                 std::num::NonZeroU64::new(std::mem::size_of::<Uniforms>() as u64)
                                     .unwrap(),
                             ),
+                        },
+                        count: None,
+                    },
+                    // 3: Overlay 1 Texture (R8Uint)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D3,
+                            sample_type: wgpu::TextureSampleType::Uint, // UINT for labels directly
+                        },
+                        count: None,
+                    },
+                    // 4: Overlay 1 LUT (RGBA8)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D1,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    // 5: Overlay 2 Texture (R8Uint)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D3,
+                            sample_type: wgpu::TextureSampleType::Uint,
+                        },
+                        count: None,
+                    },
+                    // 6: Overlay 2 LUT (RGBA8)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D1,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         },
                         count: None,
                     },
@@ -223,6 +286,24 @@ impl App {
                         ),
                     }),
                 },
+                // Overlay 1 (Demo Labelmap)
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&label_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&default_lut.1),
+                },
+                // Overlay 2 (Dummy)
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&dummy_r8.1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&default_lut.1),
+                },
             ],
             label: Some("diffuse_bind_group"),
         });
@@ -239,9 +320,28 @@ impl App {
                 texture: volume_texture,
                 view: volume_view,
                 sampler: volume_sampler,
-                bind_group: diffuse_bind_group,
+                bind_group: diffuse_bind_group.clone(),
             },
             MainVolumeTag,
+        ));
+
+        // Spawn Demo Labelmap Entity
+        world.spawn((
+            Segmentation {
+                name: "Demo Labelmap".to_string(),
+                is_visible: true,
+            },
+            LayerSettings {
+                opacity: 0.7,
+                active_representation: 0,
+            },
+            Representation::Voxel(GpuVolumeResources {
+                texture: label_tex,
+                view: label_view,
+                sampler: label_sampler,
+                bind_group: diffuse_bind_group.clone(), // Sharing the scene bind group
+            }),
+            SegmentationTag,
         ));
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -321,6 +421,8 @@ impl App {
             settings_entity,
             volume_receiver,
             volume_sender,
+            dummy_r8,
+            default_lut,
         }
     }
 }
@@ -538,83 +640,205 @@ impl ApplicationHandler for App {
                 let sender = ctx.volume_sender.clone();
                 file_dialog::spawn_file_picker(move |result| {
                     if let Some((_filename, data)) = result {
-                        let load_result = nifti_loader::load_nifti_from_bytes(&data);
+                        let load_result =
+                            nifti_loader::load_nifti_from_bytes(&data).map(LoadResult::Volume);
                         let _ = sender.send(load_result);
                     }
                 });
             }
 
-            // Check for loaded volumes from async task
+            // NEW: Handle Labelmap load request
+            let mut load_label_requested = false;
+            for (_, gui_state) in ctx.world.query_mut::<&mut GuiState>() {
+                if gui_state.load_label_requested {
+                    load_label_requested = true;
+                    gui_state.load_label_requested = false;
+                    gui_state.status_message = Some("Loading Labelmap...".to_string());
+                }
+            }
+
+            if load_label_requested {
+                let sender = ctx.volume_sender.clone();
+                file_dialog::spawn_file_picker(move |result| {
+                    if let Some((_filename, data)) = result {
+                        let load_result =
+                            nifti_loader::load_label_from_bytes(&data).map(LoadResult::Label);
+                        let _ = sender.send(load_result);
+                    }
+                });
+            }
+
+            // Check for loaded data from async task
             if let Ok(result) = ctx.volume_receiver.try_recv() {
                 match result {
-                    Ok(loaded) => {
-                        log::info!("Volume loaded: {:?} dimensions", loaded.dimensions);
+                    Ok(load_res) => {
+                        match load_res {
+                            components::LoadResult::Volume(loaded) => {
+                                log::info!("Volume loaded: {:?} dimensions", loaded.dimensions);
+                                let (new_texture, new_view, new_sampler, volume_info) =
+                                    volume::create_texture_from_nifti(
+                                        &ctx.device,
+                                        &ctx.queue,
+                                        &loaded,
+                                    );
 
-                        // Create new texture from loaded data
-                        let (new_texture, new_view, new_sampler, volume_info) =
-                            volume::create_texture_from_nifti(&ctx.device, &ctx.queue, &loaded);
+                                // Update ONLY the main volume GpuVolumeResources in ECS
+                                for (_, (vol, gpu_res)) in ctx
+                                    .world
+                                    .query_mut::<(&mut VolumeData, &mut GpuVolumeResources)>()
+                                    .with::<&MainVolumeTag>()
+                                {
+                                    vol.dimensions = volume_info.dimensions;
+                                    vol.spacing = volume_info.spacing;
+                                    vol.intensities = volume_info.intensities.clone();
+                                    vol.intensity_range = volume_info.intensity_range;
 
-                        // Recreate bind group with new texture
-                        let new_bind_group =
-                            ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                                layout: &ctx.texture_bind_group_layout,
-                                entries: &[
-                                    wgpu::BindGroupEntry {
-                                        binding: 0,
-                                        resource: wgpu::BindingResource::TextureView(&new_view),
-                                    },
-                                    wgpu::BindGroupEntry {
-                                        binding: 1,
-                                        resource: wgpu::BindingResource::Sampler(&new_sampler),
-                                    },
-                                    wgpu::BindGroupEntry {
-                                        binding: 2,
-                                        resource: wgpu::BindingResource::Buffer(
-                                            wgpu::BufferBinding {
-                                                buffer: &ctx.uniform_buffer,
-                                                offset: 0,
-                                                size: Some(
-                                                    std::num::NonZeroU64::new(std::mem::size_of::<
-                                                        Uniforms,
-                                                    >(
-                                                    )
-                                                        as u64)
-                                                    .unwrap(),
-                                                ),
-                                            },
-                                        ),
-                                    },
-                                ],
-                                label: Some("diffuse_bind_group"),
-                            });
+                                    gpu_res.texture = new_texture;
+                                    gpu_res.view = new_view;
+                                    gpu_res.sampler = new_sampler;
+                                    // bind_group will be updated below
+                                    break;
+                                }
 
-                        // Update VolumeData and GpuVolumeResources in ECS
-                        for (_, (vol, gpu_res)) in ctx
-                            .world
-                            .query_mut::<(&mut VolumeData, &mut GpuVolumeResources)>()
+                                for (_, gui_state) in ctx.world.query_mut::<&mut GuiState>() {
+                                    gui_state.status_message = Some(format!(
+                                        "Volume Loaded: {}x{}",
+                                        loaded.dimensions[0], loaded.dimensions[1]
+                                    ));
+                                }
+                            }
+                            components::LoadResult::Label(loaded_label) => {
+                                log::info!(
+                                    "Labelmap loaded: {:?} dimensions",
+                                    loaded_label.dimensions
+                                );
+                                let (new_texture, new_view, new_sampler) =
+                                    volume::create_texture_from_labelmap(
+                                        &ctx.device,
+                                        &ctx.queue,
+                                        &loaded_label,
+                                    );
+
+                                // Find Slot 1 entity or spawn one if not exists?
+                                // Let's find first Segmentation entity and update its Voxel representation.
+                                for (_, (seg, settings, repr)) in ctx.world.query_mut::<(
+                                    &mut Segmentation,
+                                    &mut LayerSettings,
+                                    &mut Representation,
+                                )>(
+                                ) {
+                                    if let Representation::Voxel(gpu_res) = repr {
+                                        gpu_res.texture = new_texture;
+                                        gpu_res.view = new_view;
+                                        gpu_res.sampler = new_sampler;
+                                        seg.is_visible = true;
+                                        settings.opacity = 0.5;
+                                        break;
+                                    }
+                                }
+
+                                for (_, gui_state) in ctx.world.query_mut::<&mut GuiState>() {
+                                    gui_state.status_message = Some(format!(
+                                        "Label Loaded: {}x{}",
+                                        loaded_label.dimensions[0], loaded_label.dimensions[1]
+                                    ));
+                                }
+                            }
+                        }
+
+                        // --- GLOBAL RECREATE BIND GROUP ---
+                        // We need the latest views for both volume and overlays.
+
+                        // We use the dummy views by default. references must live long enough.
+                        let mut main_view = &ctx.dummy_r8.1;
+                        let mut overlay1_view = &ctx.dummy_r8.1;
+
+                        let new_bind_group;
                         {
-                            vol.dimensions = volume_info.dimensions;
-                            vol.spacing = volume_info.spacing;
-                            vol.intensities = volume_info.intensities.clone();
-                            vol.intensity_range = volume_info.intensity_range;
+                            // Let's just use the query outside the entries to satisfy the borrow checker
+                            let mut main_query = ctx.world.query::<&GpuVolumeResources>();
+                            let mut main_vol_iter = main_query.with::<&MainVolumeTag>();
+                            let main_res = main_vol_iter.iter().next();
+                            if let Some((_, res)) = main_res {
+                                main_view = &res.view;
+                            }
 
-                            gpu_res.texture = new_texture;
-                            gpu_res.view = new_view;
-                            gpu_res.sampler = new_sampler;
-                            gpu_res.bind_group = new_bind_group;
+                            let mut repr_query = ctx.world.query::<&Representation>();
+                            let mut repr_iter = repr_query.iter();
+                            let repr_res =
+                                repr_iter.find(|(_, r)| matches!(r, Representation::Voxel(_)));
+                            if let Some((_, Representation::Voxel(res))) = repr_res {
+                                overlay1_view = &res.view;
+                            }
 
-                            // Break out after first match assuming one main volume entity
-                            break;
+                            new_bind_group =
+                                ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                    layout: &ctx.texture_bind_group_layout,
+                                    entries: &[
+                                        wgpu::BindGroupEntry {
+                                            binding: 0,
+                                            resource: wgpu::BindingResource::TextureView(main_view),
+                                        },
+                                        wgpu::BindGroupEntry {
+                                            binding: 1,
+                                            resource: wgpu::BindingResource::Sampler(
+                                                &ctx.dummy_r8.2,
+                                            ),
+                                        },
+                                        wgpu::BindGroupEntry {
+                                            binding: 2,
+                                            resource: wgpu::BindingResource::Buffer(
+                                                wgpu::BufferBinding {
+                                                    buffer: &ctx.uniform_buffer,
+                                                    offset: 0,
+                                                    size: Some(
+                                                        std::num::NonZeroU64::new(
+                                                            std::mem::size_of::<Uniforms>() as u64,
+                                                        )
+                                                        .unwrap(),
+                                                    ),
+                                                },
+                                            ),
+                                        },
+                                        wgpu::BindGroupEntry {
+                                            binding: 3,
+                                            resource: wgpu::BindingResource::TextureView(
+                                                overlay1_view,
+                                            ),
+                                        },
+                                        wgpu::BindGroupEntry {
+                                            binding: 4,
+                                            resource: wgpu::BindingResource::TextureView(
+                                                &ctx.default_lut.1,
+                                            ),
+                                        },
+                                        wgpu::BindGroupEntry {
+                                            binding: 5,
+                                            resource: wgpu::BindingResource::TextureView(
+                                                &ctx.dummy_r8.1,
+                                            ),
+                                        },
+                                        wgpu::BindGroupEntry {
+                                            binding: 6,
+                                            resource: wgpu::BindingResource::TextureView(
+                                                &ctx.default_lut.1,
+                                            ),
+                                        },
+                                    ],
+                                    label: Some("diffuse_bind_group"),
+                                });
                         }
 
-                        for (_, gui_state) in ctx.world.query_mut::<&mut GuiState>() {
-                            gui_state.status_message = Some(format!(
-                                "Loaded: {}x{}x{}",
-                                volume_info.dimensions[0],
-                                volume_info.dimensions[1],
-                                volume_info.dimensions[2]
-                            ));
+                        // Update bind group in ALL relevant entities
+                        for (_, res) in ctx.world.query_mut::<&mut GpuVolumeResources>() {
+                            res.bind_group = new_bind_group.clone();
                         }
+                        for (_, repr) in ctx.world.query_mut::<&mut Representation>() {
+                            if let Representation::Voxel(res) = repr {
+                                res.bind_group = new_bind_group.clone();
+                            }
+                        }
+                        // Done update
                     }
                     Err(e) => {
                         log::error!("Failed to load NIfTI: {:?}", e);

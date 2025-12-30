@@ -108,6 +108,11 @@ impl Gui {
                             gui_state.load_requested = true;
                         }
                     }
+                    if ui.button("📂 Load Labelmap...").clicked() {
+                        for (_, gui_state) in world.query_mut::<&mut GuiState>() {
+                            gui_state.load_label_requested = true;
+                        }
+                    }
 
                     // Display status from GuiState
                     if let Some(msg) = &status_msg {

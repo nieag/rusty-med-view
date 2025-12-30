@@ -178,6 +178,56 @@ pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
     })
 }
 
+/// Specialized loader for labelmaps (raw u8 IDs, no normalization)
+pub fn load_label_from_bytes(data: &[u8]) -> Result<crate::components::LoadedLabel, LoadError> {
+    // Reuse decompression and header parsing logic (simplified for this brief)
+    // For brevity, I will re-implement the core loop or refactor later.
+    // Actually, let's just do a clean implementation for Labels.
+    let decompressed;
+    let raw_data = if is_gzipped(data) {
+        decompressed = decompress_gzip(data)?;
+        &decompressed[..]
+    } else {
+        data
+    };
+
+    let mut cursor = Cursor::new(raw_data);
+    let header = NiftiHeader::from_reader(&mut cursor)
+        .map_err(|e| LoadError::HeaderParseFailed(e.to_string()))?;
+
+    let dims = header
+        .dim()
+        .map_err(|e| LoadError::DimensionError(e.to_string()))?;
+    let width = dims[0] as u32;
+    let height = dims[1] as u32;
+    let depth = dims[2] as u32;
+    let spacing = [header.pixdim[1], header.pixdim[2], header.pixdim[3]];
+
+    let vox_offset = header.vox_offset as usize;
+    let volume_data = &raw_data[vox_offset..];
+    let volume_cursor = Cursor::new(volume_data);
+    let volume = InMemNiftiVolume::from_reader(volume_cursor, &header)
+        .map_err(|e| LoadError::VolumeParseFailed(e.to_string()))?;
+
+    let total_voxels = (width * height * depth) as usize;
+    let mut label_data = Vec::with_capacity(total_voxels);
+
+    for z in 0..depth as u16 {
+        for y in 0..height as u16 {
+            for x in 0..width as u16 {
+                let value: f64 = volume.get_f64(&[x, y, z]).unwrap_or(0.0);
+                label_data.push(value.clamp(0.0, 255.0) as u8);
+            }
+        }
+    }
+
+    Ok(crate::components::LoadedLabel {
+        dimensions: [width, height, depth],
+        spacing,
+        data: label_data,
+    })
+}
+
 /// Load a NIfTI volume from a file path (native only)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_nifti_from_file(path: &std::path::Path) -> Result<LoadedVolume, LoadError> {
