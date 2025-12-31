@@ -244,6 +244,78 @@ fn intersect_aabb(origin: [f32; 3], dir: [f32; 3], min: [f32; 3], max: [f32; 3])
     }
 }
 
+// --- Quaternion & Vector Math Helpers ---
+
+/// Create a quaternion from an axis and angle (radians).
+fn quat_from_axis_angle(axis: [f32; 3], angle: f32) -> [f32; 4] {
+    let half = angle * 0.5;
+    let s = half.sin();
+    let c = half.cos();
+    [axis[0] * s, axis[1] * s, axis[2] * s, c]
+}
+
+/// Multiply two quaternions (Hamilton product).
+fn quat_multiply(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    [
+        a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+        a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+        a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+        a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+    ]
+}
+
+/// Normalize a quaternion to unit length.
+fn quat_normalize(q: [f32; 4]) -> [f32; 4] {
+    let len = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    if len > 1e-8 {
+        [q[0] / len, q[1] / len, q[2] / len, q[3] / len]
+    } else {
+        [0.0, 0.0, 0.0, 1.0] // identity
+    }
+}
+
+/// Convert a quaternion to a 3x3 rotation matrix (row-major).
+/// Returns [[row0], [row1], [row2]].
+fn quat_to_mat3(q: [f32; 4]) -> [[f32; 3]; 3] {
+    let x2 = q[0] + q[0];
+    let y2 = q[1] + q[1];
+    let z2 = q[2] + q[2];
+    let xx = q[0] * x2;
+    let xy = q[0] * y2;
+    let xz = q[0] * z2;
+    let yy = q[1] * y2;
+    let yz = q[1] * z2;
+    let zz = q[2] * z2;
+    let wx = q[3] * x2;
+    let wy = q[3] * y2;
+    let wz = q[3] * z2;
+
+    [
+        [1.0 - (yy + zz), xy + wz, xz - wy],
+        [xy - wz, 1.0 - (xx + zz), yz + wx],
+        [xz + wy, yz - wx, 1.0 - (xx + yy)],
+    ]
+}
+
+/// Multiply a 3x3 matrix (row-major) by a vec3.
+fn mat3_mul_vec3(m: [[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
+    [
+        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+    ]
+}
+
+/// Normalize a vec3 to unit length.
+fn vec3_normalize(v: [f32; 3]) -> [f32; 3] {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if len > 1e-8 {
+        [v[0] / len, v[1] / len, v[2] / len]
+    } else {
+        [0.0, 0.0, 1.0]
+    }
+}
+
 use winit::event::{ElementState, MouseButton};
 
 /// Handle mouse button events for clicking, dragging, and picking.
@@ -329,10 +401,12 @@ pub fn sys_handle_mouse_button(world: &mut World, button: MouseButton, state: El
             let mut zoom = 1.0;
             let mut pan = [0.0, 0.0];
             let mut pivot = [0.5, 0.5];
+            let mut rotation = [0.0, 0.0, 0.0, 1.0]; // identity quaternion
             for (_, view) in world.query::<&ViewState>().iter() {
                 zoom = view.zoom[0];
                 pan = view.pan[0];
                 pivot = view.pivot[0];
+                rotation = view.rotation[0];
             }
 
             let mut aspect = 1.0;
@@ -361,21 +435,27 @@ pub fn sys_handle_mouse_button(world: &mut World, button: MouseButton, state: El
                 let uv = [zoomed_uv[0] - 0.5, zoomed_uv[1] - 0.5];
                 let screen_pos = [uv[0] * aspect, uv[1]];
 
+                // Build rotation matrix from quaternion (same as shader)
+                let rot_mat = quat_to_mat3(rotation);
+
+                // Apply rotation to camera vectors
                 let radius = 3.5;
-                let eye = [0.0, 0.0, -radius];
-                let forward = [0.0, 0.0, 1.0];
-                let right = [1.0, 0.0, 0.0];
-                let up = [0.0, 1.0, 0.0];
+                let base_eye = [0.0, 0.0, -radius];
+                let eye = mat3_mul_vec3(rot_mat, base_eye);
+
+                let base_forward = [0.0, 0.0, 1.0];
+                let base_right = [1.0, 0.0, 0.0];
+                let base_up = [0.0, 1.0, 0.0];
+                let forward = mat3_mul_vec3(rot_mat, base_forward);
+                let right = mat3_mul_vec3(rot_mat, base_right);
+                let up = mat3_mul_vec3(rot_mat, base_up);
 
                 let raw_dir = [
                     forward[0] + right[0] * screen_pos[0] + up[0] * screen_pos[1],
                     forward[1] + right[1] * screen_pos[0] + up[1] * screen_pos[1],
                     forward[2] + right[2] * screen_pos[0] + up[2] * screen_pos[1],
                 ];
-                let mag =
-                    (raw_dir[0] * raw_dir[0] + raw_dir[1] * raw_dir[1] + raw_dir[2] * raw_dir[2])
-                        .sqrt();
-                let ray_dir = [raw_dir[0] / mag, raw_dir[1] / mag, raw_dir[2] / mag];
+                let ray_dir = vec3_normalize(raw_dir);
 
                 let min_bound = [-half_ar[0], -half_ar[1], -half_ar[2]];
                 let max_bound = [half_ar[0], half_ar[1], half_ar[2]];
@@ -513,32 +593,6 @@ pub fn sys_handle_mouse_drag(world: &mut World) {
             let delta_x = (current_pos[0] - start_pos[0]) * sensitivity;
             let delta_y = (current_pos[1] - start_pos[1]) * sensitivity;
 
-            // Quaternion helpers
-            fn quat_from_axis_angle(axis: [f32; 3], angle: f32) -> [f32; 4] {
-                let half = angle * 0.5;
-                let s = half.sin();
-                let c = half.cos();
-                [axis[0] * s, axis[1] * s, axis[2] * s, c]
-            }
-
-            fn quat_multiply(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
-                [
-                    a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
-                    a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
-                    a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
-                    a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
-                ]
-            }
-
-            fn quat_normalize(q: [f32; 4]) -> [f32; 4] {
-                let len = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
-                if len > 1e-8 {
-                    [q[0] / len, q[1] / len, q[2] / len, q[3] / len]
-                } else {
-                    [0.0, 0.0, 0.0, 1.0] // identity
-                }
-            }
-
             let new_quat = if has_shift {
                 // Planar rotation: Roll around Z-axis (forward)
                 let roll_quat = quat_from_axis_angle([0.0, 0.0, 1.0], delta_x);
@@ -546,8 +600,8 @@ pub fn sys_handle_mouse_drag(world: &mut World) {
             } else {
                 // Orbital rotation: Yaw around Y (world up), Pitch around X (local right)
                 let yaw_quat = quat_from_axis_angle([0.0, 1.0, 0.0], delta_x);
-                let pitch_quat = quat_from_axis_angle([1.0, 0.0, 0.0], delta_y);
-                // Apply yaw first (world space), then pitch
+                let pitch_quat = quat_from_axis_angle([1.0, 0.0, 0.0], -delta_y); // Negated for natural feel
+                                                                                  // Apply yaw first (world space), then pitch
                 let combined = quat_multiply(yaw_quat, quat_multiply(pitch_quat, start_quat));
                 quat_normalize(combined)
             };
