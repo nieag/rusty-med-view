@@ -1,0 +1,350 @@
+// src/render.rs
+//
+// Rendering infrastructure: pipeline setup, bind group creation, and frame rendering.
+
+use crate::components::*;
+use crate::geometry;
+use crate::gui;
+use crate::systems;
+use hecs::World;
+use std::sync::Arc;
+use wgpu::util::DeviceExt;
+use winit::window::Window;
+
+/// Create the bind group layout for volume rendering.
+/// Supports main volume + 2 overlay labelmaps with LUTs.
+pub fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        entries: &[
+            // 0: Main Volume Texture
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                },
+                count: None,
+            },
+            // 1: Main Volume Sampler
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            // 2: Uniforms
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: Some(
+                        std::num::NonZeroU64::new(std::mem::size_of::<Uniforms>() as u64).unwrap(),
+                    ),
+                },
+                count: None,
+            },
+            // 3: Overlay 1 Texture (R8Uint)
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                    sample_type: wgpu::TextureSampleType::Uint,
+                },
+                count: None,
+            },
+            // 4: Overlay 1 LUT (RGBA8)
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D1,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                },
+                count: None,
+            },
+            // 5: Overlay 2 Texture (R8Uint)
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D3,
+                    sample_type: wgpu::TextureSampleType::Uint,
+                },
+                count: None,
+            },
+            // 6: Overlay 2 LUT (RGBA8)
+            wgpu::BindGroupLayoutEntry {
+                binding: 6,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D1,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                },
+                count: None,
+            },
+        ],
+        label: Some("texture_bind_group_layout"),
+    })
+}
+
+/// Create the main render pipeline.
+pub fn create_render_pipeline(
+    device: &wgpu::Device,
+    bind_group_layout: &wgpu::BindGroupLayout,
+    surface_format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shader.wgsl").into()),
+    });
+
+    let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Render Pipeline Layout"),
+        bind_group_layouts: &[bind_group_layout],
+        push_constant_ranges: &[],
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Render Pipeline"),
+        layout: Some(&render_pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[geometry::Vertex::desc()],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: Some(wgpu::Face::Back),
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
+/// Create the uniform buffer with proper alignment for 4 viewports.
+pub fn create_uniform_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    let uniform_alignment = 256;
+    let uniform_buffer_size = (uniform_alignment * 4) as u64;
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Uniform Buffer"),
+        size: uniform_buffer_size,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+/// Create vertex and index buffers for the fullscreen quad.
+pub fn create_geometry_buffers(device: &wgpu::Device) -> (wgpu::Buffer, wgpu::Buffer, u32) {
+    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Vertex Buffer"),
+        contents: bytemuck::cast_slice(geometry::QUAD_VERTICES),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Index Buffer"),
+        contents: bytemuck::cast_slice(geometry::QUAD_INDICES),
+        usage: wgpu::BufferUsages::INDEX,
+    });
+    let num_indices = geometry::QUAD_INDICES.len() as u32;
+    (vertex_buffer, index_buffer, num_indices)
+}
+
+/// Create a bind group for the scene with volume and overlay textures.
+pub fn create_scene_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    volume_view: &wgpu::TextureView,
+    volume_sampler: &wgpu::Sampler,
+    uniform_buffer: &wgpu::Buffer,
+    overlay1_view: &wgpu::TextureView,
+    overlay1_lut: &wgpu::TextureView,
+    overlay2_view: &wgpu::TextureView,
+    overlay2_lut: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(volume_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(volume_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: uniform_buffer,
+                    offset: 0,
+                    size: Some(
+                        std::num::NonZeroU64::new(std::mem::size_of::<Uniforms>() as u64).unwrap(),
+                    ),
+                }),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(overlay1_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(overlay1_lut),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(overlay2_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(overlay2_lut),
+            },
+        ],
+        label: Some("diffuse_bind_group"),
+    })
+}
+
+/// Render a complete frame with all 4 viewports.
+pub fn render_frame(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    surface: &wgpu::Surface,
+    config: &wgpu::SurfaceConfiguration,
+    render_pipeline: &wgpu::RenderPipeline,
+    uniform_buffer: &wgpu::Buffer,
+    vertex_buffer: &wgpu::Buffer,
+    index_buffer: &wgpu::Buffer,
+    num_indices: u32,
+    world: &mut World,
+    gui: &mut gui::Gui,
+    window: &Arc<Window>,
+    volume_sender: std::sync::mpsc::Sender<Result<LoadResult, crate::nifti_loader::LoadError>>,
+) {
+    // Prepare uniforms for all 4 viewports
+    let mut all_uniforms_bytes = Vec::with_capacity(1024);
+    for mode in 0..4 {
+        let u = systems::sys_prepare_render_data(world, mode);
+        all_uniforms_bytes.extend_from_slice(bytemuck::cast_slice(&[u]));
+        while all_uniforms_bytes.len() % 256 != 0 {
+            all_uniforms_bytes.push(0);
+        }
+    }
+    queue.write_buffer(uniform_buffer, 0, &all_uniforms_bytes);
+    gui.prepare(window, world, volume_sender);
+
+    let frame = surface.get_current_texture().unwrap();
+    let view = frame
+        .texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("Render Encoder"),
+    });
+
+    {
+        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.1,
+                        g: 0.1,
+                        b: 0.1,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        render_pass.set_pipeline(render_pipeline);
+        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+
+        // Get Viewport Rect from ECS (updated by GUI)
+        let mut vp_rect = [0.0, 0.0, config.width as f32, config.height as f32];
+        {
+            let mut query = world.query::<&WindowSettings>();
+            if let Some((_, settings)) = query.iter().next() {
+                vp_rect = settings.viewport_rect;
+            }
+        }
+
+        let vx = vp_rect[0];
+        let vy = vp_rect[1];
+        let vw = vp_rect[2];
+        let vh = vp_rect[3];
+
+        let hw = vw / 2.0;
+        let hh = vh / 2.0;
+
+        // Query the bind group from ECS and render
+        {
+            let mut query = world
+                .query::<&GpuVolumeResources>()
+                .with::<&MainVolumeTag>();
+            if let Some((_, res)) = query.iter().next() {
+                let bg = &res.bind_group;
+                // Top-Left (3D)
+                render_pass.set_viewport(vx, vy, hw, hh, 0.0, 1.0);
+                render_pass.set_bind_group(0, bg, &[0]);
+                render_pass.draw_indexed(0..num_indices, 0, 0..1);
+
+                // Top-Right (Axial)
+                render_pass.set_viewport(vx + hw, vy, hw, hh, 0.0, 1.0);
+                render_pass.set_bind_group(0, bg, &[256]);
+                render_pass.draw_indexed(0..num_indices, 0, 0..1);
+
+                // Bottom-Left (Coronal)
+                render_pass.set_viewport(vx, vy + hh, hw, hh, 0.0, 1.0);
+                render_pass.set_bind_group(0, bg, &[512]);
+                render_pass.draw_indexed(0..num_indices, 0, 0..1);
+
+                // Bottom-Right (Sagittal)
+                render_pass.set_viewport(vx + hw, vy + hh, hw, hh, 0.0, 1.0);
+                render_pass.set_bind_group(0, bg, &[768]);
+                render_pass.draw_indexed(0..num_indices, 0, 0..1);
+            }
+        }
+    }
+
+    let screen_descriptor = egui_wgpu::ScreenDescriptor {
+        size_in_pixels: [config.width, config.height],
+        pixels_per_point: window.scale_factor() as f32,
+    };
+    gui.render(device, queue, &mut encoder, &view, &screen_descriptor);
+
+    queue.submit(std::iter::once(encoder.finish()));
+    frame.present();
+}

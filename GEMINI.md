@@ -15,8 +15,13 @@ A high-performance 2D/3D medical volume viewer built with **Rust** and **WGPU**.
 ## 📂 Project Structure
 - `src/main.rs`: Simple entry point calling `lib::run()`.
 - `src/lib.rs`: Winit event loop, GPU context initialization, and the main rendering loop.
-- `src/components.rs`: ECS components (`ViewState`, `InputState`, `Uniforms`).
-- `src/systems.rs`: Core logic for input handling (zoom, pan, scroll) and GPU data preparation.
+- `src/components.rs`: ECS components (`ViewState`, `InputState`, `Uniforms`, `VolumeData`, etc.).
+- `src/systems.rs`: Core logic for input handling (zoom, pan, scroll, rotation) and GPU data preparation.
+- `src/render.rs`: Rendering infrastructure (pipeline setup, bind group creation, frame rendering).
+- `src/load_handlers.rs`: Handlers for async volume/labelmap loading results and bind group recreation.
+- `src/gui.rs`: egui-based GUI implementation for file loading and layer controls.
+- `src/file_dialog.rs`: Cross-platform file dialog supporting both native (rfd) and WASM (web-sys).
+- `src/geometry.rs`: Vertex struct definition and fullscreen quad geometry.
 - `src/shaders/shader.wgsl`: Unified vertex and fragment shader for all viewports.
 - `src/nifti_loader.rs` / `src/volume.rs`: Volume data structures and NIfTI parsing logic.
 
@@ -41,6 +46,16 @@ The `Uniforms` struct is strictly aligned to 16-byte boundaries (grouping `vec4`
 ### 3D Picking
 Implements high-intensity raymarching in `sys_handle_mouse_button` to accurately place the crosshair on anatomical structures in the 3D view.
 
+### Labelmap Overlays
+The system supports up to 2 simultaneous labelmap overlays.
+- **Data Format**: Labels are stored as `R8Uint` textures (`t_label1`, `t_label2`).
+- **Color Lookup**: An `R8` index is mapped to an RGBA color via a 1D LUT texture (`t_lut1`, `t_lut2`).
+- **Visibility**: Controlled via `uniforms.overlay_opacities` and `uniforms.overlay_flags`.
+
+### 2D vs 3D Label Rendering
+- **2D Slices**: Labels are rendered with their LUT-defined alpha multiplied by the layer's opacity, allowing the underlying grayscale volume to be visible (translucent).
+- **3D X-Ray/MIP**: Labels are rendered as **solid** structures. During raymarching, if a label is encountered, it consumes the remaining ray budget and sets the final color to the label color, making it appear opaque while staying "inside" the volume context.
+
 ## 🛠 How to Run
 - **Native**: `cargo run`
 - **Web (WASM)**: `trunk serve` (requires `wasm32-unknown-unknown` target)
@@ -48,4 +63,4 @@ Implements high-intensity raymarching in `sys_handle_mouse_button` to accurately
 ## 💡 Future Session Tips
 - When modifying interaction logic, check `src/systems.rs` first.
 - Always ensure `Uniforms` struct alignment in `components.rs` matches `shader.wgsl` exactly.
-- The 3D camera is currently fixed at a radius of `3.5`, with `zoom` acting as a view-plane scale multiplier.
+- The 3D camera uses **quaternion-based rotation** (stored in `ViewState.rotation`) to eliminate gimbal lock. The camera is fixed at a radius of `3.5`, with `zoom` acting as a view-plane scale multiplier.

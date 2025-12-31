@@ -2397,6 +2397,7 @@ dependencies = [
  "flate2",
  "getrandom 0.2.16",
  "hecs",
+ "js-sys",
  "log",
  "nifti",
  "pollster 0.3.0",

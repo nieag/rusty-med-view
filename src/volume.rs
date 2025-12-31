@@ -1,12 +1,5 @@
+use crate::components::VolumeData;
 use crate::nifti_loader::LoadedVolume;
-
-/// Information about the created volume for use in ECS
-pub struct VolumeInfo {
-    pub dimensions: [u32; 3],
-    pub spacing: [f32; 3],
-    pub intensities: Vec<f32>,
-    pub intensity_range: [f32; 2],
-}
 
 /// Create a 3D texture and its view/sampler from RGBA data
 pub fn create_texture_from_rgba(
@@ -107,25 +100,25 @@ pub fn create_texture_from_nifti(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     loaded: &LoadedVolume,
-) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler, VolumeInfo) {
+) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler, VolumeData) {
     let (texture, view, sampler) =
         create_texture_from_rgba(device, queue, &loaded.rgba_data, loaded.dimensions);
 
-    let info = VolumeInfo {
+    let volume_data = VolumeData {
         dimensions: loaded.dimensions,
         spacing: loaded.spacing,
         intensities: loaded.intensity_data.clone(),
         intensity_range: loaded.intensity_range,
     };
 
-    (texture, view, sampler, info)
+    (texture, view, sampler, volume_data)
 }
 
 /// Create a demo voxel texture with synthetic data (fallback when no file loaded)
 pub fn create_demo_voxel_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler, VolumeInfo) {
+) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler, VolumeData) {
     let size = 64u32;
     let mut rgba_data = vec![0u8; (size * size * size * 4) as usize];
     let mut intensities = Vec::with_capacity((size * size * size) as usize);
@@ -185,14 +178,14 @@ pub fn create_demo_voxel_texture(
     let (texture, view, sampler) =
         create_texture_from_rgba(device, queue, &rgba_data, [size, size, size]);
 
-    let info = VolumeInfo {
+    let volume_data = VolumeData {
         dimensions: [size, size, size],
         spacing: [1.0, 1.0, 1.0],
         intensities,
         intensity_range: [0.0, 1.0],
     };
 
-    (texture, view, sampler, info)
+    (texture, view, sampler, volume_data)
 }
 
 // --- NEW Helper Functions for Labelmap Support ---

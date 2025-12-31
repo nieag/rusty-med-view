@@ -1,18 +1,35 @@
+//! Core ECS systems for input handling, rendering data preparation, and interaction logic.
+//!
+//! This module contains the "systems" that operate on ECS components:
+//! - Input handling (mouse, scroll, keyboard modifiers)
+//! - Render data preparation (building `Uniforms` for the shader)
+//! - 3D picking via CPU-side raymarching
+
 use crate::components::*;
-use hecs::World; // Import our structs
+use hecs::World;
 use winit::keyboard::ModifiersState;
 
-// NEW: Helper to update modifier state (Ctrl/Shift/Alt)
+/// Update keyboard modifier state (Ctrl/Shift/Alt) in the ECS.
 pub fn sys_update_modifiers(world: &mut World, mods: ModifiersState) {
     for (_, input) in world.query::<&mut InputState>().iter() {
         input.modifiers = mods;
     }
 }
+
+/// Prepare a `Uniforms` struct for the given viewport mode.
+///
+/// Gathers data from all relevant ECS components (window settings, camera,
+/// cursor, view state, volume data, overlays) and packs them into a
+/// shader-compatible uniform struct.
+///
+/// # Arguments
+/// * `view_mode` - 0=3D, 1=Axial, 2=Coronal, 3=Sagittal
 pub fn sys_prepare_render_data(world: &mut World, view_mode: u32) -> Uniforms {
-    // 1. Get Window Settings
+    // 1. Get Window Settings and Viewport Rect
     let mut resolution = [800.0, 600.0];
     for (_, win) in world.query::<&WindowSettings>().iter() {
-        resolution = [win.width as f32 / 2.0, win.height as f32 / 2.0];
+        // Use the actual render viewport dimensions for the shader
+        resolution = [win.viewport_rect[2] / 2.0, win.viewport_rect[3] / 2.0];
     }
 
     // 2. Get Camera Time
@@ -32,7 +49,7 @@ pub fn sys_prepare_render_data(world: &mut World, view_mode: u32) -> Uniforms {
     let mut zoom_val = 1.0;
     let mut pan = [0.0, 0.0];
     let mut zoom_pivot = [0.5, 0.5];
-    let mut rotation = [0.0, 0.0, 0.0];
+    let mut rotation = [0.0, 0.0, 0.0, 1.0]; // quaternion [x, y, z, w]
     for (_, view) in world.query::<&ViewState>().iter() {
         zoom_val = view.zoom[view_mode as usize];
         pan = view.pan[view_mode as usize];
@@ -81,7 +98,7 @@ pub fn sys_prepare_render_data(world: &mut World, view_mode: u32) -> Uniforms {
         mouse_uv,
         pan,
         zoom_pivot,
-        rotation: [rotation[0], rotation[1], rotation[2], 0.0],
+        rotation, // quaternion [x, y, z, w]
         zoom: zoom_val,
         time: time_val,
         view_mode,
@@ -89,6 +106,10 @@ pub fn sys_prepare_render_data(world: &mut World, view_mode: u32) -> Uniforms {
     }
 }
 
+/// Handle scroll input for zooming or slice scrolling.
+///
+/// - **With Ctrl**: Zooms in/out centered on mouse position
+/// - **Without Ctrl**: Scrolls the active slice (axial/coronal/sagittal)
 pub fn sys_handle_input_scroll(world: &mut World, delta: f32) {
     let mut mouse_uv = [0.5, 0.5];
     let mut mode = 0;
@@ -137,24 +158,36 @@ pub fn sys_handle_input_scroll(world: &mut World, delta: f32) {
     }
 }
 
-// Helper to update mouse position and calculate active viewport
+/// Update mouse position and calculate which viewport quadrant the mouse is in.
+///
+/// Converts screen coordinates to local UV coordinates within the active viewport.
 pub fn sys_update_mouse(world: &mut World, x: f64, y: f64) {
-    // We need window dimensions to calculate quadrants
-    let mut width = 1.0;
-    let mut height = 1.0;
+    // We need window dimensions and viewport rect to calculate quadrants
+    let mut viewport_rect = [0.0, 0.0, 1.0, 1.0];
 
     for (_, win) in world.query::<&WindowSettings>().iter() {
-        width = win.width as f64;
-        height = win.height as f64;
+        viewport_rect = win.viewport_rect;
     }
 
-    // Determine Quadrant (Winit 0,0 is Top-Left)
-    // TL: 3D (0)   | TR: XY (1)
-    // -------------+-----------
-    // BL: XZ (2)   | BR: YZ (3)
+    let vp_x = viewport_rect[0] as f64;
+    let vp_y = viewport_rect[1] as f64;
+    let vp_w = viewport_rect[2] as f64;
+    let vp_h = viewport_rect[3] as f64;
 
-    let col = if x > width / 2.0 { 1 } else { 0 };
-    let row = if y > height / 2.0 { 1 } else { 0 };
+    // Check if mouse is inside the render viewport
+    if x < vp_x || x > (vp_x + vp_w) || y < vp_y || y > (vp_y + vp_h) {
+        // Option: we could set active_viewport to something indicating "UI" or keep last valid
+        // For now, let's just not update the mouse_uv so we don't jump wildly
+        return;
+    }
+
+    // Relative mouse position within the viewport rect
+    let rel_x = x - vp_x;
+    let rel_y = y - vp_y;
+
+    // Determine Quadrant based on relative position
+    let col = if rel_x > vp_w / 2.0 { 1 } else { 0 };
+    let row = if rel_y > vp_h / 2.0 { 1 } else { 0 };
 
     let viewport_idx = match (row, col) {
         (0, 0) => 0, // Top-Left
@@ -166,15 +199,15 @@ pub fn sys_update_mouse(world: &mut World, x: f64, y: f64) {
 
     // Map back to local 0..1 UV coordinates within the quadrant
     let local_x = if col == 1 {
-        (x - width / 2.0) / (width / 2.0)
+        (rel_x - vp_w / 2.0) / (vp_w / 2.0)
     } else {
-        x / (width / 2.0)
+        rel_x / (vp_w / 2.0)
     };
 
     let local_y = if row == 1 {
-        (y - height / 2.0) / (height / 2.0)
+        (rel_y - vp_h / 2.0) / (vp_h / 2.0)
     } else {
-        y / (height / 2.0)
+        rel_y / (vp_h / 2.0)
     };
 
     // Update the component
@@ -213,6 +246,13 @@ fn intersect_aabb(origin: [f32; 3], dir: [f32; 3], min: [f32; 3], max: [f32; 3])
 
 use winit::event::{ElementState, MouseButton};
 
+/// Handle mouse button events for clicking, dragging, and picking.
+///
+/// # Behaviors:
+/// - **Left click**: Set crosshair position (2D picking or 3D raymarching)
+/// - **Middle click / Alt+Left**: Start panning drag
+/// - **Right click**: Start rotation drag
+/// - **Release**: End any drag operation
 pub fn sys_handle_mouse_button(world: &mut World, button: MouseButton, state: ElementState) {
     let mut click_pos = [0.0, 0.0];
     let mut viewport = 0;
@@ -414,6 +454,12 @@ pub fn sys_handle_mouse_button(world: &mut World, button: MouseButton, state: El
     }
 }
 
+/// Handle mouse drag motion for panning and rotating.
+///
+/// Called each frame while a drag is active. Updates pan offset or
+/// quaternion rotation based on mouse delta from drag start.
+///
+/// Supports Shift modifier for constrained Z-axis roll rotation.
 pub fn sys_handle_mouse_drag(world: &mut World) {
     let mut viewport = 0;
     let mut is_dragging = false;
@@ -454,9 +500,8 @@ pub fn sys_handle_mouse_drag(world: &mut World) {
             ];
         }
 
-        if let Some((start_rot, start_pos, current_pos)) = rotate_info {
+        if let Some((start_quat, start_pos, current_pos)) = rotate_info {
             let sensitivity = 3.0; // Radians per screen unit
-            let mut current_rotation = start_rot;
 
             // Check for Shift modifier
             let mut has_shift = false;
@@ -464,17 +509,50 @@ pub fn sys_handle_mouse_drag(world: &mut World) {
                 has_shift = input.modifiers.shift_key();
             }
 
-            if has_shift {
-                // Planar rotation: Roll
-                current_rotation[2] = start_rot[2] + (current_pos[0] - start_pos[0]) * sensitivity;
-            } else {
-                // Orbital rotation: Yaw and Pitch
-                current_rotation[0] = start_rot[0] + (current_pos[0] - start_pos[0]) * sensitivity;
-                current_rotation[1] =
-                    (start_rot[1] + (current_pos[1] - start_pos[1]) * sensitivity).clamp(-1.5, 1.5);
-                // Clamp pitch to avoid gimbal lock at poles
+            // Calculate deltas
+            let delta_x = (current_pos[0] - start_pos[0]) * sensitivity;
+            let delta_y = (current_pos[1] - start_pos[1]) * sensitivity;
+
+            // Quaternion helpers
+            fn quat_from_axis_angle(axis: [f32; 3], angle: f32) -> [f32; 4] {
+                let half = angle * 0.5;
+                let s = half.sin();
+                let c = half.cos();
+                [axis[0] * s, axis[1] * s, axis[2] * s, c]
             }
-            view.rotation[viewport as usize] = current_rotation;
+
+            fn quat_multiply(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+                [
+                    a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+                    a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+                    a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+                    a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+                ]
+            }
+
+            fn quat_normalize(q: [f32; 4]) -> [f32; 4] {
+                let len = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+                if len > 1e-8 {
+                    [q[0] / len, q[1] / len, q[2] / len, q[3] / len]
+                } else {
+                    [0.0, 0.0, 0.0, 1.0] // identity
+                }
+            }
+
+            let new_quat = if has_shift {
+                // Planar rotation: Roll around Z-axis (forward)
+                let roll_quat = quat_from_axis_angle([0.0, 0.0, 1.0], delta_x);
+                quat_normalize(quat_multiply(roll_quat, start_quat))
+            } else {
+                // Orbital rotation: Yaw around Y (world up), Pitch around X (local right)
+                let yaw_quat = quat_from_axis_angle([0.0, 1.0, 0.0], delta_x);
+                let pitch_quat = quat_from_axis_angle([1.0, 0.0, 0.0], delta_y);
+                // Apply yaw first (world space), then pitch
+                let combined = quat_multiply(yaw_quat, quat_multiply(pitch_quat, start_quat));
+                quat_normalize(combined)
+            };
+
+            view.rotation[viewport as usize] = new_quat;
         }
     }
 }

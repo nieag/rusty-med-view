@@ -1,27 +1,36 @@
-// use hecs::Entity;
+//! ECS components for the medical imaging viewer.
+//!
+//! Components represent data attached to entities. Key component types:
+//! - **Transform/View**: Position, zoom, pan, rotation state
+//! - **Volume**: Main volume data and GPU resources
+//! - **Segmentation**: Labelmap overlay layers
+//! - **Input/GUI**: User interaction state
+
 use winit::keyboard::ModifiersState;
-// use wgpu; // Implicitly available via Cargo.toml dependencies
-// Standard Component used by almost everything
+
+/// 3D transform component with position and rotation.
 #[derive(Debug, Copy, Clone)]
 pub struct Transform {
     pub position: [f32; 3],
     pub rotation: [f32; 3],
 }
 
-// Tag for the cursor
+/// Tag component marking an entity as the 3D cursor.
 pub struct CursorTag;
 
-// Camera settings
+/// Camera rig settings (used for animation timing).
 pub struct CameraRig {
     pub radius: f32,
     pub speed: f32,
     pub start_time: web_time::Instant,
 }
 
-// Window state
+/// Window and viewport dimensions.
 pub struct WindowSettings {
     pub width: u32,
     pub height: u32,
+    /// Viewport rectangle [x, y, width, height] in pixels
+    pub viewport_rect: [f32; 4],
 }
 
 /// GPU resources for a volume, stored as a component
@@ -32,7 +41,10 @@ pub struct GpuVolumeResources {
     pub bind_group: wgpu::BindGroup,
 }
 
-// GPU Data Structures (Uniforms)
+/// GPU-aligned uniform struct passed to shaders.
+///
+/// **Important**: This struct must be kept in sync with the WGSL `Uniforms`
+/// struct in `shader.wgsl`. Fields are ordered to satisfy 16-byte alignment.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Uniforms {
@@ -44,18 +56,28 @@ pub struct Uniforms {
     pub mouse_uv: [f32; 2],          // 72
     pub pan: [f32; 2],               // 80
     pub zoom_pivot: [f32; 2],        // 88
-    pub rotation: [f32; 4],          // 96 (Yaw, Pitch, Roll, Padding)
+    pub rotation: [f32; 4],          // 96 (quaternion x, y, z, w)
     pub zoom: f32,                   // 112
     pub time: f32,                   // 116
     pub view_mode: u32,              // 120
-    pub overlay_flags: u32,          // 124 (total 128)
+    pub overlay_flags: u32,          // 124 (total 128 bytes)
 }
 
+/// Per-viewport view state (zoom, pan, pivot, rotation).
+///
+/// Each array index corresponds to a viewport:
+/// - 0: 3D view
+/// - 1: Axial slice
+/// - 2: Coronal slice
+/// - 3: Sagittal slice
 pub struct ViewState {
     pub zoom: [f32; 4],
-    pub pan: [[f32; 2]; 4],      // Per-viewport pan offsets
-    pub pivot: [[f32; 2]; 4],    // Per-viewport zoom pivot
-    pub rotation: [[f32; 3]; 4], // NEW: Per-viewport rotation [yaw, pitch, roll]
+    /// Per-viewport pan offsets in UV space
+    pub pan: [[f32; 2]; 4],
+    /// Per-viewport zoom pivot (where zoom centers)
+    pub pivot: [[f32; 2]; 4],
+    /// Per-viewport rotation as quaternion [x, y, z, w]
+    pub rotation: [[f32; 4]; 4],
 }
 
 /// Volume data component - stores loaded volume information
@@ -125,17 +147,23 @@ pub struct LoadedLabel {
     pub data: Vec<u8>, // Raw R8Uint data
 }
 
+/// Mouse and keyboard input state.
+///
+/// Tracks current mouse position, active viewport, modifier keys,
+/// and drag/rotation gesture state.
 pub struct InputState {
     pub last_mouse_pos: [f64; 2],
     pub mouse_uv: [f32; 2],
     pub active_viewport: u8,
     pub modifiers: ModifiersState,
-    pub is_dragging: bool,            // NEW: Dragging state
-    pub drag_start_pos: [f32; 2],     // NEW: Screen pos at drag start
-    pub drag_start_pan: [f32; 2],     // NEW: Pan offset at drag start
-    pub is_rotating: bool,            // NEW: Rotating state (right click)
-    pub rotation_start_pos: [f32; 2], // NEW: Screen pos at rotation start
-    pub rotation_start_val: [f32; 3], // NEW: Rotation val at start [yaw, pitch, roll]
+    /// True while middle-click or Alt+left drag is active
+    pub is_dragging: bool,
+    pub drag_start_pos: [f32; 2],
+    pub drag_start_pan: [f32; 2],
+    /// True while right-click rotation drag is active
+    pub is_rotating: bool,
+    pub rotation_start_pos: [f32; 2],
+    pub rotation_start_val: [f32; 4],
 }
 
 // --- NEW: Labelmap & Layering Components ---

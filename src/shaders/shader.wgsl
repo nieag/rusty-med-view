@@ -17,7 +17,7 @@ struct Uniforms {
     mouse_uv: vec2<f32>,
     pan: vec2<f32>,
     zoom_pivot: vec2<f32>,
-    rotation: vec4<f32>, // [yaw, pitch, roll, padding]
+    rotation: vec4<f32>, // quaternion [x, y, z, w]
     zoom: f32,
     time: f32,
     view_mode: u32,
@@ -176,38 +176,46 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let zoomed_uv = (in.uv - pivot) / zoom + pivot + pan;
         let screen_pos = vec2<f32>((zoomed_uv.x - 0.5) * aspect, zoomed_uv.y - 0.5);
 
-        let radius = 3.5;
+        // --- Quaternion-based Camera ---
+        // Rotation quaternion stored as vec4(x, y, z, w)
+        let q = uniforms.rotation;
         
-        // Orbital Camera
-        let yaw = uniforms.rotation.x;
-        let pitch = uniforms.rotation.y;
-        let roll = uniforms.rotation.z;
+        // Convert quaternion to rotation matrix
+        // The camera looks at origin from +Z with this orientation
+        let x2 = q.x + q.x;
+        let y2 = q.y + q.y;
+        let z2 = q.z + q.z;
+        let xx = q.x * x2;
+        let xy = q.x * y2;
+        let xz = q.x * z2;
+        let yy = q.y * y2;
+        let yz = q.y * z2;
+        let zz = q.z * z2;
+        let wx = q.w * x2;
+        let wy = q.w * y2;
+        let wz = q.w * z2;
 
-        let cos_p = cos(pitch);
-        let sin_p = sin(pitch);
-        let cos_y = cos(yaw);
-        let sin_y = sin(yaw);
-        
-        // Eye position in orbital space
-        let cam_pos = vec3<f32>(
-            radius * cos_p * sin_y,
-            radius * sin_p,
-            -radius * cos_p * cos_y
+        // Rotation matrix from quaternion (column-major for WGSL mat3x3)
+        let rot_mat = mat3x3<f32>(
+            vec3<f32>(1.0 - (yy + zz), xy + wz, xz - wy),
+            vec3<f32>(xy - wz, 1.0 - (xx + zz), yz + wx),
+            vec3<f32>(xz + wy, yz - wx, 1.0 - (xx + yy))
         );
+        
+        // Camera position: rotate base position (0, 0, radius) by quaternion
+        let radius = 3.5;
+        let base_cam_pos = vec3<f32>(0.0, 0.0, -radius);
+        let cam_pos = rot_mat * base_cam_pos;
 
         let cam_target = vec3<f32>(0.0, 0.0, 0.0);
         let forward = normalize(cam_target - cam_pos);
-        let world_up = vec3<f32>(0.0, 1.0, 0.0);
         
-        // Base Basis
-        let base_right = normalize(cross(world_up, forward));
-        let base_up = cross(forward, base_right);
-        
-        // Apply Roll (planar rotation around forward axis)
-        let cos_r = cos(roll);
-        let sin_r = sin(roll);
-        let right = base_right * cos_r + base_up * sin_r;
-        let up = base_up * cos_r - base_right * sin_r;
+        // Right and Up are derived from rotated basis
+        // We rotate the standard basis vectors
+        let base_right = vec3<f32>(1.0, 0.0, 0.0);
+        let base_up = vec3<f32>(0.0, 1.0, 0.0);
+        let right = rot_mat * base_right;
+        let up = rot_mat * base_up;
 
         let ray_dir = normalize(forward + right * screen_pos.x + up * screen_pos.y);
 
