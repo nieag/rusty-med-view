@@ -52,15 +52,16 @@ pub struct Uniforms {
     pub volume_dims: [u32; 4],       // 16
     pub volume_spacing: [f32; 4],    // 32
     pub overlay_opacities: [f32; 4], // 48
-    pub resolution: [f32; 2],        // 64
-    pub mouse_uv: [f32; 2],          // 72
-    pub pan: [f32; 2],               // 80
-    pub zoom_pivot: [f32; 2],        // 88
-    pub rotation: [f32; 4],          // 96 (quaternion x, y, z, w)
-    pub zoom: f32,                   // 112
-    pub time: f32,                   // 116
-    pub view_mode: u32,              // 120
-    pub overlay_flags: u32,          // 124 (total 128 bytes)
+    pub window_params: [f32; 4],     // 64: [center, width, data_min, data_max]
+    pub resolution: [f32; 2],        // 80
+    pub mouse_uv: [f32; 2],          // 88
+    pub pan: [f32; 2],               // 96
+    pub zoom_pivot: [f32; 2],        // 104
+    pub rotation: [f32; 4],          // 112 (quaternion x, y, z, w)
+    pub zoom: f32,                   // 128
+    pub time: f32,                   // 132
+    pub view_mode: u32,              // 136
+    pub overlay_flags: u32,          // 140 (total 144 bytes)
 }
 
 /// Per-viewport view state (zoom, pan, pivot, rotation).
@@ -144,7 +145,8 @@ pub enum LoadResult {
 pub struct LoadedLabel {
     pub dimensions: [u32; 3],
     pub spacing: [f32; 3],
-    pub data: Vec<u8>, // Raw R8Uint data
+    pub data: Vec<u8>,    // Raw R8Uint data
+    pub filename: String, // Source filename for layer naming
 }
 
 /// Mouse and keyboard input state.
@@ -195,4 +197,56 @@ pub struct LabelmapData {
     pub dimensions: [u32; 3],
     pub spacing: [f32; 3], // Added spacing
     pub raw_data: Vec<u8>, // R8Uint indices
+}
+
+// --- NEW: Editor Components ---
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorTool {
+    Navigation,
+    Brush,
+    Eraser,
+}
+
+pub struct EditorState {
+    pub active_tool: EditorTool,
+    pub brush_size: f32,
+    pub active_label_index: u8,
+    pub active_layer: Option<hecs::Entity>,
+    /// Last painted voxel position for stroke interpolation
+    pub last_paint_voxel: Option<[u32; 3]>,
+}
+
+impl Default for EditorState {
+    fn default() -> Self {
+        Self {
+            active_tool: EditorTool::Navigation,
+            brush_size: 5.0,
+            active_label_index: 1,
+            active_layer: None,
+            last_paint_voxel: None,
+        }
+    }
+}
+
+// --- NEW: Windowing Component ---
+
+/// Volume windowing/contrast settings for intensity mapping.
+///
+/// Controls how volume intensities are mapped to display values.
+/// Uses normalized 0-1 range (since textures are pre-normalized).
+pub struct VolumeWindowing {
+    /// Window center (L) in normalized 0-1 range
+    pub center: f32,
+    /// Window width (W) in normalized 0-1 range
+    pub width: f32,
+}
+
+impl Default for VolumeWindowing {
+    fn default() -> Self {
+        Self {
+            center: 0.5,
+            width: 1.0,
+        }
+    }
 }

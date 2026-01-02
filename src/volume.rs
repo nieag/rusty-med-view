@@ -435,3 +435,49 @@ pub fn create_texture_from_labelmap(
 
     (texture, view, sampler)
 }
+
+/// Create a blank labelmap of given dimensions initialized to 0.
+pub fn create_blank_labelmap(
+    device: &wgpu::Device,
+    _queue: &wgpu::Queue,
+    dimensions: [u32; 3],
+) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler, Vec<u8>) {
+    let [width, height, depth] = dimensions;
+    let size = wgpu::Extent3d {
+        width,
+        height,
+        depth_or_array_layers: depth,
+    };
+
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Blank Labelmap"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D3,
+        format: wgpu::TextureFormat::R8Uint,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        address_mode_w: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Nearest,
+        min_filter: wgpu::FilterMode::Nearest,
+        ..Default::default()
+    });
+
+    // Create zeroed CPU data
+    let count = (width * height * depth) as usize;
+    let data = vec![0u8; count];
+
+    // NOTE: We don't need to write to the texture since create_texture initializes memory to 0 (usually)
+    // but to be safe/explicit or if we reused memory, we might want to cleared it.
+    // However, wgpu textures from create_texture are lazy-cleared to 0 by default.
+
+    (texture, view, sampler, data)
+}

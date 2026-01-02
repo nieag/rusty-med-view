@@ -42,34 +42,53 @@ pub fn handle_volume_load(
     loaded.dimensions
 }
 
-/// Handle a successfully loaded labelmap, updating ECS components and GPU resources.
+/// Handle a successfully loaded labelmap by spawning a new layer entity.
 ///
-/// Returns the dimensions of the loaded labelmap for status message construction.
+/// Returns the new entity ID and dimensions of the loaded labelmap.
 pub fn handle_label_load(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     world: &mut World,
     loaded_label: &LoadedLabel,
-) -> [u32; 3] {
+) -> (hecs::Entity, [u32; 3]) {
     log::info!("Labelmap loaded: {:?} dimensions", loaded_label.dimensions);
 
     let (new_texture, new_view, new_sampler) =
         volume::create_texture_from_labelmap(device, queue, loaded_label);
 
-    // Find the first Segmentation entity and update its Voxel representation
-    for (_, (seg, settings, repr)) in
-        world.query_mut::<(&mut Segmentation, &mut LayerSettings, &mut Representation)>()
-    {
-        let Representation::Voxel(gpu_res) = repr;
-        gpu_res.texture = new_texture;
-        gpu_res.view = new_view;
-        gpu_res.sampler = new_sampler;
-        seg.is_visible = true;
-        settings.opacity = 0.5;
+    // Fetch an existing bind group as placeholder (will be fixed by recreate_bind_groups)
+    let mut placeholder_bg = None;
+    for (_, res) in world.query::<&GpuVolumeResources>().iter() {
+        placeholder_bg = Some(res.bind_group.clone());
         break;
     }
+    let placeholder_bg = placeholder_bg.expect("Main volume should exist");
 
-    loaded_label.dimensions
+    // Spawn a new layer entity with CPU data for painting support
+    let entity = world.spawn((
+        Segmentation {
+            name: loaded_label.filename.clone(),
+            is_visible: true,
+        },
+        LayerSettings {
+            opacity: 0.5,
+            active_representation: 0,
+        },
+        LabelmapData {
+            dimensions: loaded_label.dimensions,
+            spacing: loaded_label.spacing,
+            raw_data: loaded_label.data.clone(),
+        },
+        Representation::Voxel(GpuVolumeResources {
+            texture: new_texture,
+            view: new_view,
+            sampler: new_sampler,
+            bind_group: placeholder_bg,
+        }),
+        SegmentationTag,
+    ));
+
+    (entity, loaded_label.dimensions)
 }
 
 /// Recreate the scene bind group with current volume and overlay textures.
@@ -87,7 +106,7 @@ pub fn recreate_bind_groups(
 ) {
     // Collect the texture views we need (must satisfy borrow checker)
     let main_view: Option<wgpu::TextureView>;
-    let overlay1_view: Option<wgpu::TextureView>;
+    let mut overlay_views = Vec::new();
 
     // Query main volume view
     {
@@ -96,18 +115,28 @@ pub fn recreate_bind_groups(
         main_view = with_tag.iter().next().map(|(_, res)| res.view.clone());
     }
 
-    // Query overlay view
+    // Query overlay views
     {
+        // We need to iterate all components that have Representation::Voxel
+        // We also want to respect some order, e.g. Entity ID or Name.
+        // For simplicity, we just collect them all.
+        // Note: we can't sort nicely without collecting first.
         let mut query = world.query::<&Representation>();
-        overlay1_view = query.iter().next().map(|(_, r)| {
-            let Representation::Voxel(res) = r;
-            res.view.clone()
-        });
+        for (_, r) in query.iter() {
+            if let Representation::Voxel(res) = r {
+                overlay_views.push(res.view.clone());
+            }
+        }
+        // Limit to 2 for now as shader supports 2
+        // Ideally we pick "visible" ones or "first 2".
+        // Let's just take first 2 found.
     }
 
     // Use actual views or fallback to dummy
     let main_view_ref = main_view.as_ref().unwrap_or(dummy_view);
-    let overlay1_view_ref = overlay1_view.as_ref().unwrap_or(dummy_view);
+
+    let overlay1_view = overlay_views.get(0).unwrap_or(dummy_view);
+    let overlay2_view = overlay_views.get(1).unwrap_or(dummy_view);
 
     let new_bind_group = render::create_scene_bind_group(
         device,
@@ -115,9 +144,9 @@ pub fn recreate_bind_groups(
         main_view_ref,
         dummy_sampler,
         uniform_buffer,
-        overlay1_view_ref,
+        overlay1_view,
         default_lut_view,
-        dummy_view,
+        overlay2_view,
         default_lut_view,
     );
 

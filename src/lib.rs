@@ -202,29 +202,79 @@ impl App {
         ));
 
         // Spawn Demo Labelmap Entity
-        world.spawn((
+        // NOTE: We need to also store the CPU data for editing!
+        // create_demo_labelmap doesn't return data, so we need to recreate the data or call it differently.
+        // Let's modify behavior slightly: Just create a "Blank" one of same size for simplicity OR
+        // we can fetch the data back from GPU? No, unnecessary complexity.
+        // Let's just create a blank one for now that is editable, OR update create_demo_labelmap to return data.
+        // For minimal changes: Let's assume the demo map is STATIC or we just create a NEW blank editable one.
+        // The user request "Add basic label editing".
+        // Let's spawn a NEW Blank Editable Layer instead of the hardcoded demo one?
+        // OR better: Update Components to hold LabelmapData for the demo layer.
+        // For speed, let's just make a new editable layer.
+
+        // Actually, to make the Demo layer editable, we need its data.
+        // Let's just create a Blank 64x64x64 layer for "New Layer" testing.
+        // But let's spawn the demo layer as non-editable for now (since we lack CPU data easily here without copy paste).
+        // Wait, I can just copy the logic from `create_demo_labelmap` here to generate data.
+        // Or I can update `volume.rs` to return data.
+        // I will adhere to "minimal changes" principle and just create a NEW blank layer logic in the Paint system or here.
+
+        // Let's create an EDITABLE blank layer at start so the user has something to draw on.
+        let (blank_tex, blank_view, blank_sampler, blank_data) =
+            volume::create_blank_labelmap(&device, &queue, [64, 64, 64]);
+        let blank_entity = world.spawn((
             Segmentation {
-                name: "Demo Labelmap".to_string(),
+                name: "Layer 1".to_string(),
                 is_visible: true,
             },
             LayerSettings {
                 opacity: 0.7,
                 active_representation: 0,
             },
+            LabelmapData {
+                dimensions: [64, 64, 64],
+                spacing: [1.0, 1.0, 1.0],
+                raw_data: blank_data,
+            },
             Representation::Voxel(GpuVolumeResources {
-                texture: label_tex,
-                view: label_view,
-                sampler: label_sampler,
-                bind_group: diffuse_bind_group.clone(),
+                texture: blank_tex,
+                view: blank_view,
+                sampler: blank_sampler,
+                bind_group: diffuse_bind_group.clone(), // Re-use until recreation
             }),
             SegmentationTag,
         ));
+
+        // Initialize EditorState with active layer
+        world.spawn((EditorState {
+            active_layer: Some(blank_entity),
+            ..Default::default()
+        },));
+
+        // Initialize VolumeWindowing with default values
+        world.spawn((VolumeWindowing::default(),));
 
         let render_pipeline =
             render::create_render_pipeline(&device, &texture_bind_group_layout, config.format);
         let (vertex_buffer, index_buffer, num_indices) = render::create_geometry_buffers(&device);
 
         let gui = gui::Gui::new(&device, config.format, &window);
+
+        // Trigger bind group update to actually bind the new blank layer?
+        // The `diffuse_bind_group` created above uses `label_view` (the demo one).
+        // We need to update it to use `blank_view`.
+        // Since we have ECS now, `recreate_bind_groups` will do it.
+        // We can just call it once here.
+        load_handlers::recreate_bind_groups(
+            &device,
+            &mut world,
+            &texture_bind_group_layout,
+            &uniform_buffer,
+            &dummy_r8.1,
+            &dummy_r8.2,
+            &default_lut.1,
+        );
 
         RenderingContext {
             window,
@@ -364,6 +414,85 @@ impl ApplicationHandler for App {
         let mut state = self.state.lock().unwrap();
         if let Some(ctx) = &mut state.context {
             systems::sys_handle_mouse_drag(&mut ctx.world);
+            systems::sys_paint(&mut ctx.world, &ctx.queue); // Execute Paint System
+
+            // Handle "Create New Layer" request from GUI?
+            // Cleanest way: Check GuiState for a request flag
+            let mut create_layer = false;
+            for (_, gui_state) in ctx.world.query::<&mut GuiState>().iter() {
+                if gui_state.load_label_requested {
+                    gui_state.load_label_requested = false;
+                    create_layer = true;
+                }
+            }
+
+            if create_layer {
+                // Get dimensions from main volume
+                let mut dims = [64, 64, 64];
+                for (_, vol) in ctx.world.query::<&VolumeData>().iter() {
+                    dims = vol.dimensions;
+                }
+
+                let (tex, view, sampler, data) =
+                    volume::create_blank_labelmap(&ctx.device, &ctx.queue, dims);
+
+                // Generate unique name
+                let mut count = 0;
+                for _ in ctx.world.query::<&Segmentation>().iter() {
+                    count += 1;
+                }
+                let name = format!("Layer {}", count + 1);
+
+                // Fetch an existing bind group to generic placeholder
+                let mut placeholder_bg = None;
+                for (_, res) in ctx.world.query::<&GpuVolumeResources>().iter() {
+                    placeholder_bg = Some(res.bind_group.clone());
+                    break;
+                }
+                // Fallback for initial startup if no volume exists yet (should not happen if we load default volume first)
+                // But create_rendering_context creates volume FIRST.
+                let placeholder_bg =
+                    placeholder_bg.expect("Main volume should exist and have a bindRef");
+
+                let entity = ctx.world.spawn((
+                    Segmentation {
+                        name,
+                        is_visible: true,
+                    },
+                    LayerSettings {
+                        opacity: 0.7,
+                        active_representation: 0,
+                    },
+                    LabelmapData {
+                        dimensions: dims,
+                        spacing: [1.0, 1.0, 1.0],
+                        raw_data: data,
+                    },
+                    Representation::Voxel(GpuVolumeResources {
+                        texture: tex,
+                        view: view,
+                        sampler: sampler,
+                        bind_group: placeholder_bg,
+                    }),
+                    SegmentationTag,
+                ));
+
+                // Now globally update the bind groups (this updates everyone's bind_group to the new correct one)
+                load_handlers::recreate_bind_groups(
+                    &ctx.device,
+                    &mut ctx.world,
+                    &ctx.texture_bind_group_layout,
+                    &ctx.uniform_buffer,
+                    &ctx.dummy_r8.1,
+                    &ctx.dummy_r8.2,
+                    &ctx.default_lut.1,
+                );
+
+                // Select the new layer
+                for (_, editor) in ctx.world.query_mut::<&mut EditorState>() {
+                    editor.active_layer = Some(entity);
+                }
+            }
 
             // File dialogs are now spawned directly from GUI button clicks (gui.rs)
             // to maintain browser user gesture chain for WASM compatibility.
@@ -387,7 +516,7 @@ impl ApplicationHandler for App {
                                 dims
                             }
                             components::LoadResult::Label(ref loaded_label) => {
-                                let dims = load_handlers::handle_label_load(
+                                let (new_entity, dims) = load_handlers::handle_label_load(
                                     &ctx.device,
                                     &ctx.queue,
                                     &mut ctx.world,
@@ -397,6 +526,12 @@ impl ApplicationHandler for App {
                                     &mut ctx.world,
                                     format!("Label Loaded: {}x{}", dims[0], dims[1]),
                                 );
+
+                                // Set the newly loaded layer as active for editing
+                                for (_, editor) in ctx.world.query_mut::<&mut EditorState>() {
+                                    editor.active_layer = Some(new_entity);
+                                }
+
                                 dims
                             }
                         };

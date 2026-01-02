@@ -13,6 +13,7 @@ struct Uniforms {
     volume_dims: vec4<u32>,
     volume_spacing: vec4<f32>,
     overlay_opacities: vec4<f32>,
+    window_params: vec4<f32>,        // [center, width, data_min, data_max]
     resolution: vec2<f32>,
     mouse_uv: vec2<f32>,
     pan: vec2<f32>,
@@ -111,6 +112,14 @@ fn get_crosshair_alpha(uv: vec2<f32>, center: vec2<f32>, aspect: f32) -> f32 {
     return max(line_x, line_y);
 }
 
+// Apply windowing transform to intensity value
+// Maps [center - width/2, center + width/2] -> [0, 1]
+fn apply_window(value: f32, center: f32, width: f32) -> f32 {
+    if width <= 0.0 { return 0.5; }
+    let low = center - width * 0.5;
+    return clamp((value - low) / width, 0.0, 1.0);
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var final_color = vec4<f32>(0.0);
@@ -145,8 +154,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 crosshair_screen_pos = (cursor.yz - pan - pivot) * zoom + pivot;
             }
 
-            // 1. Sample Main Volume
-            final_color = textureSample(t_diffuse, s_diffuse, sample_pos);
+            // 1. Sample Main Volume and apply windowing
+            let raw_intensity = textureSample(t_diffuse, s_diffuse, sample_pos).r;
+            let windowed = apply_window(raw_intensity, uniforms.window_params.x, uniforms.window_params.y);
+            final_color = vec4<f32>(windowed, windowed, windowed, 1.0);
             
             // 2. Blend Overlays (if texture not dummy)
             // We can't easily detect "dummy" in shader, so we rely on uniforms or just data being 0
@@ -261,8 +272,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             for (var i = 0; i < steps; i++) {
                 let tex_coord = (current_pos / aspect_ratio_vol) + 0.5;
                 
-                // 1. Sample Volume (Density)
-                let voxel = textureSampleLevel(t_diffuse, s_diffuse, tex_coord, 0.0).r;
+                // 1. Sample Volume (Density) with windowing
+                let raw_voxel = textureSampleLevel(t_diffuse, s_diffuse, tex_coord, 0.0).r;
+                let voxel = apply_window(raw_voxel, uniforms.window_params.x, uniforms.window_params.y);
                 let density = voxel * 0.05; 
                 
                 // 2. Sample Overlays (Color)

@@ -179,7 +179,10 @@ pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
 }
 
 /// Specialized loader for labelmaps (raw u8 IDs, no normalization)
-pub fn load_label_from_bytes(data: &[u8]) -> Result<crate::components::LoadedLabel, LoadError> {
+pub fn load_label_from_bytes(
+    data: &[u8],
+    filename: String,
+) -> Result<crate::components::LoadedLabel, LoadError> {
     // Reuse decompression and header parsing logic (simplified for this brief)
     // For brevity, I will re-implement the core loop or refactor later.
     // Actually, let's just do a clean implementation for Labels.
@@ -225,6 +228,7 @@ pub fn load_label_from_bytes(data: &[u8]) -> Result<crate::components::LoadedLab
         dimensions: [width, height, depth],
         spacing,
         data: label_data,
+        filename,
     })
 }
 

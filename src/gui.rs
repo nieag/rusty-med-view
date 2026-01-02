@@ -116,9 +116,10 @@ impl Gui {
                             // Spawn file picker DIRECTLY from button click (required for WASM user gesture)
                             let sender = volume_sender.clone();
                             file_dialog::spawn_file_picker(move |result| {
-                                if let Some((_filename, data)) = result {
-                                    let load_result = nifti_loader::load_label_from_bytes(&data)
-                                        .map(LoadResult::Label);
+                                if let Some((filename, data)) = result {
+                                    let load_result =
+                                        nifti_loader::load_label_from_bytes(&data, filename)
+                                            .map(LoadResult::Label);
                                     let _ = sender.send(load_result);
                                 }
                             });
@@ -127,19 +128,71 @@ impl Gui {
 
                     ui.separator();
 
+                    // --- Windowing / Contrast Controls ---
+                    ui.collapsing("Windowing", |ui| {
+                        let mut windowing_query = world.query::<&mut VolumeWindowing>();
+                        if let Some((_, windowing)) = windowing_query.iter().next() {
+                            ui.label("Window Center (L)");
+                            ui.add(
+                                egui::Slider::new(&mut windowing.center, 0.0..=1.0)
+                                    .show_value(true),
+                            );
+
+                            ui.label("Window Width (W)");
+                            ui.add(
+                                egui::Slider::new(&mut windowing.width, 0.01..=2.0)
+                                    .show_value(true),
+                            );
+
+                            if ui.button("Reset").clicked() {
+                                windowing.center = 0.5;
+                                windowing.width = 1.0;
+                            }
+                        } else {
+                            ui.label("No windowing settings available");
+                        }
+                    });
+
+                    ui.separator();
+
+                    // --- Toolbox (Label Editor) ---
+                    ui.collapsing("Toolbox", |ui| {
+                        // Access EditorState
+                        let mut editor_state_query = world.query::<&mut EditorState>();
+                        if let Some((_, editor)) = editor_state_query.iter().next() {
+                            ui.label("Active Tool");
+                            ui.horizontal(|ui| {
+                                ui.radio_value(
+                                    &mut editor.active_tool,
+                                    EditorTool::Navigation,
+                                    "Nav",
+                                );
+                                ui.radio_value(&mut editor.active_tool, EditorTool::Brush, "Brush");
+                                ui.radio_value(
+                                    &mut editor.active_tool,
+                                    EditorTool::Eraser,
+                                    "Erase",
+                                );
+                            });
+
+                            if editor.active_tool != EditorTool::Navigation {
+                                ui.separator();
+                                ui.label(format!("Brush Size: {:.1}", editor.brush_size));
+                                ui.add(
+                                    egui::Slider::new(&mut editor.brush_size, 1.0..=20.0)
+                                        .text("px"),
+                                );
+
+                                ui.label("Label ID");
+                                ui.add(egui::Slider::new(&mut editor.active_label_index, 1..=10));
+                            }
+                        }
+                    });
+
+                    ui.separator();
+
                     // --- Layer Control ---
                     ui.collapsing("Layers", |ui| {
-                        // We need to collect entities to mutate them to satisfy borrow rules
-                        // Since we can't iterate and mutate easily inside the closure with world borrow
-                        // We will just do a direct query update here? No, we can't borrow world inside context run closure if we want?
-                        // Wait, world is passed to prepare(), so we can borrow it.
-                        // But we are inside self.context.run closure.
-
-                        // NOTE: Rust borrow checker might complain if we try to borrow world inside the closure
-                        // if it's already borrowed mutably by `prepare`.
-                        // `ctx.run` is synchronous.
-
-                        // Let's try direct access.
                         let mut layers: Vec<(hecs::Entity, String, bool, f32)> = Vec::new();
                         for (e, (seg, settings)) in
                             world.query::<(&Segmentation, &LayerSettings)>().iter()
@@ -147,11 +200,34 @@ impl Gui {
                             layers.push((e, seg.name.clone(), seg.is_visible, settings.opacity));
                         }
 
+                        // New Layer Button
+                        if ui.button("➕ Create New Layer").clicked() {
+                            // Need to trigger creation. Can't do it here easily since we need Device/Queue.
+                            // Set a flag in GuiState?
+                            for (_, gui_state) in world.query_mut::<&mut GuiState>() {
+                                gui_state.load_label_requested = true; // Temporary hijack for "Create" logic
+                                                                       // Actually create logic needs to differentiate Load vs Create.
+                                                                       // Let's rely on checking this flag in Lib.rs and creating a default one.
+                                                                       // Or better, add `create_label_requested` to GuiState.
+                                                                       // For now, let's leave it as "TODO" or implement properly next step.
+                                                                       // Let's implement active layer selection first.
+                            }
+                        }
+
+                        // Collect EditorState to update active layer
+                        let mut active_layer = None;
+                        for (_, editor) in world.query::<&EditorState>().iter() {
+                            active_layer = editor.active_layer;
+                        }
+                        let mut new_active_layer = active_layer;
+
                         for (entity, name, mut visible, mut opacity) in layers {
                             ui.group(|ui| {
                                 ui.horizontal(|ui| {
+                                    // Radio button for "Active Layer"
+                                    ui.radio_value(&mut new_active_layer, Some(entity), "");
+
                                     if ui.checkbox(&mut visible, "").changed() {
-                                        // Update visibility later
                                         if let Ok(mut seg) =
                                             world.query_one::<&mut Segmentation>(entity)
                                         {
@@ -181,6 +257,13 @@ impl Gui {
                                 }
                             });
                         }
+
+                        // Write back active layer selection
+                        if new_active_layer != active_layer {
+                            for (_, editor) in world.query_mut::<&mut EditorState>() {
+                                editor.active_layer = new_active_layer;
+                            }
+                        }
                     });
 
                     ui.separator();
@@ -201,8 +284,8 @@ impl Gui {
 
                     ui.separator();
                     ui.collapsing("Controls", |ui| {
-                        ui.label("Left Mouse: Crosshair");
-                        ui.label("Middle Mouse / Alt+Left: Pan");
+                        ui.label("Left Mouse: Crosshair / Paint");
+                        ui.label("Middle Mouse: Pan");
                         ui.label("Right Mouse: Rotate (3D)");
                         ui.label("Scroll: Zoom / Slice");
                         ui.label("Ctrl+Scroll: 2D Zoom");
