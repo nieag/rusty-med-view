@@ -94,20 +94,21 @@ pub struct VolumeData {
 }
 
 impl VolumeData {
-    /// Get the largest dimension (used for normalization)
-    pub fn max_dimension(&self) -> u32 {
-        self.dimensions[0]
-            .max(self.dimensions[1])
-            .max(self.dimensions[2])
-    }
-
-    /// Get aspect ratios relative to max dimension
+    /// Get aspect ratios relative to max physical dimension
     pub fn aspect_ratios(&self) -> [f32; 3] {
-        let max = self.max_dimension() as f32;
+        let physical_size = [
+            self.dimensions[0] as f32 * self.spacing[0],
+            self.dimensions[1] as f32 * self.spacing[1],
+            self.dimensions[2] as f32 * self.spacing[2],
+        ];
+        let max_phys = physical_size[0]
+            .max(physical_size[1])
+            .max(physical_size[2])
+            .max(1e-6); // Avoid division by zero
         [
-            (self.dimensions[0] as f32 * self.spacing[0]) / max,
-            (self.dimensions[1] as f32 * self.spacing[1]) / max,
-            (self.dimensions[2] as f32 * self.spacing[2]) / max,
+            physical_size[0] / max_phys,
+            physical_size[1] / max_phys,
+            physical_size[2] / max_phys,
         ]
     }
 }
@@ -236,17 +237,18 @@ impl Default for EditorState {
 /// Controls how volume intensities are mapped to display values.
 /// Uses normalized 0-1 range (since textures are pre-normalized).
 pub struct VolumeWindowing {
-    /// Window center (L) in normalized 0-1 range
+    /// Window center (L) in Hounsfield Units
     pub center: f32,
-    /// Window width (W) in normalized 0-1 range
+    /// Window width (W) in Hounsfield Units
     pub width: f32,
 }
 
 impl Default for VolumeWindowing {
     fn default() -> Self {
+        // Default to soft tissue window
         Self {
-            center: 0.5,
-            width: 1.0,
+            center: 40.0, // Soft tissue center HU
+            width: 400.0, // Soft tissue width HU
         }
     }
 }

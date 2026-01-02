@@ -16,6 +16,35 @@ pub fn sys_update_modifiers(world: &mut World, mods: ModifiersState) {
     }
 }
 
+/// Get the HU intensity value at the current mouse position.
+/// Returns None if mouse is outside volume bounds or no volume is loaded.
+pub fn get_hu_at_mouse(world: &World) -> Option<f32> {
+    // Get current input state
+    let mut viewport = 0;
+    let mut mouse_uv = [0.5, 0.5];
+    for (_, input) in world.query::<&InputState>().iter() {
+        viewport = input.active_viewport as u8;
+        mouse_uv = input.mouse_uv;
+    }
+
+    // Get voxel position at mouse
+    let voxel_pos = get_voxel_at_mouse(world, viewport, mouse_uv)?;
+
+    // Sample from volume data
+    for (_, vol) in world.query::<&VolumeData>().iter() {
+        let [w, h, d] = vol.dimensions;
+        let x = ((voxel_pos[0] * w as f32) as u32).min(w - 1);
+        let y = ((voxel_pos[1] * h as f32) as u32).min(h - 1);
+        let z = ((voxel_pos[2] * d as f32) as u32).min(d - 1);
+
+        let idx = (z * h * w + y * w + x) as usize;
+        if idx < vol.intensities.len() {
+            return Some(vol.intensities[idx]);
+        }
+    }
+    None
+}
+
 /// Prepare a `Uniforms` struct for the given viewport mode.
 ///
 /// Gathers data from all relevant ECS components (window settings, camera,
@@ -89,8 +118,14 @@ pub fn sys_prepare_render_data(world: &mut World, view_mode: u32) -> Uniforms {
         layer_count += 1;
     }
 
-    // 7. Get Windowing Info
-    let mut window_params = [0.5, 1.0, 0.0, 1.0]; // default: center=0.5, width=1.0
+    // 7. Get Windowing Info (HU-based)
+    let mut window_params = [40.0, 400.0, -1000.0, 1000.0]; // default: soft tissue, typical HU range
+                                                            // Get intensity range from volume data
+    for (_, vol) in world.query::<&VolumeData>().iter() {
+        window_params[2] = vol.intensity_range[0];
+        window_params[3] = vol.intensity_range[1];
+    }
+    // Get window center/width from windowing component
     for (_, windowing) in world.query::<&VolumeWindowing>().iter() {
         window_params[0] = windowing.center;
         window_params[1] = windowing.width;
@@ -316,9 +351,9 @@ fn quat_to_mat3(q: [f32; 4]) -> [[f32; 3]; 3] {
     let wz = q[3] * z2;
 
     [
-        [1.0 - (yy + zz), xy + wz, xz - wy],
-        [xy - wz, 1.0 - (xx + zz), yz + wx],
-        [xz + wy, yz - wx, 1.0 - (xx + yy)],
+        [1.0 - (yy + zz), xy - wz, xz + wy],
+        [xy + wz, 1.0 - (xx + zz), yz - wx],
+        [xz - wy, yz + wx, 1.0 - (xx + yy)],
     ]
 }
 
@@ -405,7 +440,7 @@ fn get_voxel_at_mouse(world: &World, viewport: u8, mouse_uv: [f32; 2]) -> Option
         // Need aspect ratio for screen-to-ray conversion
         let mut aspect = 1.0;
         for (_, win) in world.query::<&WindowSettings>().iter() {
-            aspect = (win.width as f32) / (win.height as f32);
+            aspect = win.viewport_rect[2] / win.viewport_rect[3];
         }
 
         let mut vol_info = None;

@@ -1,5 +1,5 @@
 use crate::components::*;
-use crate::{file_dialog, nifti_loader};
+use crate::{file_dialog, nifti_loader, systems};
 use egui_wgpu::Renderer;
 use egui_winit::State;
 use hecs::World;
@@ -128,26 +128,44 @@ impl Gui {
 
                     ui.separator();
 
-                    // --- Windowing / Contrast Controls ---
+                    // --- Windowing / Contrast Controls (HU-based) ---
                     ui.collapsing("Windowing", |ui| {
                         let mut windowing_query = world.query::<&mut VolumeWindowing>();
                         if let Some((_, windowing)) = windowing_query.iter().next() {
-                            ui.label("Window Center (L)");
+                            ui.label("Window Center (HU)");
                             ui.add(
-                                egui::Slider::new(&mut windowing.center, 0.0..=1.0)
+                                egui::Slider::new(&mut windowing.center, -1024.0..=3071.0)
                                     .show_value(true),
                             );
 
-                            ui.label("Window Width (W)");
+                            ui.label("Window Width (HU)");
                             ui.add(
-                                egui::Slider::new(&mut windowing.width, 0.01..=2.0)
+                                egui::Slider::new(&mut windowing.width, 1.0..=4096.0)
                                     .show_value(true),
                             );
 
-                            if ui.button("Reset").clicked() {
-                                windowing.center = 0.5;
-                                windowing.width = 1.0;
-                            }
+                            ui.separator();
+                            ui.label("Presets:");
+                            ui.horizontal(|ui| {
+                                if ui.button("Soft Tissue").clicked() {
+                                    windowing.center = 40.0;
+                                    windowing.width = 400.0;
+                                }
+                                if ui.button("Lung").clicked() {
+                                    windowing.center = -600.0;
+                                    windowing.width = 1500.0;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                if ui.button("Bone").clicked() {
+                                    windowing.center = 400.0;
+                                    windowing.width = 2000.0;
+                                }
+                                if ui.button("Brain").clicked() {
+                                    windowing.center = 40.0;
+                                    windowing.width = 80.0;
+                                }
+                            });
                         } else {
                             ui.label("No windowing settings available");
                         }
@@ -289,6 +307,16 @@ impl Gui {
                         ui.label("Right Mouse: Rotate (3D)");
                         ui.label("Scroll: Zoom / Slice");
                         ui.label("Ctrl+Scroll: 2D Zoom");
+                    });
+
+                    // --- Always-visible HU Readout at bottom ---
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                        ui.separator();
+                        if let Some(hu) = systems::get_hu_at_mouse(world) {
+                            ui.label(format!("HU at cursor: {:.0}", hu));
+                        } else {
+                            ui.label("HU at cursor: --");
+                        }
                     });
                 });
 

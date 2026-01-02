@@ -1,17 +1,18 @@
 use crate::components::VolumeData;
 use crate::nifti_loader::LoadedVolume;
 
-/// Create a 3D texture and its view/sampler from RGBA data
-pub fn create_texture_from_rgba(
+/// Create a 3D texture from float intensity data (R32Float format)
+/// Used for HU-based windowing where raw intensity values are needed
+pub fn create_texture_from_float(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    rgba_data: &[u8],
+    float_data: &[f32],
     dimensions: [u32; 3],
 ) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler) {
     let [width, height, depth] = dimensions;
 
     let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("Voxel Texture"),
+        label: Some("Volume Texture (R32Float)"),
         size: wgpu::Extent3d {
             width,
             height,
@@ -20,75 +21,43 @@ pub fn create_texture_from_rgba(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D3,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: wgpu::TextureFormat::R32Float,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
 
-    let block_size = 4; // Rgba8
-    let bytes_per_row = width * block_size;
-    let padding = (256 - (bytes_per_row % 256)) % 256;
-    let padded_bytes_per_row = bytes_per_row + padding;
+    // Convert f32 to bytes
+    let byte_data: &[u8] = bytemuck::cast_slice(float_data);
+    let bytes_per_row = width * 4; // 4 bytes per f32
 
-    if padding > 0 {
-        let mut padded_data = Vec::with_capacity((padded_bytes_per_row * height * depth) as usize);
-        for z in 0..depth {
-            for y in 0..height {
-                let start = ((z * height + y) * bytes_per_row) as usize;
-                let end = start + bytes_per_row as usize;
-                padded_data.extend_from_slice(&rgba_data[start..end]);
-                padded_data.extend(std::iter::repeat(0).take(padding as usize));
-            }
-        }
-
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &padded_data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded_bytes_per_row),
-                rows_per_image: Some(height),
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: depth,
-            },
-        );
-    } else {
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            rgba_data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(bytes_per_row),
-                rows_per_image: Some(height),
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: depth,
-            },
-        );
-    }
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        byte_data,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(bytes_per_row),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: depth,
+        },
+    );
 
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    // R32Float requires Nearest filtering on WebGL2
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         address_mode_u: wgpu::AddressMode::ClampToEdge,
         address_mode_v: wgpu::AddressMode::ClampToEdge,
         address_mode_w: wgpu::AddressMode::ClampToEdge,
-        mag_filter: wgpu::FilterMode::Linear,
-        min_filter: wgpu::FilterMode::Linear,
+        mag_filter: wgpu::FilterMode::Nearest,
+        min_filter: wgpu::FilterMode::Nearest,
         ..Default::default()
     });
 
@@ -102,12 +71,12 @@ pub fn create_texture_from_nifti(
     loaded: &LoadedVolume,
 ) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler, VolumeData) {
     let (texture, view, sampler) =
-        create_texture_from_rgba(device, queue, &loaded.rgba_data, loaded.dimensions);
+        create_texture_from_float(device, queue, &loaded.float_data, loaded.dimensions);
 
     let volume_data = VolumeData {
         dimensions: loaded.dimensions,
         spacing: loaded.spacing,
-        intensities: loaded.intensity_data.clone(),
+        intensities: loaded.float_data.clone(),
         intensity_range: loaded.intensity_range,
     };
 
@@ -120,7 +89,6 @@ pub fn create_demo_voxel_texture(
     queue: &wgpu::Queue,
 ) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler, VolumeData) {
     let size = 64u32;
-    let mut rgba_data = vec![0u8; (size * size * size * 4) as usize];
     let mut intensities = Vec::with_capacity((size * size * size) as usize);
 
     let center = size as f32 / 2.0;
@@ -129,60 +97,53 @@ pub fn create_demo_voxel_texture(
     for z in 0..size {
         for y in 0..size {
             for x in 0..size {
-                let i = ((z * size * size + y * size + x) * 4) as usize;
-
                 // Distance from center
                 let dx = x as f32 - center;
                 let dy = y as f32 - center;
                 let dz = z as f32 - center;
                 let dist = (dx * dx + dy * dy + dz * dz).sqrt();
 
-                // Generate "Organs"
-                let mut density = 0.0;
+                // Generate "Organs" - using HU-like values
+                let mut density = -1000.0; // Air (outside)
 
-                // Outer Shell (Soft)
+                // Outer Shell (Soft tissue)
                 if dist < max_radius {
-                    density += 0.2;
+                    density = 40.0; // Soft tissue HU
                 }
 
                 // Inner Core (Hard/Bone)
                 if dist < max_radius * 0.5 {
-                    density += 0.8;
+                    density = 700.0; // Bone HU
                 }
 
                 // Noise/interference
                 let noise =
                     ((x as f32 * 0.1).sin() + (y as f32 * 0.2).cos() + (z as f32 * 0.3).sin())
-                        * 0.1;
+                        * 50.0;
                 if dist < max_radius {
                     density += noise;
                 }
 
-                density = density.clamp(0.0, 1.0);
                 intensities.push(density);
-
-                // Heatmap coloring
-                let r = (density * 255.0) as u8;
-                let g = (density * density * 255.0) as u8;
-                let b = ((1.0 - density) * 100.0) as u8;
-                let a = (density * 255.0) as u8;
-
-                rgba_data[i] = r;
-                rgba_data[i + 1] = g;
-                rgba_data[i + 2] = b;
-                rgba_data[i + 3] = a;
             }
         }
     }
 
+    // Find min/max for intensity range
+    let min_val = intensities.iter().cloned().fold(f32::INFINITY, f32::min);
+    let max_val = intensities
+        .iter()
+        .cloned()
+        .fold(f32::NEG_INFINITY, f32::max);
+
     let (texture, view, sampler) =
-        create_texture_from_rgba(device, queue, &rgba_data, [size, size, size]);
+        create_texture_from_float(device, queue, &intensities, [size, size, size]);
 
     let volume_data = VolumeData {
         dimensions: [size, size, size],
         spacing: [1.0, 1.0, 1.0],
         intensities,
-        intensity_range: [0.0, 1.0],
+        intensity_range: [min_val, max_val],
     };
 
     (texture, view, sampler, volume_data)

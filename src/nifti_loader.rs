@@ -14,11 +14,9 @@ pub struct LoadedVolume {
     pub dimensions: [u32; 3],
     /// Voxel spacing in mm [x, y, z]
     pub spacing: [f32; 3],
-    /// Raw RGBA8 texture data (normalized 0-255)
-    pub rgba_data: Vec<u8>,
-    /// Original intensity data as f32 (for CPU-side operations)
-    pub intensity_data: Vec<f32>,
-    /// Data range [min, max] before normalization
+    /// Raw intensity data as f32 (HU or similar units)
+    pub float_data: Vec<f32>,
+    /// Data range [min, max]
     pub intensity_range: [f32; 2],
 }
 
@@ -155,25 +153,11 @@ pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
         max_val = min_val + 1.0;
     }
 
-    let range = max_val - min_val;
-
-    // Convert to RGBA8 (grayscale with alpha)
-    let mut rgba_data = Vec::with_capacity(total_voxels * 4);
-    for &intensity in &intensity_data {
-        let normalized = ((intensity - min_val) / range).clamp(0.0, 1.0);
-        let byte_val = (normalized * 255.0) as u8;
-        // Grayscale: R=G=B=intensity, A=intensity
-        rgba_data.push(byte_val); // R
-        rgba_data.push(byte_val); // G
-        rgba_data.push(byte_val); // B
-        rgba_data.push(byte_val); // A (used for opacity in raymarching)
-    }
-
+    // No longer convert to RGBA8 - return raw float data for HU-based windowing
     Ok(LoadedVolume {
         dimensions: [width, height, depth],
         spacing,
-        rgba_data,
-        intensity_data,
+        float_data: intensity_data,
         intensity_range: [min_val, max_val],
     })
 }
