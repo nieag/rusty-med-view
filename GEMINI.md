@@ -63,4 +63,9 @@ The system supports up to 2 simultaneous labelmap overlays.
 ## 💡 Future Session Tips
 - When modifying interaction logic, check `src/systems.rs` first.
 - Always ensure `Uniforms` struct alignment in `components.rs` matches `shader.wgsl` exactly.
-- The 3D camera uses **quaternion-based rotation** (stored in `ViewState.rotation`) to eliminate gimbal lock. The camera is fixed at a radius of `3.5`, with `zoom` acting as a view-plane scale multiplier.
+- The 3D view uses **volume-based rotation** (not camera orbiting). The camera is fixed at `(0, 0, -3.5)`, and the quaternion in `ViewState.rotation[0]` rotates the volume in object space.
+
+### Volume Orientation & 3D Gizmo
+- **NIfTI Orientation**: The `sform` affine matrix is extracted from NIfTI headers and converted to a quaternion (stored in `VolumeData.orientation`). On load, this initializes the 3D view rotation.
+- **3D Gizmo**: A tri-axis gizmo (R/A/S labels for Right, Anterior, Superior) is rendered in the top-left corner of the 3D viewport. Uses depth-based fading to show which axes point toward/away from the camera.
+- **Object-Space Raymarching**: Both the shader and CPU-side picking (`get_voxel_at_mouse`) transform rays into object space using the inverse of the volume rotation matrix.

@@ -360,10 +360,30 @@ impl Gui {
             let x0 = central_rect.min.x;
             let y0 = central_rect.min.y;
 
+            // Get rotation for 3D gizmo
+            let mut gizmo_rotation = [0.0f32, 0.0, 0.0, 1.0]; // Identity quaternion
+            for (_, view) in world.query::<&ViewState>().iter() {
+                gizmo_rotation = view.rotation[0]; // 3D view rotation
+            }
+
             egui::Area::new("overlay_3d".into())
                 .fixed_pos([x0 + 10.0, y0 + 10.0])
                 .interactable(false) // CRITICAL: Allow mouse to fall through to WGPU
                 .show(ctx, |ui| draw_label(ui, "3D View", active_viewport == 0));
+
+            // 3D Orientation Gizmo using glam-based module
+            let gizmo_rect = egui::Rect::from_center_size(
+                egui::pos2(x0 + 80.0, y0 + hh - 80.0),
+                egui::vec2(120.0, 120.0),
+            );
+
+            egui::Area::new("gizmo_3d".into())
+                .fixed_pos(gizmo_rect.min)
+                .interactable(false)
+                .show(ctx, |ui| {
+                    let view_quat = crate::gizmo::quat_from_array(gizmo_rotation);
+                    crate::gizmo::draw_gizmo(ui, gizmo_rect, view_quat);
+                });
 
             egui::Area::new("overlay_xy".into())
                 .fixed_pos([x0 + hw + 10.0, y0 + 10.0])

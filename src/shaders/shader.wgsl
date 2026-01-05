@@ -119,6 +119,7 @@ fn apply_window(value: f32, center: f32, width: f32) -> f32 {
     let low = center - width * 0.5;
     return clamp((value - low) / width, 0.0, 1.0);
 }
+// Note: Gizmo is now rendered via egui for proper font rendering
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -179,20 +180,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             draw_crosshair = true;
         }
     } else {
-        // --- MODE 0: 3D X-RAY ---
-        // (Simplified Camera setup same as before)
+        // --- MODE 0: 3D X-RAY (Volume-Based Rotation) ---
+        // Camera is FIXED, volume rotates
         let zoom = uniforms.zoom;
         let pivot = uniforms.zoom_pivot;
         let pan = uniforms.pan;
         let zoomed_uv = (in.uv - pivot) / zoom + pivot + pan;
         let screen_pos = vec2<f32>((zoomed_uv.x - 0.5) * aspect, zoomed_uv.y - 0.5);
 
-        // --- Quaternion-based Camera ---
-        // Rotation quaternion stored as vec4(x, y, z, w)
+        // --- Volume Rotation Matrix from Quaternion ---
+        // This represents the volume's orientation in world space
         let q = uniforms.rotation;
         
         // Convert quaternion to rotation matrix
-        // The camera looks at origin from +Z with this orientation
         let x2 = q.x + q.x;
         let y2 = q.y + q.y;
         let z2 = q.z + q.z;
@@ -206,29 +206,31 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let wy = q.w * y2;
         let wz = q.w * z2;
 
-        // Rotation matrix from quaternion (column-major for WGSL mat3x3)
+        // Rotation matrix (column-major for WGSL mat3x3)
+        // This rotates FROM object space TO world space
         let rot_mat = mat3x3<f32>(
             vec3<f32>(1.0 - (yy + zz), xy + wz, xz - wy),
             vec3<f32>(xy - wz, 1.0 - (xx + zz), yz + wx),
             vec3<f32>(xz + wy, yz - wx, 1.0 - (xx + yy))
         );
         
-        // Camera position: rotate base position (0, 0, radius) by quaternion
-        let radius = 3.5;
-        let base_cam_pos = vec3<f32>(0.0, 0.0, -radius);
-        let cam_pos = rot_mat * base_cam_pos;
-
-        let cam_target = vec3<f32>(0.0, 0.0, 0.0);
-        let forward = normalize(cam_target - cam_pos);
+        // Inverse rotation (transpose for orthogonal matrix)
+        // This rotates FROM world space TO object space
+        let inv_rot_mat = transpose(rot_mat);
         
-        // Right and Up are derived from rotated basis
-        // We rotate the standard basis vectors
-        let base_right = vec3<f32>(1.0, 0.0, 0.0);
-        let base_up = vec3<f32>(0.0, 1.0, 0.0);
-        let right = rot_mat * base_right;
-        let up = rot_mat * base_up;
+        // Fixed camera position in world space
+        let radius = 3.5;
+        let cam_pos = vec3<f32>(0.0, 0.0, -radius);
+        let forward = vec3<f32>(0.0, 0.0, 1.0);
+        let right = vec3<f32>(1.0, 0.0, 0.0);
+        let up = vec3<f32>(0.0, 1.0, 0.0);
 
-        let ray_dir = normalize(forward + right * screen_pos.x + up * screen_pos.y);
+        // Ray direction in world space
+        let ray_dir_world = normalize(forward + right * screen_pos.x + up * screen_pos.y);
+        
+        // Transform ray into object space for volume intersection
+        let cam_pos_obj = inv_rot_mat * cam_pos;
+        let ray_dir_obj = inv_rot_mat * ray_dir_world;
 
         // Calculate aspect ratios for raymarching box
         let dims = vec3<f32>(uniforms.volume_dims.xyz);
@@ -237,8 +239,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let max_dim_vol = max(max(physical_size.x, physical_size.y), physical_size.z);
         let aspect_ratio_vol = physical_size / max_dim_vol;
 
-        // Project Cursor
-        let cursor_world = (uniforms.cursor_pos.xyz - 0.5) * aspect_ratio_vol;
+        // Project Cursor (cursor is in object space UV, transform to world for projection)
+        let cursor_obj = (uniforms.cursor_pos.xyz - 0.5) * aspect_ratio_vol;
+        let cursor_world = rot_mat * cursor_obj;
         let to_cursor = cursor_world - cam_pos;
         let dist_z = dot(to_cursor, forward);
         if dist_z > 0.0 {
@@ -251,15 +254,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             draw_crosshair = true;
         }
 
-        // Raymarching
+        // Raymarching in object space
         let box_min = -0.5 * aspect_ratio_vol;
         let box_max = 0.5 * aspect_ratio_vol;
-        let t_hit = intersectAABB(cam_pos, ray_dir, box_min, box_max);
+        let t_hit = intersectAABB(cam_pos_obj, ray_dir_obj, box_min, box_max);
 
         if t_hit.x > t_hit.y || t_hit.y < 0.0 {
             final_color = vec4<f32>(0.05, 0.05, 0.05, 1.0);
         } else {
-            let start_pos = cam_pos + ray_dir * max(t_hit.x, 0.0);
+            let start_pos = cam_pos_obj + ray_dir_obj * max(t_hit.x, 0.0);
             let total_dist = t_hit.y - max(t_hit.x, 0.0);
             let steps = 128;
             let step_size = total_dist / f32(steps);
@@ -289,39 +292,29 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
                 let o2 = get_overlay_color(t_label2, t_lut2, tex_coord, uniforms.overlay_opacities.y, s_diffuse, true);
                 if o2.a > 0.0 {
-                    overlay_color = mix(overlay_color, o2.rgb, o2.a); // Simple mix
+                    overlay_color = mix(overlay_color, o2.rgb, o2.a);
                     overlay_alpha = max(overlay_alpha, o2.a);
                 }
                 
                 // Composite
-                // If overlay is present, it contributes to color
-                // Volume density contributes to grayscale
-
                 var weight = density;
                 var sample_rgb = vec3<f32>(voxel);
                 var final_rgb = mix(sample_rgb, overlay_color, overlay_alpha);
 
                 if overlay_alpha > 0.0 {
-                    // Force solid appearance in 3D: Use full remaining budget
                     weight = 1.0 - acc_density;
                     final_rgb = overlay_color;
                 }
-                
-                // Accumulate
-                // This is a simplified "Addtive-ish" blending for X-Ray
-                // Improvement: Standard Front-to-Back compositing
-                // alpha = (1 - acc_alpha) * sample_alpha
-                // col += alpha * sample_col
-                
-                // Using existing additive style for now to match style
+
                 acc_color += final_rgb * weight;
                 acc_density += weight;
 
                 if acc_density >= 1.0 { break; }
-                current_pos += ray_dir * step_size;
+                current_pos += ray_dir_obj * step_size;
             }
             final_color = vec4<f32>(acc_color + 0.05, 1.0);
         }
+        // Gizmo is now rendered via egui, not shader
     }
 
     // Crosshair

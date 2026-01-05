@@ -78,6 +78,7 @@ pub fn create_texture_from_nifti(
         spacing: loaded.spacing,
         intensities: loaded.float_data.clone(),
         intensity_range: loaded.intensity_range,
+        orientation: loaded.orientation,
     };
 
     (texture, view, sampler, volume_data)
@@ -92,36 +93,73 @@ pub fn create_demo_voxel_texture(
     let mut intensities = Vec::with_capacity((size * size * size) as usize);
 
     let center = size as f32 / 2.0;
-    let max_radius = size as f32 / 2.0;
+    let arrow_length = size as f32 * 0.45;
+    let arrow_thickness = 3.0;
 
     for z in 0..size {
         for y in 0..size {
             for x in 0..size {
-                // Distance from center
-                let dx = x as f32 - center;
-                let dy = y as f32 - center;
-                let dz = z as f32 - center;
-                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                let fx = x as f32 - center;
+                let fy = y as f32 - center;
+                let fz = z as f32 - center;
 
-                // Generate "Organs" - using HU-like values
-                let mut density = -1000.0; // Air (outside)
+                let mut density = -1000.0; // Air (background)
 
-                // Outer Shell (Soft tissue)
-                if dist < max_radius {
-                    density = 40.0; // Soft tissue HU
+                // Small center sphere
+                let dist = (fx * fx + fy * fy + fz * fz).sqrt();
+                if dist < 4.0 {
+                    density = 500.0; // White center
                 }
 
-                // Inner Core (Hard/Bone)
-                if dist < max_radius * 0.5 {
-                    density = 700.0; // Bone HU
+                // X axis (R - Right) - arrow pointing in +X direction
+                // High intensity (appears bright)
+                if fx > 0.0
+                    && fx < arrow_length
+                    && fy.abs() < arrow_thickness
+                    && fz.abs() < arrow_thickness
+                {
+                    density = 1000.0; // Brightest - X axis
+                }
+                // X arrow head
+                if fx > arrow_length - 8.0 && fx < arrow_length {
+                    let head_size = (arrow_length - fx) * 0.8;
+                    if fy.abs() < head_size && fz.abs() < head_size {
+                        density = 1000.0;
+                    }
                 }
 
-                // Noise/interference
-                let noise =
-                    ((x as f32 * 0.1).sin() + (y as f32 * 0.2).cos() + (z as f32 * 0.3).sin())
-                        * 50.0;
-                if dist < max_radius {
-                    density += noise;
+                // Y axis (A - Anterior) - arrow pointing in +Y direction
+                // Medium-high intensity
+                if fy > 0.0
+                    && fy < arrow_length
+                    && fx.abs() < arrow_thickness
+                    && fz.abs() < arrow_thickness
+                {
+                    density = 600.0; // Medium - Y axis
+                }
+                // Y arrow head
+                if fy > arrow_length - 8.0 && fy < arrow_length {
+                    let head_size = (arrow_length - fy) * 0.8;
+                    if fx.abs() < head_size && fz.abs() < head_size {
+                        density = 600.0;
+                    }
+                }
+
+                // Z axis (S - Superior) - arrow pointing in +Z direction
+                // Medium intensity
+                if fz > 0.0
+                    && fz < arrow_length
+                    && fx.abs() < arrow_thickness
+                    && fy.abs() < arrow_thickness
+                {
+                    density = 300.0; // Dimmest - Z axis
+                }
+                // Z arrow head
+                if fz > arrow_length - 8.0 && fz < arrow_length {
+                    let head_size = (arrow_length - fz) * 0.8;
+                    if fx.abs() < head_size && fy.abs() < head_size {
+                        density = 300.0;
+                    }
                 }
 
                 intensities.push(density);
@@ -144,6 +182,7 @@ pub fn create_demo_voxel_texture(
         spacing: [1.0, 1.0, 1.0],
         intensities,
         intensity_range: [min_val, max_val],
+        orientation: [0.0, 0.0, 0.0, 1.0], // Identity quaternion (no rotation)
     };
 
     (texture, view, sampler, volume_data)

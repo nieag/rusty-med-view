@@ -32,11 +32,17 @@ pub fn handle_volume_load(
         vol.spacing = volume_data.spacing;
         vol.intensities = volume_data.intensities.clone();
         vol.intensity_range = volume_data.intensity_range;
+        vol.orientation = volume_data.orientation;
 
         gpu_res.texture = new_texture;
         gpu_res.view = new_view;
         gpu_res.sampler = new_sampler;
         break;
+    }
+
+    // Initialize 3D view rotation with volume orientation from NIfTI
+    for (_, view) in world.query_mut::<&mut ViewState>() {
+        view.rotation[0] = loaded.orientation;
     }
 
     loaded.dimensions

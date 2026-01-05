@@ -3,6 +3,7 @@
 mod components;
 mod file_dialog;
 mod geometry;
+mod gizmo;
 mod gui;
 mod load_handlers;
 mod nifti_loader;

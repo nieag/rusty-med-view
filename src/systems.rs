@@ -6,6 +6,7 @@
 //! - 3D picking via CPU-side raymarching
 
 use crate::components::*;
+use glam::{Mat3, Quat, Vec3};
 use hecs::World;
 use winit::keyboard::ModifiersState;
 
@@ -306,75 +307,7 @@ fn intersect_aabb(origin: [f32; 3], dir: [f32; 3], min: [f32; 3], max: [f32; 3])
 
 // --- Quaternion & Vector Math Helpers ---
 
-/// Create a quaternion from an axis and angle (radians).
-fn quat_from_axis_angle(axis: [f32; 3], angle: f32) -> [f32; 4] {
-    let half = angle * 0.5;
-    let s = half.sin();
-    let c = half.cos();
-    [axis[0] * s, axis[1] * s, axis[2] * s, c]
-}
-
-/// Multiply two quaternions (Hamilton product).
-fn quat_multiply(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
-    [
-        a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
-        a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
-        a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
-        a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
-    ]
-}
-
-/// Normalize a quaternion to unit length.
-fn quat_normalize(q: [f32; 4]) -> [f32; 4] {
-    let len = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
-    if len > 1e-8 {
-        [q[0] / len, q[1] / len, q[2] / len, q[3] / len]
-    } else {
-        [0.0, 0.0, 0.0, 1.0] // identity
-    }
-}
-
-/// Convert a quaternion to a 3x3 rotation matrix (row-major).
-/// Returns [[row0], [row1], [row2]].
-fn quat_to_mat3(q: [f32; 4]) -> [[f32; 3]; 3] {
-    let x2 = q[0] + q[0];
-    let y2 = q[1] + q[1];
-    let z2 = q[2] + q[2];
-    let xx = q[0] * x2;
-    let xy = q[0] * y2;
-    let xz = q[0] * z2;
-    let yy = q[1] * y2;
-    let yz = q[1] * z2;
-    let zz = q[2] * z2;
-    let wx = q[3] * x2;
-    let wy = q[3] * y2;
-    let wz = q[3] * z2;
-
-    [
-        [1.0 - (yy + zz), xy - wz, xz + wy],
-        [xy + wz, 1.0 - (xx + zz), yz - wx],
-        [xz - wy, yz + wx, 1.0 - (xx + yy)],
-    ]
-}
-
-/// Multiply a 3x3 matrix (row-major) by a vec3.
-fn mat3_mul_vec3(m: [[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
-    [
-        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
-        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
-        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
-    ]
-}
-
-/// Normalize a vec3 to unit length.
-fn vec3_normalize(v: [f32; 3]) -> [f32; 3] {
-    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    if len > 1e-8 {
-        [v[0] / len, v[1] / len, v[2] / len]
-    } else {
-        [0.0, 0.0, 1.0]
-    }
-}
+// --- REPLACED WITH GLAM ---
 
 use winit::event::{ElementState, MouseButton};
 
@@ -436,8 +369,8 @@ fn get_voxel_at_mouse(world: &World, viewport: u8, mouse_uv: [f32; 2]) -> Option
         }
         return None;
     } else {
-        // --- 3D View (Raymarching) ---
-        // Need aspect ratio for screen-to-ray conversion
+        // --- 3D View (Volume-Based Rotation) ---
+        // Camera is FIXED, volume rotates - same as shader
         let mut aspect = 1.0;
         for (_, win) in world.query::<&WindowSettings>().iter() {
             aspect = win.viewport_rect[2] / win.viewport_rect[3];
@@ -455,7 +388,7 @@ fn get_voxel_at_mouse(world: &World, viewport: u8, mouse_uv: [f32; 2]) -> Option
                 aspect_ratios[2] * 0.5,
             ];
 
-            // Ray construction
+            // Ray construction in world space
             let zoomed_uv = [
                 (mouse_uv[0] - pivot[0]) / zoom + pivot[0] + pan[0],
                 (mouse_uv[1] - pivot[1]) / zoom + pivot[1] + pan[1],
@@ -463,32 +396,46 @@ fn get_voxel_at_mouse(world: &World, viewport: u8, mouse_uv: [f32; 2]) -> Option
             let uv = [zoomed_uv[0] - 0.5, zoomed_uv[1] - 0.5];
             let screen_pos = [uv[0] * aspect, uv[1]];
 
-            // Camera vectors
-            let rot_mat = quat_to_mat3(rotation);
+            // Fixed camera in world space
             let radius = 3.5;
-            let eye = mat3_mul_vec3(rot_mat, [0.0, 0.0, -radius]);
-            let forward = mat3_mul_vec3(rot_mat, [0.0, 0.0, 1.0]);
-            let right = mat3_mul_vec3(rot_mat, [1.0, 0.0, 0.0]);
-            let up = mat3_mul_vec3(rot_mat, [0.0, 1.0, 0.0]);
+            let cam_pos_world = [0.0, 0.0, -radius];
+            let forward = [0.0, 0.0, 1.0];
+            let right = [1.0, 0.0, 0.0];
+            let up = [0.0, 1.0, 0.0];
 
+            // Ray direction in world space
             let raw_dir = [
                 forward[0] + right[0] * screen_pos[0] + up[0] * screen_pos[1],
                 forward[1] + right[1] * screen_pos[0] + up[1] * screen_pos[1],
                 forward[2] + right[2] * screen_pos[0] + up[2] * screen_pos[1],
             ];
-            let ray_dir = vec3_normalize(raw_dir);
+            let ray_dir_world = Vec3::from(raw_dir).normalize();
 
-            // AABB Intersection
-            let min_bound = [-half_ar[0], -half_ar[1], -half_ar[2]];
-            let max_bound = [half_ar[0], half_ar[1], half_ar[2]];
+            // Transform ray into object space using inverse of volume rotation
+            let rot_quat = Quat::from_array(rotation);
+            let rot_mat = Mat3::from_quat(rot_quat);
+            // World -> Object = Inverse Rotation
+            let inv_rot_mat = rot_mat.inverse();
 
-            if let Some(t_entry) = intersect_aabb(eye, ray_dir, min_bound, max_bound) {
+            let cam_pos_obj = inv_rot_mat * Vec3::from(cam_pos_world);
+            let ray_dir_obj = (inv_rot_mat * ray_dir_world).normalize();
+
+            // AABB Intersection in object space
+            let min_bound = Vec3::from([-half_ar[0], -half_ar[1], -half_ar[2]]);
+            let max_bound = Vec3::from([half_ar[0], half_ar[1], half_ar[2]]);
+
+            if let Some(t_entry) = intersect_aabb(
+                cam_pos_obj.into(),
+                ray_dir_obj.into(),
+                min_bound.into(),
+                max_bound.into(),
+            ) {
                 // Raymarching to find surface
                 let mut t_exit = f32::INFINITY;
                 for i in 0..3 {
-                    if ray_dir[i].abs() > f32::EPSILON {
-                        let t1 = (min_bound[i] - eye[i]) / ray_dir[i];
-                        let t2 = (max_bound[i] - eye[i]) / ray_dir[i];
+                    if ray_dir_obj[i].abs() > f32::EPSILON {
+                        let t1 = (min_bound[i] - cam_pos_obj[i]) / ray_dir_obj[i];
+                        let t2 = (max_bound[i] - cam_pos_obj[i]) / ray_dir_obj[i];
                         t_exit = t_exit.min(t1.max(t2));
                     }
                 }
@@ -496,7 +443,7 @@ fn get_voxel_at_mouse(world: &World, viewport: u8, mouse_uv: [f32; 2]) -> Option
                 let mut best_t = t_entry;
                 let mut max_density = 0u8;
 
-                // Raymarch loop
+                // Raymarch loop in object space
                 for (_, vol) in world.query::<&VolumeData>().iter() {
                     let steps = 128;
                     let step_size = (t_exit - t_entry) / steps as f32;
@@ -504,9 +451,9 @@ fn get_voxel_at_mouse(world: &World, viewport: u8, mouse_uv: [f32; 2]) -> Option
                     for i in 0..steps {
                         let t = t_entry + step_size * i as f32;
                         let p = [
-                            eye[0] + ray_dir[0] * t,
-                            eye[1] + ray_dir[1] * t,
-                            eye[2] + ray_dir[2] * t,
+                            cam_pos_obj[0] + ray_dir_obj[0] * t,
+                            cam_pos_obj[1] + ray_dir_obj[1] * t,
+                            cam_pos_obj[2] + ray_dir_obj[2] * t,
                         ];
 
                         let uvw = [
@@ -541,9 +488,9 @@ fn get_voxel_at_mouse(world: &World, viewport: u8, mouse_uv: [f32; 2]) -> Option
                 // Otherwise return entry point
                 let final_t = if max_density > 20 { best_t } else { t_entry };
                 let hit_point = [
-                    eye[0] + ray_dir[0] * final_t,
-                    eye[1] + ray_dir[1] * final_t,
-                    eye[2] + ray_dir[2] * final_t,
+                    cam_pos_obj[0] + ray_dir_obj[0] * final_t,
+                    cam_pos_obj[1] + ray_dir_obj[1] * final_t,
+                    cam_pos_obj[2] + ray_dir_obj[2] * final_t,
                 ];
 
                 return Some([
@@ -752,20 +699,25 @@ pub fn sys_handle_mouse_drag(world: &mut World) {
             let delta_x = (current_pos[0] - start_pos[0]) * sensitivity;
             let delta_y = (current_pos[1] - start_pos[1]) * sensitivity;
 
+            let start_q = Quat::from_array(start_quat);
+
             let new_quat = if has_shift {
                 // Planar rotation: Roll around Z-axis (forward)
-                let roll_quat = quat_from_axis_angle([0.0, 0.0, 1.0], delta_x);
-                quat_normalize(quat_multiply(roll_quat, start_quat))
+                // We use Neg Z to align with "into screen" convention for intuitive CW/CCW
+                let roll_quat = Quat::from_axis_angle(Vec3::NEG_Z, delta_x);
+                (roll_quat * start_q).normalize()
             } else {
-                // Orbital rotation: Yaw around Y (world up), Pitch around X (local right)
-                let yaw_quat = quat_from_axis_angle([0.0, 1.0, 0.0], delta_x);
-                let pitch_quat = quat_from_axis_angle([1.0, 0.0, 0.0], -delta_y); // Negated for natural feel
-                                                                                  // Apply yaw first (world space), then pitch
-                let combined = quat_multiply(yaw_quat, quat_multiply(pitch_quat, start_quat));
-                quat_normalize(combined)
+                // Orbital rotation: Yaw around Y (world up), Pitch around X (world right)
+                // Use World Axis for "tumbling" feel
+                let yaw_quat = Quat::from_axis_angle(Vec3::Y, delta_x);
+                // Flip pitch direction back to standard (negated) as the Y-axis mismatch was the root cause
+                let pitch_quat = Quat::from_axis_angle(Vec3::X, -delta_y);
+
+                // Apply World Rotations: (Yaw * Pitch) * Start
+                (yaw_quat * pitch_quat * start_q).normalize()
             };
 
-            view.rotation[viewport as usize] = new_quat;
+            view.rotation[viewport as usize] = new_quat.to_array();
         }
     }
 }

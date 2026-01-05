@@ -91,6 +91,8 @@ pub struct VolumeData {
     pub intensities: Vec<f32>,
     /// Intensity range [min, max] for windowing
     pub intensity_range: [f32; 2],
+    /// Volume orientation quaternion from NIfTI [x, y, z, w]
+    pub orientation: [f32; 4],
 }
 
 impl VolumeData {
