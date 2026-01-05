@@ -136,9 +136,49 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let cursor = uniforms.cursor_pos.xyz;
 
         let zoom = uniforms.zoom;
-        let pivot = uniforms.zoom_pivot;
         let pan = uniforms.pan;
-        let zoomed_uv = (uv - pivot) / zoom + pivot + pan;
+        // Enforce center-based pivot logic matching systems.rs
+        // We ignore uniforms.zoom_pivot potentially, or assume it's 0.5. 
+        // Let's use 0.5 explicit to match new system logic.
+        let pivot = vec2<f32>(0.5, 0.5); 
+        
+        // Aspect Correction
+        // 1. Screen Aspect
+        let screen_aspect = uniforms.resolution.x / uniforms.resolution.y;
+
+        // 2. Slice Aspect
+        let spacing = uniforms.volume_spacing.xyz;
+        let dims = vec3<f32>(uniforms.volume_dims.xyz);
+        let vol_aspects = vec3<f32>(
+            (dims.x * spacing.x) / (dims.y * spacing.y), // xy
+            (dims.x * spacing.x) / (dims.z * spacing.z), // xz
+            (dims.y * spacing.y) / (dims.z * spacing.z)  // yz
+        );
+        // Note: vol_aspects logic from systems.rs:
+        // Axial(1): Ratio = X/Y = aspect[0]/aspect[1] -> This assumes aspect_ratios() returns physical unit per pixel?
+        // systems.rs: vol.aspect_ratios() returns [d*s, d*s, d*s]. 
+        // No, vol.aspect_ratios() in systems is Dimensions * Spacing.
+        // So vol_aspects[0] is Width(mm), vol_aspects[1] is Height(mm).
+        // Ratio = Width / Height.
+        
+        // Recompute here:
+        // Axial (XY)
+        let phys_x = dims.x * spacing.x;
+        let phys_y = dims.y * spacing.y;
+        let phys_z = dims.z * spacing.z;
+
+        var slice_aspect = 1.0;
+        if uniforms.view_mode == 1u { slice_aspect = phys_x / phys_y; } else if uniforms.view_mode == 2u { slice_aspect = phys_x / phys_z; } else if uniforms.view_mode == 3u { slice_aspect = phys_y / phys_z; } // Y over Z
+
+        // Correction K
+        let k = screen_aspect / slice_aspect;
+        
+        // Map Screen UV to "Corrected" relative coord
+        // (uv - 0.5) * vec2(k, 1.0)
+        let centered_uv = (uv - pivot) * vec2<f32>(k, 1.0);
+        
+        // Apply Zoom and Pan
+        let zoomed_uv = centered_uv / zoom + pivot + pan;
 
         if any(zoomed_uv < vec2<f32>(0.0)) || any(zoomed_uv > vec2<f32>(1.0)) {
             final_color = vec4<f32>(0.05, 0.05, 0.05, 1.0);
@@ -146,13 +186,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         } else {
             if uniforms.view_mode == 1u { // XY
                 sample_pos = vec3<f32>(zoomed_uv.x, zoomed_uv.y, cursor.z);
-                crosshair_screen_pos = (cursor.xy - pan - pivot) * zoom + pivot;
+                // Crosshair calc inverse
+                // zoomed_uv = (uv - 0.5)*k/zoom + 0.5 + pan
+                // uv - 0.5 = (zoomed_uv - 0.5 - pan) * zoom / k
+                // uv = ... + 0.5
+                let rel_pos = (cursor.xy - pan - pivot) * zoom;
+                crosshair_screen_pos = (rel_pos / vec2<f32>(k, 1.0)) + pivot;
             } else if uniforms.view_mode == 2u { // XZ
                 sample_pos = vec3<f32>(zoomed_uv.x, cursor.y, zoomed_uv.y);
-                crosshair_screen_pos = (cursor.xz - pan - pivot) * zoom + pivot;
+                let rel_pos = (cursor.xz - pan - pivot) * zoom;
+                crosshair_screen_pos = (rel_pos / vec2<f32>(k, 1.0)) + pivot;
             } else if uniforms.view_mode == 3u { // YZ
                 sample_pos = vec3<f32>(cursor.x, zoomed_uv.x, zoomed_uv.y);
-                crosshair_screen_pos = (cursor.yz - pan - pivot) * zoom + pivot;
+                let rel_pos = (cursor.yz - pan - pivot) * zoom;
+                crosshair_screen_pos = (rel_pos / vec2<f32>(k, 1.0)) + pivot;
             }
 
             // 1. Sample Main Volume and apply windowing

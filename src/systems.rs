@@ -158,33 +158,74 @@ pub fn sys_handle_input_scroll(world: &mut World, delta: f32) {
     let mut mouse_uv = [0.5, 0.5];
     let mut mode = 0;
     let mut is_zoom = false;
+    let mut viewport_rect = [0.0, 0.0, 100.0, 100.0];
 
-    // Collect input state first to avoid borrow-check issues
+    // Collect input state first
     for (_, input) in world.query::<&InputState>().iter() {
         mode = input.active_viewport;
         mouse_uv = input.mouse_uv;
         is_zoom = input.modifiers.control_key();
     }
+    // Collect window settings for aspect ratio
+    for (_, win) in world.query::<&WindowSettings>().iter() {
+        viewport_rect = win.viewport_rect;
+    }
+    // Collect Volume Aspect Ratios
+    let mut vol_aspects = [1.0, 1.0, 1.0];
+    for (_, vol) in world.query::<&VolumeData>().iter() {
+        vol_aspects = vol.aspect_ratios();
+    }
 
     if is_zoom {
         for (_, view) in world.query::<&mut ViewState>().iter() {
             let idx = mode as usize;
+
+            // 2D View Aspect Correction Calculation
+            let screen_w = viewport_rect[2];
+            let screen_h = viewport_rect[3];
+            let screen_aspect = if screen_h > 0.0 {
+                screen_w / screen_h
+            } else {
+                1.0
+            };
+
+            // Correction Factor K
+            // For 2D views, K = ScreenAspect / SliceAspect.
+            // For 3D view (idx 0), we want K = 1.0 because aspect correction is handled
+            // in the shader specifically (scaling screen position, not UVs).
+            let k = if idx == 0 {
+                1.0
+            } else {
+                // Determine Physical Aspect Ratio of the slice
+                let slice_aspect = match idx {
+                    1 => vol_aspects[0] / vol_aspects[1],
+                    2 => vol_aspects[0] / vol_aspects[2],
+                    3 => vol_aspects[1] / vol_aspects[2],
+                    _ => 1.0,
+                };
+                screen_aspect / slice_aspect
+            };
+
+            // Compute Center-Referenced Mouse Position in "Corrected UV Space"
+            // The conceptual "physical world" coordinate of the mouse relative to center
+            let mx_centered = (mouse_uv[0] - 0.5) * k;
+            let my_centered = mouse_uv[1] - 0.5;
+
+            // Apply Zoom
             let sensitivity = 0.1;
-            let scale_factor = 1.0 + (delta * sensitivity);
-
+            let scale_factor = 1.0 + (delta * sensitivity); // Zoom In > 1
             let old_zoom = view.zoom[idx];
-            let new_zoom = (old_zoom * scale_factor).clamp(0.5, 50.0);
+            let new_zoom = (old_zoom * scale_factor).clamp(0.5, 100.0);
 
-            let old_pivot = view.pivot[idx];
-            let new_pivot = mouse_uv;
+            // Update Pan to stabilize Mouse Position
+            // Formula: Pan_new = Pan_old + Mouse_World * (1/Zoom_Old - 1/Zoom_New)
+            // Where Mouse_World is the offset from center.
+            view.pan[idx][0] += mx_centered * (1.0 / old_zoom - 1.0 / new_zoom);
+            view.pan[idx][1] += my_centered * (1.0 / old_zoom - 1.0 / new_zoom);
 
-            // Adjust pan to transition to the new pivot position
-            // Formula: Pan' = Pan + (P' - P) * (1/Zoom - 1)
-            view.pan[idx][0] += (new_pivot[0] - old_pivot[0]) * (1.0 / old_zoom - 1.0);
-            view.pan[idx][1] += (new_pivot[1] - old_pivot[1]) * (1.0 / old_zoom - 1.0);
-
-            view.pivot[idx] = new_pivot;
             view.zoom[idx] = new_zoom;
+            // Reset pivot to center (we don't use it anymore for storage)
+            view.pivot[idx] = [0.5, 0.5];
         }
     } else {
         // --- SLICE MODE: Step by discrete voxels ---
@@ -317,15 +358,27 @@ fn get_voxel_at_mouse(world: &World, viewport: u8, mouse_uv: [f32; 2]) -> Option
     // Shared view state
     let mut zoom = 1.0;
     let mut pan = [0.0, 0.0];
-    let mut pivot = [0.5, 0.5];
     let mut rotation = [0.0, 0.0, 0.0, 1.0];
+    let mut viewport_rect = [0.0, 0.0, 100.0, 100.0];
 
     for (_, view) in world.query::<&ViewState>().iter() {
         let idx = viewport as usize;
         zoom = view.zoom[idx];
         pan = view.pan[idx];
-        pivot = view.pivot[idx];
         rotation = view.rotation[idx];
+    }
+
+    // Get window settings
+    for (_, win) in world.query::<&WindowSettings>().iter() {
+        viewport_rect = win.viewport_rect;
+    }
+
+    // Get volume info
+    let mut vol_aspects = [1.0, 1.0, 1.0];
+    let mut vol_dims = None;
+    for (_, vol) in world.query::<&VolumeData>().iter() {
+        vol_aspects = vol.aspect_ratios();
+        vol_dims = Some(vol.dimensions);
     }
 
     // Current cursor position (for determining the slice in 2D)
@@ -336,9 +389,30 @@ fn get_voxel_at_mouse(world: &World, viewport: u8, mouse_uv: [f32; 2]) -> Option
 
     if viewport > 0 {
         // --- 2D Slices ---
+
+        // Calculate Correction Factor K
+        let screen_w = viewport_rect[2];
+        let screen_h = viewport_rect[3];
+        let screen_aspect = if screen_h > 0.0 {
+            screen_w / screen_h
+        } else {
+            1.0
+        };
+
+        let slice_aspect = match viewport {
+            1 => vol_aspects[0] / vol_aspects[1],
+            2 => vol_aspects[0] / vol_aspects[2],
+            3 => vol_aspects[1] / vol_aspects[2],
+            _ => 1.0,
+        };
+        let k = screen_aspect / slice_aspect;
+
+        // Apply Aspect Corrected, Center-Based mapping
+        // VolUV.x = ((MouseUV.x - 0.5) * K / Zoom) + 0.5 + Pan.x
+        // VolUV.y = ((MouseUV.y - 0.5) / Zoom) + 0.5 + Pan.y
         let volume_uv = [
-            (mouse_uv[0] - pivot[0]) / zoom + pivot[0] + pan[0],
-            (mouse_uv[1] - pivot[1]) / zoom + pivot[1] + pan[1],
+            ((mouse_uv[0] - 0.5) * k) / zoom + 0.5 + pan[0],
+            (mouse_uv[1] - 0.5) / zoom + 0.5 + pan[1],
         ];
 
         let mut pos = [0.0; 3];
@@ -372,16 +446,12 @@ fn get_voxel_at_mouse(world: &World, viewport: u8, mouse_uv: [f32; 2]) -> Option
         // --- 3D View (Volume-Based Rotation) ---
         // Camera is FIXED, volume rotates - same as shader
         let mut aspect = 1.0;
-        for (_, win) in world.query::<&WindowSettings>().iter() {
-            aspect = win.viewport_rect[2] / win.viewport_rect[3];
+        if viewport_rect[3] > 0.0 {
+            aspect = viewport_rect[2] / viewport_rect[3];
         }
 
-        let mut vol_info = None;
-        for (_, vol) in world.query::<&VolumeData>().iter() {
-            vol_info = Some((vol.dimensions, vol.aspect_ratios()));
-        }
-
-        if let Some(([width, height, depth], aspect_ratios)) = vol_info {
+        if let Some([width, height, depth]) = vol_dims {
+            let aspect_ratios = vol_aspects;
             let half_ar = [
                 aspect_ratios[0] * 0.5,
                 aspect_ratios[1] * 0.5,
@@ -389,6 +459,15 @@ fn get_voxel_at_mouse(world: &World, viewport: u8, mouse_uv: [f32; 2]) -> Option
             ];
 
             // Ray construction in world space
+            // 3D View uses simple aspect ratio correction for screen->world mapping
+            // But currently it's "zoomed_uv" based.
+            // Let's adapt it to CENTER based too for consistency?
+            // "zoomed_uv = (mouse_uv - pivot) / zoom + pivot + pan"
+            // If Pivot is 0.5, then:
+            // "zoomed_uv = (mouse_uv - 0.5) / zoom + 0.5 + pan"
+            // This is equivalent to center-based without extra K (since aspect handled later in ray dir).
+
+            let pivot = [0.5, 0.5]; // Assuming we reset pivot for all viewports, or at least consistency
             let zoomed_uv = [
                 (mouse_uv[0] - pivot[0]) / zoom + pivot[0] + pan[0],
                 (mouse_uv[1] - pivot[1]) / zoom + pivot[1] + pan[1],
@@ -598,6 +677,7 @@ pub fn sys_handle_mouse_drag(world: &mut World) {
     let mut viewport = 0;
     let mut is_dragging = false;
     let mut is_rotating = false;
+    let mut viewport_rect = [0.0, 0.0, 100.0, 100.0];
 
     // Check if we are painting
     let mut is_editor_tool = false;
@@ -613,39 +693,20 @@ pub fn sys_handle_mouse_drag(world: &mut World) {
         is_rotating = input.is_rotating;
     }
 
+    // Collect window settings
+    for (_, win) in world.query::<&WindowSettings>().iter() {
+        viewport_rect = win.viewport_rect;
+    }
+
+    // Collect Volume Aspect Ratios
+    let mut vol_aspects = [1.0, 1.0, 1.0];
+    for (_, vol) in world.query::<&VolumeData>().iter() {
+        vol_aspects = vol.aspect_ratios();
+    }
+
     if !is_dragging && !is_rotating {
         return;
     }
-    // If painting, sys_paint handles the drag, SKIP pan logic here
-    // However, if we started a Middle-Click drag even while in Paint mode, we should allow Panning.
-    // Differentiate based on which button started it?
-    // Simplified: If EditorTool is active, is_dragging usually means Painting (Left Click).
-    // But we allowed Middle Click to set is_dragging too.
-    // Ideally we need separate flags or check button state.
-    // For now: Check if Left Button is pressed? InputState doesn't store button.
-    // Assumption: If in Paint Mode, we only Pan with Middle Click.
-    // But implementation in sys_handle_mouse_button sets is_dragging=true for both.
-
-    // Let's implement sys_paint to only run if EditorTool != Navigation.
-    // If sys_paint runs, we skip Pan logic here?
-    // Better: Helper logic.
-    // If is_editor_tool AND is_dragging (Left Click likely) -> Skip Pan.
-    // But how do we know it wasn't Middle Click?
-    // We can check if `drag_start_pan` was set? In sys_handle_mouse_button, if paint_trigger, we didn't set it.
-    // But it retains old value.
-
-    // Hack/Fix: If painting, we shouldn't be here modifying Pan unless we explicitly started a Pan drag.
-    // We can rely on `sys_paint` checking tool type.
-    // Here we need to know if we should PAN.
-    // We only PAN if we are in Navigation Mode OR if we used the Pan Trigger (Middle Click).
-    // Let's assume if EditorTool != Nav, we DON'T Pan here unless we can distinguish.
-    // For this iteration, let's just Block Pan if EditorTool != Nav to be safe/simple,
-    // OR implementation detail: paint drag doesn't rely on `drag_start_pos` same way.
-
-    // Logic: Panning requires valid drag_start_pos/pan which we set only on drag_trigger.
-    // Painting sets is_dragging but doesn't necessarily set meaningful drag_start_pan (uses old value).
-    // Let's just run Pan logic IF we are NOT painting.
-    // Ideally we'd store "DragMode" enum in InputState.
 
     for (_, view) in world.query::<&mut ViewState>().iter() {
         let mut drag_info = None;
@@ -656,19 +717,6 @@ pub fn sys_handle_mouse_drag(world: &mut World) {
                 // Normal Pan
                 drag_info = Some((input.drag_start_pan, input.drag_start_pos, input.mouse_uv));
             }
-            // If is_editor_tool, we assume Middle Click (Pan) requires us to Check if Middle button held...
-            // which we don't know easily here.
-            // Workaround: We will rely on user not holding Left+Middle at same time.
-            // If is_editor_tool, we only PAN if the intent was PAN (check InputState or Button).
-            // Actually, we can check if `modifiers` has Alt if that was the trigger, but Middle click no modifier.
-
-            // Let's just allow Pan if !is_editor_tool.
-            // If is_editor_tool, we disable Pan drag for now in this function to avoid conflict with Paint.
-            // NOTE: This means Middle Click Pan won't work in Paint Mode with this simple logic.
-            // We can fix by adding `is_panning` to InputState distinct from `is_dragging`.
-            // For now, accept limitation or refactor InputState.
-            // Let's Refactor InputState slightly in next step or use `drag_start_pan` difference? No.
-
             if is_rotating {
                 rotate_info = Some((
                     input.rotation_start_val,
@@ -680,10 +728,33 @@ pub fn sys_handle_mouse_drag(world: &mut World) {
 
         if let Some((start_pan, start_pos, current_pos)) = drag_info {
             let zoom = view.zoom[viewport as usize];
-            view.pan[viewport as usize] = [
-                start_pan[0] + (start_pos[0] - current_pos[0]) / zoom,
-                start_pan[1] + (start_pos[1] - current_pos[1]) / zoom,
-            ];
+            let idx = viewport as usize;
+
+            // Calculate K (Aspect Correction)
+            // Reuse logic from scroll (could extract to helper, but robust enough to copy for now)
+            let mut k = 1.0;
+            if idx > 0 {
+                let screen_w = viewport_rect[2];
+                let screen_h = viewport_rect[3];
+                let screen_aspect = if screen_h > 0.0 {
+                    screen_w / screen_h
+                } else {
+                    1.0
+                };
+
+                let slice_aspect = match idx {
+                    1 => vol_aspects[0] / vol_aspects[1],
+                    2 => vol_aspects[0] / vol_aspects[2],
+                    3 => vol_aspects[1] / vol_aspects[2],
+                    _ => 1.0,
+                };
+                k = screen_aspect / slice_aspect;
+            }
+
+            // Apply Pan with Correction
+            // Delta X in UV space * K / Zoom
+            view.pan[idx][0] = start_pan[0] + ((start_pos[0] - current_pos[0]) * k) / zoom;
+            view.pan[idx][1] = start_pan[1] + (start_pos[1] - current_pos[1]) / zoom;
         }
 
         if let Some((start_quat, start_pos, current_pos)) = rotate_info {
@@ -703,17 +774,12 @@ pub fn sys_handle_mouse_drag(world: &mut World) {
 
             let new_quat = if has_shift {
                 // Planar rotation: Roll around Z-axis (forward)
-                // We use Neg Z to align with "into screen" convention for intuitive CW/CCW
                 let roll_quat = Quat::from_axis_angle(Vec3::NEG_Z, delta_x);
                 (roll_quat * start_q).normalize()
             } else {
                 // Orbital rotation: Yaw around Y (world up), Pitch around X (world right)
-                // Use World Axis for "tumbling" feel
                 let yaw_quat = Quat::from_axis_angle(Vec3::Y, delta_x);
-                // Flip pitch direction back to standard (negated) as the Y-axis mismatch was the root cause
                 let pitch_quat = Quat::from_axis_angle(Vec3::X, -delta_y);
-
-                // Apply World Rotations: (Yaw * Pitch) * Start
                 (yaw_quat * pitch_quat * start_q).normalize()
             };
 
@@ -1029,12 +1095,12 @@ pub fn sys_paint(world: &mut World, queue: &wgpu::Queue) {
         // Updating last_voxel
         // Since we collected 'interactions' (copies of data) to avoid borrow issues,
         // we now need to write back the new position.
-        if let Some(pos) = cur_target_opt {
-            let dim = [1u32, 1, 1]; // Dummy, we just need to cast pos to int
-                                    // Actually we need dimensions to cast to int correctly.
-                                    // But we did it above inside the block.
-                                    // Simpler: Just update it.
-                                    // We'll update it for ALL editors (usually just one).
+        if let Some(_pos) = cur_target_opt {
+            // Dummy, we just need to cast pos to int
+            // Actually we need dimensions to cast to int correctly.
+            // But we did it above inside the block.
+            // Simpler: Just update it.
+            // We'll update it for ALL editors (usually just one).
             for (_, editor) in world.query::<&mut EditorState>().iter() {
                 // We need to fetch dimensions again or guess?
                 // Let's assume default rounding since we don't have dims here easily without re-query.
