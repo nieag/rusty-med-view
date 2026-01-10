@@ -102,6 +102,9 @@ pub struct Uniforms {
     pub overlay_mouse_uv: [f32; 2], // Mouse position for dragged primitive
     pub overlay_primitive_count: u32, // Number of active primitives
     pub overlay_dragging_idx: u32,  // Index being dragged (u32::MAX = none)
+    // --- Brush preview ---
+    pub brush_preview: [f32; 4], // [brush_size, active (0/1), viewport, _]
+    pub brush_center_voxel: [f32; 4], // [voxel_x, voxel_y, voxel_z, valid (0/1)]
     // ---
     pub zoom: f32,
     pub time: f32,

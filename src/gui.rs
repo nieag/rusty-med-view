@@ -481,11 +481,18 @@ impl Gui {
                     let mut ann_query = world.query::<&mut AnnotationState>();
                     let mut vs_query = world.query::<&ViewState>();
                     let mut vd_query = world.query::<&VolumeData>();
+                    let mut overlay_query = world.query::<&mut OverlayState>();
 
-                    if let (Some((_, mut state)), Some((_, vs)), Some((_, vd))) = (
+                    if let (
+                        Some((_, mut state)),
+                        Some((_, vs)),
+                        Some((_, vd)),
+                        Some((_, mut overlay)),
+                    ) = (
                         ann_query.iter().next(),
                         vs_query.iter().next(),
                         vd_query.iter().next(),
+                        overlay_query.iter().next(),
                     ) {
                         let items = &mut state.annotations;
 
@@ -497,6 +504,7 @@ impl Gui {
                             vd,
                             egui::Rect::from_min_size(egui::pos2(x0, y0), egui::vec2(hw, hh)),
                             0,
+                            &mut overlay,
                         );
                         // Viewport 1
                         draw_annotations(
@@ -506,6 +514,7 @@ impl Gui {
                             vd,
                             egui::Rect::from_min_size(egui::pos2(x0 + hw, y0), egui::vec2(hw, hh)),
                             1,
+                            &mut overlay,
                         );
                         // Viewport 2
                         draw_annotations(
@@ -515,6 +524,7 @@ impl Gui {
                             vd,
                             egui::Rect::from_min_size(egui::pos2(x0, y0 + hh), egui::vec2(hw, hh)),
                             2,
+                            &mut overlay,
                         );
                         // Viewport 3
                         draw_annotations(
@@ -527,6 +537,7 @@ impl Gui {
                                 egui::vec2(hw, hh),
                             ),
                             3,
+                            &mut overlay,
                         );
                     }
                 });
@@ -600,6 +611,7 @@ fn draw_annotations(
     vol: &VolumeData,
     rect: egui::Rect,
     viewport_idx: usize,
+    overlay: &mut OverlayState,
 ) {
     let aspect_ratios = vol.aspect_ratios();
 
@@ -622,13 +634,17 @@ fn draw_annotations(
             let id = ui.make_persistent_id(format!("ann_{}_{}", viewport_idx, idx));
 
             // Allocate space for the interaction
-            let point_rect = egui::Rect::from_center_size(screen_pos, egui::vec2(10.0, 10.0));
+            let point_rect = egui::Rect::from_center_size(screen_pos, egui::vec2(16.0, 16.0));
             let response = ui.interact(point_rect, id, sense);
 
             // Handle Dragging using ABSOLUTE position (not deltas) for minimal lag
             if viewport_idx > 0 && response.dragged() {
+                // Update OverlayState for GPU rendering with zero lag
+                overlay.dragging_idx = Some(idx);
+                overlay.dragging_viewport = viewport_idx as u32;
+
                 // Get current mouse position directly from egui
-                if let Some(mouse_pos) = ui.ctx().pointer_interact_pos() {
+                if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                     // Convert screen position to world coordinates directly
                     // This is the inverse of world_to_screen for 2D views
 
@@ -655,6 +671,9 @@ fn draw_annotations(
                     // Convert screen pos to NDC (0..1 within viewport rect)
                     let ndc_x = (mouse_pos.x - rect.min.x) / rect.width();
                     let ndc_y = (mouse_pos.y - rect.min.y) / rect.height();
+
+                    // Store screen UV for shader (within this viewport)
+                    overlay.mouse_screen_uv = [ndc_x, ndc_y];
 
                     // Invert the world_to_screen projection:
                     // ndc_x = ((u - pivot[0] - pan[0]) * zoom / k) + pivot[0]
@@ -685,26 +704,23 @@ fn draw_annotations(
                     // Clamp to volume bounds
                     ann.world_pos = ann.world_pos.clamp(glam::Vec3::ZERO, glam::Vec3::ONE);
                 }
+            } else if response.drag_stopped() {
+                // Clear drag state when drag ends
+                overlay.dragging_idx = None;
             }
 
-            // Draw at the current mouse position during drag for zero perceived lag
-            // Use pointer_latest_pos() for the freshest position available
+            // Calculate text draw position
             let draw_pos = if response.dragged() {
+                // During drag, use mouse position for text too
                 ui.ctx().pointer_latest_pos().unwrap_or(screen_pos)
             } else {
                 world_to_screen(ann.world_pos, viewport_idx, view, aspect_ratios, rect)
                     .unwrap_or(screen_pos)
             };
 
-            let color = if response.hovered() || response.dragged() {
-                egui::Color32::from_rgb(255, 100, 100)
-            } else {
-                egui::Color32::from_rgb(255, 255, 0)
-            };
-
-            ui.painter().circle_filled(draw_pos, 4.0, color);
+            // GPU draws the circle now - egui only draws text label
             ui.painter().text(
-                draw_pos + egui::vec2(6.0, -6.0),
+                draw_pos + egui::vec2(8.0, -8.0),
                 egui::Align2::LEFT_BOTTOM,
                 &ann.label,
                 egui::FontId::proportional(14.0),

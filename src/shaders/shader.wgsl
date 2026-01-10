@@ -23,6 +23,9 @@ struct Uniforms {
     overlay_mouse_uv: vec2<f32>,     // Mouse position for dragged primitive
     overlay_primitive_count: u32,    // Number of active primitives
     overlay_dragging_idx: u32,       // Index being dragged (0xFFFFFFFF = none)
+    // Brush preview
+    brush_preview: vec4<f32>,        // [brush_size, active, viewport, _]
+    brush_center_voxel: vec4<f32>,   // [voxel_x, voxel_y, voxel_z, valid]
     // ---
     zoom: f32,
     time: f32,
@@ -540,6 +543,83 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
         }
         // Line rendering would go here for PRIMITIVE_LINE
+    }
+
+    // --- Brush preview (using CPU-computed center for guaranteed sync) ---
+    let brush_size = uniforms.brush_preview.x;
+    let brush_active = uniforms.brush_preview.y;
+    let brush_viewport = u32(uniforms.brush_preview.z);
+    let center_valid = uniforms.brush_center_voxel.w;
+    
+    // Only render when brush is active, viewport matches, and center is valid
+    if brush_active > 0.5 && brush_viewport == uniforms.view_mode && uniforms.view_mode > 0u && center_valid > 0.5 {
+        let dims = vec3<f32>(uniforms.volume_dims.xyz);
+        let spacing = uniforms.volume_spacing.xyz;
+        
+        // Get slice dimensions and aspect ratio for coordinate transformation
+        let phys_x = dims.x * spacing.x;
+        let phys_y = dims.y * spacing.y;
+        let phys_z = dims.z * spacing.z;
+
+        var slice_dims = vec2<f32>(dims.x, dims.y);
+        var slice_aspect = phys_x / phys_y;
+
+        if uniforms.view_mode == 2u {
+            slice_dims = vec2<f32>(dims.x, dims.z);
+            slice_aspect = phys_x / phys_z;
+        } else if uniforms.view_mode == 3u {
+            slice_dims = vec2<f32>(dims.y, dims.z);
+            slice_aspect = phys_y / phys_z;
+        }
+
+        // Screen → Volume UV transformation (must match CPU's get_voxel_at_mouse formula)
+        let brush_screen_aspect = uniforms.resolution.x / max(uniforms.resolution.y, 1.0);
+        let k = brush_screen_aspect / max(slice_aspect, 0.001);
+        let zoom = max(uniforms.zoom, 0.001);
+        let pan = uniforms.pan;
+        
+        // CPU uses CENTER-BASED formula: volume_uv = ((mouse_uv - 0.5) * k / zoom) + 0.5 + pan
+        // We must use the SAME formula for pixel_volume_uv to match
+        let pixel_volume_uv = vec2<f32>(
+            ((in.uv.x - 0.5) * k / zoom) + 0.5 + pan.x,
+            ((in.uv.y - 0.5) / zoom) + 0.5 + pan.y
+        );
+        let pixel_voxel_f = pixel_volume_uv * slice_dims;
+        let pixel_voxel = vec2<i32>(floor(pixel_voxel_f));
+        
+        // Get brush center from CPU-computed value (same as paint logic uses)
+        // brush_center_voxel contains [x, y, z] in world 0-1 coords from get_voxel_at_mouse
+        var center_voxel: vec2<i32>;
+        if uniforms.view_mode == 1u {
+            // Axial: use XY
+            center_voxel = vec2<i32>(i32(uniforms.brush_center_voxel.x * dims.x),
+                i32(uniforms.brush_center_voxel.y * dims.y));
+        } else if uniforms.view_mode == 2u {
+            // Coronal: use XZ
+            center_voxel = vec2<i32>(i32(uniforms.brush_center_voxel.x * dims.x),
+                i32(uniforms.brush_center_voxel.z * dims.z));
+        } else {
+            // Sagittal: use YZ
+            center_voxel = vec2<i32>(i32(uniforms.brush_center_voxel.y * dims.y),
+                i32(uniforms.brush_center_voxel.z * dims.z));
+        }
+        
+        // Distance check - EXACTLY as in brush paint: dx*dx + dy*dy <= r*r
+        let dx = pixel_voxel.x - center_voxel.x;
+        let dy = pixel_voxel.y - center_voxel.y;
+        let dist_sq = dx * dx + dy * dy;
+        let r = i32(brush_size);
+        let r2 = r * r;
+
+        if dist_sq <= r2 {
+            // Only show edge voxels (thin outline)
+            let is_edge = (dx - 1) * (dx - 1) + dy * dy > r2 || (dx + 1) * (dx + 1) + dy * dy > r2 || dx * dx + (dy - 1) * (dy - 1) > r2 || dx * dx + (dy + 1) * (dy + 1) > r2;
+
+            if is_edge || brush_size <= 1.5 {
+                // Thin bright outline only
+                final_color = vec4<f32>(0.0, 1.0, 1.0, 1.0);
+            }
+        }
     }
 
     return final_color;

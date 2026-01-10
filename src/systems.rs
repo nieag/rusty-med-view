@@ -132,6 +132,37 @@ pub fn sys_prepare_render_data(world: &mut World, view_mode: u32) -> Uniforms {
         window_params[1] = windowing.width;
     }
 
+    // Get brush preview settings
+    // [brush_size_voxels, active, active_viewport, reserved]
+    let mut brush_preview = [0.0f32; 4];
+    let mut brush_active_viewport = 0u32;
+    for (_, editor) in world.query::<&EditorState>().iter() {
+        match editor.active_tool {
+            EditorTool::Brush | EditorTool::Eraser => {
+                brush_preview[0] = editor.brush_size; // size in voxels
+                brush_preview[1] = 1.0; // active
+            }
+            _ => {}
+        }
+    }
+    // Set active viewport (only show in 2D views)
+    for (_, input) in world.query::<&InputState>().iter() {
+        if input.active_viewport > 0 && brush_preview[1] > 0.0 {
+            brush_preview[2] = input.active_viewport as f32;
+            brush_active_viewport = input.active_viewport;
+        }
+    }
+
+    // Compute brush center voxel using same function as paint
+    let brush_center_voxel = if brush_preview[1] > 0.0 && brush_active_viewport > 0 {
+        match get_voxel_at_mouse(world, brush_active_viewport, mouse_uv) {
+            Some([x, y, z]) => [x, y, z, 1.0], // valid
+            None => [0.0, 0.0, 0.0, 0.0],      // invalid
+        }
+    } else {
+        [0.0, 0.0, 0.0, 0.0] // not active
+    };
+
     Uniforms {
         cursor_pos,
         volume_dims,
@@ -146,6 +177,8 @@ pub fn sys_prepare_render_data(world: &mut World, view_mode: u32) -> Uniforms {
         overlay_mouse_uv: mouse_uv,     // Use current mouse position
         overlay_primitive_count: 0,     // Will be updated by render_frame after sync
         overlay_dragging_idx: u32::MAX, // MAX = no drag
+        brush_preview,
+        brush_center_voxel,
         zoom: zoom_val,
         time: time_val,
         view_mode,
