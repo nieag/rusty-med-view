@@ -1,7 +1,6 @@
-use glam::{Mat4, Vec3, Vec4};
-use std::sync::Arc;
+use glam::Vec3;
+
 use web_time::Instant;
-use wgpu::BindGroup;
 use winit::keyboard::ModifiersState;
 
 // --- Basic Tags ---
@@ -17,14 +16,12 @@ pub struct WindowSettings {
 }
 
 pub struct CameraRig {
-    pub radius: f32,
     pub speed: f32,
     pub start_time: Instant,
 }
 
 pub struct Transform {
     pub position: [f32; 3],
-    pub rotation: [f32; 3],
 }
 
 pub struct ViewState {
@@ -126,17 +123,12 @@ pub enum VolumeLoadingState {
     Loading,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EditorTool {
+    #[default]
     Navigation,
     Brush,
     Eraser,
-}
-
-impl Default for EditorTool {
-    fn default() -> Self {
-        Self::Navigation
-    }
 }
 
 pub struct EditorState {

@@ -122,7 +122,8 @@ impl App {
         let default_lut = volume::create_default_colormap(&device, &queue);
 
         // Create Demo Labelmap
-        let (label_tex, label_view, label_sampler) = volume::create_demo_labelmap(&device, &queue);
+        let (_label_tex, label_view, _label_sampler) =
+            volume::create_demo_labelmap(&device, &queue);
 
         // Create async channel for volume loading
         let (volume_sender, volume_receiver) =
@@ -130,14 +131,12 @@ impl App {
 
         // Initialize world and camera
         world.spawn((CameraRig {
-            radius: 3.5,
             speed: 1.0,
             start_time: web_time::Instant::now(),
         },));
         world.spawn((
             Transform {
                 position: [0.5, 0.5, 0.5],
-                rotation: [0.0, 0.0, 0.0],
             },
             CursorTag,
         ));
@@ -469,9 +468,8 @@ impl ApplicationHandler for App {
 
                 // Fetch an existing bind group to generic placeholder
                 let mut placeholder_bg = None;
-                for (_, res) in ctx.world.query::<&GpuVolumeResources>().iter() {
+                if let Some((_, res)) = ctx.world.query::<&GpuVolumeResources>().iter().next() {
                     placeholder_bg = Some(res.bind_group.clone());
-                    break;
                 }
                 // Fallback for initial startup if no volume exists yet (should not happen if we load default volume first)
                 // But create_rendering_context creates volume FIRST.
@@ -494,8 +492,8 @@ impl ApplicationHandler for App {
                     },
                     Representation::Voxel(GpuVolumeResources {
                         texture: tex,
-                        view: view,
-                        sampler: sampler,
+                        view,
+                        sampler,
                         bind_group: placeholder_bg,
                     }),
                     SegmentationTag,

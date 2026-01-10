@@ -24,9 +24,11 @@ pub fn handle_volume_load(
         volume::create_texture_from_nifti(device, queue, loaded);
 
     // Update ONLY the main volume components in ECS
-    for (_, (vol, gpu_res)) in world
+    if let Some((_, (vol, gpu_res))) = world
         .query_mut::<(&mut VolumeData, &mut GpuVolumeResources)>()
         .with::<&MainVolumeTag>()
+        .into_iter()
+        .next()
     {
         vol.dimensions = volume_data.dimensions;
         vol.spacing = volume_data.spacing;
@@ -37,7 +39,6 @@ pub fn handle_volume_load(
         gpu_res.texture = new_texture;
         gpu_res.view = new_view;
         gpu_res.sampler = new_sampler;
-        break;
     }
 
     // Initialize 3D view rotation with volume orientation from NIfTI
@@ -63,12 +64,12 @@ pub fn handle_label_load(
         volume::create_texture_from_labelmap(device, queue, loaded_label);
 
     // Fetch an existing bind group as placeholder (will be fixed by recreate_bind_groups)
-    let mut placeholder_bg = None;
-    for (_, res) in world.query::<&GpuVolumeResources>().iter() {
-        placeholder_bg = Some(res.bind_group.clone());
-        break;
-    }
-    let placeholder_bg = placeholder_bg.expect("Main volume should exist");
+    let placeholder_bg = world
+        .query::<&GpuVolumeResources>()
+        .iter()
+        .next()
+        .map(|(_, res)| res.bind_group.clone())
+        .expect("Main volume should exist");
 
     // Spawn a new layer entity with CPU data for painting support
     let entity = world.spawn((
@@ -130,9 +131,8 @@ pub fn recreate_bind_groups(
         // Note: we can't sort nicely without collecting first.
         let mut query = world.query::<&Representation>();
         for (_, r) in query.iter() {
-            if let Representation::Voxel(res) = r {
-                overlay_views.push(res.view.clone());
-            }
+            let Representation::Voxel(res) = r;
+            overlay_views.push(res.view.clone());
         }
         // Limit to 2 for now as shader supports 2
         // Ideally we pick "visible" ones or "first 2".
@@ -142,7 +142,7 @@ pub fn recreate_bind_groups(
     // Use actual views or fallback to dummy
     let main_view_ref = main_view.as_ref().unwrap_or(dummy_view);
 
-    let overlay1_view = overlay_views.get(0).unwrap_or(dummy_view);
+    let overlay1_view = overlay_views.first().unwrap_or(dummy_view);
     let overlay2_view = overlay_views.get(1).unwrap_or(dummy_view);
 
     let new_bind_group = render::create_scene_bind_group(

@@ -502,22 +502,12 @@ pub fn get_voxel_at_mouse(world: &World, viewport: u32, mouse_uv: [f32; 2]) -> O
             (mouse_uv[1] - 0.5) / zoom + 0.5 + pan[1],
         ];
 
-        let mut pos = [0.0; 3];
-        match viewport {
-            1 => {
-                // Axial (xy)
-                pos = [volume_uv[0], volume_uv[1], cursor_pos[2]];
-            }
-            2 => {
-                // Coronal (xz)
-                pos = [volume_uv[0], cursor_pos[1], volume_uv[1]];
-            }
-            3 => {
-                // Sagittal (yz)
-                pos = [cursor_pos[0], volume_uv[0], volume_uv[1]];
-            }
+        let pos = match viewport {
+            1 => [volume_uv[0], volume_uv[1], cursor_pos[2]],
+            2 => [volume_uv[0], cursor_pos[1], volume_uv[1]],
+            3 => [cursor_pos[0], volume_uv[0], volume_uv[1]],
             _ => return None,
-        }
+        };
         // Clamp to volume bounds
         if pos[0] >= 0.0
             && pos[0] <= 1.0
@@ -528,7 +518,7 @@ pub fn get_voxel_at_mouse(world: &World, viewport: u32, mouse_uv: [f32; 2]) -> O
         {
             return Some(pos);
         }
-        return None;
+        None
     } else {
         // --- 3D View (Volume-Based Rotation) ---
         // Camera is FIXED, volume rotates - same as shader
@@ -926,11 +916,8 @@ pub fn sys_paint(world: &mut World, queue: &wgpu::Queue) {
                 world.query_one::<(&mut LabelmapData, &Representation)>(layer_ent)
             {
                 if let Some((label_data, repr)) = query.get() {
-                    let texture = if let Representation::Voxel(res) = repr {
-                        &res.texture
-                    } else {
-                        continue;
-                    };
+                    let Representation::Voxel(res) = repr;
+                    let texture = &res.texture;
 
                     let dim = label_data.dimensions;
                     let width = dim[0];
@@ -1149,7 +1136,7 @@ pub fn sys_paint(world: &mut World, queue: &wgpu::Queue) {
 
                         queue.write_texture(
                             wgpu::TexelCopyTextureInfo {
-                                texture: &texture,
+                                texture,
                                 mip_level: 0,
                                 origin: wgpu::Origin3d {
                                     x: min_bound[0] as u32,
@@ -1246,9 +1233,10 @@ pub fn sys_paint(world: &mut World, queue: &wgpu::Queue) {
 ///
 /// # Returns
 /// Windowed intensity clamped to [0, 1]
+#[cfg(test)]
 pub fn apply_window(value: f32, center: f32, width: f32) -> f32 {
     if width <= 0.0 {
-        return 0.5; // Guard against invalid width
+        return 0.5;
     }
     let low = center - width * 0.5;
     ((value - low) / width).clamp(0.0, 1.0)

@@ -256,20 +256,19 @@ impl Gui {
                                     }
                                     ui.label(name);
                                 });
-                                if visible {
-                                    if ui
+                                if visible
+                                    && ui
                                         .add(
                                             egui::Slider::new(&mut opacity, 0.0..=1.0)
                                                 .text("Opacity"),
                                         )
                                         .changed()
+                                {
+                                    if let Ok(mut set) =
+                                        world.query_one::<&mut LayerSettings>(entity)
                                     {
-                                        if let Ok(mut set) =
-                                            world.query_one::<&mut LayerSettings>(entity)
-                                        {
-                                            if let Some(s) = set.get() {
-                                                s.opacity = opacity;
-                                            }
+                                        if let Some(s) = set.get() {
+                                            s.opacity = opacity;
                                         }
                                     }
                                 }
@@ -354,14 +353,11 @@ impl Gui {
                     if let Some(msg) = &status_msg {
                         ui.label(egui::RichText::new(msg).color(egui::Color32::LIGHT_BLUE));
                     }
-                    match loading_state {
-                        VolumeLoadingState::Loading => {
-                            ui.horizontal(|ui| {
-                                ui.spinner();
-                                ui.label("Processing...");
-                            });
-                        }
-                        _ => {}
+                    if let VolumeLoadingState::Loading = loading_state {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Processing...");
+                        });
                     }
 
                     ui.separator();
@@ -483,12 +479,7 @@ impl Gui {
                     let mut vd_query = world.query::<&VolumeData>();
                     let mut overlay_query = world.query::<&mut OverlayState>();
 
-                    if let (
-                        Some((_, mut state)),
-                        Some((_, vs)),
-                        Some((_, vd)),
-                        Some((_, mut overlay)),
-                    ) = (
+                    if let (Some((_, state)), Some((_, vs)), Some((_, vd)), Some((_, overlay))) = (
                         ann_query.iter().next(),
                         vs_query.iter().next(),
                         vd_query.iter().next(),
@@ -504,7 +495,7 @@ impl Gui {
                             vd,
                             egui::Rect::from_min_size(egui::pos2(x0, y0), egui::vec2(hw, hh)),
                             0,
-                            &mut overlay,
+                            overlay,
                         );
                         // Viewport 1
                         draw_annotations(
@@ -514,7 +505,7 @@ impl Gui {
                             vd,
                             egui::Rect::from_min_size(egui::pos2(x0 + hw, y0), egui::vec2(hw, hh)),
                             1,
-                            &mut overlay,
+                            overlay,
                         );
                         // Viewport 2
                         draw_annotations(
@@ -524,7 +515,7 @@ impl Gui {
                             vd,
                             egui::Rect::from_min_size(egui::pos2(x0, y0 + hh), egui::vec2(hw, hh)),
                             2,
-                            &mut overlay,
+                            overlay,
                         );
                         // Viewport 3
                         draw_annotations(
@@ -537,7 +528,7 @@ impl Gui {
                                 egui::vec2(hw, hh),
                             ),
                             3,
-                            &mut overlay,
+                            overlay,
                         );
                     }
                 });
@@ -778,7 +769,7 @@ fn world_to_screen(
         let ndc_y = ((v - pivot[1] - pan[1]) * zoom) + pivot[1];
 
         // Clip
-        if ndc_x < 0.0 || ndc_x > 1.0 || ndc_y < 0.0 || ndc_y > 1.0 {
+        if !(0.0..=1.0).contains(&ndc_x) || !(0.0..=1.0).contains(&ndc_y) {
             return None;
         }
 
