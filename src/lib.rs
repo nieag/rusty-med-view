@@ -256,6 +256,20 @@ impl App {
         // Initialize VolumeWindowing with default values
         world.spawn((VolumeWindowing::default(),));
 
+        // Initialize Annotations
+        world.spawn((AnnotationState {
+            annotations: vec![
+                Annotation {
+                    world_pos: glam::Vec3::new(0.5, 0.5, 0.5),
+                    label: "Target".to_string(),
+                },
+                Annotation {
+                    world_pos: glam::Vec3::new(0.2, 0.2, 0.2),
+                    label: "Tumor A".to_string(),
+                },
+            ],
+        },));
+
         let render_pipeline =
             render::create_render_pipeline(&device, &texture_bind_group_layout, config.format);
         let (vertex_buffer, index_buffer, num_indices) = render::create_geometry_buffers(&device);

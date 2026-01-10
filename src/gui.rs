@@ -286,6 +286,70 @@ impl Gui {
 
                     ui.separator();
 
+                    // --- Annotations ---
+                    ui.collapsing("Annotations", |ui| {
+                        // "Add" Button
+                        if ui.button("➕ Add Annotation").clicked() {
+                            // Logic to add annotation at current cursor position
+                            // We need to access AnnotationState (mutable) and Cursor Position
+                            // Cursor Position is in `cursor_pos` variable (Transform)
+                            // But we need to write to AnnotationState.
+
+                            // Collect queries outside closure to avoid ownership issues?
+                            // Actually we are inside `show`, we can query mutable world.
+                            // But we need to be careful about borrowing.
+
+                            // Let's grab the current cursor pos from the world first
+                            let mut current_pos = glam::Vec3::ZERO;
+                            for (_, (t, _)) in world.query::<(&Transform, &CursorTag)>().iter() {
+                                current_pos = glam::Vec3::from(t.position);
+                            }
+
+                            for (_, state) in world.query_mut::<&mut AnnotationState>() {
+                                state.annotations.push(Annotation {
+                                    world_pos: current_pos,
+                                    label: "New".to_string(),
+                                });
+                            }
+                        }
+
+                        ui.separator();
+
+                        // List Annotations
+                        let mut to_delete = None;
+                        let mut to_locate = None;
+
+                        // We iterate mutably over AnnotationState to allow text editing
+                        for (_, state) in world.query_mut::<&mut AnnotationState>() {
+                            for (i, ann) in state.annotations.iter_mut().enumerate() {
+                                ui.horizontal(|ui| {
+                                    if ui.button("🎯").on_hover_text("Locate").clicked() {
+                                        to_locate = Some(ann.world_pos);
+                                    }
+                                    ui.text_edit_singleline(&mut ann.label);
+                                    if ui.button("🗑").clicked() {
+                                        to_delete = Some(i);
+                                    }
+                                });
+                            }
+
+                            if let Some(idx) = to_delete {
+                                state.annotations.remove(idx);
+                            }
+                        }
+
+                        // Handle "Locate" Action
+                        if let Some(pos) = to_locate {
+                            for (_, (t, _)) in world.query_mut::<(&mut Transform, &CursorTag)>() {
+                                t.position = pos.into();
+                            }
+                            // Optional: Center View / Pan?
+                            // For now, just moving the crosshair is enough (slices update automatically)
+                        }
+                    });
+
+                    ui.separator();
+
                     // --- Status & Instructions ---
                     if let Some(msg) = &status_msg {
                         ui.label(egui::RichText::new(msg).color(egui::Color32::LIGHT_BLUE));
@@ -408,6 +472,64 @@ impl Gui {
                     draw_label(ui, "Sagittal (Side)", active_viewport == 3);
                     ui.label(format!("Slice X: {:.2}", cursor_pos[0]));
                 });
+
+            // --- Draw Annotations ---
+            egui::Area::new("annotations_layer".into())
+                .fixed_pos(central_rect.min)
+                .interactable(false)
+                .show(ctx, |ui| {
+                    let mut ann_query = world.query::<&mut AnnotationState>();
+                    let mut vs_query = world.query::<&ViewState>();
+                    let mut vd_query = world.query::<&VolumeData>();
+
+                    if let (Some((_, mut state)), Some((_, vs)), Some((_, vd))) = (
+                        ann_query.iter().next(),
+                        vs_query.iter().next(),
+                        vd_query.iter().next(),
+                    ) {
+                        let items = &mut state.annotations;
+
+                        // Viewport 0
+                        draw_annotations(
+                            ui,
+                            items,
+                            vs,
+                            vd,
+                            egui::Rect::from_min_size(egui::pos2(x0, y0), egui::vec2(hw, hh)),
+                            0,
+                        );
+                        // Viewport 1
+                        draw_annotations(
+                            ui,
+                            items,
+                            vs,
+                            vd,
+                            egui::Rect::from_min_size(egui::pos2(x0 + hw, y0), egui::vec2(hw, hh)),
+                            1,
+                        );
+                        // Viewport 2
+                        draw_annotations(
+                            ui,
+                            items,
+                            vs,
+                            vd,
+                            egui::Rect::from_min_size(egui::pos2(x0, y0 + hh), egui::vec2(hw, hh)),
+                            2,
+                        );
+                        // Viewport 3
+                        draw_annotations(
+                            ui,
+                            items,
+                            vs,
+                            vd,
+                            egui::Rect::from_min_size(
+                                egui::pos2(x0 + hw, y0 + hh),
+                                egui::vec2(hw, hh),
+                            ),
+                            3,
+                        );
+                    }
+                });
         });
 
         self.output = Some(full_output);
@@ -466,5 +588,246 @@ impl Gui {
         for id in &output.textures_delta.free {
             self.renderer.free_texture(id);
         }
+    }
+}
+
+// --- Annotation Helpers ---
+
+fn draw_annotations(
+    ui: &mut egui::Ui,
+    annotations: &mut [Annotation],
+    view: &ViewState,
+    vol: &VolumeData,
+    rect: egui::Rect,
+    viewport_idx: usize,
+) {
+    let aspect_ratios = vol.aspect_ratios();
+
+    // Safety check for empty dimensions
+    if vol.dimensions[0] == 0 {
+        return;
+    }
+
+    for (idx, ann) in annotations.iter_mut().enumerate() {
+        if let Some(screen_pos) =
+            world_to_screen(ann.world_pos, viewport_idx, view, aspect_ratios, rect)
+        {
+            // Draw marker as an interactive widget
+            let sense = if viewport_idx > 0 {
+                egui::Sense::drag()
+            } else {
+                egui::Sense::hover()
+            };
+            // We use a predefined ID to track state across frames
+            let id = ui.make_persistent_id(format!("ann_{}_{}", viewport_idx, idx));
+
+            // Allocate space for the interaction
+            let point_rect = egui::Rect::from_center_size(screen_pos, egui::vec2(10.0, 10.0));
+            let response = ui.interact(point_rect, id, sense);
+
+            // Handle Dragging using ABSOLUTE position (not deltas) for minimal lag
+            if viewport_idx > 0 && response.dragged() {
+                // Get current mouse position directly from egui
+                if let Some(mouse_pos) = ui.ctx().pointer_interact_pos() {
+                    // Convert screen position to world coordinates directly
+                    // This is the inverse of world_to_screen for 2D views
+
+                    let zoom = view.zoom[viewport_idx];
+                    let pan = view.pan[viewport_idx];
+                    let pivot = view.pivot[viewport_idx];
+
+                    let screen_w = rect.width();
+                    let screen_h = rect.height();
+                    let screen_aspect = if screen_h > 0.0 {
+                        screen_w / screen_h
+                    } else {
+                        1.0
+                    };
+
+                    let slice_aspect = match viewport_idx {
+                        1 => aspect_ratios[0] / aspect_ratios[1], // Axial (X/Y)
+                        2 => aspect_ratios[0] / aspect_ratios[2], // Coronal (X/Z)
+                        3 => aspect_ratios[1] / aspect_ratios[2], // Sagittal (Y/Z)
+                        _ => 1.0,
+                    };
+                    let k = screen_aspect / slice_aspect;
+
+                    // Convert screen pos to NDC (0..1 within viewport rect)
+                    let ndc_x = (mouse_pos.x - rect.min.x) / rect.width();
+                    let ndc_y = (mouse_pos.y - rect.min.y) / rect.height();
+
+                    // Invert the world_to_screen projection:
+                    // ndc_x = ((u - pivot[0] - pan[0]) * zoom / k) + pivot[0]
+                    // Solving for u: u = ((ndc_x - pivot[0]) * k / zoom) + pivot[0] + pan[0]
+                    let world_u = ((ndc_x - pivot[0]) * k / zoom) + pivot[0] + pan[0];
+                    let world_v = ((ndc_y - pivot[1]) / zoom) + pivot[1] + pan[1];
+
+                    // Apply to appropriate axes, keeping the slice axis unchanged
+                    match viewport_idx {
+                        1 => {
+                            // Axial (x, y) - z is slice axis
+                            ann.world_pos.x = world_u;
+                            ann.world_pos.y = world_v;
+                        }
+                        2 => {
+                            // Coronal (x, z) - y is slice axis
+                            ann.world_pos.x = world_u;
+                            ann.world_pos.z = world_v;
+                        }
+                        3 => {
+                            // Sagittal (y, z) - x is slice axis
+                            ann.world_pos.y = world_u;
+                            ann.world_pos.z = world_v;
+                        }
+                        _ => {}
+                    };
+
+                    // Clamp to volume bounds
+                    ann.world_pos = ann.world_pos.clamp(glam::Vec3::ZERO, glam::Vec3::ONE);
+                }
+            }
+
+            // Draw at the current mouse position during drag for zero perceived lag
+            // Use pointer_latest_pos() for the freshest position available
+            let draw_pos = if response.dragged() {
+                ui.ctx().pointer_latest_pos().unwrap_or(screen_pos)
+            } else {
+                world_to_screen(ann.world_pos, viewport_idx, view, aspect_ratios, rect)
+                    .unwrap_or(screen_pos)
+            };
+
+            let color = if response.hovered() || response.dragged() {
+                egui::Color32::from_rgb(255, 100, 100)
+            } else {
+                egui::Color32::from_rgb(255, 255, 0)
+            };
+
+            ui.painter().circle_filled(draw_pos, 4.0, color);
+            ui.painter().text(
+                draw_pos + egui::vec2(6.0, -6.0),
+                egui::Align2::LEFT_BOTTOM,
+                &ann.label,
+                egui::FontId::proportional(14.0),
+                egui::Color32::WHITE,
+            );
+        }
+    }
+}
+
+fn world_to_screen(
+    pos: glam::Vec3,
+    viewport_idx: usize,
+    view: &ViewState,
+    aspect_ratios: [f32; 3],
+    rect: egui::Rect,
+) -> Option<egui::Pos2> {
+    let zoom = view.zoom[viewport_idx];
+    let pan = view.pan[viewport_idx];
+    let pivot = view.pivot[viewport_idx]; // Should be [0.5, 0.5] if not customizable
+
+    if viewport_idx > 0 {
+        // --- 2D Viewports ---
+        let slice_aspect = match viewport_idx {
+            1 => aspect_ratios[0] / aspect_ratios[1], // Axial (X/Y)
+            2 => aspect_ratios[0] / aspect_ratios[2], // Coronal (X/Z)
+            3 => aspect_ratios[1] / aspect_ratios[2], // Sagittal (Y/Z)
+            _ => 1.0,
+        };
+
+        let screen_w = rect.width();
+        let screen_h = rect.height();
+        let screen_aspect = if screen_h > 0.0 {
+            screen_w / screen_h
+        } else {
+            1.0
+        };
+        let k = screen_aspect / slice_aspect;
+
+        // Map world pos (0..1) to Plane UV (0..1)
+        // Check slice distance (simple threshold)
+        let _slice_thickness = 0.05; // Threshold
+
+        let (u, v) = match viewport_idx {
+            1 => (pos.x, pos.y), // Axial
+            2 => (pos.x, pos.z), // Coronal
+            3 => (pos.y, pos.z), // Sagittal
+            _ => return None,
+        };
+
+        // Aspect Corrected Projection to Normalized Device Coordinates (0..1 relative to Rect)
+        // Reverse of: vol_uv.x = ((mouse_uv.x - 0.5) * k / zoom) + 0.5 + pan.x
+        // input_uv.x = ((vol_uv.x - 0.5 - pan.x) * zoom / k) + 0.5
+
+        let ndc_x = ((u - pivot[0] - pan[0]) * zoom / k) + pivot[0];
+        let ndc_y = ((v - pivot[1] - pan[1]) * zoom) + pivot[1];
+
+        // Clip
+        if ndc_x < 0.0 || ndc_x > 1.0 || ndc_y < 0.0 || ndc_y > 1.0 {
+            return None;
+        }
+
+        Some(egui::Pos2::new(
+            rect.min.x + ndc_x * rect.width(),
+            rect.min.y + ndc_y * rect.height(),
+        ))
+    } else {
+        // --- 3D Viewport ---
+        // 1. Center & Scale Object
+        let p_centered = pos - glam::Vec3::new(0.5, 0.5, 0.5);
+        let p_scaled = p_centered * glam::Vec3::from(aspect_ratios);
+
+        // 2. Rotate (Model Transform)
+        let rot_quat = glam::Quat::from_array(view.rotation[0]);
+        let p_rotated = rot_quat * p_scaled;
+
+        // 3. View Transform (Camera at 0,0,-3.5 looking +Z)
+        // Point is at P_rotated. Camera is at (0,0,-3.5).
+        // Vector from Cam to Point = P_rotated - (0,0,-3.5) = P_rotated + (0,0,3.5)
+        let p_cam = p_rotated + glam::Vec3::new(0.0, 0.0, 3.5);
+
+        // 4. Project (Perspective)
+        // Screen X = X / Z, Screen Y = Y / Z
+        // Z should be approx 3.5.
+        if p_cam.z <= 0.1 {
+            return None;
+        } // Behind camera
+
+        // This projection assumes FOV such that at Z=1, scale is 1.
+        // In systems.rs ray setup: `forward + right*screen_x + ...`
+        // implies screen plane is at Z=1 relative to camera?
+        // Yes.
+        let proj_x = p_cam.x / p_cam.z;
+        let proj_y = p_cam.y / p_cam.z;
+
+        // 5. Map to Screen UV (using Zoom/Pan)
+        // systems.rs: `screen_pos = [uv.x * aspect, uv.y]` where uv is centered.
+        // So `uv.y = proj_y`. `uv.x = proj_x / aspect`.
+        let screen_aspect = if rect.height() > 0.0 {
+            rect.width() / rect.height()
+        } else {
+            1.0
+        };
+
+        let uv_centered_x = proj_x / screen_aspect;
+        let uv_centered_y = proj_y;
+
+        // zoomed_uv (0..1) = uv_centered + 0.5
+        let zoomed_uv_x = uv_centered_x + 0.5;
+        let zoomed_uv_y = uv_centered_y + 0.5;
+
+        // Reverse Zoom/Pan Logic
+        // zoomed_uv = (mouse_uv - pivot)/zoom + pivot + pan
+        // mouse_uv = (zoomed_uv - pivot - pan) * zoom + pivot
+        let final_u = ((zoomed_uv_x - pivot[0] - pan[0]) * zoom) + pivot[0];
+        let final_v = ((zoomed_uv_y - pivot[1] - pan[1]) * zoom) + pivot[1];
+
+        // Clip
+        // if final_u < 0.0 || final_u > 1.0 || final_v < 0.0 || final_v > 1.0 { return None; }
+        // Allow slightly outside for labels
+
+        Some(egui::Pos2::new(
+            rect.min.x + final_u * rect.width(),
+            rect.min.y + final_v * rect.height(),
+        ))
     }
 }

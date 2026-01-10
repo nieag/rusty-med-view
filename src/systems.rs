@@ -21,10 +21,10 @@ pub fn sys_update_modifiers(world: &mut World, mods: ModifiersState) {
 /// Returns None if mouse is outside volume bounds or no volume is loaded.
 pub fn get_hu_at_mouse(world: &World) -> Option<f32> {
     // Get current input state
-    let mut viewport = 0;
+    let mut viewport = 0u32;
     let mut mouse_uv = [0.5, 0.5];
     for (_, input) in world.query::<&InputState>().iter() {
-        viewport = input.active_viewport as u8;
+        viewport = input.active_viewport;
         mouse_uv = input.mouse_uv;
     }
 
@@ -147,6 +147,7 @@ pub fn sys_prepare_render_data(world: &mut World, view_mode: u32) -> Uniforms {
         time: time_val,
         view_mode,
         overlay_flags,
+        padding: [0, 0],
     }
 }
 
@@ -354,7 +355,7 @@ use winit::event::{ElementState, MouseButton};
 
 /// Calculate volume coordinate (0.0..1.0) under the mouse cursor.
 /// Works for both 2D slices and 3D raymarching.
-fn get_voxel_at_mouse(world: &World, viewport: u8, mouse_uv: [f32; 2]) -> Option<[f32; 3]> {
+pub fn get_voxel_at_mouse(world: &World, viewport: u32, mouse_uv: [f32; 2]) -> Option<[f32; 3]> {
     // Shared view state
     let mut zoom = 1.0;
     let mut pan = [0.0, 0.0];
