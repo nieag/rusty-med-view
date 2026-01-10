@@ -109,6 +109,7 @@ pub fn recreate_bind_groups(
     dummy_view: &wgpu::TextureView,
     dummy_sampler: &wgpu::Sampler,
     default_lut_view: &wgpu::TextureView,
+    overlay_buffer: &wgpu::Buffer,
 ) {
     // Collect the texture views we need (must satisfy borrow checker)
     let main_view: Option<wgpu::TextureView>;
@@ -154,6 +155,7 @@ pub fn recreate_bind_groups(
         default_lut_view,
         overlay2_view,
         default_lut_view,
+        overlay_buffer,
     );
 
     // Update bind group in ALL relevant entities

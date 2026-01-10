@@ -142,13 +142,66 @@ pub fn sys_prepare_render_data(world: &mut World, view_mode: u32) -> Uniforms {
         mouse_uv,
         pan,
         zoom_pivot,
-        rotation, // quaternion [x, y, z, w]
+        rotation,                       // quaternion [x, y, z, w]
+        overlay_mouse_uv: mouse_uv,     // Use current mouse position
+        overlay_primitive_count: 0,     // Will be updated by render_frame after sync
+        overlay_dragging_idx: u32::MAX, // MAX = no drag
         zoom: zoom_val,
         time: time_val,
         view_mode,
         overlay_flags,
-        padding: [0, 0],
     }
+}
+
+/// Sync annotations to overlay primitives for GPU rendering.
+///
+/// This should be called each frame before rendering to update the overlay
+/// primitive buffer with current annotation positions.
+pub fn sys_sync_annotations_to_overlay(world: &mut World) {
+    // Collect annotations first to avoid borrow conflicts
+    let mut annotation_positions: Vec<Vec3> = Vec::new();
+
+    for (_, ann_state) in world.query::<&AnnotationState>().iter() {
+        for ann in &ann_state.annotations {
+            annotation_positions.push(ann.world_pos);
+        }
+    }
+
+    // Update overlay state with annotation primitives
+    for (_, overlay) in world.query_mut::<&mut OverlayState>() {
+        overlay.primitives.clear();
+
+        for pos in &annotation_positions {
+            // Create a circle primitive for each annotation
+            // Visible in all viewports (mask = 15 = 1|2|4|8)
+            overlay.primitives.push(OverlayPrimitive::circle(
+                *pos,
+                0.5,                  // radius in world units
+                [1.0, 0.3, 0.3, 1.0], // Red-ish color
+                15,                   // All viewports
+            ));
+        }
+    }
+}
+
+/// Get the overlay state data for use by the render frame.
+/// Returns (primitives as bytes, count, dragging_idx, mouse_uv)
+pub fn get_overlay_render_data(world: &World) -> (Vec<u8>, u32, u32, [f32; 2]) {
+    let mut primitives_bytes = Vec::new();
+    let mut count = 0u32;
+    let mut dragging_idx = u32::MAX;
+    let mut mouse_uv = [0.5f32, 0.5];
+
+    for (_, overlay) in world.query::<&OverlayState>().iter() {
+        count = overlay.primitives.len() as u32;
+        dragging_idx = overlay.dragging_idx.map(|i| i as u32).unwrap_or(u32::MAX);
+        mouse_uv = overlay.mouse_screen_uv;
+
+        // Serialize primitives to bytes
+        primitives_bytes = bytemuck::cast_slice(&overlay.primitives).to_vec();
+    }
+
+    (primitives_bytes, count, dragging_idx, mouse_uv)
 }
 
 /// Handle scroll input for zooming or slice scrolling.

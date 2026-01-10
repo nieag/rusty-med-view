@@ -91,8 +91,32 @@ pub fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout 
                 },
                 count: None,
             },
+            // 7: Overlay Primitives Storage Buffer
+            wgpu::BindGroupLayoutEntry {
+                binding: 7,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
         ],
         label: Some("texture_bind_group_layout"),
+    })
+}
+
+const MAX_OVERLAY_PRIMITIVES: usize = 64;
+
+/// Create the overlay primitives storage buffer.
+pub fn create_overlay_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    let buffer_size = (std::mem::size_of::<OverlayPrimitive>() * MAX_OVERLAY_PRIMITIVES) as u64;
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Overlay Primitives Buffer"),
+        size: buffer_size,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
     })
 }
 
@@ -187,6 +211,7 @@ pub fn create_scene_bind_group(
     overlay1_lut: &wgpu::TextureView,
     overlay2_view: &wgpu::TextureView,
     overlay2_lut: &wgpu::TextureView,
+    overlay_buffer: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout,
@@ -225,6 +250,14 @@ pub fn create_scene_bind_group(
                 binding: 6,
                 resource: wgpu::BindingResource::TextureView(overlay2_lut),
             },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: overlay_buffer,
+                    offset: 0,
+                    size: None,
+                }),
+            },
         ],
         label: Some("diffuse_bind_group"),
     })
@@ -238,6 +271,7 @@ pub fn render_frame(
     config: &wgpu::SurfaceConfiguration,
     render_pipeline: &wgpu::RenderPipeline,
     uniform_buffer: &wgpu::Buffer,
+    overlay_buffer: &wgpu::Buffer,
     vertex_buffer: &wgpu::Buffer,
     index_buffer: &wgpu::Buffer,
     num_indices: u32,
@@ -246,10 +280,27 @@ pub fn render_frame(
     window: &Arc<Window>,
     volume_sender: std::sync::mpsc::Sender<Result<LoadResult, crate::nifti_loader::LoadError>>,
 ) {
+    // Sync annotations to overlay primitives
+    systems::sys_sync_annotations_to_overlay(world);
+
+    // Get overlay data for GPU buffer
+    let (overlay_bytes, overlay_count, dragging_idx, overlay_mouse_uv) =
+        systems::get_overlay_render_data(world);
+
+    // Write overlay primitives to storage buffer
+    if !overlay_bytes.is_empty() {
+        queue.write_buffer(overlay_buffer, 0, &overlay_bytes);
+    }
+
     // Prepare uniforms for all 4 viewports
     let mut all_uniforms_bytes = Vec::with_capacity(1024);
     for mode in 0..4 {
-        let u = systems::sys_prepare_render_data(world, mode);
+        let mut u = systems::sys_prepare_render_data(world, mode);
+        // Inject overlay data into uniforms
+        u.overlay_primitive_count = overlay_count;
+        u.overlay_dragging_idx = dragging_idx;
+        u.overlay_mouse_uv = overlay_mouse_uv;
+
         all_uniforms_bytes.extend_from_slice(bytemuck::cast_slice(&[u]));
         while all_uniforms_bytes.len() % 256 != 0 {
             all_uniforms_bytes.push(0);

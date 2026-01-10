@@ -52,6 +52,7 @@ pub struct RenderingContext {
     // Shared Resources
     dummy_r8: (wgpu::Texture, wgpu::TextureView, wgpu::Sampler),
     default_lut: (wgpu::Texture, wgpu::TextureView),
+    overlay_buffer: wgpu::Buffer,
 }
 
 pub struct AppState {
@@ -177,6 +178,7 @@ impl App {
         // --- Pipeline Setup (using render module) ---
         let uniform_buffer = render::create_uniform_buffer(&device);
         let texture_bind_group_layout = render::create_bind_group_layout(&device);
+        let overlay_buffer = render::create_overlay_buffer(&device);
 
         let diffuse_bind_group = render::create_scene_bind_group(
             &device,
@@ -188,6 +190,7 @@ impl App {
             &default_lut.1,
             &dummy_r8.1,
             &default_lut.1,
+            &overlay_buffer,
         );
 
         // Store persistent WGPU volume resources in ECS (volume_data is already VolumeData)
@@ -270,6 +273,9 @@ impl App {
             ],
         },));
 
+        // Initialize Overlay State for GPU-rendered primitives
+        world.spawn((OverlayState::default(),));
+
         let render_pipeline =
             render::create_render_pipeline(&device, &texture_bind_group_layout, config.format);
         let (vertex_buffer, index_buffer, num_indices) = render::create_geometry_buffers(&device);
@@ -289,6 +295,7 @@ impl App {
             &dummy_r8.1,
             &dummy_r8.2,
             &default_lut.1,
+            &overlay_buffer,
         );
 
         RenderingContext {
@@ -310,6 +317,7 @@ impl App {
             volume_sender,
             dummy_r8,
             default_lut,
+            overlay_buffer,
         }
     }
 }
@@ -412,6 +420,7 @@ impl ApplicationHandler for App {
                     &ctx.config,
                     &ctx.render_pipeline,
                     &ctx.uniform_buffer,
+                    &ctx.overlay_buffer,
                     &ctx.vertex_buffer,
                     &ctx.index_buffer,
                     ctx.num_indices,
@@ -501,6 +510,7 @@ impl ApplicationHandler for App {
                     &ctx.dummy_r8.1,
                     &ctx.dummy_r8.2,
                     &ctx.default_lut.1,
+                    &ctx.overlay_buffer,
                 );
 
                 // Select the new layer
@@ -561,6 +571,7 @@ impl ApplicationHandler for App {
                             &ctx.dummy_r8.1,
                             &ctx.dummy_r8.2,
                             &ctx.default_lut.1,
+                            &ctx.overlay_buffer,
                         );
                     }
                     Err(e) => {
