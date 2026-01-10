@@ -5,6 +5,7 @@
 use crate::components::*;
 use crate::geometry;
 use crate::gui;
+use crate::overlay::OverlayPrimitive;
 use crate::systems;
 use hecs::World;
 use std::sync::Arc;
@@ -280,10 +281,13 @@ pub fn render_frame(
     window: &Arc<Window>,
     volume_sender: std::sync::mpsc::Sender<Result<LoadResult, crate::nifti_loader::LoadError>>,
 ) {
-    // Sync annotations to overlay primitives
+    // 1. Run GUI first so it can process interactions and update ECS state for THIS frame
+    gui.prepare(window, world, volume_sender);
+
+    // 2. Sync annotations to overlay primitives (using the potentially updated ECS state)
     systems::sys_sync_annotations_to_overlay(world);
 
-    // Get overlay data for GPU buffer
+    // 3. Get overlay data for GPU buffer
     let (overlay_bytes, overlay_count, dragging_idx, overlay_mouse_uv) =
         systems::get_overlay_render_data(world);
 
@@ -292,7 +296,7 @@ pub fn render_frame(
         queue.write_buffer(overlay_buffer, 0, &overlay_bytes);
     }
 
-    // Prepare uniforms for all 4 viewports
+    // 4. Prepare uniforms for all 4 viewports
     let mut all_uniforms_bytes = Vec::with_capacity(1024);
     for mode in 0..4 {
         let mut u = systems::sys_prepare_render_data(world, mode);
@@ -307,7 +311,6 @@ pub fn render_frame(
         }
     }
     queue.write_buffer(uniform_buffer, 0, &all_uniforms_bytes);
-    gui.prepare(window, world, volume_sender);
 
     let frame = surface.get_current_texture().unwrap();
     let view = frame

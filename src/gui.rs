@@ -1,4 +1,5 @@
 use crate::components::*;
+use crate::overlay::OverlayManager;
 use crate::{file_dialog, nifti_loader, systems};
 use egui_wgpu::Renderer;
 use egui_winit::State;
@@ -342,8 +343,15 @@ impl Gui {
                             for (_, (t, _)) in world.query_mut::<(&mut Transform, &CursorTag)>() {
                                 t.position = pos.into();
                             }
-                            // Optional: Center View / Pan?
-                            // For now, just moving the crosshair is enough (slices update automatically)
+                            // Center 2D views on this position
+                            for (_, view) in world.query_mut::<&mut ViewState>() {
+                                // Axial: center on x, y
+                                view.pan[1] = [pos.x - 0.5, pos.y - 0.5];
+                                // Coronal: center on x, z
+                                view.pan[2] = [pos.x - 0.5, pos.z - 0.5];
+                                // Sagittal: center on y, z
+                                view.pan[3] = [pos.y - 0.5, pos.z - 0.5];
+                            }
                         }
                     });
 
@@ -477,7 +485,7 @@ impl Gui {
                     let mut ann_query = world.query::<&mut AnnotationState>();
                     let mut vs_query = world.query::<&ViewState>();
                     let mut vd_query = world.query::<&VolumeData>();
-                    let mut overlay_query = world.query::<&mut OverlayState>();
+                    let mut overlay_query = world.query::<&mut OverlayManager>();
 
                     if let (Some((_, state)), Some((_, vs)), Some((_, vd)), Some((_, overlay))) = (
                         ann_query.iter().next(),
@@ -533,6 +541,12 @@ impl Gui {
                     }
                 });
         });
+
+        // Update input state flag so other systems (like paint) know egui is using the pointer
+        for (_, input) in world.query_mut::<&mut InputState>() {
+            input.egui_wants_input =
+                self.context.wants_pointer_input() || self.context.is_using_pointer();
+        }
 
         self.output = Some(full_output);
     }
@@ -602,7 +616,7 @@ fn draw_annotations(
     vol: &VolumeData,
     rect: egui::Rect,
     viewport_idx: usize,
-    overlay: &mut OverlayState,
+    overlay: &mut OverlayManager,
 ) {
     let aspect_ratios = vol.aspect_ratios();
 
@@ -630,7 +644,7 @@ fn draw_annotations(
 
             // Handle Dragging using ABSOLUTE position (not deltas) for minimal lag
             if viewport_idx > 0 && response.dragged() {
-                // Update OverlayState for GPU rendering with zero lag
+                // Update OverlayManager for GPU rendering with zero lag
                 overlay.dragging_idx = Some(idx);
                 overlay.dragging_viewport = viewport_idx as u32;
 
@@ -728,49 +742,21 @@ fn world_to_screen(
     aspect_ratios: [f32; 3],
     rect: egui::Rect,
 ) -> Option<egui::Pos2> {
-    let zoom = view.zoom[viewport_idx];
-    let pan = view.pan[viewport_idx];
-    let pivot = view.pivot[viewport_idx]; // Should be [0.5, 0.5] if not customizable
+    let screen_aspect = if rect.height() > 0.0 {
+        rect.width() / rect.height()
+    } else {
+        1.0
+    };
 
-    if viewport_idx > 0 {
-        // --- 2D Viewports ---
-        let slice_aspect = match viewport_idx {
-            1 => aspect_ratios[0] / aspect_ratios[1], // Axial (X/Y)
-            2 => aspect_ratios[0] / aspect_ratios[2], // Coronal (X/Z)
-            3 => aspect_ratios[1] / aspect_ratios[2], // Sagittal (Y/Z)
-            _ => 1.0,
-        };
-
-        let screen_w = rect.width();
-        let screen_h = rect.height();
-        let screen_aspect = if screen_h > 0.0 {
-            screen_w / screen_h
-        } else {
-            1.0
-        };
-        let k = screen_aspect / slice_aspect;
-
-        // Map world pos (0..1) to Plane UV (0..1)
-        // Check slice distance (simple threshold)
-        let _slice_thickness = 0.05; // Threshold
-
-        let (u, v) = match viewport_idx {
-            1 => (pos.x, pos.y), // Axial
-            2 => (pos.x, pos.z), // Coronal
-            3 => (pos.y, pos.z), // Sagittal
-            _ => return None,
-        };
-
-        // Aspect Corrected Projection to Normalized Device Coordinates (0..1 relative to Rect)
-        // Reverse of: vol_uv.x = ((mouse_uv.x - 0.5) * k / zoom) + 0.5 + pan.x
-        // input_uv.x = ((vol_uv.x - 0.5 - pan.x) * zoom / k) + 0.5
-
-        let ndc_x = ((u - pivot[0] - pan[0]) * zoom / k) + pivot[0];
-        let ndc_y = ((v - pivot[1] - pan[1]) * zoom) + pivot[1];
-
+    if let Some([ndc_x, ndc_y]) =
+        crate::geometry::world_to_ndc(pos, viewport_idx, view, aspect_ratios, screen_aspect)
+    {
         // Clip
         if !(0.0..=1.0).contains(&ndc_x) || !(0.0..=1.0).contains(&ndc_y) {
-            return None;
+            // Re-apply clipping for non-3D views if needed
+            if viewport_idx > 0 {
+                return None;
+            }
         }
 
         Some(egui::Pos2::new(
@@ -778,63 +764,6 @@ fn world_to_screen(
             rect.min.y + ndc_y * rect.height(),
         ))
     } else {
-        // --- 3D Viewport ---
-        // 1. Center & Scale Object
-        let p_centered = pos - glam::Vec3::new(0.5, 0.5, 0.5);
-        let p_scaled = p_centered * glam::Vec3::from(aspect_ratios);
-
-        // 2. Rotate (Model Transform)
-        let rot_quat = glam::Quat::from_array(view.rotation[0]);
-        let p_rotated = rot_quat * p_scaled;
-
-        // 3. View Transform (Camera at 0,0,-3.5 looking +Z)
-        // Point is at P_rotated. Camera is at (0,0,-3.5).
-        // Vector from Cam to Point = P_rotated - (0,0,-3.5) = P_rotated + (0,0,3.5)
-        let p_cam = p_rotated + glam::Vec3::new(0.0, 0.0, 3.5);
-
-        // 4. Project (Perspective)
-        // Screen X = X / Z, Screen Y = Y / Z
-        // Z should be approx 3.5.
-        if p_cam.z <= 0.1 {
-            return None;
-        } // Behind camera
-
-        // This projection assumes FOV such that at Z=1, scale is 1.
-        // In systems.rs ray setup: `forward + right*screen_x + ...`
-        // implies screen plane is at Z=1 relative to camera?
-        // Yes.
-        let proj_x = p_cam.x / p_cam.z;
-        let proj_y = p_cam.y / p_cam.z;
-
-        // 5. Map to Screen UV (using Zoom/Pan)
-        // systems.rs: `screen_pos = [uv.x * aspect, uv.y]` where uv is centered.
-        // So `uv.y = proj_y`. `uv.x = proj_x / aspect`.
-        let screen_aspect = if rect.height() > 0.0 {
-            rect.width() / rect.height()
-        } else {
-            1.0
-        };
-
-        let uv_centered_x = proj_x / screen_aspect;
-        let uv_centered_y = proj_y;
-
-        // zoomed_uv (0..1) = uv_centered + 0.5
-        let zoomed_uv_x = uv_centered_x + 0.5;
-        let zoomed_uv_y = uv_centered_y + 0.5;
-
-        // Reverse Zoom/Pan Logic
-        // zoomed_uv = (mouse_uv - pivot)/zoom + pivot + pan
-        // mouse_uv = (zoomed_uv - pivot - pan) * zoom + pivot
-        let final_u = ((zoomed_uv_x - pivot[0] - pan[0]) * zoom) + pivot[0];
-        let final_v = ((zoomed_uv_y - pivot[1] - pan[1]) * zoom) + pivot[1];
-
-        // Clip
-        // if final_u < 0.0 || final_u > 1.0 || final_v < 0.0 || final_v > 1.0 { return None; }
-        // Allow slightly outside for labels
-
-        Some(egui::Pos2::new(
-            rect.min.x + final_u * rect.width(),
-            rect.min.y + final_v * rect.height(),
-        ))
+        None
     }
 }

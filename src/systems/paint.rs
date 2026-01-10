@@ -1,0 +1,265 @@
+// src/systems/paint.rs
+use crate::components::*;
+use crate::systems::picking::get_voxel_at_mouse;
+use hecs::World;
+
+/// Paint System: Updates labelmap based on mouse stroke
+pub fn sys_paint(world: &mut World, queue: &wgpu::Queue) {
+    let mut interactions = Vec::new();
+
+    for (_, input) in world.query::<&InputState>().iter() {
+        if !input.is_dragging || input.egui_wants_input || input.is_panning || input.is_rotating {
+            continue;
+        }
+        for (_, editor) in world.query::<&mut EditorState>().iter() {
+            if editor.active_tool == EditorTool::Navigation {
+                continue;
+            }
+            interactions.push((
+                input.active_viewport,
+                input.mouse_uv,
+                editor.active_tool,
+                editor.brush_size,
+                editor.active_label_index,
+                editor.active_layer,
+                editor.last_paint_voxel,
+            ));
+        }
+    }
+
+    if interactions.is_empty() {
+        return;
+    }
+
+    for (viewport, mouse_uv, tool, brush_size, label_idx, layer_entity, last_voxel_opt) in
+        interactions
+    {
+        let layer_ent = if let Some(e) = layer_entity {
+            e
+        } else {
+            continue;
+        };
+        let cur_target_opt = get_voxel_at_mouse(world, viewport, mouse_uv);
+
+        if let Some(pos) = cur_target_opt {
+            if let Ok(mut query) =
+                world.query_one::<(&mut LabelmapData, &Representation)>(layer_ent)
+            {
+                if let Some((label_data, repr)) = query.get() {
+                    let Representation::Voxel(res) = repr;
+                    let texture = &res.texture;
+                    let dim = label_data.dimensions;
+                    let width = dim[0];
+                    let height = dim[1];
+                    let depth = dim[2];
+
+                    let cx = (pos[0] * width as f32) as i32;
+                    let cy = (pos[1] * height as f32) as i32;
+                    let cz = (pos[2] * depth as f32) as i32;
+                    let current_voxel = [cx, cy, cz];
+
+                    if viewport == 0 {
+                        continue;
+                    }
+
+                    let mut points_to_paint = Vec::new();
+                    if let Some(last_voxel) = last_voxel_opt {
+                        let lx = last_voxel[0] as i32;
+                        let ly = last_voxel[1] as i32;
+                        let lz = last_voxel[2] as i32;
+                        let dist = match viewport {
+                            1 => (((cx - lx).pow(2) + (cy - ly).pow(2)) as f32).sqrt(),
+                            2 => (((cx - lx).pow(2) + (cz - lz).pow(2)) as f32).sqrt(),
+                            3 => (((cy - ly).pow(2) + (cz - lz).pow(2)) as f32).sqrt(),
+                            _ => 0.0,
+                        };
+                        let steps = dist.ceil() as i32 + 1;
+                        for i in 0..=steps {
+                            let t = i as f32 / steps as f32;
+                            let (ix, iy, iz) = match viewport {
+                                1 => (
+                                    (lx as f32 + (cx - lx) as f32 * t) as i32,
+                                    (ly as f32 + (cy - ly) as f32 * t) as i32,
+                                    cz,
+                                ),
+                                2 => (
+                                    (lx as f32 + (cx - lx) as f32 * t) as i32,
+                                    cy,
+                                    (lz as f32 + (cz - lz) as f32 * t) as i32,
+                                ),
+                                3 => (
+                                    cx,
+                                    (ly as f32 + (cy - ly) as f32 * t) as i32,
+                                    (lz as f32 + (cz - lz) as f32 * t) as i32,
+                                ),
+                                _ => (cx, cy, cz),
+                            };
+                            points_to_paint.push([ix, iy, iz]);
+                        }
+                    } else {
+                        points_to_paint.push(current_voxel);
+                    }
+
+                    let val_to_write = if tool == EditorTool::Eraser {
+                        0
+                    } else {
+                        label_idx
+                    };
+                    let r = brush_size as i32;
+                    let r2 = (brush_size * brush_size) as i32;
+                    let mut min_bound = [width as i32, height as i32, depth as i32];
+                    let mut max_bound = [-1, -1, -1];
+                    let mut modified = false;
+
+                    for pt in points_to_paint {
+                        let px = pt[0];
+                        let py = pt[1];
+                        let pz = pt[2];
+                        match viewport {
+                            1 => {
+                                let start_x = (px - r).max(0);
+                                let end_x = (px + r).min(width as i32 - 1);
+                                let start_y = (py - r).max(0);
+                                let end_y = (py + r).min(height as i32 - 1);
+                                if pz >= 0 && pz < depth as i32 {
+                                    for y in start_y..=end_y {
+                                        for x in start_x..=end_x {
+                                            if (x - px).pow(2) + (y - py).pow(2) <= r2 {
+                                                let idx = (pz as u32 * width * height
+                                                    + y as u32 * width
+                                                    + x as u32)
+                                                    as usize;
+                                                if label_data.raw_data[idx] != val_to_write {
+                                                    label_data.raw_data[idx] = val_to_write;
+                                                    modified = true;
+                                                    min_bound[0] = min_bound[0].min(x);
+                                                    min_bound[1] = min_bound[1].min(y);
+                                                    min_bound[2] = min_bound[2].min(pz);
+                                                    max_bound[0] = max_bound[0].max(x);
+                                                    max_bound[1] = max_bound[1].max(y);
+                                                    max_bound[2] = max_bound[2].max(pz);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            2 => {
+                                let start_x = (px - r).max(0);
+                                let end_x = (px + r).min(width as i32 - 1);
+                                let start_z = (pz - r).max(0);
+                                let end_z = (pz + r).min(depth as i32 - 1);
+                                if py >= 0 && py < height as i32 {
+                                    for z in start_z..=end_z {
+                                        for x in start_x..=end_x {
+                                            if (x - px).pow(2) + (z - pz).pow(2) <= r2 {
+                                                let idx = (z as u32 * width * height
+                                                    + py as u32 * width
+                                                    + x as u32)
+                                                    as usize;
+                                                if label_data.raw_data[idx] != val_to_write {
+                                                    label_data.raw_data[idx] = val_to_write;
+                                                    modified = true;
+                                                    min_bound[0] = min_bound[0].min(x);
+                                                    min_bound[1] = min_bound[1].min(py);
+                                                    min_bound[2] = min_bound[2].min(z);
+                                                    max_bound[0] = max_bound[0].max(x);
+                                                    max_bound[1] = max_bound[1].max(py);
+                                                    max_bound[2] = max_bound[2].max(z);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            3 => {
+                                let start_y = (py - r).max(0);
+                                let end_y = (py + r).min(height as i32 - 1);
+                                let start_z = (pz - r).max(0);
+                                let end_z = (pz + r).min(depth as i32 - 1);
+                                if px >= 0 && px < width as i32 {
+                                    for z in start_z..=end_z {
+                                        for y in start_y..=end_y {
+                                            if (y - py).pow(2) + (z - pz).pow(2) <= r2 {
+                                                let idx = (z as u32 * width * height
+                                                    + y as u32 * width
+                                                    + px as u32)
+                                                    as usize;
+                                                if label_data.raw_data[idx] != val_to_write {
+                                                    label_data.raw_data[idx] = val_to_write;
+                                                    modified = true;
+                                                    min_bound[0] = min_bound[0].min(px);
+                                                    min_bound[1] = min_bound[1].min(y);
+                                                    min_bound[2] = min_bound[2].min(z);
+                                                    max_bound[0] = max_bound[0].max(px);
+                                                    max_bound[1] = max_bound[1].max(y);
+                                                    max_bound[2] = max_bound[2].max(z);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    if modified {
+                        let w = (max_bound[0] - min_bound[0] + 1) as u32;
+                        let h = (max_bound[1] - min_bound[1] + 1) as u32;
+                        let d = (max_bound[2] - min_bound[2] + 1) as u32;
+                        let mut sub_data = Vec::with_capacity((w * h * d) as usize);
+                        for z in min_bound[2]..=max_bound[2] {
+                            for y in min_bound[1]..=max_bound[1] {
+                                let start = (z as u32 * width * height
+                                    + y as u32 * width
+                                    + min_bound[0] as u32)
+                                    as usize;
+                                sub_data.extend_from_slice(
+                                    &label_data.raw_data[start..start + w as usize],
+                                );
+                            }
+                        }
+                        queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d {
+                                    x: min_bound[0] as u32,
+                                    y: min_bound[1] as u32,
+                                    z: min_bound[2] as u32,
+                                },
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            &sub_data,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(w),
+                                rows_per_image: Some(h),
+                            },
+                            wgpu::Extent3d {
+                                width: w,
+                                height: h,
+                                depth_or_array_layers: d,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+
+        if let Some(target) = cur_target_opt {
+            for (_, editor) in world.query::<&mut EditorState>().iter() {
+                let mut dims = [100, 100, 100];
+                for (_, vol) in world.query::<&VolumeData>().iter() {
+                    dims = vol.dimensions;
+                }
+                editor.last_paint_voxel = Some([
+                    (target[0] * dims[0] as f32) as u32,
+                    (target[1] * dims[1] as f32) as u32,
+                    (target[2] * dims[2] as f32) as u32,
+                ]);
+            }
+        }
+    }
+}

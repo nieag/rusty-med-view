@@ -7,12 +7,14 @@ mod gizmo;
 mod gui;
 mod load_handlers;
 mod nifti_loader;
+mod overlay;
 mod render;
 mod systems;
 mod volume;
 
 use components::*;
 use hecs::World;
+use overlay::OverlayManager;
 use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
@@ -161,11 +163,13 @@ impl App {
             active_viewport: 0,
             modifiers: winit::keyboard::ModifiersState::empty(),
             is_dragging: false,
+            is_panning: false,
             drag_start_pos: [0.0, 0.0],
             drag_start_pan: [0.0, 0.0],
             is_rotating: false,
             rotation_start_pos: [0.0, 0.0],
             rotation_start_val: [0.0, 0.0, 0.0, 1.0], // Identity quaternion
+            egui_wants_input: false,
         },));
         world.spawn((ViewState {
             zoom: [1.0, 1.0, 1.0, 1.0],
@@ -273,7 +277,7 @@ impl App {
         },));
 
         // Initialize Overlay State for GPU-rendered primitives
-        world.spawn((OverlayState::default(),));
+        world.spawn((OverlayManager::default(),));
 
         let render_pipeline =
             render::create_render_pipeline(&device, &texture_bind_group_layout, config.format);
