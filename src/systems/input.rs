@@ -200,23 +200,21 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
             view.zoom[idx] = new_zoom;
             view.pivot[idx] = [0.5, 0.5];
         }
-    } else {
-        if let Ok(mut transform) = world.get::<&mut Transform>(entities.cursor) {
-            let (axis, dim) = match mode {
-                1 => (2, dims[2]),
-                2 => (1, dims[1]),
-                3 => (0, dims[0]),
-                _ => return,
-            };
-            if dim == 0 {
-                return;
-            }
-            let current_uv = transform.position[axis];
-            let current_voxel = (current_uv * dim as f32).floor() as i32;
-            let step = if delta > 0.0 { 1 } else { -1 };
-            let new_voxel = (current_voxel + step).clamp(0, dim as i32 - 1);
-            transform.position[axis] = (new_voxel as f32 + 0.5) / dim as f32;
+    } else if let Ok(mut transform) = world.get::<&mut Transform>(entities.cursor) {
+        let (axis, dim) = match mode {
+            1 => (2, dims[2]),
+            2 => (1, dims[1]),
+            3 => (0, dims[0]),
+            _ => return,
+        };
+        if dim == 0 {
+            return;
         }
+        let current_uv = transform.position[axis];
+        let current_voxel = (current_uv * dim as f32).floor() as i32;
+        let step = if delta > 0.0 { 1 } else { -1 };
+        let new_voxel = (current_voxel + step).clamp(0, dim as i32 - 1);
+        transform.position[axis] = (new_voxel as f32 + 0.5) / dim as f32;
     }
 }
 

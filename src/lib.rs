@@ -67,6 +67,12 @@ pub struct App {
     state: Arc<std::sync::Mutex<AppState>>,
 }
 
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl App {
     pub fn new() -> Self {
         Self {
@@ -154,14 +160,11 @@ impl App {
 
         // Initialize GUI State
         let gui_state = world.spawn((GuiState {
-            load_requested: false,
             load_label_requested: false,
             status_message: None,
             bind_group_needs_rebuild: false,
         },));
 
-        // Initial loading state
-        let loading = world.spawn((VolumeLoadingState::Ready,));
         let input = world.spawn((InputState {
             last_mouse_pos: [0.0, 0.0],
             mouse_uv: [0.0, 0.0],
@@ -235,7 +238,6 @@ impl App {
             view,
             editor,
             gui_state,
-            loading,
             volume_windowing: windowing,
             annotations,
             overlay,
@@ -459,13 +461,9 @@ impl ApplicationHandler for App {
                         name,
                         is_visible: true,
                     },
-                    LayerSettings {
-                        opacity: 0.7,
-                        active_representation: 0,
-                    },
+                    LayerSettings { opacity: 0.7 },
                     LabelmapData {
                         dimensions: dims,
-                        spacing: [1.0, 1.0, 1.0],
                         raw_data: data,
                     },
                     Representation::Voxel(GpuVolumeResources {

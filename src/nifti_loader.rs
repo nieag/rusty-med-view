@@ -25,22 +25,18 @@ pub struct LoadedVolume {
 /// Error type for NIfTI loading operations
 #[derive(Debug)]
 pub enum LoadError {
-    InvalidMagic,
     DecompressionFailed(String),
     HeaderParseFailed(String),
     VolumeParseFailed(String),
-    UnsupportedDataType(String),
     DimensionError(String),
 }
 
 impl std::fmt::Display for LoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LoadError::InvalidMagic => write!(f, "Invalid NIfTI file magic number"),
             LoadError::DecompressionFailed(e) => write!(f, "Gzip decompression failed: {}", e),
             LoadError::HeaderParseFailed(e) => write!(f, "Failed to parse NIfTI header: {}", e),
             LoadError::VolumeParseFailed(e) => write!(f, "Failed to parse NIfTI volume: {}", e),
-            LoadError::UnsupportedDataType(t) => write!(f, "Unsupported NIfTI data type: {}", t),
             LoadError::DimensionError(e) => write!(f, "Invalid volume dimensions: {}", e),
         }
     }
@@ -290,7 +286,6 @@ pub fn load_label_from_bytes(
     let width = dims[0] as u32;
     let height = dims[1] as u32;
     let depth = dims[2] as u32;
-    let spacing = [header.pixdim[1], header.pixdim[2], header.pixdim[3]];
 
     let vox_offset = header.vox_offset as usize;
     let volume_data = &raw_data[vox_offset..];
@@ -312,18 +307,9 @@ pub fn load_label_from_bytes(
 
     Ok(crate::components::LoadedLabel {
         dimensions: [width, height, depth],
-        spacing,
         data: label_data,
         filename,
     })
-}
-
-/// Load a NIfTI volume from a file path (native only)
-#[cfg(not(target_arch = "wasm32"))]
-pub fn load_nifti_from_file(path: &std::path::Path) -> Result<LoadedVolume, LoadError> {
-    let data = std::fs::read(path)
-        .map_err(|e| LoadError::HeaderParseFailed(format!("Failed to read file: {}", e)))?;
-    load_nifti_from_bytes(&data)
 }
 
 #[cfg(test)]

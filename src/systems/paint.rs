@@ -339,7 +339,6 @@ mod tests {
     fn test_apply_brush_step() {
         let mut data = LabelmapData {
             dimensions: [100, 100, 100],
-            spacing: [1.0, 1.0, 1.0],
             raw_data: vec![0; 100 * 100 * 100],
         };
         let mut modified = false;

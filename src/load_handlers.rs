@@ -78,13 +78,9 @@ pub fn handle_label_load(
             name: loaded_label.filename.clone(),
             is_visible: true,
         },
-        LayerSettings {
-            opacity: 0.5,
-            active_representation: 0,
-        },
+        LayerSettings { opacity: 0.5 },
         LabelmapData {
             dimensions: loaded_label.dimensions,
-            spacing: loaded_label.spacing,
             raw_data: loaded_label.data.clone(),
         },
         Representation::Voxel(GpuVolumeResources {

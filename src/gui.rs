@@ -59,7 +59,7 @@ impl Gui {
 
         let full_output = self.context.run(raw_input, |ctx| {
             // 1. Data Collection from ECS via AppEntities
-            let (active_viewport, status_msg, loading_state, volume_info) = {
+            let (active_viewport, status_msg, volume_info) = {
                 let active_viewport = world
                     .get::<&InputState>(entities.input)
                     .map(|i| i.active_viewport)
@@ -68,10 +68,6 @@ impl Gui {
                     .get::<&GuiState>(entities.gui_state)
                     .map(|g| g.status_message.clone())
                     .unwrap_or(None);
-                let loading_state = world
-                    .get::<&VolumeLoadingState>(entities.loading)
-                    .map(|l| *l)
-                    .unwrap_or(VolumeLoadingState::Ready);
                 let volume_info = {
                     let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
                     query.iter().next().and_then(|(_, vd)| {
@@ -82,7 +78,7 @@ impl Gui {
                         }
                     })
                 };
-                (active_viewport, status_msg, loading_state, volume_info)
+                (active_viewport, status_msg, volume_info)
             };
 
             // 2. Sidebar Implementation
@@ -351,12 +347,6 @@ impl Gui {
 
                     if let Some(msg) = &status_msg {
                         ui.label(egui::RichText::new(msg).color(egui::Color32::LIGHT_BLUE));
-                    }
-                    if let VolumeLoadingState::Loading = loading_state {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.label("Processing...");
-                        });
                     }
 
                     ui.separator();
@@ -724,10 +714,8 @@ fn world_to_screen(
     if let Some([ndc_x, ndc_y]) =
         crate::geometry::world_to_ndc(pos, viewport_idx, view, aspect_ratios, screen_aspect)
     {
-        if !(0.0..=1.0).contains(&ndc_x) || !(0.0..=1.0).contains(&ndc_y) {
-            if viewport_idx > 0 {
-                return None;
-            }
+        if (!(0.0..=1.0).contains(&ndc_x) || !(0.0..=1.0).contains(&ndc_y)) && viewport_idx > 0 {
+            return None;
         }
 
         Some(egui::Pos2::new(

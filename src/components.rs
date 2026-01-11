@@ -114,16 +114,9 @@ pub struct Uniforms {
 // --- GUI / Editor ---
 #[derive(Clone)]
 pub struct GuiState {
-    pub load_requested: bool,
     pub load_label_requested: bool,
     pub status_message: Option<String>,
     pub bind_group_needs_rebuild: bool,
-}
-
-#[derive(Clone, Copy)]
-pub enum VolumeLoadingState {
-    Ready,
-    Loading,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -161,12 +154,10 @@ pub struct Segmentation {
 
 pub struct LayerSettings {
     pub opacity: f32,
-    pub active_representation: u32,
 }
 
 pub struct LabelmapData {
     pub dimensions: [u32; 3],
-    pub spacing: [f32; 3],
     pub raw_data: Vec<u8>,
 }
 
@@ -201,7 +192,6 @@ pub enum LoadResult {
 #[derive(Debug)]
 pub struct LoadedLabel {
     pub dimensions: [u32; 3],
-    pub spacing: [f32; 3],
     pub data: Vec<u8>,
     pub filename: String,
 }
@@ -225,7 +215,6 @@ pub struct AppEntities {
     pub view: hecs::Entity,
     pub editor: hecs::Entity,
     pub gui_state: hecs::Entity,
-    pub loading: hecs::Entity,
     pub volume_windowing: hecs::Entity,
     pub annotations: hecs::Entity,
     pub overlay: hecs::Entity,

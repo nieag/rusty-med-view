@@ -1,15 +1,13 @@
 // src/overlay/mod.rs
 pub mod primitives;
 
-use glam::{Vec2, Vec3};
-pub use primitives::{OverlayPrimitive, OverlayPrimitiveKind};
+use glam::Vec3;
+pub use primitives::OverlayPrimitive;
 
 /// Marker for an annotation in the overlay
 #[derive(Clone, Debug)]
 pub struct AnnotationMarker {
     pub world_pos: Vec3,
-    pub label: String,
-    pub annotation_idx: usize,
 }
 
 /// Preview of a brush stroke
@@ -51,12 +49,6 @@ impl OverlayManager {
         }
     }
 
-    pub fn clear(&mut self) {
-        self.annotations.clear();
-        self.brush_preview = None;
-        self.primitives.clear();
-    }
-
     /// Rebuild the flat primitive list for the GPU
     pub fn rebuild_primitives(&mut self) {
         self.primitives.clear();
@@ -83,52 +75,8 @@ impl OverlayManager {
         }
     }
 
-    pub fn add_annotation(&mut self, pos: Vec3, label: String, idx: usize) {
-        self.annotations.push(AnnotationMarker {
-            world_pos: pos,
-            label,
-            annotation_idx: idx,
-        });
-    }
-
-    pub fn set_brush_preview(&mut self, pos: Vec3, radius: f32, viewport_mask: u32) {
-        self.brush_preview = Some(BrushPreview {
-            world_pos: pos,
-            radius,
-            viewport_mask,
-        });
-    }
-
-    /// Find the nearest annotation to a given screen UV.
-    /// This is used for hit-testing during dragging.
-    pub fn hit_test_annotations(
-        &self,
-        mouse_uv: [f32; 2],
-        viewport_idx: usize,
-        view: &crate::components::ViewState,
-        aspect_ratios: [f32; 3],
-        screen_aspect: f32,
-    ) -> Option<usize> {
-        let mouse_vec = Vec2::new(mouse_uv[0], mouse_uv[1]);
-        let mut best_idx = None;
-        let mut min_dist = 0.05; // Hit threshold in screen UV units
-
-        for (i, ann) in self.annotations.iter().enumerate() {
-            if let Some([ndc_x, ndc_y]) = crate::geometry::world_to_ndc(
-                ann.world_pos,
-                viewport_idx,
-                view,
-                aspect_ratios,
-                screen_aspect,
-            ) {
-                let dist = (Vec2::new(ndc_x, ndc_y) - mouse_vec).length();
-                if dist < min_dist {
-                    min_dist = dist;
-                    best_idx = Some(i);
-                }
-            }
-        }
-        best_idx
+    pub fn add_annotation(&mut self, pos: Vec3) {
+        self.annotations.push(AnnotationMarker { world_pos: pos });
     }
 }
 

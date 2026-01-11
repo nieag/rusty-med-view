@@ -149,8 +149,8 @@ pub fn sys_sync_annotations_to_overlay(world: &mut World, entities: &AppEntities
 
     if let Ok(mut overlay) = world.get::<&mut OverlayManager>(entities.overlay) {
         overlay.annotations.clear();
-        for (i, pos) in annotation_positions.iter().enumerate() {
-            overlay.add_annotation(*pos, format!("A{}", i), i);
+        for pos in &annotation_positions {
+            overlay.add_annotation(*pos);
         }
         overlay.rebuild_primitives();
     }

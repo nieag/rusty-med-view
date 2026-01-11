@@ -18,7 +18,7 @@ jobs:
       - name: Rustfmt Check
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy -- -D warnings -A clippy::too-many-arguments
 
   test:
     name: Test

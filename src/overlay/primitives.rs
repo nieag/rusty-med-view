@@ -7,7 +7,6 @@ use glam::Vec3;
 pub enum OverlayPrimitiveKind {
     Circle = 0, // Filled circle - annotations, measurement endpoints
     Ring = 1,   // Hollow circle - brush preview, selection highlights
-    Line = 2,   // Line segment - measurements, slice intersections
 }
 
 /// A single GPU-rendered overlay primitive.
@@ -65,27 +64,6 @@ impl OverlayPrimitive {
                 OverlayPrimitiveKind::Ring as u32 as f32,
             ],
             secondary_pos: [0.0; 4],
-        }
-    }
-
-    /// Create a line segment between two points
-    pub fn line(
-        start: Vec3,
-        end: Vec3,
-        thickness: f32,
-        color: [f32; 4],
-        viewport_mask: u32,
-    ) -> Self {
-        Self {
-            world_pos: [start.x, start.y, start.z, 0.0],
-            color,
-            params: [
-                0.0,
-                thickness,
-                viewport_mask as f32,
-                OverlayPrimitiveKind::Line as u32 as f32,
-            ],
-            secondary_pos: [end.x, end.y, end.z, 0.0],
         }
     }
 }
