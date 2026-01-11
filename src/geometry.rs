@@ -69,24 +69,12 @@ pub fn world_to_ndc(
 
     if viewport_idx > 0 {
         // --- 2D Viewports ---
-        let slice_aspect = match viewport_idx {
-            1 => aspect_ratios[0] / aspect_ratios[1], // Axial (X/Y)
-            2 => aspect_ratios[0] / aspect_ratios[2], // Coronal (X/Z)
-            3 => aspect_ratios[1] / aspect_ratios[2], // Sagittal (Y/Z)
-            _ => 1.0,
-        };
+        let plane = crate::orientation::SlicePlane::from_viewport(viewport_idx as u32)?;
+        let [ndc_x_relative, ndc_y_relative] = plane.volume_to_screen_uv(pos.into());
+        let k = screen_aspect / plane.slice_aspect(aspect_ratios);
 
-        let k = screen_aspect / slice_aspect;
-
-        let (u, v) = match viewport_idx {
-            1 => (pos.x, 1.0 - pos.y),       // Axial
-            2 => (pos.x, 1.0 - pos.z),       // Coronal
-            3 => (1.0 - pos.y, 1.0 - pos.z), // Sagittal
-            _ => return None,
-        };
-
-        let ndc_x = ((u - pivot[0] - pan[0]) * zoom / k) + pivot[0];
-        let ndc_y = ((v - pivot[1] - pan[1]) * zoom) + pivot[1];
+        let ndc_x = ((ndc_x_relative - pivot[0] - pan[0]) * zoom / k) + pivot[0];
+        let ndc_y = ((ndc_y_relative - pivot[1] - pan[1]) * zoom) + pivot[1];
 
         Some([ndc_x, ndc_y])
     } else {
@@ -104,7 +92,8 @@ pub fn world_to_ndc(
         let proj_x = p_cam.x / p_cam.z;
         let proj_y = p_cam.y / p_cam.z;
 
-        let uv_centered_x = proj_x / screen_aspect;
+        // RADIOLOGICAL: Patient Right (x=+) maps to Screen Left (uv < 0.5)
+        let uv_centered_x = -proj_x / screen_aspect;
         let uv_centered_y = proj_y;
 
         let zoomed_uv_x = uv_centered_x + 0.5;

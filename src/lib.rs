@@ -7,6 +7,7 @@ mod gizmo;
 mod gui;
 mod load_handlers;
 mod nifti_loader;
+mod orientation;
 mod overlay;
 mod render;
 mod systems;

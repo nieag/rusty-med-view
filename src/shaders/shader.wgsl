@@ -1,3 +1,14 @@
+// ============================================================
+// COORDINATE REFERENCE: src/orientation.rs::SlicePlane
+// These mappings MUST match the Rust implementation exactly.
+// ============================================================
+// | Viewport | screen.u → vol | screen.v → vol   | depth   |
+// |----------|----------------|------------------|---------|
+// | Axial    | vol.x = u      | vol.y = 1 - v    | vol.z   |
+// | Coronal  | vol.x = u      | vol.z = 1 - v    | vol.y   |
+// | Sagittal | vol.y = 1 - u  | vol.z = 1 - v    | vol.x   |
+// ============================================================
+
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) tex_coords: vec2<f32>,
@@ -124,15 +135,49 @@ fn get_overlay_color(
     return vec4<f32>(color.rgb, color.a * opacity);
 }
 
-// Compute Crosshair alpha
-fn get_crosshair_alpha(uv: vec2<f32>, center: vec2<f32>, aspect: f32) -> f32 {
-    let thickness = 0.002;
-    let blur = 0.001;
-    let dist_x = abs(uv.x - center.x) * aspect;
-    let dist_y = abs(uv.y - center.y);
-    let line_x = 1.0 - smoothstep(thickness, thickness + blur, dist_x);
-    let line_y = 1.0 - smoothstep(thickness, thickness + blur, dist_y);
-    return max(line_x, line_y);
+// Compute Crosshair color and alpha
+fn get_crosshair_color(uv: vec2<f32>, center: vec2<f32>, v1: vec2<f32>, v2: vec2<f32>, v3: vec2<f32>, aspect: f32) -> vec4<f32> {
+    let thickness = 0.0011;
+    let blur = 0.0008;
+    let p = (uv - center) * vec2<f32>(aspect, 1.0);
+
+    var final_rgb = vec3<f32>(0.0);
+    var final_a = 0.0;
+    
+    // X (Red)
+    let vx = v1 * vec2<f32>(aspect, 1.0);
+    let lx = length(vx);
+    if lx > 0.001 {
+        let dx = vx / lx;
+        let dist = abs(dot(p, vec2<f32>(-dx.y, dx.x)));
+        let val = 1.0 - smoothstep(thickness, thickness + blur, dist);
+        final_rgb = max(final_rgb, vec3<f32>(1.0, 0.2, 0.2) * val);
+        final_a = max(final_a, val);
+    }
+    
+    // Y (Green)
+    let vy = v2 * vec2<f32>(aspect, 1.0);
+    let ly = length(vy);
+    if ly > 0.001 {
+        let dy = vy / ly;
+        let dist = abs(dot(p, vec2<f32>(-dy.y, dy.x)));
+        let val = 1.0 - smoothstep(thickness, thickness + blur, dist);
+        final_rgb = max(final_rgb, vec3<f32>(0.2, 1.0, 0.2) * val);
+        final_a = max(final_a, val);
+    }
+    
+    // Z (Blue)
+    let vz = v3 * vec2<f32>(aspect, 1.0);
+    let lz = length(vz);
+    if lz > 0.001 {
+        let dz = vz / lz;
+        let dist = abs(dot(p, vec2<f32>(-dz.y, dz.x)));
+        let val = 1.0 - smoothstep(thickness, thickness + blur, dist);
+        final_rgb = max(final_rgb, vec3<f32>(0.3, 0.6, 1.0) * val);
+        final_a = max(final_a, val);
+    }
+
+    return vec4<f32>(final_rgb, final_a);
 }
 
 // Apply windowing transform to intensity value
@@ -156,6 +201,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let aspect = uniforms.resolution.x / uniforms.resolution.y;
 
     var crosshair_screen_pos = vec2<f32>(-10.0, -10.0);
+    var ch_v1 = vec2<f32>(1.0, 0.0);
+    var ch_v2 = vec2<f32>(0.0, 1.0);
+    var ch_v3 = vec2<f32>(0.0, 0.0);
     var draw_crosshair = false;
 
     // --- MODE 1,2,3: 2D SLICES ---
@@ -214,20 +262,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             draw_crosshair = false;
         } else {
             if uniforms.view_mode == 1u { // Axial (XY)
-                // Anterior is UP (-Y in physical, but mapped to 1-v for display)
-                sample_pos = vec3<f32>(zoomed_uv.x, 1.0 - zoomed_uv.y, cursor.z);
-                let rel_pos = (vec2<f32>(cursor.x, 1.0 - cursor.y) - pan - pivot) * zoom;
+                // RADIOLOGICAL: Patient Right (x=1) on Screen Left (u=0)
+                sample_pos = vec3<f32>(1.0 - zoomed_uv.x, 1.0 - zoomed_uv.y, cursor.z);
+                let rel_pos = (vec2<f32>(1.0 - cursor.x, 1.0 - cursor.y) - pan - pivot) * zoom;
                 crosshair_screen_pos = (rel_pos / vec2<f32>(k, 1.0)) + pivot;
+                ch_v1 = vec2<f32>(-1.0, 0.0); // +X (Red) -> Left
+                ch_v2 = vec2<f32>(0.0, -1.0); // +Y (Green) -> Up
             } else if uniforms.view_mode == 2u { // Coronal (XZ)
-                // Superior is UP
-                sample_pos = vec3<f32>(zoomed_uv.x, cursor.y, 1.0 - zoomed_uv.y);
-                let rel_pos = (vec2<f32>(cursor.x, 1.0 - cursor.z) - pan - pivot) * zoom;
+                // RADIOLOGICAL: Patient Right (x=1) on Screen Left (u=0)
+                sample_pos = vec3<f32>(1.0 - zoomed_uv.x, cursor.y, 1.0 - zoomed_uv.y);
+                let rel_pos = (vec2<f32>(1.0 - cursor.x, 1.0 - cursor.z) - pan - pivot) * zoom;
                 crosshair_screen_pos = (rel_pos / vec2<f32>(k, 1.0)) + pivot;
+                ch_v1 = vec2<f32>(-1.0, 0.0); // +X (Red) -> Left
+                ch_v2 = vec2<f32>(0.0, 0.0);
+                ch_v3 = vec2<f32>(0.0, -1.0); // +Z (Blue) -> Up
             } else if uniforms.view_mode == 3u { // Sagittal (YZ)
                 // Anterior is LEFT, Superior is UP
                 sample_pos = vec3<f32>(cursor.x, 1.0 - zoomed_uv.x, 1.0 - zoomed_uv.y);
                 let rel_pos = (vec2<f32>(1.0 - cursor.y, 1.0 - cursor.z) - pan - pivot) * zoom;
                 crosshair_screen_pos = (rel_pos / vec2<f32>(k, 1.0)) + pivot;
+                ch_v1 = vec2<f32>(0.0, 0.0);
+                ch_v2 = vec2<f32>(-1.0, 0.0); // +Y (Green) -> Left
+                ch_v3 = vec2<f32>(0.0, -1.0); // +Z (Blue) -> Up
             }
 
             // 1. Sample Main Volume and apply windowing
@@ -261,7 +317,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let pivot = uniforms.zoom_pivot;
         let pan = uniforms.pan;
         let zoomed_uv = (in.uv - pivot) / zoom + pivot + pan;
-        let screen_pos = vec2<f32>((zoomed_uv.x - 0.5) * aspect, zoomed_uv.y - 0.5);
+        // RADIOLOGICAL: Patient Right (x=+) maps to Screen Left
+        let screen_pos = vec2<f32>(-(zoomed_uv.x - 0.5) * aspect, zoomed_uv.y - 0.5);
 
         // --- Volume Rotation Matrix from Quaternion ---
         // This represents the volume's orientation in world space
@@ -322,10 +379,35 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         if dist_z > 0.0 {
             let dist_x = dot(to_cursor, right);
             let dist_y = dot(to_cursor, up);
-            let screen_u = (dist_x / dist_z) / aspect;
+            let screen_u = -(dist_x / dist_z) / aspect;
             let screen_v = (dist_y / dist_z);
             let p_uv = vec2<f32>(screen_u + 0.5, screen_v + 0.5);
             crosshair_screen_pos = (p_uv - pan - pivot) * zoom + pivot;
+            
+            // Calculate Axis Projection
+            let z2_inv = 1.0 / (dist_z * dist_z);
+            
+            // X (Red)
+            let wx = rot_mat[0];
+            ch_v1 = vec2<f32>(
+                -((dot(wx, right) * dist_z - dist_x * dot(wx, forward)) * z2_inv) / aspect,
+                (dot(wx, up) * dist_z - dist_y * dot(wx, forward)) * z2_inv
+            ) * zoom;
+            
+            // Y (Green)
+            let wy = rot_mat[1];
+            ch_v2 = vec2<f32>(
+                -((dot(wy, right) * dist_z - dist_x * dot(wy, forward)) * z2_inv) / aspect,
+                (dot(wy, up) * dist_z - dist_y * dot(wy, forward)) * z2_inv
+            ) * zoom;
+            
+            // Z (Blue)
+            let wz = rot_mat[2];
+            ch_v3 = vec2<f32>(
+                -((dot(wz, right) * dist_z - dist_x * dot(wz, forward)) * z2_inv) / aspect,
+                (dot(wz, up) * dist_z - dist_y * dot(wz, forward)) * z2_inv
+            ) * zoom;
+
             draw_crosshair = true;
         }
 
@@ -394,9 +476,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Crosshair
     if draw_crosshair {
-        let ch_alpha = get_crosshair_alpha(in.uv, crosshair_screen_pos, aspect);
-        let ch_color = vec3<f32>(0.0, 1.0, 0.0);
-        final_color = vec4<f32>(mix(final_color.rgb, ch_color, ch_alpha * 0.6), 1.0);
+        let ch_res = get_crosshair_color(in.uv, crosshair_screen_pos, ch_v1, ch_v2, ch_v3, aspect);
+        final_color = vec4<f32>(mix(final_color.rgb, ch_res.rgb, ch_res.a * 0.7), 1.0);
     }
 
     // --- Overlay Primitives ---

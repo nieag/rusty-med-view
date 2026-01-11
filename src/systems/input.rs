@@ -330,8 +330,9 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
             if let Ok(input) = world.get::<&InputState>(entities.input) {
                 has_shift = input.modifiers.shift_key();
             }
-            let delta_x = (current_pos[0] - start_pos[0]) * sensitivity;
-            let delta_y = (current_pos[1] - start_pos[1]) * sensitivity;
+            // Negate deltas so Drag Right -> Volume Rotates Right
+            let delta_x = (start_pos[0] - current_pos[0]) * sensitivity;
+            let delta_y = (start_pos[1] - current_pos[1]) * sensitivity;
             let start_q = Quat::from_array(start_quat);
 
             let new_quat = if has_shift {

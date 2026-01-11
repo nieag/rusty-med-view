@@ -75,12 +75,8 @@ pub fn get_voxel_at_mouse(
         } else {
             1.0
         };
-        let slice_aspect = match viewport {
-            1 => vol_aspects[0] / vol_aspects[1],
-            2 => vol_aspects[0] / vol_aspects[2],
-            3 => vol_aspects[1] / vol_aspects[2],
-            _ => 1.0,
-        };
+        let plane = crate::orientation::SlicePlane::from_viewport(viewport)?;
+        let slice_aspect = plane.slice_aspect(vol_aspects);
         let k = screen_aspect / slice_aspect;
 
         let volume_uv = [
@@ -88,12 +84,7 @@ pub fn get_voxel_at_mouse(
             (mouse_uv[1] - 0.5) / zoom + 0.5 + pan[1],
         ];
 
-        let pos = match viewport {
-            1 => [volume_uv[0], 1.0 - volume_uv[1], cursor_pos[2]],
-            2 => [volume_uv[0], cursor_pos[1], 1.0 - volume_uv[1]],
-            3 => [cursor_pos[0], 1.0 - volume_uv[0], 1.0 - volume_uv[1]],
-            _ => return None,
-        };
+        let pos = plane.screen_uv_to_volume(volume_uv, cursor_pos[plane.depth_axis()]);
         if (0.0..=1.0).contains(&pos[0])
             && (0.0..=1.0).contains(&pos[1])
             && (0.0..=1.0).contains(&pos[2])

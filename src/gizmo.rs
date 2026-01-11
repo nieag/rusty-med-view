@@ -35,22 +35,25 @@ pub fn draw_gizmo(ui: &mut Ui, rect: Rect, view_rotation: Quat) {
         .iter()
         .map(|(vec, label, color)| {
             // Apply rotation - direct multiplication for Object->World
-            let rotated = view_rotation * *vec;
+            let q = view_rotation.to_array();
+            let m = crate::orientation::quat_to_mat3(q);
+            let rotated = crate::orientation::rotate_vec3(m, vec.to_array());
 
             // Project to 2D (orthographic)
             // Flip Y because screen Y is down, 3D Y is up
             // UPDATE: Volume Shader uses Screen Top = -Y, Bottom = +Y.
             // EgUi Painter uses Screen Top = 0, Bottom = Height.
             // To match Volume: Rotated.Y (Up in 3D) should map to Larger Screen Y (Down).
-            // Default center.y - rotated.y maps +Y to Top. We want +Y to Bottom.
-            let screen_x = center.x + rotated.x * axis_length;
-            let screen_y = center.y + rotated.y * axis_length;
+            // Default center.y - rotated[1] maps +Y to Top. We want +Y to Bottom.
+            // RADIOLOGICAL: Rotated.X (Right) should map to Left on screen.
+            let screen_x = center.x - rotated[0] * axis_length;
+            let screen_y = center.y + rotated[1] * axis_length;
 
             TransformedAxis {
                 pos2: Pos2::new(screen_x, screen_y),
                 label,
                 color: *color,
-                depth: rotated.z,
+                depth: rotated[2],
             }
         })
         .collect();
