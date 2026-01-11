@@ -173,6 +173,7 @@ impl App {
             rotation_start_pos: [0.0, 0.0],
             rotation_start_val: [0.0, 0.0, 0.0, 1.0], // Identity quaternion
             egui_wants_input: false,
+            scroll_accumulator: [0.0; 4],
         },));
         let view = world.spawn((ViewState {
             zoom: [1.0, 1.0, 1.0, 1.0],
@@ -355,7 +356,7 @@ impl ApplicationHandler for App {
             WindowEvent::MouseWheel { delta, .. } => {
                 let y_delta = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
-                    MouseScrollDelta::PixelDelta(pos) => (pos.y * 0.001) as f32,
+                    MouseScrollDelta::PixelDelta(pos) => (pos.y * 0.05) as f32,
                 };
                 if y_delta != 0.0 {
                     systems::sys_handle_input_scroll(&mut ctx.world, &ctx.entities, y_delta);

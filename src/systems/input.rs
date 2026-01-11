@@ -210,11 +210,37 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
         if dim == 0 {
             return;
         }
-        let current_uv = transform.position[axis];
-        let current_voxel = (current_uv * dim as f32).floor() as i32;
-        let step = if delta > 0.0 { 1 } else { -1 };
-        let new_voxel = (current_voxel + step).clamp(0, dim as i32 - 1);
-        transform.position[axis] = (new_voxel as f32 + 0.5) / dim as f32;
+
+        if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+            // Apply acceleration factor:
+            // - Exactly 1.0 for deltas <= 1.0 (ensure precise 1-slice move for slow scrolls)
+            // - Progressively higher for faster swipes
+            let abs_delta = delta.abs();
+            let factor = if abs_delta <= 1.0 {
+                1.0
+            } else {
+                1.0 + (abs_delta - 1.0) * 0.5
+            };
+            let accelerated_delta = delta * factor;
+
+            // Update accumulator for this viewport
+            let vp_idx = mode as usize;
+            input.scroll_accumulator[vp_idx] += accelerated_delta;
+
+            // Carry out discrete slice jumps based on the accumulator
+            let mut steps_to_move = 0;
+            if input.scroll_accumulator[vp_idx].abs() >= 1.0 {
+                steps_to_move = input.scroll_accumulator[vp_idx].trunc() as i32;
+                input.scroll_accumulator[vp_idx] -= steps_to_move as f32;
+            }
+
+            if steps_to_move != 0 {
+                let current_uv = transform.position[axis];
+                let current_voxel = (current_uv * dim as f32).floor() as i32;
+                let new_voxel = (current_voxel + steps_to_move).clamp(0, dim as i32 - 1);
+                transform.position[axis] = (new_voxel as f32 + 0.5) / dim as f32;
+            }
+        }
     }
 }
 
