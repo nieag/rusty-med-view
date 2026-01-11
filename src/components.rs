@@ -117,6 +117,7 @@ pub struct GuiState {
     pub load_requested: bool,
     pub load_label_requested: bool,
     pub status_message: Option<String>,
+    pub bind_group_needs_rebuild: bool,
 }
 
 #[derive(Clone, Copy)]

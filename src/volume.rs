@@ -84,110 +84,6 @@ pub fn create_texture_from_nifti(
     (texture, view, sampler, volume_data)
 }
 
-/// Create a demo voxel texture with synthetic data (fallback when no file loaded)
-pub fn create_demo_voxel_texture(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler, VolumeData) {
-    let size = 64u32;
-    let mut intensities = Vec::with_capacity((size * size * size) as usize);
-
-    let center = size as f32 / 2.0;
-    let arrow_length = size as f32 * 0.45;
-    let arrow_thickness = 3.0;
-
-    for z in 0..size {
-        for y in 0..size {
-            for x in 0..size {
-                let fx = x as f32 - center;
-                let fy = y as f32 - center;
-                let fz = z as f32 - center;
-
-                let mut density = -1000.0; // Air (background)
-
-                // Small center sphere
-                let dist = (fx * fx + fy * fy + fz * fz).sqrt();
-                if dist < 4.0 {
-                    density = 500.0; // White center
-                }
-
-                // X axis (R - Right) - arrow pointing in +X direction
-                // High intensity (appears bright)
-                if fx > 0.0
-                    && fx < arrow_length
-                    && fy.abs() < arrow_thickness
-                    && fz.abs() < arrow_thickness
-                {
-                    density = 1000.0; // Brightest - X axis
-                }
-                // X arrow head
-                if fx > arrow_length - 8.0 && fx < arrow_length {
-                    let head_size = (arrow_length - fx) * 0.8;
-                    if fy.abs() < head_size && fz.abs() < head_size {
-                        density = 1000.0;
-                    }
-                }
-
-                // Y axis (A - Anterior) - arrow pointing in +Y direction
-                // Medium-high intensity
-                if fy > 0.0
-                    && fy < arrow_length
-                    && fx.abs() < arrow_thickness
-                    && fz.abs() < arrow_thickness
-                {
-                    density = 600.0; // Medium - Y axis
-                }
-                // Y arrow head
-                if fy > arrow_length - 8.0 && fy < arrow_length {
-                    let head_size = (arrow_length - fy) * 0.8;
-                    if fx.abs() < head_size && fz.abs() < head_size {
-                        density = 600.0;
-                    }
-                }
-
-                // Z axis (S - Superior) - arrow pointing in +Z direction
-                // Medium intensity
-                if fz > 0.0
-                    && fz < arrow_length
-                    && fx.abs() < arrow_thickness
-                    && fy.abs() < arrow_thickness
-                {
-                    density = 300.0; // Dimmest - Z axis
-                }
-                // Z arrow head
-                if fz > arrow_length - 8.0 && fz < arrow_length {
-                    let head_size = (arrow_length - fz) * 0.8;
-                    if fx.abs() < head_size && fy.abs() < head_size {
-                        density = 300.0;
-                    }
-                }
-
-                intensities.push(density);
-            }
-        }
-    }
-
-    // Find min/max for intensity range
-    let min_val = intensities.iter().cloned().fold(f32::INFINITY, f32::min);
-    let max_val = intensities
-        .iter()
-        .cloned()
-        .fold(f32::NEG_INFINITY, f32::max);
-
-    let (texture, view, sampler) =
-        create_texture_from_float(device, queue, &intensities, [size, size, size]);
-
-    let volume_data = VolumeData {
-        dimensions: [size, size, size],
-        spacing: [1.0, 1.0, 1.0],
-        intensities,
-        intensity_range: [min_val, max_val],
-        orientation: [0.0, 0.0, 0.0, 1.0], // Identity quaternion (no rotation)
-    };
-
-    (texture, view, sampler, volume_data)
-}
-
 // --- NEW Helper Functions for Labelmap Support ---
 
 /// Creates a "dummy" 1x1x1 R8Uint texture initialized to 0.
@@ -243,6 +139,15 @@ pub fn create_dummy_r8_texture(
     );
 
     (texture, view, sampler)
+}
+
+/// Creates a "dummy" 1x1x1 R32Float texture initialized to 0.0.
+/// Used for the main volume slot when no data is loaded.
+pub fn create_dummy_r32_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler) {
+    create_texture_from_float(device, queue, &[0.0], [1, 1, 1])
 }
 
 /// Creates a 1D colormap texture (Red/Blue/Green/etc.) for label IDs.
@@ -308,81 +213,6 @@ pub fn create_default_colormap(
     (texture, view)
 }
 
-/// Creates a demo labelmap (64x64x64) with a visible structure (a cube).
-pub fn create_demo_labelmap(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler) {
-    let size = 64u32;
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("Demo Labelmap"),
-        size: wgpu::Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: size,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D3,
-        format: wgpu::TextureFormat::R8Uint,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        address_mode_u: wgpu::AddressMode::ClampToEdge,
-        address_mode_v: wgpu::AddressMode::ClampToEdge,
-        address_mode_w: wgpu::AddressMode::ClampToEdge,
-        mag_filter: wgpu::FilterMode::Nearest,
-        min_filter: wgpu::FilterMode::Nearest,
-        ..Default::default()
-    });
-
-    // Generate data: A 32x32x32 cube in the corner
-    let mut data = vec![0u8; (size * size * size) as usize];
-
-    let start = 10;
-    let end = 40;
-
-    for z in start..end {
-        for y in start..end {
-            for x in start..end {
-                let idx = (z * size * size + y * size + x) as usize;
-                // Label ID 1
-                data[idx] = 1;
-
-                // Add a second label ID 2 inside
-                if x > 20 && x < 30 && y > 20 && y < 30 && z > 20 && z < 30 {
-                    data[idx] = 2;
-                }
-            }
-        }
-    }
-
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        &data,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(size),
-            rows_per_image: Some(size),
-        },
-        wgpu::Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: size,
-        },
-    );
-
-    (texture, view, sampler)
-}
 /// Creates a GPU texture from loaded Labelmap data (R8Uint)
 pub fn create_texture_from_labelmap(
     device: &wgpu::Device,

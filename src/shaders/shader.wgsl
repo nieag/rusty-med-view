@@ -146,6 +146,12 @@ fn apply_window(value: f32, center: f32, width: f32) -> f32 {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    // Early exit: if no volume is loaded, render solid black
+    // This prevents NaN from 0/0 aspect ratio calculations and unwanted overlay drawing
+    if uniforms.volume_dims.x == 0u || uniforms.volume_dims.y == 0u || uniforms.volume_dims.z == 0u {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+
     var final_color = vec4<f32>(0.0);
     let aspect = uniforms.resolution.x / uniforms.resolution.y;
 
@@ -204,7 +210,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let zoomed_uv = centered_uv / zoom + pivot + pan;
 
         if any(zoomed_uv < vec2<f32>(0.0)) || any(zoomed_uv > vec2<f32>(1.0)) {
-            final_color = vec4<f32>(0.05, 0.05, 0.05, 1.0);
+            final_color = vec4<f32>(0.0, 0.0, 0.0, 1.0);
             draw_crosshair = false;
         } else {
             if uniforms.view_mode == 1u { // XY
@@ -330,7 +336,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let t_hit = intersectAABB(cam_pos_obj, ray_dir_obj, box_min, box_max);
 
         if t_hit.x > t_hit.y || t_hit.y < 0.0 {
-            final_color = vec4<f32>(0.05, 0.05, 0.05, 1.0);
+            final_color = vec4<f32>(0.0, 0.0, 0.0, 1.0);
         } else {
             let start_pos = cam_pos_obj + ray_dir_obj * max(t_hit.x, 0.0);
             let total_dist = t_hit.y - max(t_hit.x, 0.0);
@@ -382,7 +388,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 if acc_density >= 1.0 { break; }
                 current_pos += ray_dir_obj * step_size;
             }
-            final_color = vec4<f32>(acc_color + 0.05, 1.0);
+            final_color = vec4<f32>(acc_color, 1.0);
         }
         // Gizmo is now rendered via egui, not shader
     }

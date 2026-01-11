@@ -115,18 +115,21 @@ impl App {
         };
         surface.configure(&device, &config);
 
-        // --- Initialize Data & ECS ---
         let mut world = World::new();
-        let (volume_texture, volume_view, volume_sampler, volume_data) =
-            volume::create_demo_voxel_texture(&device, &queue);
+        // Initialize world and camera
+        let (volume_texture, volume_view, volume_sampler) =
+            volume::create_dummy_r32_texture(&device, &queue);
+        let volume_data = VolumeData {
+            dimensions: [0, 0, 0],
+            spacing: [1.0, 1.0, 1.0],
+            intensities: vec![],
+            intensity_range: [0.0, 0.0],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
 
         // Create shared resources
         let dummy_r8 = volume::create_dummy_r8_texture(&device, &queue);
         let default_lut = volume::create_default_colormap(&device, &queue);
-
-        // Create Demo Labelmap
-        let (_label_tex, label_view, _label_sampler) =
-            volume::create_demo_labelmap(&device, &queue);
 
         // Create async channel for volume loading
         let (volume_sender, volume_receiver) =
@@ -154,6 +157,7 @@ impl App {
             load_requested: false,
             load_label_requested: false,
             status_message: None,
+            bind_group_needs_rebuild: false,
         },));
 
         // Initial loading state
@@ -190,7 +194,7 @@ impl App {
             &volume_view,
             &volume_sampler,
             &uniform_buffer,
-            &label_view,
+            &dummy_r8.1,
             &default_lut.1,
             &dummy_r8.1,
             &default_lut.1,
@@ -209,54 +213,9 @@ impl App {
             MainVolumeTag,
         ));
 
-        // Spawn Demo Labelmap Entity
-        // NOTE: We need to also store the CPU data for editing!
-        // create_demo_labelmap doesn't return data, so we need to recreate the data or call it differently.
-        // Let's modify behavior slightly: Just create a "Blank" one of same size for simplicity OR
-        // we can fetch the data back from GPU? No, unnecessary complexity.
-        // Let's just create a blank one for now that is editable, OR update create_demo_labelmap to return data.
-        // For minimal changes: Let's assume the demo map is STATIC or we just create a NEW blank editable one.
-        // The user request "Add basic label editing".
-        // Let's spawn a NEW Blank Editable Layer instead of the hardcoded demo one?
-        // OR better: Update Components to hold LabelmapData for the demo layer.
-        // For speed, let's just make a new editable layer.
-
-        // Actually, to make the Demo layer editable, we need its data.
-        // Let's just create a Blank 64x64x64 layer for "New Layer" testing.
-        // But let's spawn the demo layer as non-editable for now (since we lack CPU data easily here without copy paste).
-        // Wait, I can just copy the logic from `create_demo_labelmap` here to generate data.
-        // Or I can update `volume.rs` to return data.
-        // I will adhere to "minimal changes" principle and just create a NEW blank layer logic in the Paint system or here.
-
-        // Let's create an EDITABLE blank layer at start so the user has something to draw on.
-        let (blank_tex, blank_view, blank_sampler, blank_data) =
-            volume::create_blank_labelmap(&device, &queue, [64, 64, 64]);
-        let blank_entity = world.spawn((
-            Segmentation {
-                name: "Layer 1".to_string(),
-                is_visible: true,
-            },
-            LayerSettings {
-                opacity: 0.7,
-                active_representation: 0,
-            },
-            LabelmapData {
-                dimensions: [64, 64, 64],
-                spacing: [1.0, 1.0, 1.0],
-                raw_data: blank_data,
-            },
-            Representation::Voxel(GpuVolumeResources {
-                texture: blank_tex,
-                view: blank_view,
-                sampler: blank_sampler,
-                bind_group: diffuse_bind_group.clone(), // Re-use until recreation
-            }),
-            SegmentationTag,
-        ));
-
         // Initialize EditorState with active layer
         let editor = world.spawn((EditorState {
-            active_layer: Some(blank_entity),
+            active_layer: None,
             ..Default::default()
         },));
 
@@ -265,16 +224,7 @@ impl App {
 
         // Initialize Annotations
         let annotations = world.spawn((AnnotationState {
-            annotations: vec![
-                Annotation {
-                    world_pos: glam::Vec3::new(0.5, 0.5, 0.5),
-                    label: "Target".to_string(),
-                },
-                Annotation {
-                    world_pos: glam::Vec3::new(0.2, 0.2, 0.2),
-                    label: "Tumor A".to_string(),
-                },
-            ],
+            annotations: vec![],
         },));
 
         // Initialize Overlay State for GPU-rendered primitives
@@ -314,6 +264,7 @@ impl App {
             &dummy_r8.2,
             &default_lut.1,
             &overlay_buffer,
+            None,
         );
 
         RenderingContext {
@@ -464,10 +415,15 @@ impl ApplicationHandler for App {
             // Handle "Create New Layer" request from GUI?
             // Cleanest way: Check GuiState for a request flag
             let mut create_layer = false;
+            let mut needs_rebuild = false;
             for (_, gui_state) in ctx.world.query::<&mut GuiState>().iter() {
                 if gui_state.load_label_requested {
                     gui_state.load_label_requested = false;
                     create_layer = true;
+                }
+                if gui_state.bind_group_needs_rebuild {
+                    gui_state.bind_group_needs_rebuild = false;
+                    needs_rebuild = true;
                 }
             }
 
@@ -522,6 +478,14 @@ impl ApplicationHandler for App {
                 ));
 
                 // Now globally update the bind groups (this updates everyone's bind_group to the new correct one)
+                // Now globally update the bind groups
+                let active_layer = ctx
+                    .world
+                    .query::<&EditorState>()
+                    .iter()
+                    .next()
+                    .and_then(|(_, e)| e.active_layer);
+
                 load_handlers::recreate_bind_groups(
                     &ctx.device,
                     &mut ctx.world,
@@ -531,12 +495,35 @@ impl ApplicationHandler for App {
                     &ctx.dummy_r8.2,
                     &ctx.default_lut.1,
                     &ctx.overlay_buffer,
+                    active_layer,
                 );
 
                 // Select the new layer
                 for (_, editor) in ctx.world.query_mut::<&mut EditorState>() {
                     editor.active_layer = Some(entity);
                 }
+                needs_rebuild = false; // Already rebuilt above
+            }
+
+            if needs_rebuild {
+                let active_layer = ctx
+                    .world
+                    .query::<&EditorState>()
+                    .iter()
+                    .next()
+                    .and_then(|(_, e)| e.active_layer);
+
+                load_handlers::recreate_bind_groups(
+                    &ctx.device,
+                    &mut ctx.world,
+                    &ctx.texture_bind_group_layout,
+                    &ctx.uniform_buffer,
+                    &ctx.dummy_r8.1,
+                    &ctx.dummy_r8.2,
+                    &ctx.default_lut.1,
+                    &ctx.overlay_buffer,
+                    active_layer,
+                );
             }
 
             // File dialogs are now spawned directly from GUI button clicks (gui.rs)
@@ -585,6 +572,13 @@ impl ApplicationHandler for App {
                         };
                         log::info!("Loaded data with dimensions: {:?}", dims);
 
+                        let active_layer = ctx
+                            .world
+                            .query::<&EditorState>()
+                            .iter()
+                            .next()
+                            .and_then(|(_, e)| e.active_layer);
+
                         // Recreate bind groups with updated textures
                         load_handlers::recreate_bind_groups(
                             &ctx.device,
@@ -595,6 +589,7 @@ impl ApplicationHandler for App {
                             &ctx.dummy_r8.2,
                             &ctx.default_lut.1,
                             &ctx.overlay_buffer,
+                            active_layer,
                         );
                     }
                     Err(e) => {

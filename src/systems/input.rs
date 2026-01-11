@@ -208,6 +208,9 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
                 3 => (0, dims[0]),
                 _ => return,
             };
+            if dim == 0 {
+                return;
+            }
             let current_uv = transform.position[axis];
             let current_voxel = (current_uv * dim as f32).floor() as i32;
             let step = if delta > 0.0 { 1 } else { -1 };

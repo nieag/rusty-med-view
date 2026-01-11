@@ -74,7 +74,13 @@ impl Gui {
                     .unwrap_or(VolumeLoadingState::Ready);
                 let volume_info = {
                     let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
-                    query.iter().next().map(|(_, vd)| vd.dimensions)
+                    query.iter().next().and_then(|(_, vd)| {
+                        if vd.dimensions == [0, 0, 0] {
+                            None
+                        } else {
+                            Some(vd.dimensions)
+                        }
+                    })
                 };
                 (active_viewport, status_msg, loading_state, volume_info)
             };
@@ -192,16 +198,32 @@ impl Gui {
                                 );
                             });
 
-                            if editor.active_tool != EditorTool::Navigation {
-                                ui.separator();
-                                ui.label(format!("Brush Size: {:.1}", editor.brush_size));
-                                ui.add(
-                                    egui::Slider::new(&mut editor.brush_size, 1.0..=20.0)
-                                        .text("px"),
-                                );
+                            if editor.active_layer.is_none()
+                                && editor.active_tool != EditorTool::Navigation
+                            {
+                                editor.active_tool = EditorTool::Navigation;
+                            }
 
-                                ui.label("Label ID");
-                                ui.add(egui::Slider::new(&mut editor.active_label_index, 1..=10));
+                            if editor.active_layer.is_some() {
+                                if editor.active_tool != EditorTool::Navigation {
+                                    ui.separator();
+                                    ui.label(format!("Brush Size: {:.1}", editor.brush_size));
+                                    ui.add(
+                                        egui::Slider::new(&mut editor.brush_size, 1.0..=20.0)
+                                            .text("px"),
+                                    );
+
+                                    ui.label("Label ID");
+                                    ui.add(egui::Slider::new(
+                                        &mut editor.active_label_index,
+                                        1..=10,
+                                    ));
+                                }
+                            } else {
+                                ui.label(
+                                    egui::RichText::new("Create/Load a layer to enable editing")
+                                        .color(egui::Color32::KHAKI),
+                                );
                             }
                         }
                     });
@@ -225,7 +247,7 @@ impl Gui {
                             }
                         }
 
-                        let mut active_layer = world
+                        let active_layer = world
                             .get::<&EditorState>(entities.editor)
                             .ok()
                             .and_then(|e| e.active_layer);
@@ -261,6 +283,9 @@ impl Gui {
                         if new_active_layer != active_layer {
                             if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
                                 editor.active_layer = new_active_layer;
+                                if let Ok(mut gs) = world.get::<&mut GuiState>(entities.gui_state) {
+                                    gs.bind_group_needs_rebuild = true;
+                                }
                             }
                         }
                     });
@@ -435,6 +460,30 @@ impl Gui {
                     draw_label(ui, "Sagittal (Side)", active_viewport == 3);
                     ui.label(format!("Slice X: {:.2}", cursor_pos[0]));
                 });
+
+            // --- Instruction Overlay if empty ---
+            if volume_info.is_none() {
+                egui::Area::new("instructions".into())
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .show(ctx, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(20.0);
+                            ui.label(
+                                egui::RichText::new("No data loaded")
+                                    .size(32.0)
+                                    .strong()
+                                    .color(egui::Color32::from_gray(180)),
+                            );
+                            ui.label(
+                                egui::RichText::new(
+                                    "Use \u{1f4c2} Load Main Volume (NIfTI) to get started",
+                                )
+                                .size(18.0)
+                                .color(egui::Color32::from_gray(140)),
+                            );
+                        });
+                    });
+            }
 
             // --- Draw Annotations ---
             egui::Area::new("annotations_layer".into())

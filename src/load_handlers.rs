@@ -112,6 +112,7 @@ pub fn recreate_bind_groups(
     dummy_sampler: &wgpu::Sampler,
     default_lut_view: &wgpu::TextureView,
     overlay_buffer: &wgpu::Buffer,
+    active_layer: Option<hecs::Entity>,
 ) {
     // Collect the texture views we need (must satisfy borrow checker)
     let main_view: Option<wgpu::TextureView>;
@@ -126,18 +127,23 @@ pub fn recreate_bind_groups(
 
     // Query overlay views
     {
-        // We need to iterate all components that have Representation::Voxel
-        // We also want to respect some order, e.g. Entity ID or Name.
-        // For simplicity, we just collect them all.
-        // Note: we can't sort nicely without collecting first.
-        let mut query = world.query::<&Representation>();
-        for (_, r) in query.iter() {
-            let Representation::Voxel(res) = r;
+        // 1. Prioritize active layer if it exists and is a voxel representation
+        if let Some(active) = active_layer {
+            if let Ok(repr) = world.get::<&Representation>(active) {
+                let Representation::Voxel(res) = &*repr;
+                overlay_views.push(res.view.clone());
+            }
+        }
+
+        // 2. Add other visible layers that aren't the active one
+        let mut query = world.query::<(&Segmentation, &Representation)>();
+        for (e, (_seg, repr)) in query.iter() {
+            if Some(e) == active_layer {
+                continue;
+            }
+            let Representation::Voxel(res) = repr;
             overlay_views.push(res.view.clone());
         }
-        // Limit to 2 for now as shader supports 2
-        // Ideally we pick "visible" ones or "first 2".
-        // Let's just take first 2 found.
     }
 
     // Use actual views or fallback to dummy
