@@ -272,24 +272,26 @@ pub fn render_frame(
     config: &wgpu::SurfaceConfiguration,
     render_pipeline: &wgpu::RenderPipeline,
     uniform_buffer: &wgpu::Buffer,
-    overlay_buffer: &wgpu::Buffer,
     vertex_buffer: &wgpu::Buffer,
     index_buffer: &wgpu::Buffer,
     num_indices: u32,
+    overlay_buffer: &wgpu::Buffer,
     world: &mut World,
+    entities: &AppEntities,
+    settings_entity: hecs::Entity,
     gui: &mut gui::Gui,
     window: &Arc<Window>,
     volume_sender: std::sync::mpsc::Sender<Result<LoadResult, crate::nifti_loader::LoadError>>,
 ) {
     // 1. Run GUI first so it can process interactions and update ECS state for THIS frame
-    gui.prepare(window, world, volume_sender);
+    gui.prepare(window, world, entities, volume_sender);
 
     // 2. Sync annotations to overlay primitives (using the potentially updated ECS state)
-    systems::sys_sync_annotations_to_overlay(world);
+    systems::sys_sync_annotations_to_overlay(world, entities);
 
     // 3. Get overlay data for GPU buffer
     let (overlay_bytes, overlay_count, dragging_idx, overlay_mouse_uv) =
-        systems::get_overlay_render_data(world);
+        systems::get_overlay_render_data(world, entities);
 
     // Write overlay primitives to storage buffer
     if !overlay_bytes.is_empty() {
@@ -299,7 +301,7 @@ pub fn render_frame(
     // 4. Prepare uniforms for all 4 viewports
     let mut all_uniforms_bytes = Vec::with_capacity(1024);
     for mode in 0..4 {
-        let mut u = systems::sys_prepare_render_data(world, mode);
+        let mut u = systems::sys_prepare_render_data(world, entities, settings_entity, mode);
         // Inject overlay data into uniforms
         u.overlay_primitive_count = overlay_count;
         u.overlay_dragging_idx = dragging_idx;

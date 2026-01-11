@@ -16,6 +16,7 @@ pub fn handle_volume_load(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     world: &mut World,
+    entities: &AppEntities,
     loaded: &LoadedVolume,
 ) -> [u32; 3] {
     log::info!("Volume loaded: {:?} dimensions", loaded.dimensions);
@@ -42,7 +43,7 @@ pub fn handle_volume_load(
     }
 
     // Initialize 3D view rotation with volume orientation from NIfTI
-    for (_, view) in world.query_mut::<&mut ViewState>() {
+    if let Ok(mut view) = world.get::<&mut ViewState>(entities.view) {
         view.rotation[0] = loaded.orientation;
     }
 
@@ -169,8 +170,8 @@ pub fn recreate_bind_groups(
 }
 
 /// Update GUI status message
-pub fn set_status_message(world: &mut World, message: String) {
-    for (_, gui_state) in world.query_mut::<&mut GuiState>() {
-        gui_state.status_message = Some(message.clone());
+pub fn set_status_message(world: &mut World, entities: &AppEntities, message: String) {
+    if let Ok(mut gui_state) = world.get::<&mut GuiState>(entities.gui_state) {
+        gui_state.status_message = Some(message);
     }
 }

@@ -4,31 +4,35 @@ use crate::systems::picking::get_voxel_at_mouse;
 use hecs::World;
 
 /// Paint System: Updates labelmap based on mouse stroke
-pub fn sys_paint(world: &mut World, queue: &wgpu::Queue) {
+pub fn sys_paint(world: &mut World, entities: &AppEntities, queue: &wgpu::Queue) {
     let mut interactions = Vec::new();
 
-    for (_, input) in world.query::<&InputState>().iter() {
-        if !input.is_dragging || input.egui_wants_input || input.is_panning || input.is_rotating {
-            continue;
-        }
-        for (_, editor) in world.query::<&mut EditorState>().iter() {
-            if editor.active_tool == EditorTool::Navigation {
-                continue;
+    if let Ok(input) = world.get::<&InputState>(entities.input) {
+        if input.is_dragging && !input.egui_wants_input && !input.is_panning && !input.is_rotating {
+            if let Ok(editor) = world.get::<&EditorState>(entities.editor) {
+                if editor.active_tool != EditorTool::Navigation {
+                    interactions.push((
+                        input.active_viewport,
+                        input.mouse_uv,
+                        editor.active_tool,
+                        editor.brush_size,
+                        editor.active_label_index,
+                        editor.active_layer,
+                        editor.last_paint_voxel,
+                    ));
+                }
             }
-            interactions.push((
-                input.active_viewport,
-                input.mouse_uv,
-                editor.active_tool,
-                editor.brush_size,
-                editor.active_label_index,
-                editor.active_layer,
-                editor.last_paint_voxel,
-            ));
         }
     }
 
     if interactions.is_empty() {
         return;
+    }
+
+    // Cache volume dimensions for voxel conversion
+    let mut vol_dims = [100, 100, 100];
+    for (_, vol) in world.query::<&VolumeData>().iter() {
+        vol_dims = vol.dimensions;
     }
 
     for (viewport, mouse_uv, tool, brush_size, label_idx, layer_entity, last_voxel_opt) in
@@ -39,7 +43,7 @@ pub fn sys_paint(world: &mut World, queue: &wgpu::Queue) {
         } else {
             continue;
         };
-        let cur_target_opt = get_voxel_at_mouse(world, viewport, mouse_uv);
+        let cur_target_opt = get_voxel_at_mouse(world, entities, viewport, mouse_uv);
 
         if let Some(pos) = cur_target_opt {
             if let Ok(mut query) =
@@ -249,15 +253,11 @@ pub fn sys_paint(world: &mut World, queue: &wgpu::Queue) {
         }
 
         if let Some(target) = cur_target_opt {
-            for (_, editor) in world.query::<&mut EditorState>().iter() {
-                let mut dims = [100, 100, 100];
-                for (_, vol) in world.query::<&VolumeData>().iter() {
-                    dims = vol.dimensions;
-                }
+            if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
                 editor.last_paint_voxel = Some([
-                    (target[0] * dims[0] as f32) as u32,
-                    (target[1] * dims[1] as f32) as u32,
-                    (target[2] * dims[2] as f32) as u32,
+                    (target[0] * vol_dims[0] as f32) as u32,
+                    (target[1] * vol_dims[1] as f32) as u32,
+                    (target[2] * vol_dims[2] as f32) as u32,
                 ]);
             }
         }

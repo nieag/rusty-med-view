@@ -43,6 +43,7 @@ pub struct RenderingContext {
 
     // ECS and GUI
     world: World,
+    entities: AppEntities,
     gui: gui::Gui,
     settings_entity: hecs::Entity,
 
@@ -132,11 +133,11 @@ impl App {
             std::sync::mpsc::channel::<Result<components::LoadResult, nifti_loader::LoadError>>();
 
         // Initialize world and camera
-        world.spawn((CameraRig {
+        let camera = world.spawn((CameraRig {
             speed: 1.0,
             start_time: web_time::Instant::now(),
         },));
-        world.spawn((
+        let cursor = world.spawn((
             Transform {
                 position: [0.5, 0.5, 0.5],
             },
@@ -149,15 +150,15 @@ impl App {
         },));
 
         // Initialize GUI State
-        world.spawn((GuiState {
+        let gui_state = world.spawn((GuiState {
             load_requested: false,
             load_label_requested: false,
             status_message: None,
         },));
 
         // Initial loading state
-        world.spawn((VolumeLoadingState::Ready,));
-        world.spawn((InputState {
+        let loading = world.spawn((VolumeLoadingState::Ready,));
+        let input = world.spawn((InputState {
             last_mouse_pos: [0.0, 0.0],
             mouse_uv: [0.0, 0.0],
             active_viewport: 0,
@@ -171,7 +172,7 @@ impl App {
             rotation_start_val: [0.0, 0.0, 0.0, 1.0], // Identity quaternion
             egui_wants_input: false,
         },));
-        world.spawn((ViewState {
+        let view = world.spawn((ViewState {
             zoom: [1.0, 1.0, 1.0, 1.0],
             pan: [[0.0, 0.0]; 4],
             pivot: [[0.5, 0.5]; 4],
@@ -254,16 +255,16 @@ impl App {
         ));
 
         // Initialize EditorState with active layer
-        world.spawn((EditorState {
+        let editor = world.spawn((EditorState {
             active_layer: Some(blank_entity),
             ..Default::default()
         },));
 
         // Initialize VolumeWindowing with default values
-        world.spawn((VolumeWindowing::default(),));
+        let windowing = world.spawn((VolumeWindowing::default(),));
 
         // Initialize Annotations
-        world.spawn((AnnotationState {
+        let annotations = world.spawn((AnnotationState {
             annotations: vec![
                 Annotation {
                     world_pos: glam::Vec3::new(0.5, 0.5, 0.5),
@@ -277,7 +278,21 @@ impl App {
         },));
 
         // Initialize Overlay State for GPU-rendered primitives
-        world.spawn((OverlayManager::default(),));
+        let overlay = world.spawn((OverlayManager::default(),));
+
+        let entities = AppEntities {
+            input,
+            view,
+            editor,
+            gui_state,
+            loading,
+            volume_windowing: windowing,
+            annotations,
+            overlay,
+            cursor,
+            camera_rig: camera,
+            window_settings: settings_entity,
+        };
 
         let render_pipeline =
             render::create_render_pipeline(&device, &texture_bind_group_layout, config.format);
@@ -314,6 +329,7 @@ impl App {
             index_buffer,
             num_indices,
             world,
+            entities,
             gui,
             settings_entity,
             volume_receiver,
@@ -384,10 +400,10 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::CursorMoved { position, .. } => {
-                systems::sys_update_mouse(&mut ctx.world, position.x, position.y);
+                systems::sys_update_mouse(&mut ctx.world, &ctx.entities, position.x, position.y);
             }
             WindowEvent::MouseInput { button, state, .. } => {
-                systems::sys_handle_mouse_button(&mut ctx.world, button, state);
+                systems::sys_handle_mouse_button(&mut ctx.world, &ctx.entities, button, state);
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let y_delta = match delta {
@@ -395,12 +411,12 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::PixelDelta(pos) => (pos.y * 0.001) as f32,
                 };
                 if y_delta != 0.0 {
-                    systems::sys_handle_input_scroll(&mut ctx.world, y_delta);
+                    systems::sys_handle_input_scroll(&mut ctx.world, &ctx.entities, y_delta);
                     ctx.window.request_redraw();
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => {
-                systems::sys_update_modifiers(&mut ctx.world, modifiers.state());
+                systems::sys_update_modifiers(&mut ctx.world, &ctx.entities, modifiers.state());
             }
             WindowEvent::Resized(size) => {
                 ctx.config.width = size.width;
@@ -423,11 +439,13 @@ impl ApplicationHandler for App {
                     &ctx.config,
                     &ctx.render_pipeline,
                     &ctx.uniform_buffer,
-                    &ctx.overlay_buffer,
                     &ctx.vertex_buffer,
                     &ctx.index_buffer,
                     ctx.num_indices,
+                    &ctx.overlay_buffer,
                     &mut ctx.world,
+                    &ctx.entities,
+                    ctx.settings_entity,
                     &mut ctx.gui,
                     &ctx.window,
                     ctx.volume_sender.clone(),
@@ -440,8 +458,8 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         let mut state = self.state.lock().unwrap();
         if let Some(ctx) = &mut state.context {
-            systems::sys_handle_mouse_drag(&mut ctx.world);
-            systems::sys_paint(&mut ctx.world, &ctx.queue); // Execute Paint System
+            systems::sys_handle_mouse_drag(&mut ctx.world, &ctx.entities);
+            systems::sys_paint(&mut ctx.world, &ctx.entities, &ctx.queue); // Execute Paint System
 
             // Handle "Create New Layer" request from GUI?
             // Cleanest way: Check GuiState for a request flag
@@ -534,10 +552,12 @@ impl ApplicationHandler for App {
                                     &ctx.device,
                                     &ctx.queue,
                                     &mut ctx.world,
+                                    &ctx.entities,
                                     loaded,
                                 );
                                 load_handlers::set_status_message(
                                     &mut ctx.world,
+                                    &ctx.entities,
                                     format!("Volume Loaded: {}x{}", dims[0], dims[1]),
                                 );
                                 dims
@@ -551,6 +571,7 @@ impl ApplicationHandler for App {
                                 );
                                 load_handlers::set_status_message(
                                     &mut ctx.world,
+                                    &ctx.entities,
                                     format!("Label Loaded: {}x{}", dims[0], dims[1]),
                                 );
 
@@ -580,6 +601,7 @@ impl ApplicationHandler for App {
                         log::error!("Failed to load NIfTI: {:?}", e);
                         load_handlers::set_status_message(
                             &mut ctx.world,
+                            &ctx.entities,
                             format!("Error: {:?}", e),
                         );
                     }

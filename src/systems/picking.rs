@@ -4,17 +4,19 @@ use glam::{Mat3, Quat, Vec3};
 use hecs::World;
 
 /// Get the HU intensity value at the current mouse position.
-pub fn get_hu_at_mouse(world: &World) -> Option<f32> {
-    let mut viewport = 0u32;
-    let mut mouse_uv = [0.5, 0.5];
-    for (_, input) in world.query::<&InputState>().iter() {
-        viewport = input.active_viewport;
-        mouse_uv = input.mouse_uv;
-    }
+pub fn get_hu_at_mouse(world: &World, entities: &AppEntities) -> Option<f32> {
+    let (viewport, mouse_uv) = {
+        if let Ok(input) = world.get::<&InputState>(entities.input) {
+            (input.active_viewport, input.mouse_uv)
+        } else {
+            (0, [0.5, 0.5])
+        }
+    };
 
-    let voxel_pos = get_voxel_at_mouse(world, viewport, mouse_uv)?;
+    let voxel_pos = get_voxel_at_mouse(world, entities, viewport, mouse_uv)?;
 
-    for (_, vol) in world.query::<&VolumeData>().iter() {
+    let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
+    if let Some((_, vol)) = query.iter().next() {
         let [w, h, d] = vol.dimensions;
         let x = ((voxel_pos[0] * w as f32) as u32).min(w - 1);
         let y = ((voxel_pos[1] * h as f32) as u32).min(h - 1);
@@ -29,34 +31,37 @@ pub fn get_hu_at_mouse(world: &World) -> Option<f32> {
 }
 
 /// Calculate volume coordinate (0.0..1.0) under the mouse cursor.
-pub fn get_voxel_at_mouse(world: &World, viewport: u32, mouse_uv: [f32; 2]) -> Option<[f32; 3]> {
-    let mut zoom = 1.0;
-    let mut pan = [0.0, 0.0];
-    let mut rotation = [0.0, 0.0, 0.0, 1.0];
-    let mut viewport_rect = [0.0, 0.0, 100.0, 100.0];
-
-    for (_, view) in world.query::<&ViewState>().iter() {
+pub fn get_voxel_at_mouse(
+    world: &World,
+    entities: &AppEntities,
+    viewport: u32,
+    mouse_uv: [f32; 2],
+) -> Option<[f32; 3]> {
+    let (zoom, pan, rotation) = if let Ok(view) = world.get::<&ViewState>(entities.view) {
         let idx = viewport as usize;
-        zoom = view.zoom[idx];
-        pan = view.pan[idx];
-        rotation = view.rotation[idx];
-    }
+        (view.zoom[idx], view.pan[idx], view.rotation[idx])
+    } else {
+        (1.0, [0.0, 0.0], [0.0, 0.0, 0.0, 1.0])
+    };
 
-    for (_, win) in world.query::<&WindowSettings>().iter() {
-        viewport_rect = win.viewport_rect;
-    }
+    let viewport_rect = world
+        .get::<&WindowSettings>(entities.window_settings)
+        .map(|w| w.viewport_rect)
+        .unwrap_or([0.0, 0.0, 100.0, 100.0]);
 
-    let mut vol_aspects = [1.0, 1.0, 1.0];
-    let mut vol_dims = None;
-    for (_, vol) in world.query::<&VolumeData>().iter() {
-        vol_aspects = vol.aspect_ratios();
-        vol_dims = Some(vol.dimensions);
-    }
+    let (vol_aspects, vol_dims) = {
+        let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
+        if let Some((_, vol)) = query.iter().next() {
+            (vol.aspect_ratios(), Some(vol.dimensions))
+        } else {
+            ([1.0, 1.0, 1.0], None)
+        }
+    };
 
-    let mut cursor_pos = [0.0; 3];
-    for (_, (t, _tag)) in world.query::<(&Transform, &CursorTag)>().iter() {
-        cursor_pos = t.position;
-    }
+    let cursor_pos = world
+        .get::<&Transform>(entities.cursor)
+        .map(|t| t.position)
+        .unwrap_or([0.0, 0.0, 0.0]);
 
     if viewport > 0 {
         // --- 2D Slices ---

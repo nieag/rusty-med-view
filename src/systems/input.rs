@@ -7,16 +7,16 @@ use winit::event::{ElementState, MouseButton};
 use winit::keyboard::ModifiersState;
 
 /// Update keyboard modifier state (Ctrl/Shift/Alt) in the ECS.
-pub fn sys_update_modifiers(world: &mut World, mods: ModifiersState) {
-    for (_, input) in world.query::<&mut InputState>().iter() {
+pub fn sys_update_modifiers(world: &mut World, entities: &AppEntities, mods: ModifiersState) {
+    if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
         input.modifiers = mods;
     }
 }
 
 /// Update mouse position and calculate which viewport quadrant the mouse is in.
-pub fn sys_update_mouse(world: &mut World, x: f64, y: f64) {
+pub fn sys_update_mouse(world: &mut World, entities: &AppEntities, x: f64, y: f64) {
     let mut viewport_rect = [0.0, 0.0, 1.0, 1.0];
-    for (_, win) in world.query::<&WindowSettings>().iter() {
+    if let Ok(win) = world.get::<&WindowSettings>(entities.window_settings) {
         viewport_rect = win.viewport_rect;
     }
 
@@ -54,7 +54,7 @@ pub fn sys_update_mouse(world: &mut World, x: f64, y: f64) {
         rel_y / (vp_h / 2.0)
     };
 
-    for (_, input) in world.query::<&mut InputState>().iter() {
+    if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
         input.last_mouse_pos = [x, y];
         input.mouse_uv = [local_x as f32, local_y as f32];
         input.active_viewport = viewport_idx;
@@ -62,19 +62,24 @@ pub fn sys_update_mouse(world: &mut World, x: f64, y: f64) {
 }
 
 /// Handle mouse button events for clicking, dragging, and picking.
-pub fn sys_handle_mouse_button(world: &mut World, button: MouseButton, state: ElementState) {
+pub fn sys_handle_mouse_button(
+    world: &mut World,
+    entities: &AppEntities,
+    button: MouseButton,
+    state: ElementState,
+) {
     let mut click_pos = [0.0, 0.0];
     let mut viewport = 0;
     let mut alt_pressed = false;
 
     let mut is_editor_tool = false;
-    for (_, editor) in world.query::<&EditorState>().iter() {
+    if let Ok(editor) = world.get::<&EditorState>(entities.editor) {
         if editor.active_tool != EditorTool::Navigation {
             is_editor_tool = true;
         }
     }
 
-    for (_, input) in world.query::<&mut InputState>().iter() {
+    if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
         click_pos = input.mouse_uv;
         viewport = input.active_viewport;
         alt_pressed = input.modifiers.alt_key();
@@ -83,9 +88,14 @@ pub fn sys_handle_mouse_button(world: &mut World, button: MouseButton, state: El
             input.is_dragging = true;
             input.drag_start_pos = input.mouse_uv;
 
-            if button == MouseButton::Middle {
+            let ctrl_pressed = input.modifiers.control_key();
+            let super_pressed = input.modifiers.super_key();
+
+            if button == MouseButton::Middle
+                || (button == MouseButton::Left && (ctrl_pressed || super_pressed))
+            {
                 input.is_panning = true;
-                for (_, view) in world.query::<&ViewState>().iter() {
+                if let Ok(view) = world.get::<&ViewState>(entities.view) {
                     input.drag_start_pan = view.pan[viewport as usize];
                 }
             }
@@ -93,7 +103,7 @@ pub fn sys_handle_mouse_button(world: &mut World, button: MouseButton, state: El
             if button == MouseButton::Right || (button == MouseButton::Left && alt_pressed) {
                 input.is_rotating = true;
                 input.rotation_start_pos = input.mouse_uv;
-                for (_, view) in world.query::<&ViewState>().iter() {
+                if let Ok(view) = world.get::<&ViewState>(entities.view) {
                     input.rotation_start_val = view.rotation[viewport as usize];
                 }
             }
@@ -101,19 +111,32 @@ pub fn sys_handle_mouse_button(world: &mut World, button: MouseButton, state: El
             input.is_dragging = false;
             input.is_panning = false;
             input.is_rotating = false;
-            for (_, editor) in world.query::<&mut EditorState>().iter() {
+            if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
                 editor.last_paint_voxel = None;
             }
         }
     }
 
+    let ctrl_pressed = if let Ok(input) = world.get::<&InputState>(entities.input) {
+        input.modifiers.control_key()
+    } else {
+        false
+    };
+    let super_pressed = if let Ok(input) = world.get::<&InputState>(entities.input) {
+        input.modifiers.super_key()
+    } else {
+        false
+    };
+
     if !is_editor_tool
         && button == MouseButton::Left
         && !alt_pressed
+        && !ctrl_pressed
+        && !super_pressed
         && state == ElementState::Pressed
     {
-        if let Some(target_pos) = get_voxel_at_mouse(world, viewport, click_pos) {
-            for (_, (t, _tag)) in world.query::<(&mut Transform, &CursorTag)>().iter() {
+        if let Some(target_pos) = get_voxel_at_mouse(world, entities, viewport, click_pos) {
+            if let Ok(mut t) = world.get::<&mut Transform>(entities.cursor) {
                 t.position = target_pos;
             }
         }
@@ -121,27 +144,31 @@ pub fn sys_handle_mouse_button(world: &mut World, button: MouseButton, state: El
 }
 
 /// Handle scroll input for zooming or slice scrolling.
-pub fn sys_handle_input_scroll(world: &mut World, delta: f32) {
+pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta: f32) {
     let mut mouse_uv = [0.5, 0.5];
     let mut mode = 0;
     let mut is_zoom = false;
     let mut viewport_rect = [0.0, 0.0, 100.0, 100.0];
 
-    for (_, input) in world.query::<&InputState>().iter() {
+    if let Ok(input) = world.get::<&InputState>(entities.input) {
         mode = input.active_viewport;
         mouse_uv = input.mouse_uv;
         is_zoom = input.modifiers.control_key();
     }
-    for (_, win) in world.query::<&WindowSettings>().iter() {
+    if let Ok(win) = world.get::<&WindowSettings>(entities.window_settings) {
         viewport_rect = win.viewport_rect;
     }
     let mut vol_aspects = [1.0, 1.0, 1.0];
+    let mut dims = [1u32, 1, 1];
+    // Main volume is harder to singleton-ify because it's data dependent,
+    // but the system already queries for it. Let's find it.
     for (_, vol) in world.query::<&VolumeData>().iter() {
         vol_aspects = vol.aspect_ratios();
+        dims = vol.dimensions;
     }
 
     if is_zoom {
-        for (_, view) in world.query::<&mut ViewState>().iter() {
+        if let Ok(mut view) = world.get::<&mut ViewState>(entities.view) {
             let idx = mode as usize;
             let screen_aspect = if viewport_rect[3] > 0.0 {
                 viewport_rect[2] / viewport_rect[3]
@@ -174,16 +201,12 @@ pub fn sys_handle_input_scroll(world: &mut World, delta: f32) {
             view.pivot[idx] = [0.5, 0.5];
         }
     } else {
-        let mut dims = [1u32, 1, 1];
-        for (_, vol) in world.query::<&VolumeData>().iter() {
-            dims = vol.dimensions;
-        }
-        for (_, (transform, _tag)) in world.query::<(&mut Transform, &CursorTag)>().iter() {
+        if let Ok(mut transform) = world.get::<&mut Transform>(entities.cursor) {
             let (axis, dim) = match mode {
                 1 => (2, dims[2]),
                 2 => (1, dims[1]),
                 3 => (0, dims[0]),
-                _ => continue,
+                _ => return,
             };
             let current_uv = transform.position[axis];
             let current_voxel = (current_uv * dim as f32).floor() as i32;
@@ -195,58 +218,60 @@ pub fn sys_handle_input_scroll(world: &mut World, delta: f32) {
 }
 
 /// Handle mouse drag motion for panning and rotating.
-pub fn sys_handle_mouse_drag(world: &mut World) {
+pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
     let mut viewport = 0;
     let mut is_dragging = false;
     let mut is_rotating = false;
+    let mut is_panning = false;
     let mut viewport_rect = [0.0, 0.0, 100.0, 100.0];
 
     let mut is_editor_tool = false;
-    for (_, editor) in world.query::<&EditorState>().iter() {
+    if let Ok(editor) = world.get::<&EditorState>(entities.editor) {
         if editor.active_tool != EditorTool::Navigation {
             is_editor_tool = true;
         }
     }
 
-    for (_, input) in world.query::<&InputState>().iter() {
+    if let Ok(input) = world.get::<&InputState>(entities.input) {
         viewport = input.active_viewport;
         is_dragging = input.is_dragging;
         is_rotating = input.is_rotating;
+        is_panning = input.is_panning;
     }
-    for (_, win) in world.query::<&WindowSettings>().iter() {
+
+    if !is_dragging && !is_rotating && !is_panning {
+        return;
+    }
+
+    if let Ok(win) = world.get::<&WindowSettings>(entities.window_settings) {
         viewport_rect = win.viewport_rect;
     }
+
     let mut vol_aspects = [1.0, 1.0, 1.0];
     for (_, vol) in world.query::<&VolumeData>().iter() {
         vol_aspects = vol.aspect_ratios();
     }
 
-    if !is_dragging && !is_rotating {
-        return;
-    }
+    let mut crosshair_update = None;
 
-    for (_, view) in world.query::<&mut ViewState>().iter() {
+    if let Ok(mut view) = world.get::<&mut ViewState>(entities.view) {
         let mut drag_info = None;
         let mut rotate_info = None;
 
-        for (_, input) in world.query::<&InputState>().iter() {
-            if input.is_panning && !is_editor_tool {
+        if let Ok(input) = world.get::<&InputState>(entities.input) {
+            if is_panning {
                 drag_info = Some((input.drag_start_pan, input.drag_start_pos, input.mouse_uv));
             }
-            if input.is_rotating {
+            if is_rotating {
                 rotate_info = Some((
                     input.rotation_start_val,
                     input.rotation_start_pos,
                     input.mouse_uv,
                 ));
             }
-            // Crosshair update during drag
-            if input.is_dragging && !is_editor_tool && !input.is_panning && !input.is_rotating {
-                if let Some(target_pos) = get_voxel_at_mouse(world, viewport, input.mouse_uv) {
-                    for (_, (t, _tag)) in world.query::<(&mut Transform, &CursorTag)>().iter() {
-                        t.position = target_pos;
-                    }
-                }
+            // Crosshair update during drag - prepare info
+            if is_dragging && !is_editor_tool && !is_panning && !is_rotating {
+                crosshair_update = Some((viewport, input.mouse_uv));
             }
         }
 
@@ -275,7 +300,7 @@ pub fn sys_handle_mouse_drag(world: &mut World) {
         if let Some((start_quat, start_pos, current_pos)) = rotate_info {
             let sensitivity = 3.0;
             let mut has_shift = false;
-            for (_, input) in world.query::<&InputState>().iter() {
+            if let Ok(input) = world.get::<&InputState>(entities.input) {
                 has_shift = input.modifiers.shift_key();
             }
             let delta_x = (current_pos[0] - start_pos[0]) * sensitivity;
@@ -291,6 +316,15 @@ pub fn sys_handle_mouse_drag(world: &mut World) {
                 (yaw_quat * pitch_quat * start_q).normalize()
             };
             view.rotation[viewport as usize] = new_quat.to_array();
+        }
+    }
+
+    // Now update crosshair outside ViewState borrow
+    if let Some((vp, uv)) = crosshair_update {
+        if let Some(target_pos) = get_voxel_at_mouse(world, entities, vp, uv) {
+            if let Ok(mut t) = world.get::<&mut Transform>(entities.cursor) {
+                t.position = target_pos;
+            }
         }
     }
 }

@@ -119,7 +119,7 @@ pub struct GuiState {
     pub status_message: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub enum VolumeLoadingState {
     Ready,
     Loading,
@@ -215,4 +215,20 @@ pub struct Annotation {
 #[derive(Clone, Debug, Default)]
 pub struct AnnotationState {
     pub annotations: Vec<Annotation>,
+}
+
+// --- Singleton Entity Registry ---
+#[derive(Clone, Copy)]
+pub struct AppEntities {
+    pub input: hecs::Entity,
+    pub view: hecs::Entity,
+    pub editor: hecs::Entity,
+    pub gui_state: hecs::Entity,
+    pub loading: hecs::Entity,
+    pub volume_windowing: hecs::Entity,
+    pub annotations: hecs::Entity,
+    pub overlay: hecs::Entity,
+    pub cursor: hecs::Entity,
+    pub camera_rig: hecs::Entity,
+    pub window_settings: hecs::Entity,
 }

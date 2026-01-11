@@ -26,7 +26,7 @@ impl Gui {
             window,
             Some(window.scale_factor() as f32),
             None,
-            None, // Added 6th argument (max_inner_size)
+            None,
         );
 
         let renderer = Renderer::new(device, format, egui_wgpu::RendererOptions::default());
@@ -52,29 +52,32 @@ impl Gui {
         &mut self,
         window: &WinitWindow,
         world: &mut World,
+        entities: &AppEntities,
         volume_sender: Sender<Result<LoadResult, nifti_loader::LoadError>>,
     ) {
         let raw_input = self.state.take_egui_input(window);
 
         let full_output = self.context.run(raw_input, |ctx| {
-            // 1. Data Collection from ECS
-            let mut active_viewport = 99;
-            let mut status_msg = None;
-            let mut loading_state = VolumeLoadingState::Ready;
-            let mut volume_info = None;
-
-            for (_, inp) in world.query::<&InputState>().iter() {
-                active_viewport = inp.active_viewport;
-            }
-            for (_, gui_state) in world.query::<&GuiState>().iter() {
-                status_msg = gui_state.status_message.clone();
-            }
-            for (_, state) in world.query::<&VolumeLoadingState>().iter() {
-                loading_state = state.clone();
-            }
-            for (_, vol) in world.query::<&VolumeData>().iter() {
-                volume_info = Some(vol.dimensions);
-            }
+            // 1. Data Collection from ECS via AppEntities
+            let (active_viewport, status_msg, loading_state, volume_info) = {
+                let active_viewport = world
+                    .get::<&InputState>(entities.input)
+                    .map(|i| i.active_viewport)
+                    .unwrap_or(99);
+                let status_msg = world
+                    .get::<&GuiState>(entities.gui_state)
+                    .map(|g| g.status_message.clone())
+                    .unwrap_or(None);
+                let loading_state = world
+                    .get::<&VolumeLoadingState>(entities.loading)
+                    .map(|l| *l)
+                    .unwrap_or(VolumeLoadingState::Ready);
+                let volume_info = {
+                    let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
+                    query.iter().next().map(|(_, vd)| vd.dimensions)
+                };
+                (active_viewport, status_msg, loading_state, volume_info)
+            };
 
             // 2. Sidebar Implementation
             egui::SidePanel::left("left_panel")
@@ -87,11 +90,9 @@ impl Gui {
                     // --- Data Loading ---
                     ui.collapsing("Data Loading", |ui| {
                         if ui.button("📂 Load Main Volume (NIfTI)").clicked() {
-                            // Update status message
-                            for (_, gui_state) in world.query_mut::<&mut GuiState>() {
-                                gui_state.status_message = Some("Loading...".to_string());
+                            if let Ok(mut g) = world.get::<&mut GuiState>(entities.gui_state) {
+                                g.status_message = Some("Loading...".to_string());
                             }
-                            // Spawn file picker DIRECTLY from button click (required for WASM user gesture)
                             let sender = volume_sender.clone();
                             file_dialog::spawn_file_picker(move |result| {
                                 if let Some((_filename, data)) = result {
@@ -110,11 +111,9 @@ impl Gui {
                         ui.separator();
                         ui.label("Overlays");
                         if ui.button("📂 Load Label (Slot 1)").clicked() {
-                            // Update status message
-                            for (_, gui_state) in world.query_mut::<&mut GuiState>() {
-                                gui_state.status_message = Some("Loading Labelmap...".to_string());
+                            if let Ok(mut g) = world.get::<&mut GuiState>(entities.gui_state) {
+                                g.status_message = Some("Loading Labelmap...".to_string());
                             }
-                            // Spawn file picker DIRECTLY from button click (required for WASM user gesture)
                             let sender = volume_sender.clone();
                             file_dialog::spawn_file_picker(move |result| {
                                 if let Some((filename, data)) = result {
@@ -131,8 +130,9 @@ impl Gui {
 
                     // --- Windowing / Contrast Controls (HU-based) ---
                     ui.collapsing("Windowing", |ui| {
-                        let mut windowing_query = world.query::<&mut VolumeWindowing>();
-                        if let Some((_, windowing)) = windowing_query.iter().next() {
+                        if let Ok(mut windowing) =
+                            world.get::<&mut VolumeWindowing>(entities.volume_windowing)
+                        {
                             ui.label("Window Center (HU)");
                             ui.add(
                                 egui::Slider::new(&mut windowing.center, -1024.0..=3071.0)
@@ -176,9 +176,7 @@ impl Gui {
 
                     // --- Toolbox (Label Editor) ---
                     ui.collapsing("Toolbox", |ui| {
-                        // Access EditorState
-                        let mut editor_state_query = world.query::<&mut EditorState>();
-                        if let Some((_, editor)) = editor_state_query.iter().next() {
+                        if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
                             ui.label("Active Tool");
                             ui.horizontal(|ui| {
                                 ui.radio_value(
@@ -219,40 +217,28 @@ impl Gui {
                             layers.push((e, seg.name.clone(), seg.is_visible, settings.opacity));
                         }
 
-                        // New Layer Button
                         if ui.button("➕ Create New Layer").clicked() {
-                            // Need to trigger creation. Can't do it here easily since we need Device/Queue.
-                            // Set a flag in GuiState?
-                            for (_, gui_state) in world.query_mut::<&mut GuiState>() {
-                                gui_state.load_label_requested = true; // Temporary hijack for "Create" logic
-                                                                       // Actually create logic needs to differentiate Load vs Create.
-                                                                       // Let's rely on checking this flag in Lib.rs and creating a default one.
-                                                                       // Or better, add `create_label_requested` to GuiState.
-                                                                       // For now, let's leave it as "TODO" or implement properly next step.
-                                                                       // Let's implement active layer selection first.
+                            if let Ok(mut gui_state) =
+                                world.get::<&mut GuiState>(entities.gui_state)
+                            {
+                                gui_state.load_label_requested = true;
                             }
                         }
 
-                        // Collect EditorState to update active layer
-                        let mut active_layer = None;
-                        for (_, editor) in world.query::<&EditorState>().iter() {
-                            active_layer = editor.active_layer;
-                        }
+                        let mut active_layer = world
+                            .get::<&EditorState>(entities.editor)
+                            .ok()
+                            .and_then(|e| e.active_layer);
                         let mut new_active_layer = active_layer;
 
                         for (entity, name, mut visible, mut opacity) in layers {
                             ui.group(|ui| {
                                 ui.horizontal(|ui| {
-                                    // Radio button for "Active Layer"
                                     ui.radio_value(&mut new_active_layer, Some(entity), "");
-
                                     if ui.checkbox(&mut visible, "").changed() {
-                                        if let Ok(mut seg) =
-                                            world.query_one::<&mut Segmentation>(entity)
+                                        if let Ok(mut seg) = world.get::<&mut Segmentation>(entity)
                                         {
-                                            if let Some(s) = seg.get() {
-                                                s.is_visible = visible;
-                                            }
+                                            seg.is_visible = visible;
                                         }
                                     }
                                     ui.label(name);
@@ -265,20 +251,15 @@ impl Gui {
                                         )
                                         .changed()
                                 {
-                                    if let Ok(mut set) =
-                                        world.query_one::<&mut LayerSettings>(entity)
-                                    {
-                                        if let Some(s) = set.get() {
-                                            s.opacity = opacity;
-                                        }
+                                    if let Ok(mut set) = world.get::<&mut LayerSettings>(entity) {
+                                        set.opacity = opacity;
                                     }
                                 }
                             });
                         }
 
-                        // Write back active layer selection
                         if new_active_layer != active_layer {
-                            for (_, editor) in world.query_mut::<&mut EditorState>() {
+                            if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
                                 editor.active_layer = new_active_layer;
                             }
                         }
@@ -288,24 +269,15 @@ impl Gui {
 
                     // --- Annotations ---
                     ui.collapsing("Annotations", |ui| {
-                        // "Add" Button
                         if ui.button("➕ Add Annotation").clicked() {
-                            // Logic to add annotation at current cursor position
-                            // We need to access AnnotationState (mutable) and Cursor Position
-                            // Cursor Position is in `cursor_pos` variable (Transform)
-                            // But we need to write to AnnotationState.
-
-                            // Collect queries outside closure to avoid ownership issues?
-                            // Actually we are inside `show`, we can query mutable world.
-                            // But we need to be careful about borrowing.
-
-                            // Let's grab the current cursor pos from the world first
                             let mut current_pos = glam::Vec3::ZERO;
-                            for (_, (t, _)) in world.query::<(&Transform, &CursorTag)>().iter() {
+                            if let Ok(t) = world.get::<&Transform>(entities.cursor) {
                                 current_pos = glam::Vec3::from(t.position);
                             }
 
-                            for (_, state) in world.query_mut::<&mut AnnotationState>() {
+                            if let Ok(mut state) =
+                                world.get::<&mut AnnotationState>(entities.annotations)
+                            {
                                 state.annotations.push(Annotation {
                                     world_pos: current_pos,
                                     label: "New".to_string(),
@@ -315,12 +287,12 @@ impl Gui {
 
                         ui.separator();
 
-                        // List Annotations
                         let mut to_delete = None;
                         let mut to_locate = None;
 
-                        // We iterate mutably over AnnotationState to allow text editing
-                        for (_, state) in world.query_mut::<&mut AnnotationState>() {
+                        if let Ok(mut state) =
+                            world.get::<&mut AnnotationState>(entities.annotations)
+                        {
                             for (i, ann) in state.annotations.iter_mut().enumerate() {
                                 ui.horizontal(|ui| {
                                     if ui.button("🎯").on_hover_text("Locate").clicked() {
@@ -338,18 +310,13 @@ impl Gui {
                             }
                         }
 
-                        // Handle "Locate" Action
                         if let Some(pos) = to_locate {
-                            for (_, (t, _)) in world.query_mut::<(&mut Transform, &CursorTag)>() {
+                            if let Ok(mut t) = world.get::<&mut Transform>(entities.cursor) {
                                 t.position = pos.into();
                             }
-                            // Center 2D views on this position
-                            for (_, view) in world.query_mut::<&mut ViewState>() {
-                                // Axial: center on x, y
+                            if let Ok(mut view) = world.get::<&mut ViewState>(entities.view) {
                                 view.pan[1] = [pos.x - 0.5, pos.y - 0.5];
-                                // Coronal: center on x, z
                                 view.pan[2] = [pos.x - 0.5, pos.z - 0.5];
-                                // Sagittal: center on y, z
                                 view.pan[3] = [pos.y - 0.5, pos.z - 0.5];
                             }
                         }
@@ -357,7 +324,6 @@ impl Gui {
 
                     ui.separator();
 
-                    // --- Status & Instructions ---
                     if let Some(msg) = &status_msg {
                         ui.label(egui::RichText::new(msg).color(egui::Color32::LIGHT_BLUE));
                     }
@@ -377,10 +343,9 @@ impl Gui {
                         ui.label("Ctrl+Scroll: 2D Zoom");
                     });
 
-                    // --- Always-visible HU Readout at bottom ---
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                         ui.separator();
-                        if let Some(hu) = systems::get_hu_at_mouse(world) {
+                        if let Some(hu) = systems::get_hu_at_mouse(world, entities) {
                             ui.label(format!("HU at cursor: {:.0}", hu));
                         } else {
                             ui.label("HU at cursor: --");
@@ -389,10 +354,7 @@ impl Gui {
                 });
 
             // 3. Viewport Rect Calculation
-            // We SHUT DOWN the CentralPanel because it consumes mouse events.
-            // Instead, we just read the remaining space using `available_rect()`.
             let central_rect = ctx.available_rect();
-
             let pixels_per_point = ctx.pixels_per_point();
             for (_, settings) in world.query_mut::<&mut WindowSettings>() {
                 settings.viewport_rect = [
@@ -403,9 +365,9 @@ impl Gui {
                 ];
             }
 
-            // 4. Overlays (Floating on top of Central Area)
+            // 4. Overlays
             let mut cursor_pos = [0.0, 0.0, 0.0];
-            for (_, (t, _)) in world.query::<(&Transform, &CursorTag)>().iter() {
+            if let Ok(t) = world.get::<&Transform>(entities.cursor) {
                 cursor_pos = t.position;
             }
 
@@ -422,24 +384,21 @@ impl Gui {
                 ));
             };
 
-            // Calculate relative positions for overlays based on the 4 viewports within central_rect
             let hw = central_rect.width() / 2.0;
             let hh = central_rect.height() / 2.0;
             let x0 = central_rect.min.x;
             let y0 = central_rect.min.y;
 
-            // Get rotation for 3D gizmo
-            let mut gizmo_rotation = [0.0f32, 0.0, 0.0, 1.0]; // Identity quaternion
-            for (_, view) in world.query::<&ViewState>().iter() {
-                gizmo_rotation = view.rotation[0]; // 3D view rotation
+            let mut gizmo_rotation = [0.0f32, 0.0, 0.0, 1.0];
+            if let Ok(view) = world.get::<&ViewState>(entities.view) {
+                gizmo_rotation = view.rotation[0];
             }
 
             egui::Area::new("overlay_3d".into())
                 .fixed_pos([x0 + 10.0, y0 + 10.0])
-                .interactable(false) // CRITICAL: Allow mouse to fall through to WGPU
+                .interactable(false)
                 .show(ctx, |ui| draw_label(ui, "3D View", active_viewport == 0));
 
-            // 3D Orientation Gizmo using glam-based module
             let gizmo_rect = egui::Rect::from_center_size(
                 egui::pos2(x0 + 80.0, y0 + hh - 80.0),
                 egui::vec2(120.0, 120.0),
@@ -482,68 +441,61 @@ impl Gui {
                 .fixed_pos(central_rect.min)
                 .interactable(false)
                 .show(ctx, |ui| {
-                    let mut ann_query = world.query::<&mut AnnotationState>();
-                    let mut vs_query = world.query::<&ViewState>();
-                    let mut vd_query = world.query::<&VolumeData>();
-                    let mut overlay_query = world.query::<&mut OverlayManager>();
+                    let mut vd_query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
+                    let vol_data = vd_query.iter().next().map(|(_, vd)| vd);
 
-                    if let (Some((_, state)), Some((_, vs)), Some((_, vd)), Some((_, overlay))) = (
-                        ann_query.iter().next(),
-                        vs_query.iter().next(),
-                        vd_query.iter().next(),
-                        overlay_query.iter().next(),
+                    if let (Ok(mut state), Ok(vs), Ok(mut overlay), Some(vd)) = (
+                        world.get::<&mut AnnotationState>(entities.annotations),
+                        world.get::<&ViewState>(entities.view),
+                        world.get::<&mut OverlayManager>(entities.overlay),
+                        vol_data,
                     ) {
                         let items = &mut state.annotations;
-
-                        // Viewport 0
                         draw_annotations(
                             ui,
                             items,
-                            vs,
+                            &vs,
                             vd,
                             egui::Rect::from_min_size(egui::pos2(x0, y0), egui::vec2(hw, hh)),
                             0,
-                            overlay,
+                            &mut overlay,
                         );
-                        // Viewport 1
                         draw_annotations(
                             ui,
                             items,
-                            vs,
+                            &vs,
                             vd,
                             egui::Rect::from_min_size(egui::pos2(x0 + hw, y0), egui::vec2(hw, hh)),
                             1,
-                            overlay,
+                            &mut overlay,
                         );
-                        // Viewport 2
                         draw_annotations(
                             ui,
                             items,
-                            vs,
+                            &vs,
                             vd,
                             egui::Rect::from_min_size(egui::pos2(x0, y0 + hh), egui::vec2(hw, hh)),
                             2,
-                            overlay,
+                            &mut overlay,
                         );
-                        // Viewport 3
                         draw_annotations(
                             ui,
                             items,
-                            vs,
+                            &vs,
                             vd,
                             egui::Rect::from_min_size(
                                 egui::pos2(x0 + hw, y0 + hh),
                                 egui::vec2(hw, hh),
                             ),
                             3,
-                            overlay,
+                            &mut overlay,
                         );
                     }
                 });
         });
 
-        // Update input state flag so other systems (like paint) know egui is using the pointer
-        for (_, input) in world.query_mut::<&mut InputState>() {
+        // Update input state flag
+        if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
             input.egui_wants_input =
                 self.context.wants_pointer_input() || self.context.is_using_pointer();
         }
@@ -559,18 +511,15 @@ impl Gui {
         view: &wgpu::TextureView,
         screen_descriptor: &egui_wgpu::ScreenDescriptor,
     ) {
-        // Retrieve the output we saved in prepare()
         let output = self
             .output
             .take()
             .expect("Gui::prepare() must be called before Gui::render()");
 
-        // Generate the geometry
         let tessellation = self
             .context
             .tessellate(output.shapes, self.context.pixels_per_point());
 
-        // Update textures (font atlas)
         for (id, delta) in &output.textures_delta.set {
             self.renderer.update_texture(device, queue, *id, delta);
         }
@@ -600,7 +549,6 @@ impl Gui {
                 screen_descriptor,
             );
         }
-        // Cleanup textures that are no longer needed
         for id in &output.textures_delta.free {
             self.renderer.free_texture(id);
         }
@@ -620,7 +568,6 @@ fn draw_annotations(
 ) {
     let aspect_ratios = vol.aspect_ratios();
 
-    // Safety check for empty dimensions
     if vol.dimensions[0] == 0 {
         return;
     }
@@ -629,30 +576,21 @@ fn draw_annotations(
         if let Some(screen_pos) =
             world_to_screen(ann.world_pos, viewport_idx, view, aspect_ratios, rect)
         {
-            // Draw marker as an interactive widget
             let sense = if viewport_idx > 0 {
                 egui::Sense::drag()
             } else {
                 egui::Sense::hover()
             };
-            // We use a predefined ID to track state across frames
             let id = ui.make_persistent_id(format!("ann_{}_{}", viewport_idx, idx));
 
-            // Allocate space for the interaction
             let point_rect = egui::Rect::from_center_size(screen_pos, egui::vec2(16.0, 16.0));
             let response = ui.interact(point_rect, id, sense);
 
-            // Handle Dragging using ABSOLUTE position (not deltas) for minimal lag
             if viewport_idx > 0 && response.dragged() {
-                // Update OverlayManager for GPU rendering with zero lag
                 overlay.dragging_idx = Some(idx);
                 overlay.dragging_viewport = viewport_idx as u32;
 
-                // Get current mouse position directly from egui
                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
-                    // Convert screen position to world coordinates directly
-                    // This is the inverse of world_to_screen for 2D views
-
                     let zoom = view.zoom[viewport_idx];
                     let pan = view.pan[viewport_idx];
                     let pivot = view.pivot[viewport_idx];
@@ -673,57 +611,43 @@ fn draw_annotations(
                     };
                     let k = screen_aspect / slice_aspect;
 
-                    // Convert screen pos to NDC (0..1 within viewport rect)
                     let ndc_x = (mouse_pos.x - rect.min.x) / rect.width();
                     let ndc_y = (mouse_pos.y - rect.min.y) / rect.height();
 
-                    // Store screen UV for shader (within this viewport)
                     overlay.mouse_screen_uv = [ndc_x, ndc_y];
 
-                    // Invert the world_to_screen projection:
-                    // ndc_x = ((u - pivot[0] - pan[0]) * zoom / k) + pivot[0]
-                    // Solving for u: u = ((ndc_x - pivot[0]) * k / zoom) + pivot[0] + pan[0]
                     let world_u = ((ndc_x - pivot[0]) * k / zoom) + pivot[0] + pan[0];
                     let world_v = ((ndc_y - pivot[1]) / zoom) + pivot[1] + pan[1];
 
-                    // Apply to appropriate axes, keeping the slice axis unchanged
                     match viewport_idx {
                         1 => {
-                            // Axial (x, y) - z is slice axis
                             ann.world_pos.x = world_u;
                             ann.world_pos.y = world_v;
                         }
                         2 => {
-                            // Coronal (x, z) - y is slice axis
                             ann.world_pos.x = world_u;
                             ann.world_pos.z = world_v;
                         }
                         3 => {
-                            // Sagittal (y, z) - x is slice axis
                             ann.world_pos.y = world_u;
                             ann.world_pos.z = world_v;
                         }
                         _ => {}
                     };
 
-                    // Clamp to volume bounds
                     ann.world_pos = ann.world_pos.clamp(glam::Vec3::ZERO, glam::Vec3::ONE);
                 }
             } else if response.drag_stopped() {
-                // Clear drag state when drag ends
                 overlay.dragging_idx = None;
             }
 
-            // Calculate text draw position
             let draw_pos = if response.dragged() {
-                // During drag, use mouse position for text too
                 ui.ctx().pointer_latest_pos().unwrap_or(screen_pos)
             } else {
                 world_to_screen(ann.world_pos, viewport_idx, view, aspect_ratios, rect)
                     .unwrap_or(screen_pos)
             };
 
-            // GPU draws the circle now - egui only draws text label
             ui.painter().text(
                 draw_pos + egui::vec2(8.0, -8.0),
                 egui::Align2::LEFT_BOTTOM,
@@ -751,9 +675,7 @@ fn world_to_screen(
     if let Some([ndc_x, ndc_y]) =
         crate::geometry::world_to_ndc(pos, viewport_idx, view, aspect_ratios, screen_aspect)
     {
-        // Clip
         if !(0.0..=1.0).contains(&ndc_x) || !(0.0..=1.0).contains(&ndc_y) {
-            // Re-apply clipping for non-3D views if needed
             if viewport_idx > 0 {
                 return None;
             }
