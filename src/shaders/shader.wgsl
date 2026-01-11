@@ -136,7 +136,7 @@ fn get_overlay_color(
 }
 
 // Compute Crosshair color and alpha
-fn get_crosshair_color(uv: vec2<f32>, center: vec2<f32>, v1: vec2<f32>, v2: vec2<f32>, v3: vec2<f32>, aspect: f32) -> vec4<f32> {
+fn get_crosshair_color(uv: vec2<f32>, center: vec2<f32>, v1: vec2<f32>, v2: vec2<f32>, v3: vec2<f32>, aspect: f32, length_limit: f32, base_alpha: f32) -> vec4<f32> {
     let thickness = 0.0011;
     let blur = 0.0008;
     let p = (uv - center) * vec2<f32>(aspect, 1.0);
@@ -149,8 +149,12 @@ fn get_crosshair_color(uv: vec2<f32>, center: vec2<f32>, v1: vec2<f32>, v2: vec2
     let lx = length(vx);
     if lx > 0.001 {
         let dx = vx / lx;
+        let proj = dot(p, dx);
         let dist = abs(dot(p, vec2<f32>(-dx.y, dx.x)));
-        let val = 1.0 - smoothstep(thickness, thickness + blur, dist);
+        var val = 1.0 - smoothstep(thickness, thickness + blur, dist);
+        if length_limit > 0.0 {
+            val *= 1.0 - smoothstep(length_limit * 0.8, length_limit, abs(proj));
+        }
         final_rgb = max(final_rgb, vec3<f32>(1.0, 0.2, 0.2) * val);
         final_a = max(final_a, val);
     }
@@ -160,8 +164,12 @@ fn get_crosshair_color(uv: vec2<f32>, center: vec2<f32>, v1: vec2<f32>, v2: vec2
     let ly = length(vy);
     if ly > 0.001 {
         let dy = vy / ly;
+        let proj = dot(p, dy);
         let dist = abs(dot(p, vec2<f32>(-dy.y, dy.x)));
-        let val = 1.0 - smoothstep(thickness, thickness + blur, dist);
+        var val = 1.0 - smoothstep(thickness, thickness + blur, dist);
+        if length_limit > 0.0 {
+            val *= 1.0 - smoothstep(length_limit * 0.8, length_limit, abs(proj));
+        }
         final_rgb = max(final_rgb, vec3<f32>(0.2, 1.0, 0.2) * val);
         final_a = max(final_a, val);
     }
@@ -171,13 +179,17 @@ fn get_crosshair_color(uv: vec2<f32>, center: vec2<f32>, v1: vec2<f32>, v2: vec2
     let lz = length(vz);
     if lz > 0.001 {
         let dz = vz / lz;
+        let proj = dot(p, dz);
         let dist = abs(dot(p, vec2<f32>(-dz.y, dz.x)));
-        let val = 1.0 - smoothstep(thickness, thickness + blur, dist);
+        var val = 1.0 - smoothstep(thickness, thickness + blur, dist);
+        if length_limit > 0.0 {
+            val *= 1.0 - smoothstep(length_limit * 0.8, length_limit, abs(proj));
+        }
         final_rgb = max(final_rgb, vec3<f32>(0.3, 0.6, 1.0) * val);
         final_a = max(final_a, val);
     }
 
-    return vec4<f32>(final_rgb, final_a);
+    return vec4<f32>(final_rgb, final_a * base_alpha);
 }
 
 // Apply windowing transform to intensity value
@@ -197,14 +209,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
 
-    var final_color = vec4<f32>(0.0);
-    let aspect = uniforms.resolution.x / uniforms.resolution.y;
-
     var crosshair_screen_pos = vec2<f32>(-10.0, -10.0);
     var ch_v1 = vec2<f32>(1.0, 0.0);
     var ch_v2 = vec2<f32>(0.0, 1.0);
     var ch_v3 = vec2<f32>(0.0, 0.0);
     var draw_crosshair = false;
+    var ch_len = 0.0;
+    var ch_alpha = 0.7;
+
+    var final_color = vec4<f32>(0.0);
+    let aspect = uniforms.resolution.x / uniforms.resolution.y;
 
     // --- MODE 1,2,3: 2D SLICES ---
     if uniforms.view_mode > 0u {
@@ -302,13 +316,51 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
             
             // Overlay 2
-            // Overlay 2
             let col2 = get_overlay_color(t_label2, t_lut2, sample_pos, uniforms.overlay_opacities.y, s_diffuse, false);
             if col2.a > 0.0 {
                 final_color = vec4<f32>(mix(final_color.rgb, col2.rgb, col2.a), 1.0);
             }
 
+            // Crosshair State for 2D modes
             draw_crosshair = true;
+            ch_len = 0.0;
+            ch_alpha = 0.7;
+
+            // --- Brush preview (using CPU-computed center for guaranteed sync) ---
+            let brush_size = uniforms.brush_preview.x;
+            let brush_active = uniforms.brush_preview.y;
+            let brush_viewport = u32(uniforms.brush_preview.z);
+            let center_valid = uniforms.brush_center_voxel.w;
+
+            if brush_active > 0.5 && brush_viewport == uniforms.view_mode && center_valid > 0.5 {
+                // Use sample_pos (the volume coord of THIS pixel) vs brush_center_voxel (volume coord of MOUSE)
+                // This guarantees the preview matches the voxel sampling and the paint logic!
+                let diff = (sample_pos - uniforms.brush_center_voxel.xyz) * dims;
+                var dist_sq = 0.0;
+                var dx = 0.0;
+                var dy = 0.0;
+
+                if uniforms.view_mode == 1u {
+                    dx = diff.x; dy = diff.y;
+                } else if uniforms.view_mode == 2u {
+                    dx = diff.x; dy = diff.z;
+                } else if uniforms.view_mode == 3u {
+                    dx = diff.y; dy = diff.z;
+                }
+                dist_sq = dx * dx + dy * dy;
+
+                let r = brush_size;
+                let r2 = r * r;
+
+                if dist_sq <= r2 {
+                    // Only show edge voxels (thin outline)
+                    let is_edge = (abs(dx) + 1.0) * (abs(dx) + 1.0) + dy * dy > r2 || dx * dx + (abs(dy) + 1.0) * (abs(dy) + 1.0) > r2;
+
+                    if is_edge || brush_size <= 1.5 {
+                        final_color = vec4<f32>(0.0, 1.0, 1.0, 1.0);
+                    }
+                }
+            }
         }
     } else {
         // --- MODE 0: 3D X-RAY (Volume-Based Rotation) ---
@@ -371,6 +423,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let max_dim_vol = max(max(physical_size.x, physical_size.y), physical_size.z);
         let aspect_ratio_vol = physical_size / max_dim_vol;
 
+        // Raymarching AABB (moved up for occlusion)
+        let box_min = -0.5 * aspect_ratio_vol;
+        let box_max = 0.5 * aspect_ratio_vol;
+        let t_hit = intersectAABB(cam_pos_obj, ray_dir_obj, box_min, box_max);
+
         // Project Cursor (cursor is in object space UV, transform to world for projection)
         let cursor_obj = (uniforms.cursor_pos.xyz - 0.5) * aspect_ratio_vol;
         let cursor_world = rot_mat * cursor_obj;
@@ -409,12 +466,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             ) * zoom;
 
             draw_crosshair = true;
+            ch_len = 0.05;
+            
+            // Occlusion Factor
+            if dist_z < t_hit.x {
+                ch_alpha = 0.7;
+            } else if dist_z > t_hit.y {
+                ch_alpha = 0.15;
+            } else {
+                ch_alpha = 0.35;
+            }
         }
 
-        // Raymarching in object space
-        let box_min = -0.5 * aspect_ratio_vol;
-        let box_max = 0.5 * aspect_ratio_vol;
-        let t_hit = intersectAABB(cam_pos_obj, ray_dir_obj, box_min, box_max);
 
         if t_hit.x > t_hit.y || t_hit.y < 0.0 {
             final_color = vec4<f32>(0.0, 0.0, 0.0, 1.0);
@@ -476,8 +539,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Crosshair
     if draw_crosshair {
-        let ch_res = get_crosshair_color(in.uv, crosshair_screen_pos, ch_v1, ch_v2, ch_v3, aspect);
-        final_color = vec4<f32>(mix(final_color.rgb, ch_res.rgb, ch_res.a * 0.7), 1.0);
+        let ch_res = get_crosshair_color(in.uv, crosshair_screen_pos, ch_v1, ch_v2, ch_v3, aspect, ch_len, ch_alpha);
+        final_color = vec4<f32>(mix(final_color.rgb, ch_res.rgb, ch_res.a), 1.0);
     }
 
     // --- Overlay Primitives ---
@@ -526,23 +589,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             var uv = vec2<f32>(0.0);
 
             if uniforms.view_mode == 1u {
-                // Axial (XY) - Y is inverted
+                // Axial (XY) - Radiological: Patient Right (x=1) on Screen Left (u=0)
                 slice_aspect = phys_x / phys_y;
                 if use_mouse_pos {
                     uv = uniforms.overlay_mouse_uv;
                 } else {
-                    uv = vec2<f32>(world_pos.x, 1.0 - world_pos.y);
+                    uv = vec2<f32>(1.0 - world_pos.x, 1.0 - world_pos.y);
                 }
             } else if uniforms.view_mode == 2u {
-                // Coronal (XZ) - Z is inverted
+                // Coronal (XZ) - Radiological: Patient Right (x=1) on Screen Left (u=0)
                 slice_aspect = phys_x / phys_z;
                 if use_mouse_pos {
                     uv = uniforms.overlay_mouse_uv;
                 } else {
-                    uv = vec2<f32>(world_pos.x, 1.0 - world_pos.z);
+                    uv = vec2<f32>(1.0 - world_pos.x, 1.0 - world_pos.z);
                 }
             } else if uniforms.view_mode == 3u {
-                // Sagittal (YZ) - Y and Z are inverted, Y is horizontal
+                // Sagittal (YZ) - Anterior is LEFT (u=0), Superior is UP (v=0)
                 slice_aspect = phys_y / phys_z;
                 if use_mouse_pos {
                     uv = uniforms.overlay_mouse_uv;
@@ -630,83 +693,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
         // Line rendering would go here for PRIMITIVE_LINE
     }
-
-    // --- Brush preview (using CPU-computed center for guaranteed sync) ---
-    let brush_size = uniforms.brush_preview.x;
-    let brush_active = uniforms.brush_preview.y;
-    let brush_viewport = u32(uniforms.brush_preview.z);
-    let center_valid = uniforms.brush_center_voxel.w;
-    
-    // Only render when brush is active, viewport matches, and center is valid
-    if brush_active > 0.5 && brush_viewport == uniforms.view_mode && uniforms.view_mode > 0u && center_valid > 0.5 {
-        let dims = vec3<f32>(uniforms.volume_dims.xyz);
-        let spacing = uniforms.volume_spacing.xyz;
-        
-        // Get slice dimensions and aspect ratio for coordinate transformation
-        let phys_x = dims.x * spacing.x;
-        let phys_y = dims.y * spacing.y;
-        let phys_z = dims.z * spacing.z;
-
-        var slice_dims = vec2<f32>(dims.x, dims.y);
-        var slice_aspect = phys_x / phys_y;
-
-        if uniforms.view_mode == 2u {
-            slice_dims = vec2<f32>(dims.x, dims.z);
-            slice_aspect = phys_x / phys_z;
-        } else if uniforms.view_mode == 3u {
-            slice_dims = vec2<f32>(dims.y, dims.z);
-            slice_aspect = phys_y / phys_z;
-        }
-
-        // Screen → Volume UV transformation (must match CPU's get_voxel_at_mouse formula)
-        let brush_screen_aspect = uniforms.resolution.x / max(uniforms.resolution.y, 1.0);
-        let k = brush_screen_aspect / max(slice_aspect, 0.001);
-        let zoom = max(uniforms.zoom, 0.001);
-        let pan = uniforms.pan;
-        
-        // CPU uses CENTER-BASED formula: volume_uv = ((mouse_uv - 0.5) * k / zoom) + 0.5 + pan
-        // We must use the SAME formula for pixel_volume_uv to match
-        let pixel_volume_uv = vec2<f32>(
-            ((in.uv.x - 0.5) * k / zoom) + 0.5 + pan.x,
-            ((in.uv.y - 0.5) / zoom) + 0.5 + pan.y
-        );
-        let pixel_voxel_f = pixel_volume_uv * slice_dims;
-        let pixel_voxel = vec2<i32>(floor(pixel_voxel_f));
-        
-        // Get brush center from CPU-computed value (same as paint logic uses)
-        // brush_center_voxel contains [x, y, z] in world 0-1 coords from get_voxel_at_mouse
-        var center_voxel: vec2<i32>;
-        if uniforms.view_mode == 1u {
-            // Axial: use XY (Y is inverted)
-            center_voxel = vec2<i32>(i32(uniforms.brush_center_voxel.x * dims.x),
-                i32((1.0 - uniforms.brush_center_voxel.y) * dims.y));
-        } else if uniforms.view_mode == 2u {
-            // Coronal: use XZ (Z is inverted)
-            center_voxel = vec2<i32>(i32(uniforms.brush_center_voxel.x * dims.x),
-                i32((1.0 - uniforms.brush_center_voxel.z) * dims.z));
-        } else {
-            // Sagittal: use YZ (Y and Z are inverted, Y is horizontal)
-            center_voxel = vec2<i32>(i32((1.0 - uniforms.brush_center_voxel.y) * dims.y),
-                i32((1.0 - uniforms.brush_center_voxel.z) * dims.z));
-        }
-        
-        // Distance check - EXACTLY as in brush paint: dx*dx + dy*dy <= r*r
-        let dx = pixel_voxel.x - center_voxel.x;
-        let dy = pixel_voxel.y - center_voxel.y;
-        let dist_sq = dx * dx + dy * dy;
-        let r = i32(brush_size);
-        let r2 = r * r;
-
-        if dist_sq <= r2 {
-            // Only show edge voxels (thin outline)
-            let is_edge = (dx - 1) * (dx - 1) + dy * dy > r2 || (dx + 1) * (dx + 1) + dy * dy > r2 || dx * dx + (dy - 1) * (dy - 1) > r2 || dx * dx + (dy + 1) * (dy + 1) > r2;
-
-            if is_edge || brush_size <= 1.5 {
-                // Thin bright outline only
-                final_color = vec4<f32>(0.0, 1.0, 1.0, 1.0);
-            }
-        }
-    }
-
     return final_color;
 }

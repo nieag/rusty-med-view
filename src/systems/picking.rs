@@ -113,7 +113,8 @@ pub fn get_voxel_at_mouse(
                 (mouse_uv[1] - pivot[1]) / zoom + pivot[1] + pan[1],
             ];
             let uv = [zoomed_uv[0] - 0.5, zoomed_uv[1] - 0.5];
-            let screen_pos = [uv[0] * aspect, uv[1]];
+            // RADIOLOGICAL: Flip X to match shader (Patient Right on Screen Left)
+            let screen_pos = [-uv[0] * aspect, uv[1]];
 
             let cam_pos_world = [0.0, 0.0, -3.5];
             let forward = [0.0, 0.0, 1.0];

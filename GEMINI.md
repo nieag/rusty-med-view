@@ -6,12 +6,12 @@ This document provides a technical overview of the **Rust Medical Imaging Viewer
 A high-performance 2D/3D medical volume viewer built with **Rust** and **WGPU**. It supports orthogonal slicing, volumetric X-ray rendering, and interactive crosshair picking.
 
 ### 📈 Recent Progress
-- **Refactor**: Monolithic `systems.rs` architecture split into modular submodules.
-- **Performance**: Integrated O(1) ECS singleton registry via `AppEntities`.
-- **Latency**: Implemented zero-lag interaction loop (GUI state fed into current frame).
-- **UX**: Fixed green viewport on startup via shader early-exit; added trackpad-friendly `Ctrl/Cmd + Left Click` panning.
-- **Precision**: Fixed picking offsets and transitioned to clinical HU-based windowing.
-- **Reliability**: Implemented a comprehensive high-yield unit test suite (18 tests) covering coordinate math, orientations (RAS/LAS), and brush painting logic.
+- **Orientation Consolidation**: Established `src/orientation.rs` as the single source of truth for all coordinate transforms and radiological axis mappings. All tools (Brush, Annotations, Crosshairs, Picking) are now synchronized via this centralized logic.
+- **Radiological Convention**: Native support for flipped X-axis (Right-on-Left) across picking, 2D slicing, and 3D volume rendering.
+- **3D Crosshairs**: Implemented axis-aligned, screen-projected crosshairs that tilt and foreshorten with volume rotation.
+- **Anatomical Color Coding**: Adopted RGB (XYZ) standard for crosshairs and anatomical orientation feedback.
+- **Testing**: Added "Reach-Through" parity tests to ensure Rust-side logic and WGSL shader math remain perfectly synchronized.
+- **Reliability**: Expanded unit test suite to 26 tests covering quaternions, plane intersections, and orientation matrices.
 
 ## 🛠 Tech Stack
 - **Graphics**: [wgpu](https://github.com/gfx-rs/wgpu) (using Metal, WebGPU/WebGL2)
@@ -23,6 +23,7 @@ A high-performance 2D/3D medical volume viewer built with **Rust** and **WGPU**.
 ## 📂 Project Structure
 - `src/main.rs`: Simple entry point calling `lib::run()`.
 - `src/lib.rs`: Winit event loop, GPU context initialization, and the main rendering loop.
+- `src/orientation.rs`: **The single source of truth** for all coordinate systems and radiological mappings.
 - `src/components.rs`: ECS components and the **`AppEntities` registry** for singleton access.
 - `src/systems/`: Modularized core logic:
     - `input.rs`: Mouse, trackpad, and navigation gestures.
@@ -36,6 +37,17 @@ A high-performance 2D/3D medical volume viewer built with **Rust** and **WGPU**.
 - `src/nifti_loader.rs` / `src/volume.rs`: Volume data structures and NIfTI parsing logic.
 
 ## 📐 Key Implementation Details
+
+### Orientation & Coordinate Systems
+The app uses a strict **Radiological convention**:
+- **2D Views**: Axial (XY), Coronal (XZ), and Sagittal (YZ) planes.
+- **Signage**: Patient Right maps to Screen Left (flipped X).
+- **Parity**: Parity between CPU (Rust) and GPU (WGSL) is maintained via "Shader Emulation" unit tests in `orientation.rs`.
+
+### Aligned 3D Crosshairs
+Crosshairs in the 3D view are projected from world-space local axes:
+- **Projection**: Calculated in `shader.wgsl` using the volume's rotation matrix and perspective derivatives.
+- **Anatomical Colors**: Red (X), Green (Y), Blue (Z) represent the primary anatomical axes.
 
 ### ECS Singleton Registry (`AppEntities`)
 To avoid O(N) query overhead, global components are accessed via a centralized registry:

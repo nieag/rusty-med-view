@@ -108,6 +108,7 @@ pub fn rotate_vec3(m: [[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::Vec3;
 
     #[test]
     fn test_axial_conversions() {
@@ -189,6 +190,41 @@ mod tests {
 
         // 4. Sample projection logic (MUST MATCH SHADER EXACTLY)
         match view_mode {
+            0 => {
+                // 3D Ray Projection (Perspective)
+                // Represents the "crosshair_screen_pos" calculation in mode 0
+                let cam_pos = [0.0, 0.0, -3.5];
+                let forward = [0.0, 0.0, 1.0];
+                let right = [1.0, 0.0, 0.0];
+                let up = [0.0, 1.0, 0.0];
+
+                let q = [0.0, 0.0, 0.0, 1.0]; // Identity rotation for test
+                let rot_mat = quat_to_mat3(q);
+
+                // For parity test, we assume standard Aspect Ratio Vol [1,1,1]
+                let cursor_obj = [cursor[0] - 0.5, cursor[1] - 0.5, cursor[2] - 0.5];
+                let cursor_world = rotate_vec3(rot_mat, cursor_obj);
+                let to_cursor = [
+                    cursor_world[0] - cam_pos[0],
+                    cursor_world[1] - cam_pos[1],
+                    cursor_world[2] - cam_pos[2],
+                ];
+                let dist_z = to_cursor[0] * forward[0]
+                    + to_cursor[1] * forward[1]
+                    + to_cursor[2] * forward[2];
+                let dist_x =
+                    to_cursor[0] * right[0] + to_cursor[1] * right[1] + to_cursor[2] * right[2];
+                let dist_y = to_cursor[0] * up[0] + to_cursor[1] * up[1] + to_cursor[2] * up[2];
+
+                let screen_u = -(dist_x / dist_z) / screen_aspect;
+                let screen_v = dist_y / dist_z;
+                let p_uv = [screen_u + 0.5, screen_v + 0.5];
+                let crosshair_pos = [
+                    (p_uv[0] - pan[0] - pivot[0]) * zoom + pivot[0],
+                    (p_uv[1] - pan[1] - pivot[1]) * zoom + pivot[1],
+                ];
+                [crosshair_pos[0], crosshair_pos[1], 0.0]
+            }
             1 => [1.0 - zoomed_uv[0], 1.0 - zoomed_uv[1], cursor[2]], // Axial
             2 => [1.0 - zoomed_uv[0], cursor[1], 1.0 - zoomed_uv[1]], // Coronal
             3 => [cursor[0], 1.0 - zoomed_uv[0], 1.0 - zoomed_uv[1]], // Sagittal
@@ -270,5 +306,36 @@ mod tests {
         for i in 0..3 {
             assert!((shader_result[i] - api_result[i]).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn test_picking_3d_parity() {
+        // Test that our picking ray math (picking.rs logic) matches
+        // the shader's crosshair projection logic.
+        let zoom = 1.0;
+        let pan = [0.0, 0.0];
+        let res = [800.0, 800.0]; // Square to simplify
+        let aspects = [1.0, 1.0, 1.0];
+        let cursor = [1.0, 0.5, 0.5]; // Patient Right (R)
+
+        // Find Screen UV where this cursor should be projected in 3D
+        let shader_uv = shader_logic_emulation(0, [0.5, 0.5], zoom, pan, res, aspects, cursor);
+        // radiological should be Left (u < 0.5)
+        assert!(shader_uv[0] < 0.5);
+
+        // Now if we pick at that UV in picking logic, we should get cursor back
+        let mouse_uv = [shader_uv[0], shader_uv[1]];
+
+        // Manual picking logic (replicated from picking.rs)
+        let uv = [mouse_uv[0] - 0.5, mouse_uv[1] - 0.5];
+        let screen_pos = [-uv[0] * 1.0, uv[1]]; // THE RADIOLOGICAL FIX
+
+        let forward = Vec3::from([0.0, 0.0, 1.0]);
+        let right = Vec3::from([1.0, 0.0, 0.0]);
+        let up = Vec3::from([0.0, 1.0, 0.0]);
+        let ray_dir_world = (forward + right * screen_pos[0] + up * screen_pos[1]).normalize();
+
+        // Ray should point towards Patient Right (+X)
+        assert!(ray_dir_world.x > 0.0);
     }
 }

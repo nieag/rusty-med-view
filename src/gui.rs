@@ -799,21 +799,15 @@ fn draw_annotations(
                     let world_u = ((ndc_x - pivot[0]) * k / zoom) + pivot[0] + pan[0];
                     let world_v = ((ndc_y - pivot[1]) / zoom) + pivot[1] + pan[1];
 
-                    match viewport_idx {
-                        1 => {
-                            ann.world_pos.x = world_u;
-                            ann.world_pos.y = 1.0 - world_v;
-                        }
-                        2 => {
-                            ann.world_pos.x = world_u;
-                            ann.world_pos.z = 1.0 - world_v;
-                        }
-                        3 => {
-                            ann.world_pos.y = 1.0 - world_u;
-                            ann.world_pos.z = 1.0 - world_v;
-                        }
-                        _ => {}
-                    };
+                    if let Some(plane) =
+                        crate::orientation::SlicePlane::from_viewport(viewport_idx as u32)
+                    {
+                        let vol_pos = plane.screen_uv_to_volume(
+                            [world_u, world_v],
+                            ann.world_pos[plane.depth_axis()],
+                        );
+                        ann.world_pos = glam::Vec3::from(vol_pos);
+                    }
 
                     ann.world_pos = ann.world_pos.clamp(glam::Vec3::ZERO, glam::Vec3::ONE);
                 }
