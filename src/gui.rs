@@ -1,11 +1,11 @@
 use crate::components::*;
 use crate::overlay::OverlayManager;
-use crate::{file_dialog, nifti_loader, systems};
+use crate::{file_dialog, nifti_loader, systems, AppEvent};
 use egui_wgpu::Renderer;
 use egui_winit::State;
 use hecs::World;
-use std::sync::mpsc::Sender;
 use wgpu::{Device, TextureFormat};
+use winit::event_loop::EventLoopProxy;
 use winit::window::Window as WinitWindow;
 
 pub struct Gui {
@@ -53,7 +53,7 @@ impl Gui {
         window: &WinitWindow,
         world: &mut World,
         entities: &AppEntities,
-        volume_sender: Sender<Result<LoadResult, nifti_loader::LoadError>>,
+        event_proxy: EventLoopProxy<AppEvent>,
     ) {
         let raw_input = self.state.take_egui_input(window);
 
@@ -103,12 +103,12 @@ impl Gui {
                         if let Ok(mut g) = world.get::<&mut GuiState>(entities.gui_state) {
                             g.status_message = Some("Loading...".to_string());
                         }
-                        let sender = volume_sender.clone();
+                        let proxy = event_proxy.clone();
                         file_dialog::spawn_file_picker(move |result| {
                             if let Some((_filename, data)) = result {
                                 let load_result = nifti_loader::load_nifti_from_bytes(&data)
                                     .map(LoadResult::Volume);
-                                let _ = sender.send(load_result);
+                                let _ = proxy.send_event(AppEvent::VolumeLoaded(load_result));
                             }
                         });
                     }
@@ -120,13 +120,13 @@ impl Gui {
                         if let Ok(mut g) = world.get::<&mut GuiState>(entities.gui_state) {
                             g.status_message = Some("Loading Labelmap...".to_string());
                         }
-                        let sender = volume_sender.clone();
+                        let proxy = event_proxy.clone();
                         file_dialog::spawn_file_picker(move |result| {
                             if let Some((filename, data)) = result {
                                 let load_result =
                                     nifti_loader::load_label_from_bytes(&data, filename)
                                         .map(LoadResult::Label);
-                                let _ = sender.send(load_result);
+                                let _ = proxy.send_event(AppEvent::VolumeLoaded(load_result));
                             }
                         });
                     }
@@ -270,11 +270,7 @@ impl Gui {
                         }
 
                         if ui.button("➕ Create New Layer").clicked() {
-                            if let Ok(mut gui_state) =
-                                world.get::<&mut GuiState>(entities.gui_state)
-                            {
-                                gui_state.load_label_requested = true;
-                            }
+                            let _ = event_proxy.send_event(AppEvent::CreateNewLayer);
                         }
 
                         let active_layer = world
@@ -313,9 +309,7 @@ impl Gui {
                         if new_active_layer != active_layer {
                             if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
                                 editor.active_layer = new_active_layer;
-                                if let Ok(mut gs) = world.get::<&mut GuiState>(entities.gui_state) {
-                                    gs.bind_group_needs_rebuild = true;
-                                }
+                                let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
                             }
                         }
                     });

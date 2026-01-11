@@ -109,9 +109,7 @@ pub struct Uniforms {
 // --- GUI / Editor ---
 #[derive(Clone)]
 pub struct GuiState {
-    pub load_label_requested: bool,
     pub status_message: Option<String>,
-    pub bind_group_needs_rebuild: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

@@ -20,9 +20,16 @@ use std::sync::Arc;
 use winit::{
     application::ApplicationHandler,
     event::*,
-    event_loop::{ActiveEventLoop, EventLoop},
+    event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy},
     window::{Window, WindowAttributes},
 };
+
+#[derive(Debug)]
+pub enum AppEvent {
+    VolumeLoaded(Result<components::LoadResult, nifti_loader::LoadError>),
+    RebuildBindGroups,
+    CreateNewLayer,
+}
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -48,15 +55,13 @@ pub struct RenderingContext {
     gui: gui::Gui,
     settings_entity: hecs::Entity,
 
-    // Async file loading channel
-    volume_receiver:
-        std::sync::mpsc::Receiver<Result<components::LoadResult, nifti_loader::LoadError>>,
-    volume_sender: std::sync::mpsc::Sender<Result<components::LoadResult, nifti_loader::LoadError>>,
-
     // Shared Resources
     dummy_r8: (wgpu::Texture, wgpu::TextureView, wgpu::Sampler),
     default_lut: (wgpu::Texture, wgpu::TextureView),
     overlay_buffer: wgpu::Buffer,
+
+    // Proxy for waking up the event loop from async tasks
+    event_proxy: EventLoopProxy<AppEvent>,
 }
 
 pub struct AppState {
@@ -66,6 +71,7 @@ pub struct AppState {
 pub struct App {
     instance: wgpu::Instance,
     state: Arc<std::sync::Mutex<AppState>>,
+    event_proxy: Option<EventLoopProxy<AppEvent>>,
 }
 
 impl Default for App {
@@ -79,12 +85,14 @@ impl App {
         Self {
             instance: wgpu::Instance::default(),
             state: Arc::new(std::sync::Mutex::new(AppState { context: None })),
+            event_proxy: None,
         }
     }
 
     async fn create_rendering_context(
         instance: &wgpu::Instance,
         window: Arc<Window>,
+        event_proxy: EventLoopProxy<AppEvent>,
     ) -> RenderingContext {
         log::info!("Initializing Rendering Context...");
         let size = window.inner_size();
@@ -138,10 +146,6 @@ impl App {
         let dummy_r8 = volume::create_dummy_r8_texture(&device, &queue);
         let default_lut = volume::create_default_colormap(&device, &queue);
 
-        // Create async channel for volume loading
-        let (volume_sender, volume_receiver) =
-            std::sync::mpsc::channel::<Result<components::LoadResult, nifti_loader::LoadError>>();
-
         let cursor = world.spawn((
             Transform {
                 position: [0.5, 0.5, 0.5],
@@ -156,9 +160,7 @@ impl App {
 
         // Initialize GUI State
         let gui_state = world.spawn((GuiState {
-            load_label_requested: false,
             status_message: None,
-            bind_group_needs_rebuild: false,
         },));
 
         let input = world.spawn((InputState {
@@ -281,21 +283,20 @@ impl App {
             entities,
             gui,
             settings_entity,
-            volume_receiver,
-            volume_sender,
             dummy_r8,
             default_lut,
             overlay_buffer,
+            event_proxy,
         }
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<AppEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let has_context = self.state.lock().unwrap().context.is_some();
         if !has_context {
             let window_attributes =
-                WindowAttributes::default().with_title("Medical Viewer - Refactor (WASM)");
+                WindowAttributes::default().with_title("Medical Viewer - Reactive Architecture");
 
             // On Wasm, we need to find the canvas and append the window to it
             #[cfg(target_arch = "wasm32")]
@@ -309,11 +310,15 @@ impl ApplicationHandler for App {
             };
 
             let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
+            let proxy = self.event_proxy.as_ref().unwrap().clone();
 
             #[cfg(not(target_arch = "wasm32"))]
             {
-                let context =
-                    pollster::block_on(Self::create_rendering_context(&self.instance, window));
+                let context = pollster::block_on(Self::create_rendering_context(
+                    &self.instance,
+                    window,
+                    proxy,
+                ));
                 self.state.lock().unwrap().context = Some(context);
             }
 
@@ -322,7 +327,8 @@ impl ApplicationHandler for App {
                 let state_clone = self.state.clone();
                 let instance_clone = self.instance.clone();
                 wasm_bindgen_futures::spawn_local(async move {
-                    let context = Self::create_rendering_context(&instance_clone, window).await;
+                    let context =
+                        Self::create_rendering_context(&instance_clone, window, proxy).await;
                     state_clone.lock().unwrap().context = Some(context);
                 });
             }
@@ -343,6 +349,7 @@ impl ApplicationHandler for App {
         };
 
         if ctx.gui.handle_event(&ctx.window, &event) {
+            ctx.window.request_redraw();
             return;
         }
 
@@ -350,9 +357,11 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::CursorMoved { position, .. } => {
                 systems::sys_update_mouse(&mut ctx.world, &ctx.entities, position.x, position.y);
+                ctx.window.request_redraw();
             }
             WindowEvent::MouseInput { button, state, .. } => {
                 systems::sys_handle_mouse_button(&mut ctx.world, &ctx.entities, button, state);
+                ctx.window.request_redraw();
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let y_delta = match delta {
@@ -366,6 +375,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::ModifiersChanged(modifiers) => {
                 systems::sys_update_modifiers(&mut ctx.world, &ctx.entities, modifiers.state());
+                ctx.window.request_redraw();
             }
             WindowEvent::Resized(size) => {
                 ctx.config.width = size.width;
@@ -379,8 +389,12 @@ impl ApplicationHandler for App {
                     settings.width = size.width;
                     settings.height = size.height;
                 }
+                ctx.window.request_redraw();
             }
             WindowEvent::RedrawRequested => {
+                systems::sys_handle_mouse_drag(&mut ctx.world, &ctx.entities);
+                systems::sys_paint(&mut ctx.world, &ctx.entities, &ctx.queue); // Execute Paint System
+
                 render::render_frame(
                     &ctx.device,
                     &ctx.queue,
@@ -397,134 +411,23 @@ impl ApplicationHandler for App {
                     ctx.settings_entity,
                     &mut ctx.gui,
                     &ctx.window,
-                    ctx.volume_sender.clone(),
+                    ctx.event_proxy.clone(),
                 );
             }
             _ => {}
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AppEvent) {
         let mut state = self.state.lock().unwrap();
-        if let Some(ctx) = &mut state.context {
-            systems::sys_handle_mouse_drag(&mut ctx.world, &ctx.entities);
-            systems::sys_paint(&mut ctx.world, &ctx.entities, &ctx.queue); // Execute Paint System
+        let ctx = if let Some(ctx) = &mut state.context {
+            ctx
+        } else {
+            return;
+        };
 
-            // Handle "Create New Layer" request from GUI?
-            // Cleanest way: Check GuiState for a request flag
-            let mut create_layer = false;
-            let mut needs_rebuild = false;
-            for (_, gui_state) in ctx.world.query::<&mut GuiState>().iter() {
-                if gui_state.load_label_requested {
-                    gui_state.load_label_requested = false;
-                    create_layer = true;
-                }
-                if gui_state.bind_group_needs_rebuild {
-                    gui_state.bind_group_needs_rebuild = false;
-                    needs_rebuild = true;
-                }
-            }
-
-            if create_layer {
-                // Get dimensions from main volume
-                let mut dims = [64, 64, 64];
-                for (_, vol) in ctx.world.query::<&VolumeData>().iter() {
-                    dims = vol.dimensions;
-                }
-
-                let (tex, view, sampler, data) =
-                    volume::create_blank_labelmap(&ctx.device, &ctx.queue, dims);
-
-                // Generate unique name
-                let mut count = 0;
-                for _ in ctx.world.query::<&Segmentation>().iter() {
-                    count += 1;
-                }
-                let name = format!("Layer {}", count + 1);
-
-                // Fetch an existing bind group to generic placeholder
-                let mut placeholder_bg = None;
-                if let Some((_, res)) = ctx.world.query::<&GpuVolumeResources>().iter().next() {
-                    placeholder_bg = Some(res.bind_group.clone());
-                }
-                // Fallback for initial startup if no volume exists yet (should not happen if we load default volume first)
-                // But create_rendering_context creates volume FIRST.
-                let placeholder_bg =
-                    placeholder_bg.expect("Main volume should exist and have a bindRef");
-
-                let entity = ctx.world.spawn((
-                    Segmentation {
-                        name,
-                        is_visible: true,
-                    },
-                    LayerSettings { opacity: 0.7 },
-                    LabelmapData {
-                        dimensions: dims,
-                        raw_data: data,
-                    },
-                    Representation::Voxel(GpuVolumeResources {
-                        texture: tex,
-                        view,
-                        sampler,
-                        bind_group: placeholder_bg,
-                    }),
-                    SegmentationTag,
-                ));
-
-                // Now globally update the bind groups (this updates everyone's bind_group to the new correct one)
-                // Now globally update the bind groups
-                let active_layer = ctx
-                    .world
-                    .query::<&EditorState>()
-                    .iter()
-                    .next()
-                    .and_then(|(_, e)| e.active_layer);
-
-                load_handlers::recreate_bind_groups(
-                    &ctx.device,
-                    &mut ctx.world,
-                    &ctx.texture_bind_group_layout,
-                    &ctx.uniform_buffer,
-                    &ctx.dummy_r8.1,
-                    &ctx.dummy_r8.2,
-                    &ctx.default_lut.1,
-                    &ctx.overlay_buffer,
-                    active_layer,
-                );
-
-                // Select the new layer
-                for (_, editor) in ctx.world.query_mut::<&mut EditorState>() {
-                    editor.active_layer = Some(entity);
-                }
-                needs_rebuild = false; // Already rebuilt above
-            }
-
-            if needs_rebuild {
-                let active_layer = ctx
-                    .world
-                    .query::<&EditorState>()
-                    .iter()
-                    .next()
-                    .and_then(|(_, e)| e.active_layer);
-
-                load_handlers::recreate_bind_groups(
-                    &ctx.device,
-                    &mut ctx.world,
-                    &ctx.texture_bind_group_layout,
-                    &ctx.uniform_buffer,
-                    &ctx.dummy_r8.1,
-                    &ctx.dummy_r8.2,
-                    &ctx.default_lut.1,
-                    &ctx.overlay_buffer,
-                    active_layer,
-                );
-            }
-
-            // File dialogs are now spawned directly from GUI button clicks (gui.rs)
-            // to maintain browser user gesture chain for WASM compatibility.
-
-            // Check for loaded data from async task
-            if let Ok(result) = ctx.volume_receiver.try_recv() {
+        match event {
+            AppEvent::VolumeLoaded(result) => {
                 match result {
                     Ok(load_res) => {
                         let dims = match load_res {
@@ -595,9 +498,99 @@ impl ApplicationHandler for App {
                         );
                     }
                 }
+                ctx.window.request_redraw();
             }
+            AppEvent::RebuildBindGroups => {
+                let active_layer = ctx
+                    .world
+                    .query::<&EditorState>()
+                    .iter()
+                    .next()
+                    .and_then(|(_, e)| e.active_layer);
 
-            ctx.window.request_redraw();
+                load_handlers::recreate_bind_groups(
+                    &ctx.device,
+                    &mut ctx.world,
+                    &ctx.texture_bind_group_layout,
+                    &ctx.uniform_buffer,
+                    &ctx.dummy_r8.1,
+                    &ctx.dummy_r8.2,
+                    &ctx.default_lut.1,
+                    &ctx.overlay_buffer,
+                    active_layer,
+                );
+                ctx.window.request_redraw();
+            }
+            AppEvent::CreateNewLayer => {
+                // Get dimensions from main volume
+                let mut dims = [64, 64, 64];
+                for (_, vol) in ctx.world.query::<&VolumeData>().iter() {
+                    dims = vol.dimensions;
+                }
+
+                let (tex, view, sampler, data) =
+                    volume::create_blank_labelmap(&ctx.device, &ctx.queue, dims);
+
+                // Generate unique name
+                let mut count = 0;
+                for _ in ctx.world.query::<&Segmentation>().iter() {
+                    count += 1;
+                }
+                let name = format!("Layer {}", count + 1);
+
+                // Fetch an existing bind group to generic placeholder
+                let mut placeholder_bg = None;
+                if let Some((_, res)) = ctx.world.query::<&GpuVolumeResources>().iter().next() {
+                    placeholder_bg = Some(res.bind_group.clone());
+                }
+                let placeholder_bg =
+                    placeholder_bg.expect("Main volume should exist and have a bindRef");
+
+                let entity = ctx.world.spawn((
+                    Segmentation {
+                        name,
+                        is_visible: true,
+                    },
+                    LayerSettings { opacity: 0.7 },
+                    LabelmapData {
+                        dimensions: dims,
+                        raw_data: data,
+                    },
+                    Representation::Voxel(GpuVolumeResources {
+                        texture: tex,
+                        view,
+                        sampler,
+                        bind_group: placeholder_bg,
+                    }),
+                    SegmentationTag,
+                ));
+
+                // Now globally update the bind groups
+                let active_layer = ctx
+                    .world
+                    .query::<&EditorState>()
+                    .iter()
+                    .next()
+                    .and_then(|(_, e)| e.active_layer);
+
+                load_handlers::recreate_bind_groups(
+                    &ctx.device,
+                    &mut ctx.world,
+                    &ctx.texture_bind_group_layout,
+                    &ctx.uniform_buffer,
+                    &ctx.dummy_r8.1,
+                    &ctx.dummy_r8.2,
+                    &ctx.default_lut.1,
+                    &ctx.overlay_buffer,
+                    active_layer,
+                );
+
+                // Select the new layer
+                for (_, editor) in ctx.world.query_mut::<&mut EditorState>() {
+                    editor.active_layer = Some(entity);
+                }
+                ctx.window.request_redraw();
+            }
         }
     }
 }
@@ -618,7 +611,8 @@ pub fn run() {
             .try_init();
     }
 
-    let event_loop = EventLoop::new().unwrap();
+    let event_loop = EventLoop::<AppEvent>::with_user_event().build().unwrap();
     let mut app = App::new();
+    app.event_proxy = Some(event_loop.create_proxy());
     let _ = event_loop.run_app(&mut app);
 }

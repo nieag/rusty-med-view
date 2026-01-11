@@ -281,10 +281,10 @@ pub fn render_frame(
     settings_entity: hecs::Entity,
     gui: &mut gui::Gui,
     window: &Arc<Window>,
-    volume_sender: std::sync::mpsc::Sender<Result<LoadResult, crate::nifti_loader::LoadError>>,
+    event_proxy: winit::event_loop::EventLoopProxy<crate::AppEvent>,
 ) {
     // 1. Run GUI first so it can process interactions and update ECS state for THIS frame
-    gui.prepare(window, world, entities, volume_sender);
+    gui.prepare(window, world, entities, event_proxy);
 
     // 2. Sync annotations to overlay primitives (using the potentially updated ECS state)
     systems::sys_sync_annotations_to_overlay(world, entities);

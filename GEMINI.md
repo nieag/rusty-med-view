@@ -11,6 +11,7 @@ A high-performance 2D/3D medical volume viewer built with **Rust** and **WGPU**.
 - **3D Crosshairs**: Implemented axis-aligned, screen-projected crosshairs that tilt and foreshorten with volume rotation.
 - **Anatomical Color Coding**: Adopted RGB (XYZ) standard for crosshairs and anatomical orientation feedback.
 - **Testing**: Added "Reach-Through" parity tests to ensure Rust-side logic and WGSL shader math remain perfectly synchronized.
+- **Reactive Architecture**: Migrated from polling-based `about_to_wait` to a purely event-driven model using `UserEvent` and `EventLoopProxy`. This significantly reduced CPU usage when idle while maintaining zero-lag responsiveness.
 - **Reliability**: Expanded unit test suite to 26 tests covering quaternions, plane intersections, and orientation matrices.
 
 ## 🛠 Tech Stack
@@ -54,11 +55,15 @@ To avoid O(N) query overhead, global components are accessed via a centralized r
 - **Pattern**: Singleton entity IDs are stored in `AppEntities` during initialization.
 - **Access**: Systems use `world.get::<T>(entities.input)` for O(1) performance.
 
-### Zero-Lag Interaction Loop
-The render loop is ordered to ensure the lowest possible latency between input and visual feedback:
-1. **GUI Prepare**: `gui.prepare` runs first to capture dragging and tool state.
-2. **System Prep**: `sys_prepare_render_data` builds uniforms using the *immediately* updated state.
-3. **Render**: The frame is drawn using the latest interaction data in the *same* frame.
+### Reactive Architecture & Event-Driven Rendering
+The application uses a purely reactive model to minimize CPU usage while maintaining high performance:
+- **`AppEvent`**: A custom enum (VolumeLoaded, RebuildBindGroups, etc.) that centralizes all asynchronous and UI-triggered wake-ups.
+- **`EventLoopProxy`**: Used by background loading threads and GUI interactions to signal the main thread without polling.
+- **Explicit Redraws**: Redraws are only requested (`window.request_redraw()`) when a state change occurs (input, loading complete, UI interaction).
+- **Zero-Lag Interaction Loop**: When a redraw is requested, the system preserves the optimal execution order:
+    1. **GUI Prepare**: `gui.prepare` runs first to handle interactions and UI state.
+    2. **System Prep**: `sys_prepare_render_data` builds uniforms using the *immediately* updated state.
+    3. **Render**: The frame is drawn using the latest interaction data in the *same* frame.
 
 ### Stable Mouse-Centered Zoom
 Uses a decoupled pivot system to ensure the image stays stationary under the cursor.
