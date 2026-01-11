@@ -51,7 +51,6 @@ pub fn sys_paint(world: &mut World, entities: &AppEntities, queue: &wgpu::Queue)
             {
                 if let Some((label_data, repr)) = query.get() {
                     let Representation::Voxel(res) = repr;
-                    let texture = &res.texture;
                     let dim = label_data.dimensions;
                     let width = dim[0];
                     let height = dim[1];
@@ -66,186 +65,43 @@ pub fn sys_paint(world: &mut World, entities: &AppEntities, queue: &wgpu::Queue)
                         continue;
                     }
 
-                    let mut points_to_paint = Vec::new();
-                    if let Some(last_voxel) = last_voxel_opt {
-                        let lx = last_voxel[0] as i32;
-                        let ly = last_voxel[1] as i32;
-                        let lz = last_voxel[2] as i32;
-                        let dist = match viewport {
-                            1 => (((cx - lx).pow(2) + (cy - ly).pow(2)) as f32).sqrt(),
-                            2 => (((cx - lx).pow(2) + (cz - lz).pow(2)) as f32).sqrt(),
-                            3 => (((cy - ly).pow(2) + (cz - lz).pow(2)) as f32).sqrt(),
-                            _ => 0.0,
-                        };
-                        let steps = dist.ceil() as i32 + 1;
-                        for i in 0..=steps {
-                            let t = i as f32 / steps as f32;
-                            let (ix, iy, iz) = match viewport {
-                                1 => (
-                                    (lx as f32 + (cx - lx) as f32 * t) as i32,
-                                    (ly as f32 + (cy - ly) as f32 * t) as i32,
-                                    cz,
-                                ),
-                                2 => (
-                                    (lx as f32 + (cx - lx) as f32 * t) as i32,
-                                    cy,
-                                    (lz as f32 + (cz - lz) as f32 * t) as i32,
-                                ),
-                                3 => (
-                                    cx,
-                                    (ly as f32 + (cy - ly) as f32 * t) as i32,
-                                    (lz as f32 + (cz - lz) as f32 * t) as i32,
-                                ),
-                                _ => (cx, cy, cz),
-                            };
-                            points_to_paint.push([ix, iy, iz]);
-                        }
-                    } else {
-                        points_to_paint.push(current_voxel);
-                    }
+                    let points_to_paint =
+                        get_stroke_points(current_voxel, last_voxel_opt, viewport);
 
                     let val_to_write = if tool == EditorTool::Eraser {
                         0
                     } else {
                         label_idx
                     };
-                    let r = brush_size as i32;
-                    let r2 = (brush_size * brush_size) as i32;
+
                     let mut min_bound = [width as i32, height as i32, depth as i32];
                     let mut max_bound = [-1, -1, -1];
                     let mut modified = false;
 
                     for pt in points_to_paint {
-                        let px = pt[0];
-                        let py = pt[1];
-                        let pz = pt[2];
-                        match viewport {
-                            1 => {
-                                let start_x = (px - r).max(0);
-                                let end_x = (px + r).min(width as i32 - 1);
-                                let start_y = (py - r).max(0);
-                                let end_y = (py + r).min(height as i32 - 1);
-                                if pz >= 0 && pz < depth as i32 {
-                                    for y in start_y..=end_y {
-                                        for x in start_x..=end_x {
-                                            if (x - px).pow(2) + (y - py).pow(2) <= r2 {
-                                                let idx = (pz as u32 * width * height
-                                                    + y as u32 * width
-                                                    + x as u32)
-                                                    as usize;
-                                                if label_data.raw_data[idx] != val_to_write {
-                                                    label_data.raw_data[idx] = val_to_write;
-                                                    modified = true;
-                                                    min_bound[0] = min_bound[0].min(x);
-                                                    min_bound[1] = min_bound[1].min(y);
-                                                    min_bound[2] = min_bound[2].min(pz);
-                                                    max_bound[0] = max_bound[0].max(x);
-                                                    max_bound[1] = max_bound[1].max(y);
-                                                    max_bound[2] = max_bound[2].max(pz);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            2 => {
-                                let start_x = (px - r).max(0);
-                                let end_x = (px + r).min(width as i32 - 1);
-                                let start_z = (pz - r).max(0);
-                                let end_z = (pz + r).min(depth as i32 - 1);
-                                if py >= 0 && py < height as i32 {
-                                    for z in start_z..=end_z {
-                                        for x in start_x..=end_x {
-                                            if (x - px).pow(2) + (z - pz).pow(2) <= r2 {
-                                                let idx = (z as u32 * width * height
-                                                    + py as u32 * width
-                                                    + x as u32)
-                                                    as usize;
-                                                if label_data.raw_data[idx] != val_to_write {
-                                                    label_data.raw_data[idx] = val_to_write;
-                                                    modified = true;
-                                                    min_bound[0] = min_bound[0].min(x);
-                                                    min_bound[1] = min_bound[1].min(py);
-                                                    min_bound[2] = min_bound[2].min(z);
-                                                    max_bound[0] = max_bound[0].max(x);
-                                                    max_bound[1] = max_bound[1].max(py);
-                                                    max_bound[2] = max_bound[2].max(z);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            3 => {
-                                let start_y = (py - r).max(0);
-                                let end_y = (py + r).min(height as i32 - 1);
-                                let start_z = (pz - r).max(0);
-                                let end_z = (pz + r).min(depth as i32 - 1);
-                                if px >= 0 && px < width as i32 {
-                                    for z in start_z..=end_z {
-                                        for y in start_y..=end_y {
-                                            if (y - py).pow(2) + (z - pz).pow(2) <= r2 {
-                                                let idx = (z as u32 * width * height
-                                                    + y as u32 * width
-                                                    + px as u32)
-                                                    as usize;
-                                                if label_data.raw_data[idx] != val_to_write {
-                                                    label_data.raw_data[idx] = val_to_write;
-                                                    modified = true;
-                                                    min_bound[0] = min_bound[0].min(px);
-                                                    min_bound[1] = min_bound[1].min(y);
-                                                    min_bound[2] = min_bound[2].min(z);
-                                                    max_bound[0] = max_bound[0].max(px);
-                                                    max_bound[1] = max_bound[1].max(y);
-                                                    max_bound[2] = max_bound[2].max(z);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {}
+                        if apply_brush_step(
+                            pt,
+                            viewport,
+                            brush_size,
+                            val_to_write,
+                            label_data,
+                            &mut modified,
+                            &mut min_bound,
+                            &mut max_bound,
+                        ) {
+                            // modified updated in call
                         }
                     }
 
                     if modified {
-                        let w = (max_bound[0] - min_bound[0] + 1) as u32;
-                        let h = (max_bound[1] - min_bound[1] + 1) as u32;
-                        let d = (max_bound[2] - min_bound[2] + 1) as u32;
-                        let mut sub_data = Vec::with_capacity((w * h * d) as usize);
-                        for z in min_bound[2]..=max_bound[2] {
-                            for y in min_bound[1]..=max_bound[1] {
-                                let start = (z as u32 * width * height
-                                    + y as u32 * width
-                                    + min_bound[0] as u32)
-                                    as usize;
-                                sub_data.extend_from_slice(
-                                    &label_data.raw_data[start..start + w as usize],
-                                );
-                            }
-                        }
-                        queue.write_texture(
-                            wgpu::TexelCopyTextureInfo {
-                                texture,
-                                mip_level: 0,
-                                origin: wgpu::Origin3d {
-                                    x: min_bound[0] as u32,
-                                    y: min_bound[1] as u32,
-                                    z: min_bound[2] as u32,
-                                },
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            &sub_data,
-                            wgpu::TexelCopyBufferLayout {
-                                offset: 0,
-                                bytes_per_row: Some(w),
-                                rows_per_image: Some(h),
-                            },
-                            wgpu::Extent3d {
-                                width: w,
-                                height: h,
-                                depth_or_array_layers: d,
-                            },
+                        update_gpu_texture(
+                            queue,
+                            &res.texture,
+                            label_data,
+                            min_bound,
+                            max_bound,
+                            width,
+                            height,
                         );
                     }
                 }
@@ -261,5 +117,252 @@ pub fn sys_paint(world: &mut World, entities: &AppEntities, queue: &wgpu::Queue)
                 ]);
             }
         }
+    }
+}
+
+/// Helper to get interpolates points between current and last voxel.
+fn get_stroke_points(
+    current: [i32; 3],
+    last_opt: Option<[u32; 3]>,
+    viewport: u32,
+) -> Vec<[i32; 3]> {
+    let mut points = Vec::new();
+    let cx = current[0];
+    let cy = current[1];
+    let cz = current[2];
+
+    if let Some(last_voxel) = last_opt {
+        let lx = last_voxel[0] as i32;
+        let ly = last_voxel[1] as i32;
+        let lz = last_voxel[2] as i32;
+        let dist = match viewport {
+            1 => (((cx - lx).pow(2) + (cy - ly).pow(2)) as f32).sqrt(),
+            2 => (((cx - lx).pow(2) + (cz - lz).pow(2)) as f32).sqrt(),
+            3 => (((cy - ly).pow(2) + (cz - lz).pow(2)) as f32).sqrt(),
+            _ => 0.0,
+        };
+        let steps = dist.ceil() as i32 + 1;
+        for i in 0..=steps {
+            let t = i as f32 / steps as f32;
+            let (ix, iy, iz) = match viewport {
+                1 => (
+                    (lx as f32 + (cx - lx) as f32 * t) as i32,
+                    (ly as f32 + (cy - ly) as f32 * t) as i32,
+                    cz,
+                ),
+                2 => (
+                    (lx as f32 + (cx - lx) as f32 * t) as i32,
+                    cy,
+                    (lz as f32 + (cz - lz) as f32 * t) as i32,
+                ),
+                3 => (
+                    cx,
+                    (ly as f32 + (cy - ly) as f32 * t) as i32,
+                    (lz as f32 + (cz - lz) as f32 * t) as i32,
+                ),
+                _ => (cx, cy, cz),
+            };
+            points.push([ix, iy, iz]);
+        }
+    } else {
+        points.push(current);
+    }
+    points
+}
+
+/// Applies a single brush step to the labelmap data.
+fn apply_brush_step(
+    pt: [i32; 3],
+    viewport: u32,
+    brush_size: f32,
+    val: u8,
+    label_data: &mut LabelmapData,
+    modified: &mut bool,
+    min_bound: &mut [i32; 3],
+    max_bound: &mut [i32; 3],
+) -> bool {
+    let px = pt[0];
+    let py = pt[1];
+    let pz = pt[2];
+    let r = brush_size as i32;
+    let r2 = (brush_size * brush_size) as i32;
+    let width = label_data.dimensions[0];
+    let height = label_data.dimensions[1];
+    let depth = label_data.dimensions[2];
+
+    match viewport {
+        1 => {
+            let start_x = (px - r).max(0);
+            let end_x = (px + r).min(width as i32 - 1);
+            let start_y = (py - r).max(0);
+            let end_y = (py + r).min(height as i32 - 1);
+            if pz >= 0 && pz < depth as i32 {
+                for y in start_y..=end_y {
+                    for x in start_x..=end_x {
+                        if (x - px).pow(2) + (y - py).pow(2) <= r2 {
+                            let idx =
+                                (pz as u32 * width * height + y as u32 * width + x as u32) as usize;
+                            if label_data.raw_data[idx] != val {
+                                label_data.raw_data[idx] = val;
+                                *modified = true;
+                                update_bounds(min_bound, max_bound, x, y, pz);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        2 => {
+            let start_x = (px - r).max(0);
+            let end_x = (px + r).min(width as i32 - 1);
+            let start_z = (pz - r).max(0);
+            let end_z = (pz + r).min(depth as i32 - 1);
+            if py >= 0 && py < height as i32 {
+                for z in start_z..=end_z {
+                    for x in start_x..=end_x {
+                        if (x - px).pow(2) + (z - pz).pow(2) <= r2 {
+                            let idx =
+                                (z as u32 * width * height + py as u32 * width + x as u32) as usize;
+                            if label_data.raw_data[idx] != val {
+                                label_data.raw_data[idx] = val;
+                                *modified = true;
+                                update_bounds(min_bound, max_bound, x, py, z);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        3 => {
+            let start_y = (py - r).max(0);
+            let end_y = (py + r).min(height as i32 - 1);
+            let start_z = (pz - r).max(0);
+            let end_z = (pz + r).min(depth as i32 - 1);
+            if px >= 0 && px < width as i32 {
+                for z in start_z..=end_z {
+                    for y in start_y..=end_y {
+                        if (y - py).pow(2) + (z - pz).pow(2) <= r2 {
+                            let idx =
+                                (z as u32 * width * height + y as u32 * width + px as u32) as usize;
+                            if label_data.raw_data[idx] != val {
+                                label_data.raw_data[idx] = val;
+                                *modified = true;
+                                update_bounds(min_bound, max_bound, px, y, z);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    *modified
+}
+
+fn update_bounds(min_bound: &mut [i32; 3], max_bound: &mut [i32; 3], x: i32, y: i32, z: i32) {
+    min_bound[0] = min_bound[0].min(x);
+    min_bound[1] = min_bound[1].min(y);
+    min_bound[2] = min_bound[2].min(z);
+    max_bound[0] = max_bound[0].max(x);
+    max_bound[1] = max_bound[1].max(y);
+    max_bound[2] = max_bound[2].max(z);
+}
+
+fn update_gpu_texture(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    label_data: &LabelmapData,
+    min_bound: [i32; 3],
+    max_bound: [i32; 3],
+    width: u32,
+    height: u32,
+) {
+    let w = (max_bound[0] - min_bound[0] + 1) as u32;
+    let h = (max_bound[1] - min_bound[1] + 1) as u32;
+    let d = (max_bound[2] - min_bound[2] + 1) as u32;
+    let mut sub_data = Vec::with_capacity((w * h * d) as usize);
+    for z in min_bound[2]..=max_bound[2] {
+        for y in min_bound[1]..=max_bound[1] {
+            let start =
+                (z as u32 * width * height + y as u32 * width + min_bound[0] as u32) as usize;
+            sub_data.extend_from_slice(&label_data.raw_data[start..start + w as usize]);
+        }
+    }
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d {
+                x: min_bound[0] as u32,
+                y: min_bound[1] as u32,
+                z: min_bound[2] as u32,
+            },
+            aspect: wgpu::TextureAspect::All,
+        },
+        &sub_data,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(w),
+            rows_per_image: Some(h),
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: d,
+        },
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_stroke_points_single() {
+        let current = [10, 10, 10];
+        let points = get_stroke_points(current, None, 1);
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0], current);
+    }
+
+    #[test]
+    fn test_get_stroke_points_interpolated() {
+        let current = [20, 10, 10];
+        let last = Some([10, 10, 10]);
+        let points = get_stroke_points(current, last, 1);
+        assert!(points.len() > 1);
+        assert_eq!(points[0], [10, 10, 10]);
+        assert_eq!(points.last().unwrap(), &current);
+    }
+
+    #[test]
+    fn test_apply_brush_step() {
+        let mut data = LabelmapData {
+            dimensions: [100, 100, 100],
+            spacing: [1.0, 1.0, 1.0],
+            raw_data: vec![0; 100 * 100 * 100],
+        };
+        let mut modified = false;
+        let mut min = [100, 100, 100];
+        let mut max = [-1, -1, -1];
+
+        apply_brush_step(
+            [50, 50, 50],
+            1,
+            2.0,
+            1,
+            &mut data,
+            &mut modified,
+            &mut min,
+            &mut max,
+        );
+
+        assert!(modified);
+        // Check center
+        let idx = (50 * 100 * 100 + 50 * 100 + 50) as usize;
+        assert_eq!(data.raw_data[idx], 1);
+        // Check bounds
+        assert!(min[0] <= 50);
+        assert!(max[0] >= 50);
     }
 }

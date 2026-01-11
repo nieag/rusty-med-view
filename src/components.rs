@@ -233,3 +233,51 @@ pub struct AppEntities {
     pub camera_rig: hecs::Entity,
     pub window_settings: hecs::Entity,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_aspect_ratio_cubic() {
+        let vol = VolumeData {
+            dimensions: [100, 100, 100],
+            spacing: [1.0, 1.0, 1.0],
+            intensities: vec![],
+            intensity_range: [0.0, 1.0],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+        let ar = vol.aspect_ratios();
+        assert!((ar[0] - 1.0).abs() < 1e-6);
+        assert!((ar[1] - 1.0).abs() < 1e-6);
+        assert!((ar[2] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_aspect_ratio_anisotropic() {
+        let vol = VolumeData {
+            dimensions: [256, 256, 128],
+            spacing: [1.0, 1.0, 2.0], // Physical size is 256, 256, 256
+            intensities: vec![],
+            intensity_range: [0.0, 1.0],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+        let ar = vol.aspect_ratios();
+        assert!((ar[0] - 1.0).abs() < 1e-6);
+        assert!((ar[1] - 1.0).abs() < 1e-6);
+        assert!((ar[2] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_aspect_ratio_zero_dims() {
+        let vol = VolumeData {
+            dimensions: [0, 0, 0],
+            spacing: [1.0, 1.0, 1.0],
+            intensities: vec![],
+            intensity_range: [0.0, 1.0],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+        let ar = vol.aspect_ratios();
+        assert_eq!(ar, [1.0, 1.0, 1.0]);
+    }
+}

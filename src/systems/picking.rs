@@ -246,3 +246,53 @@ pub fn intersect_aabb(
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_intersect_aabb_direct_hit() {
+        let result = intersect_aabb(
+            [0.0, 0.0, -2.0],
+            [0.0, 0.0, 1.0],
+            [-1.0, -1.0, -1.0],
+            [1.0, 1.0, 1.0],
+        );
+        assert!((result.unwrap() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_intersect_aabb_miss() {
+        let result = intersect_aabb(
+            [5.0, 0.0, -2.0],
+            [0.0, 0.0, 1.0],
+            [-1.0, -1.0, -1.0],
+            [1.0, 1.0, 1.0],
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_intersect_aabb_inside() {
+        let result = intersect_aabb(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [-1.0, -1.0, -1.0],
+            [1.0, 1.0, 1.0],
+        );
+        assert_eq!(result, Some(0.0));
+    }
+
+    #[test]
+    fn test_intersect_aabb_glancing_edge() {
+        let result = intersect_aabb(
+            [1.0, 1.0, -2.0],
+            [0.0, 0.0, 1.0],
+            [-1.0, -1.0, -1.0],
+            [1.0, 1.0, 1.0],
+        );
+        assert!(result.is_some());
+        assert!((result.unwrap() - 1.0).abs() < 1e-6);
+    }
+}

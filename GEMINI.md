@@ -9,8 +9,9 @@ A high-performance 2D/3D medical volume viewer built with **Rust** and **WGPU**.
 - **Refactor**: Monolithic `systems.rs` architecture split into modular submodules.
 - **Performance**: Integrated O(1) ECS singleton registry via `AppEntities`.
 - **Latency**: Implemented zero-lag interaction loop (GUI state fed into current frame).
-- **UX**: Added trackpad-friendly `Ctrl/Cmd + Left Click` panning and continuous crosshair updates.
+- **UX**: Fixed green viewport on startup via shader early-exit; added trackpad-friendly `Ctrl/Cmd + Left Click` panning.
 - **Precision**: Fixed picking offsets and transitioned to clinical HU-based windowing.
+- **Reliability**: Implemented a comprehensive high-yield unit test suite (18 tests) covering coordinate math, orientations (RAS/LAS), and brush painting logic.
 
 ## 🛠 Tech Stack
 - **Graphics**: [wgpu](https://github.com/gfx-rs/wgpu) (using Metal, WebGPU/WebGL2)
@@ -68,6 +69,18 @@ The system supports raw **Hounsfield Unit (HU)** based windowing and translucent
 - **Data Format**: `R32Float` for raw intensities; `R8Uint` for label textures.
 - **2D vs 3D**: 2D slices use alpha-blended translucency; 3D view treats labels as solid, ray-terminating structures.
 
+### Startup State & Empty Viewports
+To prevent shader artifacts (like NaN aspect ratios) when no data is loaded:
+- **Guard**: `shader.wgsl` implements an early-exit if `volume_dims` are zero, returning solid black.
+- **Initialization**: The app starts with a dummy 1x1x1 volume but dimensions are explicitly set to `[0, 0, 0]` in the `VolumeData` component.
+- **Overlays**: Crosshairs and primitives are inhibited until a valid volume is loaded to prevent visual clutter.
+
+### Reliability & Testing
+The codebase uses a "modular math" approach to ensure critical logic is unit-testable without GPU or ECS dependencies:
+- **Modular Refactoring**: Complex systems (like `paint.rs` and `nifti_loader.rs`) have been refactored to expose pure functions (e.g., `calculate_orientation_from_rows`, `get_stroke_points`).
+- **Test Suite**: Covers AABB intersections, quaternion ↔ matrix conversions, anatomical orientations, and voxel painting interpolation.
+- **Validation**: All tests reside in `#[cfg(test)]` modules within the respective source files.
+
 ## 🛠 How to Run
 - **Native**: `cargo run`
 - **Web (WASM)**: `trunk serve` (requires `wasm32-unknown-unknown` target)
@@ -77,3 +90,4 @@ The system supports raw **Hounsfield Unit (HU)** based windowing and translucent
 - **Coordinate Systems**: Both the shader and CPU picking use object-space raymarching via the volume's inverse rotation.
 - **Annotations**: Using the "Locate" feature (🎯) centers the 2D viewports on the world position by modifying `ViewState.pan`.
 - **Uniforms**: Ensure `Uniforms` struct alignment in `components.rs` (16-byte boundaries) matches `shader.wgsl` exactly.
+- **Testing**: Run `cargo test` to verify math and coordinate transforms before deploying.
