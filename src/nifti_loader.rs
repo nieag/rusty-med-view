@@ -402,32 +402,7 @@ mod tests {
         let srow_y = [0.0, 1.0, 0.0, 0.0];
         let srow_z = [0.0, 0.0, 1.0, 0.0];
         let _q = calculate_orientation_from_rows(srow_x, srow_y, srow_z);
-        // Rotation of 180 deg around Y or similar.
-        // Matrix: [[-1,0,0],[0,1,0],[0,0,1]]
-        // Let's check the result quaternion
-        // Trace = -1 + 1 + 1 = 1. Trace > 0 case.
-        // s = sqrt(2) * 2 = 2 * 1.414 = 2.828
-        // w = 0.25 * 2.828 = 0.707
-        // x = (m21 - m12) / s = 0
-        // y = (m02 - m20) / s = 0
-        // z = (m10 - m01) / s = 0/s = 0
-        // Wait, m[0][0] is -1.
-        // The Trace > 0 block in rotation_matrix_to_quaternion:
-        // trace = -1 + 1 + 1 = 1.0. Correct.
-        // s = sqrt(1.0 + 1.0) * 2.0 = 2.0 * sqrt(2)
-        // w = 0.25 * 2 * sqrt(2) = 0.5 * sqrt(2) = 0.707
-        // x = (m[2][1] - m[1][2]) / s = 0
-        // y = (m[0][2] - m[2][0]) / s = 0
-        // z = (m[1][0] - m[0][1]) / s = 0
-        // Actual result should be [0, 0, 0, 0.707]? No, w should be sqrt(0.5) if it's a 180 rotation?
-        // Wait, if it's a reflection (determinant -1), NIfTI handles it by normalizing columns correctly.
-        // If srow_x = [-1, 0, 0], col0 = [-1, 0, 0]. normalize_vec3 leaves it as [-1, 0, 0].
-        // So matrix is [[-1,0,0],[0,1,0],[0,0,1]].
-        // Trace = 1. w = 0.5 * sqrt(1+1) = 0.707. No, w = sqrt(tr+1)/2 = 1/sqrt(2).
-        // x = 0, y = 0, z = 0.
-        // Wait, this is NOT a valid rotation matrix (det = -1).
-        // Medical images often have reflections. The current logic converts it to a rotation.
-        // Let's just assert it doesn't panic and is stable.
+
         let result = calculate_orientation_from_rows(srow_x, srow_y, srow_z);
         assert!((result[3]).abs() > 0.0);
     }

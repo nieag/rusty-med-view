@@ -85,6 +85,16 @@ The codebase uses a "modular math" approach to ensure critical logic is unit-tes
 - **Native**: `cargo run`
 - **Web (WASM)**: `trunk serve` (requires `wasm32-unknown-unknown` target)
 
+## 🔄 CI/CD
+The project uses GitHub Actions for automated testing and deployment.
+- **CI (`ci.yml`)**: Runs on every push and pull request. Performs linting (`rustfmt`, `clippy`), runs unit tests, and verifies compilation for both native and WASM targets.
+- **Deploy (`deploy.yml`)**: Runs on every push to the `main` branch. Builds the WASM version using `wasm-bindgen-cli` and deploys it to GitHub Pages.
+
+### Live Demo
+The latest version is automatically hosted on GitHub Pages:
+`https://<github-username>.github.io/rust_starter_app/`
+*(Note: You must enable GitHub Pages in repo settings: Settings → Pages → Build and deployment → Source: GitHub Actions)*
+
 ## 💡 Future Session Tips
 - When modifying interaction logic, check the submodules in `src/systems/`.
 - **Coordinate Systems**: Both the shader and CPU picking use object-space raymarching via the volume's inverse rotation.
