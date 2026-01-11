@@ -43,8 +43,12 @@ pub fn handle_volume_load(
     }
 
     // Initialize 3D view rotation with volume orientation from NIfTI
+    // We apply an additional 90 degree rotation around X to make Superior UP and Anterior FORWARD (facing camera)
     if let Ok(mut view) = world.get::<&mut ViewState>(entities.view) {
-        view.rotation[0] = loaded.orientation;
+        use glam::{Quat, Vec3};
+        let nifti_quat = Quat::from_array(loaded.orientation);
+        let base_rot = Quat::from_axis_angle(Vec3::X, std::f32::consts::FRAC_PI_2);
+        view.rotation[0] = (base_rot * nifti_quat).to_array();
     }
 
     loaded.dimensions

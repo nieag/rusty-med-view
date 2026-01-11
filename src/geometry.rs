@@ -79,9 +79,9 @@ pub fn world_to_ndc(
         let k = screen_aspect / slice_aspect;
 
         let (u, v) = match viewport_idx {
-            1 => (pos.x, pos.y), // Axial
-            2 => (pos.x, pos.z), // Coronal
-            3 => (pos.y, pos.z), // Sagittal
+            1 => (pos.x, 1.0 - pos.y),       // Axial
+            2 => (pos.x, 1.0 - pos.z),       // Coronal
+            3 => (1.0 - pos.y, 1.0 - pos.z), // Sagittal
             _ => return None,
         };
 

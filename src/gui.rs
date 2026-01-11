@@ -536,8 +536,8 @@ impl Gui {
                 .fixed_pos([x0, y0])
                 .interactable(false)
                 .show(ctx, |ui| {
-                    marker(ui, "S", egui::pos2(xm_r, y0 + 15.0));
-                    marker(ui, "I", egui::pos2(xm_r, y0 + hh - 15.0));
+                    marker(ui, "A", egui::pos2(xm_r, y0 + 15.0));
+                    marker(ui, "P", egui::pos2(xm_r, y0 + hh - 15.0));
                     marker(ui, "R", egui::pos2(x0 + hw + 15.0, ym_t));
                     marker(ui, "L", egui::pos2(x0 + central_rect.width() - 15.0, ym_t));
                 });
@@ -802,15 +802,15 @@ fn draw_annotations(
                     match viewport_idx {
                         1 => {
                             ann.world_pos.x = world_u;
-                            ann.world_pos.y = world_v;
+                            ann.world_pos.y = 1.0 - world_v;
                         }
                         2 => {
                             ann.world_pos.x = world_u;
-                            ann.world_pos.z = world_v;
+                            ann.world_pos.z = 1.0 - world_v;
                         }
                         3 => {
-                            ann.world_pos.y = world_u;
-                            ann.world_pos.z = world_v;
+                            ann.world_pos.y = 1.0 - world_u;
+                            ann.world_pos.z = 1.0 - world_v;
                         }
                         _ => {}
                     };

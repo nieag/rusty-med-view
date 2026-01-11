@@ -213,21 +213,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             final_color = vec4<f32>(0.0, 0.0, 0.0, 1.0);
             draw_crosshair = false;
         } else {
-            if uniforms.view_mode == 1u { // XY
-                sample_pos = vec3<f32>(zoomed_uv.x, zoomed_uv.y, cursor.z);
-                // Crosshair calc inverse
-                // zoomed_uv = (uv - 0.5)*k/zoom + 0.5 + pan
-                // uv - 0.5 = (zoomed_uv - 0.5 - pan) * zoom / k
-                // uv = ... + 0.5
-                let rel_pos = (cursor.xy - pan - pivot) * zoom;
+            if uniforms.view_mode == 1u { // Axial (XY)
+                // Anterior is UP (-Y in physical, but mapped to 1-v for display)
+                sample_pos = vec3<f32>(zoomed_uv.x, 1.0 - zoomed_uv.y, cursor.z);
+                let rel_pos = (vec2<f32>(cursor.x, 1.0 - cursor.y) - pan - pivot) * zoom;
                 crosshair_screen_pos = (rel_pos / vec2<f32>(k, 1.0)) + pivot;
-            } else if uniforms.view_mode == 2u { // XZ
-                sample_pos = vec3<f32>(zoomed_uv.x, cursor.y, zoomed_uv.y);
-                let rel_pos = (cursor.xz - pan - pivot) * zoom;
+            } else if uniforms.view_mode == 2u { // Coronal (XZ)
+                // Superior is UP
+                sample_pos = vec3<f32>(zoomed_uv.x, cursor.y, 1.0 - zoomed_uv.y);
+                let rel_pos = (vec2<f32>(cursor.x, 1.0 - cursor.z) - pan - pivot) * zoom;
                 crosshair_screen_pos = (rel_pos / vec2<f32>(k, 1.0)) + pivot;
-            } else if uniforms.view_mode == 3u { // YZ
-                sample_pos = vec3<f32>(cursor.x, zoomed_uv.x, zoomed_uv.y);
-                let rel_pos = (cursor.yz - pan - pivot) * zoom;
+            } else if uniforms.view_mode == 3u { // Sagittal (YZ)
+                // Anterior is LEFT, Superior is UP
+                sample_pos = vec3<f32>(cursor.x, 1.0 - zoomed_uv.x, 1.0 - zoomed_uv.y);
+                let rel_pos = (vec2<f32>(1.0 - cursor.y, 1.0 - cursor.z) - pan - pivot) * zoom;
                 crosshair_screen_pos = (rel_pos / vec2<f32>(k, 1.0)) + pivot;
             }
 
@@ -446,28 +445,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             var uv = vec2<f32>(0.0);
 
             if uniforms.view_mode == 1u {
-                // Axial (XY)
+                // Axial (XY) - Y is inverted
                 slice_aspect = phys_x / phys_y;
                 if use_mouse_pos {
                     uv = uniforms.overlay_mouse_uv;
                 } else {
-                    uv = world_pos.xy;
+                    uv = vec2<f32>(world_pos.x, 1.0 - world_pos.y);
                 }
             } else if uniforms.view_mode == 2u {
-                // Coronal (XZ)
+                // Coronal (XZ) - Z is inverted
                 slice_aspect = phys_x / phys_z;
                 if use_mouse_pos {
                     uv = uniforms.overlay_mouse_uv;
                 } else {
-                    uv = vec2<f32>(world_pos.x, world_pos.z);
+                    uv = vec2<f32>(world_pos.x, 1.0 - world_pos.z);
                 }
             } else if uniforms.view_mode == 3u {
-                // Sagittal (YZ)
+                // Sagittal (YZ) - Y and Z are inverted, Y is horizontal
                 slice_aspect = phys_y / phys_z;
                 if use_mouse_pos {
                     uv = uniforms.overlay_mouse_uv;
                 } else {
-                    uv = vec2<f32>(world_pos.y, world_pos.z);
+                    uv = vec2<f32>(1.0 - world_pos.y, 1.0 - world_pos.z);
                 }
             }
 
@@ -597,17 +596,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // brush_center_voxel contains [x, y, z] in world 0-1 coords from get_voxel_at_mouse
         var center_voxel: vec2<i32>;
         if uniforms.view_mode == 1u {
-            // Axial: use XY
+            // Axial: use XY (Y is inverted)
             center_voxel = vec2<i32>(i32(uniforms.brush_center_voxel.x * dims.x),
-                i32(uniforms.brush_center_voxel.y * dims.y));
+                i32((1.0 - uniforms.brush_center_voxel.y) * dims.y));
         } else if uniforms.view_mode == 2u {
-            // Coronal: use XZ
+            // Coronal: use XZ (Z is inverted)
             center_voxel = vec2<i32>(i32(uniforms.brush_center_voxel.x * dims.x),
-                i32(uniforms.brush_center_voxel.z * dims.z));
+                i32((1.0 - uniforms.brush_center_voxel.z) * dims.z));
         } else {
-            // Sagittal: use YZ
-            center_voxel = vec2<i32>(i32(uniforms.brush_center_voxel.y * dims.y),
-                i32(uniforms.brush_center_voxel.z * dims.z));
+            // Sagittal: use YZ (Y and Z are inverted, Y is horizontal)
+            center_voxel = vec2<i32>(i32((1.0 - uniforms.brush_center_voxel.y) * dims.y),
+                i32((1.0 - uniforms.brush_center_voxel.z) * dims.z));
         }
         
         // Distance check - EXACTLY as in brush paint: dx*dx + dy*dy <= r*r

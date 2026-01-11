@@ -89,9 +89,9 @@ pub fn get_voxel_at_mouse(
         ];
 
         let pos = match viewport {
-            1 => [volume_uv[0], volume_uv[1], cursor_pos[2]],
-            2 => [volume_uv[0], cursor_pos[1], volume_uv[1]],
-            3 => [cursor_pos[0], volume_uv[0], volume_uv[1]],
+            1 => [volume_uv[0], 1.0 - volume_uv[1], cursor_pos[2]],
+            2 => [volume_uv[0], cursor_pos[1], 1.0 - volume_uv[1]],
+            3 => [cursor_pos[0], 1.0 - volume_uv[0], 1.0 - volume_uv[1]],
             _ => return None,
         };
         if (0.0..=1.0).contains(&pos[0])
