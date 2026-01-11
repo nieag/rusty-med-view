@@ -28,9 +28,9 @@ struct Uniforms {
     brush_center_voxel: vec4<f32>,   // [voxel_x, voxel_y, voxel_z, valid]
     // ---
     zoom: f32,
-    time: f32,
     view_mode: u32,
     overlay_flags: u32,
+    _padding: u32,
 };
 
 @group(0) @binding(0) var t_diffuse: texture_3d<f32>;

@@ -18,13 +18,7 @@ pub fn sys_prepare_render_data(
         resolution = [win.viewport_rect[2] / 2.0, win.viewport_rect[3] / 2.0];
     }
 
-    // 2. Get Camera Time
-    let mut time_val = 0.0;
-    if let Ok(rig) = world.get::<&CameraRig>(entities.camera_rig) {
-        time_val = rig.start_time.elapsed().as_secs_f32() * rig.speed;
-    }
-
-    // 3. Get Cursor
+    // 2. Get Cursor
     let mut cursor_pos = [0.0; 4];
     if let Ok(t) = world.get::<&Transform>(entities.cursor) {
         cursor_pos[0] = t.position[0];
@@ -133,9 +127,9 @@ pub fn sys_prepare_render_data(
         brush_preview,
         brush_center_voxel,
         zoom: zoom_val,
-        time: time_val,
         view_mode,
         overlay_flags,
+        _padding: 0,
     }
 }
 

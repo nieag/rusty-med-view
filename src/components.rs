@@ -1,6 +1,5 @@
 use glam::Vec3;
 
-use web_time::Instant;
 use winit::keyboard::ModifiersState;
 
 // --- Basic Tags ---
@@ -13,11 +12,6 @@ pub struct WindowSettings {
     pub width: u32,
     pub height: u32,
     pub viewport_rect: [f32; 4],
-}
-
-pub struct CameraRig {
-    pub speed: f32,
-    pub start_time: Instant,
 }
 
 pub struct Transform {
@@ -106,9 +100,9 @@ pub struct Uniforms {
     pub brush_center_voxel: [f32; 4], // [voxel_x, voxel_y, voxel_z, valid (0/1)]
     // ---
     pub zoom: f32,
-    pub time: f32,
     pub view_mode: u32,
     pub overlay_flags: u32,
+    pub _padding: u32,
 }
 
 // --- GUI / Editor ---
@@ -219,7 +213,6 @@ pub struct AppEntities {
     pub annotations: hecs::Entity,
     pub overlay: hecs::Entity,
     pub cursor: hecs::Entity,
-    pub camera_rig: hecs::Entity,
     pub window_settings: hecs::Entity,
 }
 

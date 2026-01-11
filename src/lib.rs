@@ -141,11 +141,6 @@ impl App {
         let (volume_sender, volume_receiver) =
             std::sync::mpsc::channel::<Result<components::LoadResult, nifti_loader::LoadError>>();
 
-        // Initialize world and camera
-        let camera = world.spawn((CameraRig {
-            speed: 1.0,
-            start_time: web_time::Instant::now(),
-        },));
         let cursor = world.spawn((
             Transform {
                 position: [0.5, 0.5, 0.5],
@@ -242,7 +237,6 @@ impl App {
             annotations,
             overlay,
             cursor,
-            camera_rig: camera,
             window_settings: settings_entity,
         };
 
