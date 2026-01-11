@@ -59,7 +59,7 @@ impl Gui {
 
         let full_output = self.context.run(raw_input, |ctx| {
             // 1. Data Collection from ECS via AppEntities
-            let (active_viewport, status_msg, volume_info) = {
+            let (active_viewport, status_msg, volume_info, windowing_active) = {
                 let active_viewport = world
                     .get::<&InputState>(entities.input)
                     .map(|i| i.active_viewport)
@@ -68,166 +68,200 @@ impl Gui {
                     .get::<&GuiState>(entities.gui_state)
                     .map(|g| g.status_message.clone())
                     .unwrap_or(None);
-                let volume_info = {
+                let (volume_info, windowing_active) = {
                     let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
-                    query.iter().next().and_then(|(_, vd)| {
-                        if vd.dimensions == [0, 0, 0] {
-                            None
-                        } else {
-                            Some(vd.dimensions)
-                        }
-                    })
+                    query
+                        .iter()
+                        .next()
+                        .map(|(_, vd)| {
+                            let dims = if vd.dimensions == [0, 0, 0] {
+                                None
+                            } else {
+                                Some(vd.dimensions)
+                            };
+                            (dims, dims.is_some())
+                        })
+                        .unwrap_or((None, false))
                 };
-                (active_viewport, status_msg, volume_info)
+                (active_viewport, status_msg, volume_info, windowing_active)
             };
 
-            // 2. Sidebar Implementation
-            egui::SidePanel::left("left_panel")
-                .resizable(true)
-                .default_width(250.0)
-                .show(ctx, |ui| {
-                    ui.heading("Medical Viewer");
+            // 1.5 Top Toolbar
+            egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 12.0;
+                    ui.heading("🩺 Medical Viewer");
                     ui.separator();
 
                     // --- Data Loading ---
-                    ui.collapsing("Data Loading", |ui| {
-                        if ui.button("📂 Load Main Volume (NIfTI)").clicked() {
-                            if let Ok(mut g) = world.get::<&mut GuiState>(entities.gui_state) {
-                                g.status_message = Some("Loading...".to_string());
-                            }
-                            let sender = volume_sender.clone();
-                            file_dialog::spawn_file_picker(move |result| {
-                                if let Some((_filename, data)) = result {
-                                    let load_result = nifti_loader::load_nifti_from_bytes(&data)
-                                        .map(LoadResult::Volume);
-                                    let _ = sender.send(load_result);
-                                }
-                            });
+                    ui.label("Data:");
+                    if ui
+                        .button("📂 Volume")
+                        .on_hover_text("Load Main Volume (NIfTI)")
+                        .clicked()
+                    {
+                        if let Ok(mut g) = world.get::<&mut GuiState>(entities.gui_state) {
+                            g.status_message = Some("Loading...".to_string());
                         }
+                        let sender = volume_sender.clone();
+                        file_dialog::spawn_file_picker(move |result| {
+                            if let Some((_filename, data)) = result {
+                                let load_result = nifti_loader::load_nifti_from_bytes(&data)
+                                    .map(LoadResult::Volume);
+                                let _ = sender.send(load_result);
+                            }
+                        });
+                    }
+                    if ui
+                        .button("📂 Label")
+                        .on_hover_text("Load Labelmap")
+                        .clicked()
+                    {
+                        if let Ok(mut g) = world.get::<&mut GuiState>(entities.gui_state) {
+                            g.status_message = Some("Loading Labelmap...".to_string());
+                        }
+                        let sender = volume_sender.clone();
+                        file_dialog::spawn_file_picker(move |result| {
+                            if let Some((filename, data)) = result {
+                                let load_result =
+                                    nifti_loader::load_label_from_bytes(&data, filename)
+                                        .map(LoadResult::Label);
+                                let _ = sender.send(load_result);
+                            }
+                        });
+                    }
+
+                    ui.separator();
+
+                    // --- Tool Selection ---
+                    if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
+                        ui.label("Tool:");
+                        ui.radio_value(&mut editor.active_tool, EditorTool::Navigation, "🖱 Nav");
+                        ui.radio_value(&mut editor.active_tool, EditorTool::Brush, "🖌 Brush");
+                        ui.radio_value(&mut editor.active_tool, EditorTool::Eraser, "⌫ Erase");
+
+                        if editor.active_layer.is_none()
+                            && editor.active_tool != EditorTool::Navigation
+                        {
+                            editor.active_tool = EditorTool::Navigation;
+                        }
+                    }
+
+                    ui.separator();
+
+                    // --- Presets (Quick Access) ---
+                    if windowing_active {
+                        if let Ok(mut windowing) =
+                            world.get::<&mut VolumeWindowing>(entities.volume_windowing)
+                        {
+                            ui.label("Presets:");
+                            if ui.small_button("Soft").clicked() {
+                                windowing.center = 40.0;
+                                windowing.width = 400.0;
+                            }
+                            if ui.small_button("Lung").clicked() {
+                                windowing.center = -600.0;
+                                windowing.width = 1500.0;
+                            }
+                            if ui.small_button("Bone").clicked() {
+                                windowing.center = 400.0;
+                                windowing.width = 2000.0;
+                            }
+                        }
+                    }
+
+                    if let Some(msg) = &status_msg {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(egui::RichText::new(msg).color(egui::Color32::LIGHT_BLUE));
+                        });
+                    }
+                });
+            });
+
+            // 2. Sidebar Implementation (Metadata & Detailed Controls)
+            egui::SidePanel::left("left_panel")
+                .resizable(true)
+                .default_width(220.0)
+                .show(ctx, |ui| {
+                    ui.add_space(8.0);
+
+                    // --- Volume Info ---
+                    ui.collapsing("📊 Volume Info", |ui| {
                         if let Some(dims) = volume_info {
-                            ui.label(format!("Volume: {}x{}x{}", dims[0], dims[1], dims[2]));
+                            ui.label(format!("Dimensions: {}×{}×{}", dims[0], dims[1], dims[2]));
+                            if let Some((_, vd)) = world
+                                .query::<&VolumeData>()
+                                .with::<&MainVolumeTag>()
+                                .iter()
+                                .next()
+                            {
+                                ui.label(format!(
+                                    "Spacing: {:.2}×{:.2}×{:.2} mm",
+                                    vd.spacing[0], vd.spacing[1], vd.spacing[2]
+                                ));
+                                ui.label(format!(
+                                    "Range: {:.0} to {:.0} HU",
+                                    vd.intensity_range[0], vd.intensity_range[1]
+                                ));
+                            }
                         } else {
                             ui.label("No volume loaded");
-                        }
-
-                        ui.separator();
-                        ui.label("Overlays");
-                        if ui.button("📂 Load Label (Slot 1)").clicked() {
-                            if let Ok(mut g) = world.get::<&mut GuiState>(entities.gui_state) {
-                                g.status_message = Some("Loading Labelmap...".to_string());
-                            }
-                            let sender = volume_sender.clone();
-                            file_dialog::spawn_file_picker(move |result| {
-                                if let Some((filename, data)) = result {
-                                    let load_result =
-                                        nifti_loader::load_label_from_bytes(&data, filename)
-                                            .map(LoadResult::Label);
-                                    let _ = sender.send(load_result);
-                                }
-                            });
                         }
                     });
 
                     ui.separator();
 
-                    // --- Windowing / Contrast Controls (HU-based) ---
-                    ui.collapsing("Windowing", |ui| {
+                    // --- Windowing / Contrast (Detailed) ---
+                    ui.collapsing("🌓 Windowing", |ui| {
                         if let Ok(mut windowing) =
                             world.get::<&mut VolumeWindowing>(entities.volume_windowing)
                         {
-                            ui.label("Window Center (HU)");
+                            ui.label("Center (HU)");
                             ui.add(
                                 egui::Slider::new(&mut windowing.center, -1024.0..=3071.0)
                                     .show_value(true),
                             );
 
-                            ui.label("Window Width (HU)");
+                            ui.label("Width (HU)");
                             ui.add(
                                 egui::Slider::new(&mut windowing.width, 1.0..=4096.0)
                                     .show_value(true),
                             );
 
                             ui.separator();
-                            ui.label("Presets:");
                             ui.horizontal(|ui| {
-                                if ui.button("Soft Tissue").clicked() {
-                                    windowing.center = 40.0;
-                                    windowing.width = 400.0;
-                                }
-                                if ui.button("Lung").clicked() {
-                                    windowing.center = -600.0;
-                                    windowing.width = 1500.0;
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                if ui.button("Bone").clicked() {
-                                    windowing.center = 400.0;
-                                    windowing.width = 2000.0;
-                                }
                                 if ui.button("Brain").clicked() {
                                     windowing.center = 40.0;
                                     windowing.width = 80.0;
                                 }
-                            });
-                        } else {
-                            ui.label("No windowing settings available");
-                        }
-                    });
-
-                    ui.separator();
-
-                    // --- Toolbox (Label Editor) ---
-                    ui.collapsing("Toolbox", |ui| {
-                        if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
-                            ui.label("Active Tool");
-                            ui.horizontal(|ui| {
-                                ui.radio_value(
-                                    &mut editor.active_tool,
-                                    EditorTool::Navigation,
-                                    "Nav",
-                                );
-                                ui.radio_value(&mut editor.active_tool, EditorTool::Brush, "Brush");
-                                ui.radio_value(
-                                    &mut editor.active_tool,
-                                    EditorTool::Eraser,
-                                    "Erase",
-                                );
-                            });
-
-                            if editor.active_layer.is_none()
-                                && editor.active_tool != EditorTool::Navigation
-                            {
-                                editor.active_tool = EditorTool::Navigation;
-                            }
-
-                            if editor.active_layer.is_some() {
-                                if editor.active_tool != EditorTool::Navigation {
-                                    ui.separator();
-                                    ui.label(format!("Brush Size: {:.1}", editor.brush_size));
-                                    ui.add(
-                                        egui::Slider::new(&mut editor.brush_size, 1.0..=20.0)
-                                            .text("px"),
-                                    );
-
-                                    ui.label("Label ID");
-                                    ui.add(egui::Slider::new(
-                                        &mut editor.active_label_index,
-                                        1..=10,
-                                    ));
+                                if ui.button("Default").clicked() {
+                                    windowing.center = 40.0;
+                                    windowing.width = 400.0;
                                 }
-                            } else {
-                                ui.label(
-                                    egui::RichText::new("Create/Load a layer to enable editing")
-                                        .color(egui::Color32::KHAKI),
-                                );
-                            }
+                            });
                         }
                     });
 
                     ui.separator();
+
+                    // --- Toolbox (Brush Settings) ---
+                    if let Ok(editor) = world.get::<&EditorState>(entities.editor) {
+                        if editor.active_tool != EditorTool::Navigation {
+                            ui.collapsing("🖌 Brush Settings", |ui| {
+                                let mut editor =
+                                    world.get::<&mut EditorState>(entities.editor).unwrap();
+                                ui.label(format!("Size: {:.1} px", editor.brush_size));
+                                ui.add(egui::Slider::new(&mut editor.brush_size, 1.0..=20.0));
+
+                                ui.label("Label ID");
+                                ui.add(egui::Slider::new(&mut editor.active_label_index, 1..=10));
+                            });
+                            ui.separator();
+                        }
+                    }
 
                     // --- Layer Control ---
-                    ui.collapsing("Layers", |ui| {
+                    ui.collapsing("📚 Layers", |ui| {
                         let mut layers: Vec<(hecs::Entity, String, bool, f32)> = Vec::new();
                         for (e, (seg, settings)) in
                             world.query::<(&Segmentation, &LayerSettings)>().iter()
@@ -289,8 +323,8 @@ impl Gui {
                     ui.separator();
 
                     // --- Annotations ---
-                    ui.collapsing("Annotations", |ui| {
-                        if ui.button("➕ Add Annotation").clicked() {
+                    ui.collapsing("📍 Annotations", |ui| {
+                        if ui.button("➕ Add at Cursor").clicked() {
                             let mut current_pos = glam::Vec3::ZERO;
                             if let Ok(t) = world.get::<&Transform>(entities.cursor) {
                                 current_pos = glam::Vec3::from(t.position);
@@ -336,24 +370,23 @@ impl Gui {
                                 t.position = pos.into();
                             }
                             if let Ok(mut view) = world.get::<&mut ViewState>(entities.view) {
-                                view.pan[1] = [pos.x - 0.5, pos.y - 0.5];
-                                view.pan[2] = [pos.x - 0.5, pos.z - 0.5];
-                                view.pan[3] = [pos.y - 0.5, pos.z - 0.5];
+                                for i in 1..=3 {
+                                    view.pan[i] = match i {
+                                        1 => [pos.x - 0.5, pos.y - 0.5],
+                                        2 => [pos.x - 0.5, pos.z - 0.5],
+                                        3 => [pos.y - 0.5, pos.z - 0.5],
+                                        _ => [0.0, 0.0],
+                                    };
+                                }
                             }
                         }
                     });
 
                     ui.separator();
-
-                    if let Some(msg) = &status_msg {
-                        ui.label(egui::RichText::new(msg).color(egui::Color32::LIGHT_BLUE));
-                    }
-
-                    ui.separator();
-                    ui.collapsing("Controls", |ui| {
-                        ui.label("Left Mouse: Crosshair / Paint");
-                        ui.label("Middle Mouse: Pan");
-                        ui.label("Right Mouse: Rotate (3D)");
+                    ui.collapsing("⌨ Controls", |ui| {
+                        ui.label("LMB: Crosshair / Paint");
+                        ui.label("MMB: Pan");
+                        ui.label("RMB: Rotate (3D)");
                         ui.label("Scroll: Zoom / Slice");
                         ui.label("Ctrl+Scroll: 2D Zoom");
                     });
@@ -412,7 +445,12 @@ impl Gui {
             egui::Area::new("overlay_3d".into())
                 .fixed_pos([x0 + 10.0, y0 + 10.0])
                 .interactable(false)
-                .show(ctx, |ui| draw_label(ui, "3D View", active_viewport == 0));
+                .show(ctx, |ui| {
+                    draw_label(ui, "3D View", active_viewport == 0);
+                    if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
+                        ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
+                    }
+                });
 
             let gizmo_rect = egui::Rect::from_center_size(
                 egui::pos2(x0 + 80.0, y0 + hh - 80.0),
@@ -427,28 +465,131 @@ impl Gui {
                     crate::gizmo::draw_gizmo(ui, gizmo_rect, view_quat);
                 });
 
+            // --- Viewport Separation Lines ---
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            let border_color = egui::Color32::from_gray(60);
+            painter.line_segment(
+                [
+                    egui::pos2(x0, y0 + hh),
+                    egui::pos2(x0 + central_rect.width(), y0 + hh),
+                ],
+                (1.0, border_color),
+            );
+            painter.line_segment(
+                [
+                    egui::pos2(x0 + hw, y0),
+                    egui::pos2(x0 + hw, y0 + central_rect.height()),
+                ],
+                (1.0, border_color),
+            );
+
+            // Viewport info helper
+            let draw_viewport_info = |ui: &mut egui::Ui,
+                                      name: &str,
+                                      active: bool,
+                                      slice: Option<(u32, u32)>,
+                                      world: &World,
+                                      entities: &AppEntities| {
+                draw_label(ui, name, active);
+                if let Some((curr, total)) = slice {
+                    ui.label(format!("Slice: {} / {}", curr, total));
+                }
+                if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
+                    ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
+                }
+            };
+
+            let vol_dims = volume_info.unwrap_or([0, 0, 0]);
+
             egui::Area::new("overlay_xy".into())
                 .fixed_pos([x0 + hw + 10.0, y0 + 10.0])
                 .interactable(false)
                 .show(ctx, |ui| {
-                    draw_label(ui, "Axial (Top)", active_viewport == 1);
-                    ui.label(format!("Slice Z: {:.2}", cursor_pos[2]));
+                    let slice_z = (cursor_pos[2] * vol_dims[2] as f32).round() as u32;
+                    draw_viewport_info(
+                        ui,
+                        "Axial (Top)",
+                        active_viewport == 1,
+                        Some((slice_z, vol_dims[2])),
+                        world,
+                        entities,
+                    );
+                });
+
+            // Anatomical markers for Axial (A/P/R/L)
+            let marker = |ui: &mut egui::Ui, text: &str, pos: egui::Pos2| {
+                ui.painter().text(
+                    pos,
+                    egui::Align2::CENTER_CENTER,
+                    text,
+                    egui::FontId::proportional(16.0),
+                    egui::Color32::from_gray(200),
+                );
+            };
+
+            let xm_l = x0 + hw / 2.0;
+            let xm_r = x0 + hw + hw / 2.0;
+            let ym_t = y0 + hh / 2.0;
+            let ym_b = y0 + hh + hh / 2.0;
+
+            egui::Area::new(egui::Id::new("markers_xy"))
+                .fixed_pos([x0, y0])
+                .interactable(false)
+                .show(ctx, |ui| {
+                    marker(ui, "S", egui::pos2(xm_r, y0 + 15.0));
+                    marker(ui, "I", egui::pos2(xm_r, y0 + hh - 15.0));
+                    marker(ui, "R", egui::pos2(x0 + hw + 15.0, ym_t));
+                    marker(ui, "L", egui::pos2(x0 + central_rect.width() - 15.0, ym_t));
                 });
 
             egui::Area::new("overlay_xz".into())
                 .fixed_pos([x0 + 10.0, y0 + hh + 10.0])
                 .interactable(false)
                 .show(ctx, |ui| {
-                    draw_label(ui, "Coronal (Front)", active_viewport == 2);
-                    ui.label(format!("Slice Y: {:.2}", cursor_pos[1]));
+                    let slice_y = (cursor_pos[1] * vol_dims[1] as f32).round() as u32;
+                    draw_viewport_info(
+                        ui,
+                        "Coronal (Front)",
+                        active_viewport == 2,
+                        Some((slice_y, vol_dims[1])),
+                        world,
+                        entities,
+                    );
+                });
+
+            egui::Area::new(egui::Id::new("markers_xz"))
+                .fixed_pos([x0, y0])
+                .interactable(false)
+                .show(ctx, |ui| {
+                    marker(ui, "S", egui::pos2(xm_l, y0 + hh + 15.0));
+                    marker(ui, "I", egui::pos2(xm_l, y0 + central_rect.height() - 15.0));
+                    marker(ui, "R", egui::pos2(x0 + 15.0, ym_b));
+                    marker(ui, "L", egui::pos2(x0 + hw - 15.0, ym_b));
                 });
 
             egui::Area::new("overlay_yz".into())
                 .fixed_pos([x0 + hw + 10.0, y0 + hh + 10.0])
                 .interactable(false)
                 .show(ctx, |ui| {
-                    draw_label(ui, "Sagittal (Side)", active_viewport == 3);
-                    ui.label(format!("Slice X: {:.2}", cursor_pos[0]));
+                    let slice_x = (cursor_pos[0] * vol_dims[0] as f32).round() as u32;
+                    draw_viewport_info(
+                        ui,
+                        "Sagittal (Side)",
+                        active_viewport == 3,
+                        Some((slice_x, vol_dims[0])),
+                        world,
+                        entities,
+                    );
+                });
+
+            egui::Area::new(egui::Id::new("markers_yz"))
+                .fixed_pos([x0, y0])
+                .interactable(false)
+                .show(ctx, |ui| {
+                    marker(ui, "S", egui::pos2(xm_r, y0 + hh + 15.0));
+                    marker(ui, "I", egui::pos2(xm_r, y0 + central_rect.height() - 15.0));
+                    marker(ui, "A", egui::pos2(x0 + hw + 15.0, ym_b));
+                    marker(ui, "P", egui::pos2(x0 + central_rect.width() - 15.0, ym_b));
                 });
 
             // --- Instruction Overlay if empty ---
