@@ -157,7 +157,7 @@ pub fn get_voxel_at_mouse(
                 let mut max_density = 0u8;
 
                 for (_, vol) in world.query::<&VolumeData>().iter() {
-                    let steps = 128;
+                    let steps = 64;
                     let step_size = (t_exit - t_entry) / steps as f32;
                     for i in 0..steps {
                         let t = t_entry + step_size * i as f32;
@@ -183,11 +183,15 @@ pub fn get_voxel_at_mouse(
                         {
                             let idx = (iz as u32 * height * width + iy as u32 * width + ix as u32)
                                 as usize;
-                            let intensity = vol.intensities.get(idx).copied().unwrap_or(0.0);
-                            let d = (intensity * 255.0) as u8;
-                            if d > max_density {
-                                max_density = d;
-                                best_t = t;
+                            if let Some(&intensity) = vol.intensities.get(idx) {
+                                let d = (intensity * 255.0) as u8;
+                                if d > max_density {
+                                    max_density = d;
+                                    best_t = t;
+                                    if d >= 250 {
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }

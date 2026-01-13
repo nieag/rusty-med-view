@@ -118,15 +118,37 @@ impl App {
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps.formats[0];
+        let present_mode = if surface_caps
+            .present_modes
+            .contains(&wgpu::PresentMode::Immediate)
+        {
+            wgpu::PresentMode::Immediate
+        } else if surface_caps
+            .present_modes
+            .contains(&wgpu::PresentMode::Mailbox)
+        {
+            wgpu::PresentMode::Mailbox
+        } else if surface_caps
+            .present_modes
+            .contains(&wgpu::PresentMode::AutoVsync)
+        {
+            wgpu::PresentMode::AutoVsync
+        } else {
+            wgpu::PresentMode::Fifo
+        };
+
+        let width = size.width.max(1);
+        let height = size.height.max(1);
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
-            width: size.width,
-            height: size.height,
-            present_mode: wgpu::PresentMode::Fifo,
+            width,
+            height,
+            present_mode,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: 1,
         };
         surface.configure(&device, &config);
 
@@ -392,9 +414,6 @@ impl ApplicationHandler<AppEvent> for App {
                 ctx.window.request_redraw();
             }
             WindowEvent::RedrawRequested => {
-                systems::sys_handle_mouse_drag(&mut ctx.world, &ctx.entities);
-                systems::sys_paint(&mut ctx.world, &ctx.entities, &ctx.queue); // Execute Paint System
-
                 render::render_frame(
                     &ctx.device,
                     &ctx.queue,

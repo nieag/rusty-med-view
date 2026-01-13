@@ -1,0 +1,9 @@
+[build]
+target = "index.html"
+
+[serve]
+port = 8080
+public_url = "/"
+
+[watch]
+ignore = ["target", ".git"]

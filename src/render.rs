@@ -283,6 +283,14 @@ pub fn render_frame(
     window: &Arc<Window>,
     event_proxy: winit::event_loop::EventLoopProxy<crate::AppEvent>,
 ) {
+    if config.width == 0 || config.height == 0 {
+        return;
+    }
+
+    // 0. Process interaction and updates once per frame, right before rendering
+    systems::sys_handle_mouse_drag(world, entities);
+    systems::sys_paint(world, entities, queue);
+
     // 1. Run GUI first so it can process interactions and update ECS state for THIS frame
     gui.prepare(window, world, entities, event_proxy);
 

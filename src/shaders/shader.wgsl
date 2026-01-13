@@ -301,7 +301,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
 
             // 1. Sample Main Volume and apply windowing
-            let raw_intensity = textureSample(t_diffuse, s_diffuse, sample_pos).r;
+            let raw_intensity = textureSampleLevel(t_diffuse, s_diffuse, sample_pos, 0.0).r;
             let windowed = apply_window(raw_intensity, uniforms.window_params.x, uniforms.window_params.y);
             final_color = vec4<f32>(windowed, windowed, windowed, 1.0);
             
