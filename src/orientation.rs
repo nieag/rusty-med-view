@@ -18,7 +18,17 @@ pub enum SlicePlane {
 }
 
 impl SlicePlane {
-    /// Create from viewport index (1=Axial, 2=Coronal, 3=Sagittal)
+    /// Create from ViewMode
+    pub fn from_mode(mode: crate::components::ViewMode) -> Option<Self> {
+        match mode {
+            crate::components::ViewMode::Axial => Some(SlicePlane::Axial),
+            crate::components::ViewMode::Coronal => Some(SlicePlane::Coronal),
+            crate::components::ViewMode::Sagittal => Some(SlicePlane::Sagittal),
+            _ => None,
+        }
+    }
+
+    /// Create from viewport index (1=Axial, 2=Coronal, 3=Sagittal) [DEPRECATED]
     pub fn from_viewport(idx: u32) -> Option<Self> {
         match idx {
             1 => Some(SlicePlane::Axial),
@@ -74,7 +84,7 @@ impl SlicePlane {
     }
 }
 
-/// Convert quaternion [x, y, z, w] to 3x3 rotation matrix (column-major)
+/// Convert quaternion [x, i, j, k] to 3x3 rotation matrix (column-major)
 pub fn quat_to_mat3(q: [f32; 4]) -> [[f32; 3]; 3] {
     let x2 = q[0] + q[0];
     let y2 = q[1] + q[1];
@@ -217,7 +227,7 @@ mod tests {
                 let dist_y = to_cursor[0] * up[0] + to_cursor[1] * up[1] + to_cursor[2] * up[2];
 
                 let screen_u = -(dist_x / dist_z) / screen_aspect;
-                let screen_v = dist_y / dist_z;
+                let screen_v = -(dist_y / dist_z); // THE VERTICAL FIX
                 let p_uv = [screen_u + 0.5, screen_v + 0.5];
                 let crosshair_pos = [
                     (p_uv[0] - pan[0] - pivot[0]) * zoom + pivot[0],
@@ -328,7 +338,7 @@ mod tests {
 
         // Manual picking logic (replicated from picking.rs)
         let uv = [mouse_uv[0] - 0.5, mouse_uv[1] - 0.5];
-        let screen_pos = [-uv[0] * 1.0, uv[1]]; // THE RADIOLOGICAL FIX
+        let screen_pos = [-uv[0] * 1.0, -uv[1]]; // THE RADIOLOGICAL + VERTICAL FIX
 
         let forward = Vec3::from([0.0, 0.0, 1.0]);
         let right = Vec3::from([1.0, 0.0, 0.0]);
@@ -337,5 +347,20 @@ mod tests {
 
         // Ray should point towards Patient Right (+X)
         assert!(ray_dir_world.x > 0.0);
+        // Ray should point towards World Y- (Down) because cursor is at Y=0.5 (center)
+        // Wait, if cursor is at center (0.5), ray should be straight forward.
+        // Let's test a non-center cursor.
+
+        let cursor_up = [0.5, 0.8, 0.5]; // Anterior (Up in identity)
+        let shader_uv_up =
+            shader_logic_emulation(0, [0.5, 0.5], zoom, pan, res, aspects, cursor_up);
+        // Anterior (+Y) should be at Top (v < 0.5)
+        assert!(shader_uv_up[1] < 0.5);
+
+        let uv_up = [shader_uv_up[0] - 0.5, shader_uv_up[1] - 0.5];
+        let screen_pos_up = [-uv_up[0], -uv_up[1]];
+        let ray_up = (forward + right * screen_pos_up[0] + up * screen_pos_up[1]).normalize();
+        // ray_up.y should be positive (points Up)
+        assert!(ray_up.y > 0.0);
     }
 }

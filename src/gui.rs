@@ -59,11 +59,11 @@ impl Gui {
 
         let full_output = self.context.run(raw_input, |ctx| {
             // 1. Data Collection from ECS via AppEntities
-            let (active_viewport, status_msg, volume_info, windowing_active) = {
-                let active_viewport = world
+            let (active_viewport_entity, status_msg, volume_info, windowing_active) = {
+                let active_viewport_entity = world
                     .get::<&InputState>(entities.input)
                     .map(|i| i.active_viewport)
-                    .unwrap_or(99);
+                    .unwrap_or(None);
                 let status_msg = world
                     .get::<&GuiState>(entities.gui_state)
                     .map(|g| g.status_message.clone())
@@ -83,7 +83,12 @@ impl Gui {
                         })
                         .unwrap_or((None, false))
                 };
-                (active_viewport, status_msg, volume_info, windowing_active)
+                (
+                    active_viewport_entity,
+                    status_msg,
+                    volume_info,
+                    windowing_active,
+                )
             };
 
             // 1.5 Top Toolbar
@@ -170,7 +175,7 @@ impl Gui {
                         }
                     }
 
-                    if let Some(msg) = &status_msg {
+                    if let Some(msg) = status_msg {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.label(egui::RichText::new(msg).color(egui::Color32::LIGHT_BLUE));
                         });
@@ -184,6 +189,26 @@ impl Gui {
                 .default_width(220.0)
                 .show(ctx, |ui| {
                     ui.add_space(8.0);
+
+                    ui.collapsing("📁 Protocol", |ui| {
+                        if let Ok(proto) = world.get::<&ProtocolState>(entities.protocol) {
+                            let mut selected = proto.active_protocol.clone();
+                            let registry = crate::protocols::get_protocol_registry();
+                            egui::ComboBox::from_label("Active Protocol")
+                                .selected_text(&selected)
+                                .show_ui(ui, |ui| {
+                                    for p in registry {
+                                        ui.selectable_value(&mut selected, p.name.clone(), &p.name);
+                                    }
+                                });
+
+                            if selected != proto.active_protocol {
+                                let _ = event_proxy.send_event(AppEvent::SwitchProtocol(selected));
+                            }
+                        }
+                    });
+
+                    ui.separator();
 
                     // --- Volume Info ---
                     ui.collapsing("📊 Volume Info", |ui| {
@@ -339,23 +364,25 @@ impl Gui {
                         let mut to_delete = None;
                         let mut to_locate = None;
 
-                        if let Ok(mut state) =
-                            world.get::<&mut AnnotationState>(entities.annotations)
                         {
-                            for (i, ann) in state.annotations.iter_mut().enumerate() {
-                                ui.horizontal(|ui| {
-                                    if ui.button("🎯").on_hover_text("Locate").clicked() {
-                                        to_locate = Some(ann.world_pos);
-                                    }
-                                    ui.text_edit_singleline(&mut ann.label);
-                                    if ui.button("🗑").clicked() {
-                                        to_delete = Some(i);
-                                    }
-                                });
-                            }
+                            if let Ok(mut state) =
+                                world.get::<&mut AnnotationState>(entities.annotations)
+                            {
+                                for (i, ann) in state.annotations.iter_mut().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        if ui.button("🎯").on_hover_text("Locate").clicked() {
+                                            to_locate = Some(ann.world_pos);
+                                        }
+                                        ui.text_edit_singleline(&mut ann.label);
+                                        if ui.button("🗑").clicked() {
+                                            to_delete = Some(i);
+                                        }
+                                    });
+                                }
 
-                            if let Some(idx) = to_delete {
-                                state.annotations.remove(idx);
+                                if let Some(idx) = to_delete {
+                                    state.annotations.remove(idx);
+                                }
                             }
                         }
 
@@ -363,15 +390,15 @@ impl Gui {
                             if let Ok(mut t) = world.get::<&mut Transform>(entities.cursor) {
                                 t.position = pos.into();
                             }
-                            if let Ok(mut view) = world.get::<&mut ViewState>(entities.view) {
-                                for i in 1..=3 {
-                                    view.pan[i] = match i {
-                                        1 => [pos.x - 0.5, pos.y - 0.5],
-                                        2 => [pos.x - 0.5, pos.z - 0.5],
-                                        3 => [pos.y - 0.5, pos.z - 0.5],
-                                        _ => [0.0, 0.0],
-                                    };
-                                }
+                            for (_, (vp, vs)) in
+                                world.query_mut::<(&Viewport, &mut ViewportState)>()
+                            {
+                                vs.pan = match vp.mode {
+                                    ViewMode::Axial => [pos.x - 0.5, pos.y - 0.5],
+                                    ViewMode::Coronal => [pos.x - 0.5, pos.z - 0.5],
+                                    ViewMode::Sagittal => [pos.y - 0.5, pos.z - 0.5],
+                                    _ => vs.pan,
+                                };
                             }
                         }
                     });
@@ -395,13 +422,38 @@ impl Gui {
                     });
                 });
 
-            // 3. Viewport Rect Calculation
+            // 3. Viewport Rect Calculation (Data-Driven by ViewportLayout)
             let central_rect = ctx.available_rect();
             let pixels_per_point = ctx.pixels_per_point();
+
+            let x0 = central_rect.min.x;
+            let y0 = central_rect.min.y;
+            let cw = central_rect.width();
+            let ch = central_rect.height();
+
+            let mut vps = Vec::new();
+            for (e, (vp, layout, _)) in
+                world.query_mut::<(&mut Viewport, &ViewportLayout, &ViewportState)>()
+            {
+                let rel = layout.relative_rect;
+                let rect = egui::Rect::from_min_size(
+                    egui::pos2(x0 + rel[0] * cw, y0 + rel[1] * ch),
+                    egui::vec2(rel[2] * cw, rel[3] * ch),
+                );
+
+                vp.rect = [
+                    rect.min.x * pixels_per_point,
+                    rect.min.y * pixels_per_point,
+                    rect.width() * pixels_per_point,
+                    rect.height() * pixels_per_point,
+                ];
+                vps.push((e, vp.mode, rect));
+            }
+
             for (_, settings) in world.query_mut::<&mut WindowSettings>() {
                 settings.viewport_rect = [
-                    central_rect.min.x * pixels_per_point,
-                    central_rect.min.y * pixels_per_point,
+                    x0 * pixels_per_point,
+                    y0 * pixels_per_point,
                     central_rect.width() * pixels_per_point,
                     central_rect.height() * pixels_per_point,
                 ];
@@ -432,32 +484,11 @@ impl Gui {
             let y0 = central_rect.min.y;
 
             let mut gizmo_rotation = [0.0f32, 0.0, 0.0, 1.0];
-            if let Ok(view) = world.get::<&ViewState>(entities.view) {
-                gizmo_rotation = view.rotation[0];
+            for (_, (vp, vs)) in world.query::<(&Viewport, &ViewportState)>().iter() {
+                if vp.mode == ViewMode::ThreeD {
+                    gizmo_rotation = vs.rotation;
+                }
             }
-
-            egui::Area::new("overlay_3d".into())
-                .fixed_pos([x0 + 10.0, y0 + 10.0])
-                .interactable(false)
-                .show(ctx, |ui| {
-                    draw_label(ui, "3D View", active_viewport == 0);
-                    if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
-                        ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
-                    }
-                });
-
-            let gizmo_rect = egui::Rect::from_center_size(
-                egui::pos2(x0 + 80.0, y0 + hh - 80.0),
-                egui::vec2(120.0, 120.0),
-            );
-
-            egui::Area::new("gizmo_3d".into())
-                .fixed_pos(gizmo_rect.min)
-                .interactable(false)
-                .show(ctx, |ui| {
-                    let view_quat = crate::gizmo::quat_from_array(gizmo_rotation);
-                    crate::gizmo::draw_gizmo(ui, gizmo_rect, view_quat);
-                });
 
             // --- Viewport Separation Lines ---
             let painter = ctx.layer_painter(egui::LayerId::background());
@@ -467,14 +498,14 @@ impl Gui {
                     egui::pos2(x0, y0 + hh),
                     egui::pos2(x0 + central_rect.width(), y0 + hh),
                 ],
-                (1.0, border_color),
+                (2.0, border_color),
             );
             painter.line_segment(
                 [
                     egui::pos2(x0 + hw, y0),
                     egui::pos2(x0 + hw, y0 + central_rect.height()),
                 ],
-                (1.0, border_color),
+                (2.0, border_color),
             );
 
             // Viewport info helper
@@ -495,22 +526,7 @@ impl Gui {
 
             let vol_dims = volume_info.unwrap_or([0, 0, 0]);
 
-            egui::Area::new("overlay_xy".into())
-                .fixed_pos([x0 + hw + 10.0, y0 + 10.0])
-                .interactable(false)
-                .show(ctx, |ui| {
-                    let slice_z = (cursor_pos[2] * vol_dims[2] as f32).round() as u32;
-                    draw_viewport_info(
-                        ui,
-                        "Axial (Top)",
-                        active_viewport == 1,
-                        Some((slice_z, vol_dims[2])),
-                        world,
-                        entities,
-                    );
-                });
-
-            // Anatomical markers for Axial (A/P/R/L)
+            // Anatomical markers helper
             let marker = |ui: &mut egui::Ui, text: &str, pos: egui::Pos2| {
                 ui.painter().text(
                     pos,
@@ -521,70 +537,85 @@ impl Gui {
                 );
             };
 
-            let xm_l = x0 + hw / 2.0;
-            let xm_r = x0 + hw + hw / 2.0;
-            let ym_t = y0 + hh / 2.0;
-            let ym_b = y0 + hh + hh / 2.0;
+            for (e, mode, rect) in vps.clone() {
+                let rx0 = rect.min.x;
+                let ry0 = rect.min.y;
+                let rhw = rect.width() / 2.0;
+                let rhh = rect.height() / 2.0;
+                let is_active = Some(e) == active_viewport_entity;
 
-            egui::Area::new(egui::Id::new("markers_xy"))
-                .fixed_pos([x0, y0])
-                .interactable(false)
-                .show(ctx, |ui| {
-                    marker(ui, "A", egui::pos2(xm_r, y0 + 15.0));
-                    marker(ui, "P", egui::pos2(xm_r, y0 + hh - 15.0));
-                    marker(ui, "R", egui::pos2(x0 + hw + 15.0, ym_t));
-                    marker(ui, "L", egui::pos2(x0 + central_rect.width() - 15.0, ym_t));
-                });
+                egui::Area::new(egui::Id::new("overlay").with(e))
+                    .fixed_pos([rx0 + 10.0, ry0 + 10.0])
+                    .interactable(false)
+                    .show(ctx, |ui| match mode {
+                        ViewMode::ThreeD => {
+                            draw_label(ui, "3D View", is_active);
+                            if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing)
+                            {
+                                ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
+                            }
+                        }
+                        ViewMode::Axial => {
+                            let slice_z = (cursor_pos[2] * vol_dims[2] as f32).round() as u32;
+                            draw_viewport_info(
+                                ui,
+                                "Axial (Top)",
+                                is_active,
+                                Some((slice_z, vol_dims[2])),
+                                world,
+                                entities,
+                            );
+                            marker(ui, "A", egui::pos2(rx0 + rhw, ry0 + 15.0));
+                            marker(ui, "P", egui::pos2(rx0 + rhw, ry0 + rect.height() - 15.0));
+                            marker(ui, "R", egui::pos2(rx0 + 15.0, ry0 + rhh));
+                            marker(ui, "L", egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh));
+                        }
+                        ViewMode::Coronal => {
+                            let slice_y = (cursor_pos[1] * vol_dims[1] as f32).round() as u32;
+                            draw_viewport_info(
+                                ui,
+                                "Coronal (Front)",
+                                is_active,
+                                Some((slice_y, vol_dims[1])),
+                                world,
+                                entities,
+                            );
+                            marker(ui, "S", egui::pos2(rx0 + rhw, ry0 + 15.0));
+                            marker(ui, "I", egui::pos2(rx0 + rhw, ry0 + rect.height() - 15.0));
+                            marker(ui, "R", egui::pos2(rx0 + 15.0, ry0 + rhh));
+                            marker(ui, "L", egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh));
+                        }
+                        ViewMode::Sagittal => {
+                            let slice_x = (cursor_pos[0] * vol_dims[0] as f32).round() as u32;
+                            draw_viewport_info(
+                                ui,
+                                "Sagittal (Side)",
+                                is_active,
+                                Some((slice_x, vol_dims[0])),
+                                world,
+                                entities,
+                            );
+                            marker(ui, "S", egui::pos2(rx0 + rhw, ry0 + 15.0));
+                            marker(ui, "I", egui::pos2(rx0 + rhw, ry0 + rect.height() - 15.0));
+                            marker(ui, "A", egui::pos2(rx0 + 15.0, ry0 + rhh));
+                            marker(ui, "P", egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh));
+                        }
+                    });
 
-            egui::Area::new("overlay_xz".into())
-                .fixed_pos([x0 + 10.0, y0 + hh + 10.0])
-                .interactable(false)
-                .show(ctx, |ui| {
-                    let slice_y = (cursor_pos[1] * vol_dims[1] as f32).round() as u32;
-                    draw_viewport_info(
-                        ui,
-                        "Coronal (Front)",
-                        active_viewport == 2,
-                        Some((slice_y, vol_dims[1])),
-                        world,
-                        entities,
+                if mode == ViewMode::ThreeD {
+                    let gizmo_rect = egui::Rect::from_center_size(
+                        egui::pos2(rx0 + 80.0, ry0 + rect.height() - 80.0),
+                        egui::vec2(120.0, 120.0),
                     );
-                });
-
-            egui::Area::new(egui::Id::new("markers_xz"))
-                .fixed_pos([x0, y0])
-                .interactable(false)
-                .show(ctx, |ui| {
-                    marker(ui, "S", egui::pos2(xm_l, y0 + hh + 15.0));
-                    marker(ui, "I", egui::pos2(xm_l, y0 + central_rect.height() - 15.0));
-                    marker(ui, "R", egui::pos2(x0 + 15.0, ym_b));
-                    marker(ui, "L", egui::pos2(x0 + hw - 15.0, ym_b));
-                });
-
-            egui::Area::new("overlay_yz".into())
-                .fixed_pos([x0 + hw + 10.0, y0 + hh + 10.0])
-                .interactable(false)
-                .show(ctx, |ui| {
-                    let slice_x = (cursor_pos[0] * vol_dims[0] as f32).round() as u32;
-                    draw_viewport_info(
-                        ui,
-                        "Sagittal (Side)",
-                        active_viewport == 3,
-                        Some((slice_x, vol_dims[0])),
-                        world,
-                        entities,
-                    );
-                });
-
-            egui::Area::new(egui::Id::new("markers_yz"))
-                .fixed_pos([x0, y0])
-                .interactable(false)
-                .show(ctx, |ui| {
-                    marker(ui, "S", egui::pos2(xm_r, y0 + hh + 15.0));
-                    marker(ui, "I", egui::pos2(xm_r, y0 + central_rect.height() - 15.0));
-                    marker(ui, "A", egui::pos2(x0 + hw + 15.0, ym_b));
-                    marker(ui, "P", egui::pos2(x0 + central_rect.width() - 15.0, ym_b));
-                });
+                    egui::Area::new("gizmo_3d".into())
+                        .fixed_pos(gizmo_rect.min)
+                        .interactable(false)
+                        .show(ctx, |ui| {
+                            let view_quat = crate::gizmo::quat_from_array(gizmo_rotation);
+                            crate::gizmo::draw_gizmo(ui, gizmo_rect, view_quat);
+                        });
+                }
+            }
 
             // --- Instruction Overlay if empty ---
             if volume_info.is_none() {
@@ -618,52 +649,19 @@ impl Gui {
                     let mut vd_query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
                     let vol_data = vd_query.iter().next().map(|(_, vd)| vd);
 
-                    if let (Ok(mut state), Ok(vs), Ok(mut overlay), Some(vd)) = (
+                    if let (Ok(mut state), Ok(mut overlay), Some(vd)) = (
                         world.get::<&mut AnnotationState>(entities.annotations),
-                        world.get::<&ViewState>(entities.view),
                         world.get::<&mut OverlayManager>(entities.overlay),
                         vol_data,
                     ) {
                         let items = &mut state.annotations;
-                        draw_annotations(
-                            ui,
-                            items,
-                            &vs,
-                            vd,
-                            egui::Rect::from_min_size(egui::pos2(x0, y0), egui::vec2(hw, hh)),
-                            0,
-                            &mut overlay,
-                        );
-                        draw_annotations(
-                            ui,
-                            items,
-                            &vs,
-                            vd,
-                            egui::Rect::from_min_size(egui::pos2(x0 + hw, y0), egui::vec2(hw, hh)),
-                            1,
-                            &mut overlay,
-                        );
-                        draw_annotations(
-                            ui,
-                            items,
-                            &vs,
-                            vd,
-                            egui::Rect::from_min_size(egui::pos2(x0, y0 + hh), egui::vec2(hw, hh)),
-                            2,
-                            &mut overlay,
-                        );
-                        draw_annotations(
-                            ui,
-                            items,
-                            &vs,
-                            vd,
-                            egui::Rect::from_min_size(
-                                egui::pos2(x0 + hw, y0 + hh),
-                                egui::vec2(hw, hh),
-                            ),
-                            3,
-                            &mut overlay,
-                        );
+
+                        // Loop over all viewports to draw annotations in each
+                        for (e, mode, rect) in vps {
+                            if let Ok(vs) = world.get::<&ViewportState>(e) {
+                                draw_annotations(ui, items, &vs, vd, rect, mode, &mut overlay);
+                            }
+                        }
                     }
                 });
         });
@@ -734,10 +732,10 @@ impl Gui {
 fn draw_annotations(
     ui: &mut egui::Ui,
     annotations: &mut [Annotation],
-    view: &ViewState,
+    view: &ViewportState,
     vol: &VolumeData,
     rect: egui::Rect,
-    viewport_idx: usize,
+    mode: ViewMode,
     overlay: &mut OverlayManager,
 ) {
     let aspect_ratios = vol.aspect_ratios();
@@ -746,10 +744,24 @@ fn draw_annotations(
         return;
     }
 
+    let viewport_idx = match mode {
+        ViewMode::ThreeD => 0,
+        ViewMode::Axial => 1,
+        ViewMode::Coronal => 2,
+        ViewMode::Sagittal => 3,
+    };
+
     for (idx, ann) in annotations.iter_mut().enumerate() {
-        if let Some(screen_pos) =
-            world_to_screen(ann.world_pos, viewport_idx, view, aspect_ratios, rect)
-        {
+        if let Some(screen_pos) = world_to_screen(
+            ann.world_pos,
+            viewport_idx,
+            view.zoom,
+            view.pan,
+            view.pivot,
+            view.rotation,
+            aspect_ratios,
+            rect,
+        ) {
             let sense = if viewport_idx > 0 {
                 egui::Sense::drag()
             } else {
@@ -765,9 +777,9 @@ fn draw_annotations(
                 overlay.dragging_viewport = viewport_idx as u32;
 
                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
-                    let zoom = view.zoom[viewport_idx];
-                    let pan = view.pan[viewport_idx];
-                    let pivot = view.pivot[viewport_idx];
+                    let zoom = view.zoom;
+                    let pan = view.pan;
+                    let pivot = view.pivot;
 
                     let screen_w = rect.width();
                     let screen_h = rect.height();
@@ -812,8 +824,17 @@ fn draw_annotations(
             let draw_pos = if response.dragged() {
                 ui.ctx().pointer_latest_pos().unwrap_or(screen_pos)
             } else {
-                world_to_screen(ann.world_pos, viewport_idx, view, aspect_ratios, rect)
-                    .unwrap_or(screen_pos)
+                world_to_screen(
+                    ann.world_pos,
+                    viewport_idx,
+                    view.zoom,
+                    view.pan,
+                    view.pivot,
+                    view.rotation,
+                    aspect_ratios,
+                    rect,
+                )
+                .unwrap_or(screen_pos)
             };
 
             ui.painter().text(
@@ -830,7 +851,10 @@ fn draw_annotations(
 fn world_to_screen(
     pos: glam::Vec3,
     viewport_idx: usize,
-    view: &ViewState,
+    zoom: f32,
+    pan: [f32; 2],
+    pivot: [f32; 2],
+    rotation: [f32; 4],
     aspect_ratios: [f32; 3],
     rect: egui::Rect,
 ) -> Option<egui::Pos2> {
@@ -840,9 +864,16 @@ fn world_to_screen(
         1.0
     };
 
-    if let Some([ndc_x, ndc_y]) =
-        crate::geometry::world_to_ndc(pos, viewport_idx, view, aspect_ratios, screen_aspect)
-    {
+    if let Some([ndc_x, ndc_y]) = crate::geometry::world_to_ndc(
+        pos,
+        viewport_idx,
+        zoom,
+        pan,
+        pivot,
+        rotation,
+        aspect_ratios,
+        screen_aspect,
+    ) {
         if (!(0.0..=1.0).contains(&ndc_x) || !(0.0..=1.0).contains(&ndc_y)) && viewport_idx > 0 {
             return None;
         }

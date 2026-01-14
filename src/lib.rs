@@ -9,6 +9,7 @@ mod load_handlers;
 mod nifti_loader;
 mod orientation;
 mod overlay;
+mod protocols;
 mod render;
 mod systems;
 mod volume;
@@ -29,6 +30,7 @@ pub enum AppEvent {
     VolumeLoaded(Result<components::LoadResult, nifti_loader::LoadError>),
     RebuildBindGroups,
     CreateNewLayer,
+    SwitchProtocol(String),
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -188,7 +190,7 @@ impl App {
         let input = world.spawn((InputState {
             last_mouse_pos: [0.0, 0.0],
             mouse_uv: [0.0, 0.0],
-            active_viewport: 0,
+            active_viewport: None,
             modifiers: winit::keyboard::ModifiersState::empty(),
             is_dragging: false,
             is_panning: false,
@@ -200,12 +202,13 @@ impl App {
             egui_wants_input: false,
             scroll_accumulator: [0.0; 4],
         },));
-        let view = world.spawn((ViewState {
-            zoom: [1.0, 1.0, 1.0, 1.0],
-            pan: [[0.0, 0.0]; 4],
-            pivot: [[0.5, 0.5]; 4],
-            rotation: [[0.0, 0.0, 0.0, 1.0]; 4], // Identity quaternions
-        },));
+
+        // Initialize Protocol State
+        let protocol = world.spawn((ProtocolState::default(),));
+
+        // Let the apply_protocol system handle initial viewport spawning
+
+        // Set active viewport to 3D by default (this will be overridden by apply_protocol below anyway)
 
         // --- Pipeline Setup (using render module) ---
         let uniform_buffer = render::create_uniform_buffer(&device);
@@ -256,15 +259,18 @@ impl App {
 
         let entities = AppEntities {
             input,
-            view,
             editor,
             gui_state,
             volume_windowing: windowing,
             annotations,
             overlay,
+            protocol,
             cursor,
             window_settings: settings_entity,
         };
+
+        // Apply initial protocol
+        protocols::apply_protocol(&mut world, &entities, "Standard 2x2");
 
         let render_pipeline =
             render::create_render_pipeline(&device, &texture_bind_group_layout, config.format);
@@ -427,7 +433,6 @@ impl ApplicationHandler<AppEvent> for App {
                     &ctx.overlay_buffer,
                     &mut ctx.world,
                     &ctx.entities,
-                    ctx.settings_entity,
                     &mut ctx.gui,
                     &ctx.window,
                     ctx.event_proxy.clone(),
@@ -608,6 +613,10 @@ impl ApplicationHandler<AppEvent> for App {
                 for (_, editor) in ctx.world.query_mut::<&mut EditorState>() {
                     editor.active_layer = Some(entity);
                 }
+                ctx.window.request_redraw();
+            }
+            AppEvent::SwitchProtocol(name) => {
+                protocols::apply_protocol(&mut ctx.world, &ctx.entities, &name);
                 ctx.window.request_redraw();
             }
         }

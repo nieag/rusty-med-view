@@ -1,5 +1,5 @@
 // src/geometry.rs
-use crate::components::ViewState;
+// use crate::components::ViewState; // Removed
 use glam::{Quat, Vec3};
 
 #[repr(C)]
@@ -59,14 +59,13 @@ pub const QUAD_INDICES: &[u16] = &[
 pub fn world_to_ndc(
     pos: Vec3,
     viewport_idx: usize,
-    view: &ViewState,
+    zoom: f32,
+    pan: [f32; 2],
+    pivot: [f32; 2],
+    rotation: [f32; 4],
     aspect_ratios: [f32; 3],
     screen_aspect: f32,
 ) -> Option<[f32; 2]> {
-    let zoom = view.zoom[viewport_idx];
-    let pan = view.pan[viewport_idx];
-    let pivot = view.pivot[viewport_idx];
-
     if viewport_idx > 0 {
         // --- 2D Viewports ---
         let plane = crate::orientation::SlicePlane::from_viewport(viewport_idx as u32)?;
@@ -81,7 +80,7 @@ pub fn world_to_ndc(
         // --- 3D Viewport ---
         let p_centered = pos - Vec3::new(0.5, 0.5, 0.5);
         let p_scaled = p_centered * Vec3::from(aspect_ratios);
-        let rot_quat = Quat::from_array(view.rotation[0]);
+        let rot_quat = Quat::from_array(rotation);
         let p_rotated = rot_quat * p_scaled;
         let p_cam = p_rotated + Vec3::new(0.0, 0.0, 3.5);
 
@@ -92,9 +91,9 @@ pub fn world_to_ndc(
         let proj_x = p_cam.x / p_cam.z;
         let proj_y = p_cam.y / p_cam.z;
 
-        // RADIOLOGICAL: Patient Right (x=+) maps to Screen Left (uv < 0.5)
+        // RADIOLOGICAL: Patient Right (x=+) maps to Screen Left (uv < 0.5). Flip Y to match screen coords.
         let uv_centered_x = -proj_x / screen_aspect;
-        let uv_centered_y = proj_y;
+        let uv_centered_y = -proj_y;
 
         let zoomed_uv_x = uv_centered_x + 0.5;
         let zoomed_uv_y = uv_centered_y + 0.5;

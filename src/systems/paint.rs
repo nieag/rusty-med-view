@@ -35,15 +35,27 @@ pub fn sys_paint(world: &mut World, entities: &AppEntities, queue: &wgpu::Queue)
         vol_dims = vol.dimensions;
     }
 
-    for (viewport, mouse_uv, tool, brush_size, label_idx, layer_entity, last_voxel_opt) in
+    for (viewport_entity, mouse_uv, tool, brush_size, label_idx, layer_entity, last_voxel_opt) in
         interactions
     {
+        let viewport_entity = if let Some(e) = viewport_entity {
+            e
+        } else {
+            continue;
+        };
+
+        let mode = if let Ok(vp) = world.get::<&Viewport>(viewport_entity) {
+            vp.mode
+        } else {
+            continue;
+        };
+
         let layer_ent = if let Some(e) = layer_entity {
             e
         } else {
             continue;
         };
-        let cur_target_opt = get_voxel_at_mouse(world, entities, viewport, mouse_uv);
+        let cur_target_opt = get_voxel_at_mouse(world, entities, viewport_entity, mouse_uv);
 
         if let Some(pos) = cur_target_opt {
             if let Ok(mut query) =
@@ -61,12 +73,11 @@ pub fn sys_paint(world: &mut World, entities: &AppEntities, queue: &wgpu::Queue)
                     let cz = (pos[2] * depth as f32) as i32;
                     let current_voxel = [cx, cy, cz];
 
-                    if viewport == 0 {
+                    if mode == ViewMode::ThreeD {
                         continue;
                     }
 
-                    let points_to_paint =
-                        get_stroke_points(current_voxel, last_voxel_opt, viewport);
+                    let points_to_paint = get_stroke_points(current_voxel, last_voxel_opt, mode);
 
                     let val_to_write = if tool == EditorTool::Eraser {
                         0
@@ -81,7 +92,7 @@ pub fn sys_paint(world: &mut World, entities: &AppEntities, queue: &wgpu::Queue)
                     for pt in points_to_paint {
                         if apply_brush_step(
                             pt,
-                            viewport,
+                            mode,
                             brush_size,
                             val_to_write,
                             label_data,
@@ -124,7 +135,7 @@ pub fn sys_paint(world: &mut World, entities: &AppEntities, queue: &wgpu::Queue)
 fn get_stroke_points(
     current: [i32; 3],
     last_opt: Option<[u32; 3]>,
-    viewport: u32,
+    mode: ViewMode,
 ) -> Vec<[i32; 3]> {
     let mut points = Vec::new();
     let cx = current[0];
@@ -135,27 +146,27 @@ fn get_stroke_points(
         let lx = last_voxel[0] as i32;
         let ly = last_voxel[1] as i32;
         let lz = last_voxel[2] as i32;
-        let dist = match viewport {
-            1 => (((cx - lx).pow(2) + (cy - ly).pow(2)) as f32).sqrt(),
-            2 => (((cx - lx).pow(2) + (cz - lz).pow(2)) as f32).sqrt(),
-            3 => (((cy - ly).pow(2) + (cz - lz).pow(2)) as f32).sqrt(),
+        let dist = match mode {
+            ViewMode::Axial => (((cx - lx).pow(2) + (cy - ly).pow(2)) as f32).sqrt(),
+            ViewMode::Coronal => (((cx - lx).pow(2) + (cz - lz).pow(2)) as f32).sqrt(),
+            ViewMode::Sagittal => (((cy - ly).pow(2) + (cz - lz).pow(2)) as f32).sqrt(),
             _ => 0.0,
         };
         let steps = dist.ceil() as i32 + 1;
         for i in 0..=steps {
             let t = i as f32 / steps as f32;
-            let (ix, iy, iz) = match viewport {
-                1 => (
+            let (ix, iy, iz) = match mode {
+                ViewMode::Axial => (
                     (lx as f32 + (cx - lx) as f32 * t) as i32,
                     (ly as f32 + (cy - ly) as f32 * t) as i32,
                     cz,
                 ),
-                2 => (
+                ViewMode::Coronal => (
                     (lx as f32 + (cx - lx) as f32 * t) as i32,
                     cy,
                     (lz as f32 + (cz - lz) as f32 * t) as i32,
                 ),
-                3 => (
+                ViewMode::Sagittal => (
                     cx,
                     (ly as f32 + (cy - ly) as f32 * t) as i32,
                     (lz as f32 + (cz - lz) as f32 * t) as i32,
@@ -173,7 +184,7 @@ fn get_stroke_points(
 /// Applies a single brush step to the labelmap data.
 fn apply_brush_step(
     pt: [i32; 3],
-    viewport: u32,
+    mode: ViewMode,
     brush_size: f32,
     val: u8,
     label_data: &mut LabelmapData,
@@ -190,8 +201,8 @@ fn apply_brush_step(
     let height = label_data.dimensions[1];
     let depth = label_data.dimensions[2];
 
-    match viewport {
-        1 => {
+    match mode {
+        ViewMode::Axial => {
             let start_x = (px - r).max(0);
             let end_x = (px + r).min(width as i32 - 1);
             let start_y = (py - r).max(0);
@@ -212,7 +223,7 @@ fn apply_brush_step(
                 }
             }
         }
-        2 => {
+        ViewMode::Coronal => {
             let start_x = (px - r).max(0);
             let end_x = (px + r).min(width as i32 - 1);
             let start_z = (pz - r).max(0);
@@ -233,7 +244,7 @@ fn apply_brush_step(
                 }
             }
         }
-        3 => {
+        ViewMode::Sagittal => {
             let start_y = (py - r).max(0);
             let end_y = (py + r).min(height as i32 - 1);
             let start_z = (pz - r).max(0);
@@ -320,7 +331,7 @@ mod tests {
     #[test]
     fn test_get_stroke_points_single() {
         let current = [10, 10, 10];
-        let points = get_stroke_points(current, None, 1);
+        let points = get_stroke_points(current, None, ViewMode::Axial);
         assert_eq!(points.len(), 1);
         assert_eq!(points[0], current);
     }
@@ -329,7 +340,7 @@ mod tests {
     fn test_get_stroke_points_interpolated() {
         let current = [20, 10, 10];
         let last = Some([10, 10, 10]);
-        let points = get_stroke_points(current, last, 1);
+        let points = get_stroke_points(current, last, ViewMode::Axial);
         assert!(points.len() > 1);
         assert_eq!(points[0], [10, 10, 10]);
         assert_eq!(points.last().unwrap(), &current);
@@ -347,7 +358,7 @@ mod tests {
 
         apply_brush_step(
             [50, 50, 50],
-            1,
+            ViewMode::Axial,
             2.0,
             1,
             &mut data,

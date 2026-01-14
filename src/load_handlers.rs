@@ -16,7 +16,7 @@ pub fn handle_volume_load(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     world: &mut World,
-    entities: &AppEntities,
+    _entities: &AppEntities,
     loaded: &LoadedVolume,
 ) -> [u32; 3] {
     log::info!("Volume loaded: {:?} dimensions", loaded.dimensions);
@@ -44,11 +44,13 @@ pub fn handle_volume_load(
 
     // Initialize 3D view rotation with volume orientation from NIfTI
     // We apply an additional 90 degree rotation around X to make Superior UP and Anterior FORWARD (facing camera)
-    if let Ok(mut view) = world.get::<&mut ViewState>(entities.view) {
-        use glam::{Quat, Vec3};
-        let nifti_quat = Quat::from_array(loaded.orientation);
-        let base_rot = Quat::from_axis_angle(Vec3::X, std::f32::consts::FRAC_PI_2);
-        view.rotation[0] = (base_rot * nifti_quat).to_array();
+    for (_, (vp, vs)) in world.query_mut::<(&Viewport, &mut ViewportState)>() {
+        if vp.mode == ViewMode::ThreeD {
+            use glam::{Quat, Vec3};
+            let nifti_quat = Quat::from_array(loaded.orientation);
+            let base_rot = Quat::from_axis_angle(Vec3::X, std::f32::consts::FRAC_PI_2);
+            vs.rotation = (base_rot * nifti_quat).to_array();
+        }
     }
 
     loaded.dimensions

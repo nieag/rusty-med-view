@@ -9,14 +9,33 @@ use hecs::World;
 pub fn sys_prepare_render_data(
     world: &mut World,
     entities: &AppEntities,
-    settings_entity: hecs::Entity,
-    view_mode: u32,
+    viewport_entity: hecs::Entity,
 ) -> Uniforms {
-    // 1. Get Window Settings and Viewport Rect
-    let mut resolution = [800.0, 600.0];
-    if let Ok(win) = world.get::<&WindowSettings>(settings_entity) {
-        resolution = [win.viewport_rect[2] / 2.0, win.viewport_rect[3] / 2.0];
-    }
+    // 1. Get Viewport and State
+    let (vp_rect, view_mode, zoom_val, pan, zoom_pivot, rotation) = if let (Ok(vp), Ok(vs)) = (
+        world.get::<&Viewport>(viewport_entity),
+        world.get::<&ViewportState>(viewport_entity),
+    ) {
+        (
+            vp.rect,
+            vp.mode as u32,
+            vs.zoom,
+            vs.pan,
+            vs.pivot,
+            vs.rotation,
+        )
+    } else {
+        (
+            [0.0; 4],
+            0,
+            1.0,
+            [0.0, 0.0],
+            [0.5, 0.5],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+    };
+
+    let resolution = [vp_rect[2], vp_rect[3]];
 
     // 2. Get Cursor
     let mut cursor_pos = [0.0; 4];
@@ -26,23 +45,12 @@ pub fn sys_prepare_render_data(
         cursor_pos[2] = t.position[2];
     }
 
-    let mut zoom_val = 1.0;
-    let mut pan = [0.0, 0.0];
-    let mut zoom_pivot = [0.5, 0.5];
-    let mut rotation = [0.0, 0.0, 0.0, 1.0]; // quaternion [x, y, z, w]
-    if let Ok(view) = world.get::<&ViewState>(entities.view) {
-        zoom_val = view.zoom[view_mode as usize];
-        pan = view.pan[view_mode as usize];
-        zoom_pivot = view.pivot[view_mode as usize];
-        rotation = view.rotation[view_mode as usize];
-    }
-
     // 4. Get Mouse UV
     let mut mouse_uv = [0.5, 0.5];
-    let mut active_viewport = 0u32;
+    let mut active_viewport_entity = None;
     if let Ok(inp) = world.get::<&InputState>(entities.input) {
         mouse_uv = inp.mouse_uv;
-        active_viewport = inp.active_viewport;
+        active_viewport_entity = inp.active_viewport;
     }
 
     // 5. Get Volume Info
@@ -97,12 +105,15 @@ pub fn sys_prepare_render_data(
         }
     }
 
-    if active_viewport > 0 && brush_preview[1] > 0.0 {
-        brush_preview[2] = active_viewport as f32;
+    let is_active = Some(viewport_entity) == active_viewport_entity;
+
+    if is_active && brush_preview[1] > 0.0 {
+        // shader expects view_mode at index 2 for conditional rendering
+        brush_preview[2] = view_mode as f32;
     }
 
-    let brush_center_voxel = if brush_preview[1] > 0.0 && active_viewport > 0 {
-        match get_voxel_at_mouse(world, entities, active_viewport, mouse_uv) {
+    let brush_center_voxel = if is_active && brush_preview[1] > 0.0 {
+        match get_voxel_at_mouse(world, entities, viewport_entity, mouse_uv) {
             Some([x, y, z]) => [x, y, z, 1.0],
             None => [0.0, 0.0, 0.0, 0.0],
         }

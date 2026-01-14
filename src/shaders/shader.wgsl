@@ -369,8 +369,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let pivot = uniforms.zoom_pivot;
         let pan = uniforms.pan;
         let zoomed_uv = (in.uv - pivot) / zoom + pivot + pan;
-        // RADIOLOGICAL: Patient Right (x=+) maps to Screen Left
-        let screen_pos = vec2<f32>(-(zoomed_uv.x - 0.5) * aspect, zoomed_uv.y - 0.5);
+        // RADIOLOGICAL: Patient Right (x=+) maps to Screen Left. Flip Y for vertical orientation.
+        let screen_pos = vec2<f32>(-(zoomed_uv.x - 0.5) * aspect, -(zoomed_uv.y - 0.5));
 
         // --- Volume Rotation Matrix from Quaternion ---
         // This represents the volume's orientation in world space
@@ -437,7 +437,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let dist_x = dot(to_cursor, right);
             let dist_y = dot(to_cursor, up);
             let screen_u = -(dist_x / dist_z) / aspect;
-            let screen_v = (dist_y / dist_z);
+            let screen_v = -(dist_y / dist_z);
             let p_uv = vec2<f32>(screen_u + 0.5, screen_v + 0.5);
             crosshair_screen_pos = (p_uv - pan - pivot) * zoom + pivot;
             
@@ -445,24 +445,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let z2_inv = 1.0 / (dist_z * dist_z);
             
             // X (Red)
-            let wx = rot_mat[0];
+            let wx = rot_mat[0] * aspect_ratio_vol.x;
             ch_v1 = vec2<f32>(
                 -((dot(wx, right) * dist_z - dist_x * dot(wx, forward)) * z2_inv) / aspect,
-                (dot(wx, up) * dist_z - dist_y * dot(wx, forward)) * z2_inv
+                -((dot(wx, up) * dist_z - dist_y * dot(wx, forward)) * z2_inv) // Flipped
             ) * zoom;
             
             // Y (Green)
-            let wy = rot_mat[1];
+            let wy = rot_mat[1] * aspect_ratio_vol.y;
             ch_v2 = vec2<f32>(
                 -((dot(wy, right) * dist_z - dist_x * dot(wy, forward)) * z2_inv) / aspect,
-                (dot(wy, up) * dist_z - dist_y * dot(wy, forward)) * z2_inv
+                -((dot(wy, up) * dist_z - dist_y * dot(wy, forward)) * z2_inv) // Flipped
             ) * zoom;
             
             // Z (Blue)
-            let wz = rot_mat[2];
+            let wz = rot_mat[2] * aspect_ratio_vol.z;
             ch_v3 = vec2<f32>(
                 -((dot(wz, right) * dist_z - dist_x * dot(wz, forward)) * z2_inv) / aspect,
-                (dot(wz, up) * dist_z - dist_y * dot(wz, forward)) * z2_inv
+                -((dot(wz, up) * dist_z - dist_y * dot(wz, forward)) * z2_inv) // Flipped
             ) * zoom;
 
             draw_crosshair = true;
@@ -654,8 +654,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             if dist_z > 0.0 {
                 let dist_x = dot(to_prim, right);
                 let dist_y = dot(to_prim, up);
-                let proj_u = (dist_x / dist_z) / aspect;
-                let proj_v = dist_y / dist_z;
+                let proj_u = -(dist_x / dist_z) / aspect;
+                let proj_v = -(dist_y / dist_z);
                 let p_uv = vec2<f32>(proj_u + 0.5, proj_v + 0.5);
 
                 let zoom = uniforms.zoom;

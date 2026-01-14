@@ -278,7 +278,6 @@ pub fn render_frame(
     overlay_buffer: &wgpu::Buffer,
     world: &mut World,
     entities: &AppEntities,
-    settings_entity: hecs::Entity,
     gui: &mut gui::Gui,
     window: &Arc<Window>,
     event_proxy: winit::event_loop::EventLoopProxy<crate::AppEvent>,
@@ -306,21 +305,22 @@ pub fn render_frame(
         queue.write_buffer(overlay_buffer, 0, &overlay_bytes);
     }
 
-    // 4. Prepare uniforms for all 4 viewports
-    let mut all_uniforms_bytes = Vec::with_capacity(1024);
-    for mode in 0..4 {
-        let mut u = systems::sys_prepare_render_data(world, entities, settings_entity, mode);
+    // 4. Prepare uniforms for all viewports
+    let mut viewports = Vec::new();
+    for (e, vp) in world.query::<&Viewport>().iter() {
+        viewports.push((e, vp.rect, vp.uniform_index));
+    }
+
+    for (e, _, u_idx) in &viewports {
+        let mut u = systems::sys_prepare_render_data(world, entities, *e);
         // Inject overlay data into uniforms
         u.overlay_primitive_count = overlay_count;
         u.overlay_dragging_idx = dragging_idx;
         u.overlay_mouse_uv = overlay_mouse_uv;
 
-        all_uniforms_bytes.extend_from_slice(bytemuck::cast_slice(&[u]));
-        while all_uniforms_bytes.len() % 256 != 0 {
-            all_uniforms_bytes.push(0);
-        }
+        let offset = *u_idx as u64 * 256;
+        queue.write_buffer(uniform_buffer, offset, bytemuck::cast_slice(&[u]));
     }
-    queue.write_buffer(uniform_buffer, 0, &all_uniforms_bytes);
 
     let frame = surface.get_current_texture().unwrap();
     let view = frame
@@ -356,23 +356,6 @@ pub fn render_frame(
         render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
         render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 
-        // Get Viewport Rect from ECS (updated by GUI)
-        let mut vp_rect = [0.0, 0.0, config.width as f32, config.height as f32];
-        {
-            let mut query = world.query::<&WindowSettings>();
-            if let Some((_, settings)) = query.iter().next() {
-                vp_rect = settings.viewport_rect;
-            }
-        }
-
-        let vx = vp_rect[0];
-        let vy = vp_rect[1];
-        let vw = vp_rect[2];
-        let vh = vp_rect[3];
-
-        let hw = vw / 2.0;
-        let hh = vh / 2.0;
-
         // Query the bind group from ECS and render
         {
             let mut query = world
@@ -380,25 +363,11 @@ pub fn render_frame(
                 .with::<&MainVolumeTag>();
             if let Some((_, res)) = query.iter().next() {
                 let bg = &res.bind_group;
-                // Top-Left (3D)
-                render_pass.set_viewport(vx, vy, hw, hh, 0.0, 1.0);
-                render_pass.set_bind_group(0, bg, &[0]);
-                render_pass.draw_indexed(0..num_indices, 0, 0..1);
-
-                // Top-Right (Axial)
-                render_pass.set_viewport(vx + hw, vy, hw, hh, 0.0, 1.0);
-                render_pass.set_bind_group(0, bg, &[256]);
-                render_pass.draw_indexed(0..num_indices, 0, 0..1);
-
-                // Bottom-Left (Coronal)
-                render_pass.set_viewport(vx, vy + hh, hw, hh, 0.0, 1.0);
-                render_pass.set_bind_group(0, bg, &[512]);
-                render_pass.draw_indexed(0..num_indices, 0, 0..1);
-
-                // Bottom-Right (Sagittal)
-                render_pass.set_viewport(vx + hw, vy + hh, hw, hh, 0.0, 1.0);
-                render_pass.set_bind_group(0, bg, &[768]);
-                render_pass.draw_indexed(0..num_indices, 0, 0..1);
+                for (_, rect, u_idx) in &viewports {
+                    render_pass.set_viewport(rect[0], rect[1], rect[2], rect[3], 0.0, 1.0);
+                    render_pass.set_bind_group(0, bg, &[*u_idx * 256]);
+                    render_pass.draw_indexed(0..num_indices, 0, 0..1);
+                }
             }
         }
     }

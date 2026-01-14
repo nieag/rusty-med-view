@@ -15,8 +15,8 @@ pub fn draw_gizmo(ui: &mut Ui, rect: Rect, view_rotation: Quat) {
     // Define axes with medical standard labels
     // X = Right/Left, Y = Anterior/Posterior, Z = Superior/Inferior
     let axes = [
-        (Vec3::X, "L", Color32::from_rgb(255, 100, 100)), // Right (Red)
-        (Vec3::NEG_X, "R", Color32::from_rgb(180, 60, 60)), // Left
+        (Vec3::X, "R", Color32::from_rgb(255, 100, 100)), // Right (Red)
+        (Vec3::NEG_X, "L", Color32::from_rgb(180, 60, 60)), // Left
         (Vec3::Y, "A", Color32::from_rgb(100, 255, 100)), // Anterior (Green)
         (Vec3::NEG_Y, "P", Color32::from_rgb(60, 180, 60)), // Posterior
         (Vec3::Z, "S", Color32::from_rgb(100, 150, 255)), // Superior (Blue)
@@ -41,13 +41,10 @@ pub fn draw_gizmo(ui: &mut Ui, rect: Rect, view_rotation: Quat) {
 
             // Project to 2D (orthographic)
             // Flip Y because screen Y is down, 3D Y is up
-            // UPDATE: Volume Shader uses Screen Top = -Y, Bottom = +Y.
-            // EgUi Painter uses Screen Top = 0, Bottom = Height.
-            // To match Volume: Rotated.Y (Up in 3D) should map to Larger Screen Y (Down).
-            // Default center.y - rotated[1] maps +Y to Top. We want +Y to Bottom.
             // RADIOLOGICAL: Rotated.X (Right) should map to Left on screen.
+            // AND we now have a vertical flip in the main 3D view too.
             let screen_x = center.x - rotated[0] * axis_length;
-            let screen_y = center.y + rotated[1] * axis_length;
+            let screen_y = center.y - rotated[1] * axis_length; // Match main 3D view's fix
 
             TransformedAxis {
                 pos2: Pos2::new(screen_x, screen_y),

@@ -18,17 +18,60 @@ pub struct Transform {
     pub position: [f32; 3],
 }
 
-pub struct ViewState {
-    pub zoom: [f32; 4],
-    pub pan: [[f32; 2]; 4],
-    pub pivot: [[f32; 2]; 4],
-    pub rotation: [[f32; 4]; 4],
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    ThreeD = 0,
+    Axial = 1,
+    Coronal = 2,
+    Sagittal = 3,
+}
+
+pub struct Viewport {
+    pub mode: ViewMode,
+    pub rect: [f32; 4], // [x, y, w, h] in pixels (physical)
+    pub uniform_index: u32,
+}
+
+pub struct ViewportState {
+    pub zoom: f32,
+    pub pan: [f32; 2],
+    pub pivot: [f32; 2],
+    pub rotation: [f32; 4],
+}
+
+/// Viewport Layout (Normalized 0..1 coordinates)
+pub struct ViewportLayout {
+    pub relative_rect: [f32; 4], // [x, y, w, h]
+}
+
+/// Global Protocol State
+pub struct ProtocolState {
+    pub active_protocol: String,
+}
+
+impl Default for ProtocolState {
+    fn default() -> Self {
+        Self {
+            active_protocol: "Standard 2x2".to_string(),
+        }
+    }
+}
+
+impl Default for ViewportState {
+    fn default() -> Self {
+        Self {
+            zoom: 1.0,
+            pan: [0.0, 0.0],
+            pivot: [0.5, 0.5],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+        }
+    }
 }
 
 pub struct InputState {
     pub last_mouse_pos: [f64; 2],
     pub mouse_uv: [f32; 2],
-    pub active_viewport: u32,
+    pub active_viewport: Option<hecs::Entity>,
     pub modifiers: ModifiersState,
     pub is_dragging: bool,
     pub is_panning: bool,
@@ -205,12 +248,12 @@ pub struct AnnotationState {
 #[derive(Clone, Copy)]
 pub struct AppEntities {
     pub input: hecs::Entity,
-    pub view: hecs::Entity,
     pub editor: hecs::Entity,
     pub gui_state: hecs::Entity,
     pub volume_windowing: hecs::Entity,
     pub annotations: hecs::Entity,
     pub overlay: hecs::Entity,
+    pub protocol: hecs::Entity,
     pub cursor: hecs::Entity,
     pub window_settings: hecs::Entity,
 }

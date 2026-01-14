@@ -5,15 +5,15 @@ use hecs::World;
 
 /// Get the HU intensity value at the current mouse position.
 pub fn get_hu_at_mouse(world: &World, entities: &AppEntities) -> Option<f32> {
-    let (viewport, mouse_uv) = {
+    let (viewport_entity, mouse_uv) = {
         if let Ok(input) = world.get::<&InputState>(entities.input) {
             (input.active_viewport, input.mouse_uv)
         } else {
-            (0, [0.5, 0.5])
+            (None, [0.5, 0.5])
         }
     };
 
-    let voxel_pos = get_voxel_at_mouse(world, entities, viewport, mouse_uv)?;
+    let voxel_pos = get_voxel_at_mouse(world, entities, viewport_entity?, mouse_uv)?;
 
     let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
     if let Some((_, vol)) = query.iter().next() {
@@ -37,14 +37,16 @@ pub fn get_hu_at_mouse(world: &World, entities: &AppEntities) -> Option<f32> {
 pub fn get_voxel_at_mouse(
     world: &World,
     entities: &AppEntities,
-    viewport: u32,
+    viewport_entity: hecs::Entity,
     mouse_uv: [f32; 2],
 ) -> Option<[f32; 3]> {
-    let (zoom, pan, rotation) = if let Ok(view) = world.get::<&ViewState>(entities.view) {
-        let idx = viewport as usize;
-        (view.zoom[idx], view.pan[idx], view.rotation[idx])
+    let (zoom, pan, rotation, mode) = if let (Ok(vp), Ok(vs)) = (
+        world.get::<&Viewport>(viewport_entity),
+        world.get::<&ViewportState>(viewport_entity),
+    ) {
+        (vs.zoom, vs.pan, vs.rotation, vp.mode)
     } else {
-        (1.0, [0.0, 0.0], [0.0, 0.0, 0.0, 1.0])
+        (1.0, [0.0, 0.0], [0.0, 0.0, 0.0, 1.0], ViewMode::ThreeD)
     };
 
     let viewport_rect = world
@@ -66,7 +68,7 @@ pub fn get_voxel_at_mouse(
         .map(|t| t.position)
         .unwrap_or([0.0, 0.0, 0.0]);
 
-    if viewport > 0 {
+    if mode != ViewMode::ThreeD {
         // --- 2D Slices ---
         let screen_w = viewport_rect[2];
         let screen_h = viewport_rect[3];
@@ -75,7 +77,7 @@ pub fn get_voxel_at_mouse(
         } else {
             1.0
         };
-        let plane = crate::orientation::SlicePlane::from_viewport(viewport)?;
+        let plane = crate::orientation::SlicePlane::from_mode(mode)?;
         let slice_aspect = plane.slice_aspect(vol_aspects);
         let k = screen_aspect / slice_aspect;
 
@@ -113,8 +115,8 @@ pub fn get_voxel_at_mouse(
                 (mouse_uv[1] - pivot[1]) / zoom + pivot[1] + pan[1],
             ];
             let uv = [zoomed_uv[0] - 0.5, zoomed_uv[1] - 0.5];
-            // RADIOLOGICAL: Flip X to match shader (Patient Right on Screen Left)
-            let screen_pos = [-uv[0] * aspect, uv[1]];
+            // RADIOLOGICAL: Flip X (Patient Right on Screen Left). Flip Y (Vertical screen orientation).
+            let screen_pos = [-uv[0] * aspect, -uv[1]];
 
             let cam_pos_world = [0.0, 0.0, -3.5];
             let forward = [0.0, 0.0, 1.0];
