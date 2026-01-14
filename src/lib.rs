@@ -33,6 +33,9 @@ pub enum AppEvent {
     SwitchProtocol(String),
     ToggleMaximize(hecs::Entity),
     SwapViewports(hecs::Entity, hecs::Entity),
+    FocusAnnotation(uuid::Uuid),
+    AddComment(uuid::Uuid, String),
+    DeleteAnnotation(uuid::Uuid),
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -254,6 +257,8 @@ impl App {
         // Initialize Annotations
         let annotations = world.spawn((AnnotationState {
             annotations: vec![],
+            focused_id: None,
+            show_right_sidebar: false,
         },));
 
         // Initialize Overlay State for GPU-rendered primitives
@@ -631,6 +636,43 @@ impl ApplicationHandler<AppEvent> for App {
             }
             AppEvent::SwapViewports(a, b) => {
                 protocols::swap_viewports(&mut ctx.world, &ctx.entities, a, b);
+                ctx.window.request_redraw();
+            }
+            AppEvent::FocusAnnotation(id) => {
+                if let Ok(mut state) = ctx
+                    .world
+                    .get::<&mut AnnotationState>(ctx.entities.annotations)
+                {
+                    state.focused_id = Some(id);
+                    state.show_right_sidebar = true;
+                }
+                ctx.window.request_redraw();
+            }
+            AppEvent::AddComment(id, text) => {
+                if let Ok(mut state) = ctx
+                    .world
+                    .get::<&mut AnnotationState>(ctx.entities.annotations)
+                {
+                    if let Some(ann) = state.annotations.iter_mut().find(|a| a.id == id) {
+                        ann.comments.push(Comment {
+                            author: "User".to_string(), // Placeholder for now
+                            text,
+                            timestamp: std::time::SystemTime::now(),
+                        });
+                    }
+                }
+                ctx.window.request_redraw();
+            }
+            AppEvent::DeleteAnnotation(id) => {
+                if let Ok(mut state) = ctx
+                    .world
+                    .get::<&mut AnnotationState>(ctx.entities.annotations)
+                {
+                    state.annotations.retain(|a| a.id != id);
+                    if state.focused_id == Some(id) {
+                        state.focused_id = None;
+                    }
+                }
                 ctx.window.request_redraw();
             }
         }

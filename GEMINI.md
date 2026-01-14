@@ -86,6 +86,13 @@ The system supports raw **Hounsfield Unit (HU)** based windowing and translucent
 - **Data Format**: `R32Float` for raw intensities; `R8Uint` for label textures.
 - **2D vs 3D**: 2D slices use alpha-blended translucency; 3D view treats labels as solid, ray-terminating structures.
 
+### Annotation Discussion Workflow
+Implemented a collaborative clinical note-taking system:
+- **Stable IDs**: Annotations use `uuid::Uuid` for stable cross-viewport and discussion mapping.
+- **Threaded UI**: A reactive right-sidebar handles multi-line notes and threaded user comments.
+- **Slice-Awareness**: To minimize clutter, 2D viewports filter annotations based on their proximity (depth) to the active crosshair slice using the centralized orientation API.
+- **Global landmarking**: Annotations remain always visible in the 3D perspective view for spatial reference.
+
 ### Startup State & Empty Viewports
 To prevent shader artifacts (like NaN aspect ratios) when no data is loaded:
 - **Guard**: `shader.wgsl` implements an early-exit if `volume_dims` are zero, returning solid black.

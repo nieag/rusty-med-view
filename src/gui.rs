@@ -175,11 +175,31 @@ impl Gui {
                         }
                     }
 
-                    if let Some(msg) = status_msg {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if let Ok(mut state) =
+                            world.get::<&mut AnnotationState>(entities.annotations)
+                        {
+                            let icon = if state.show_right_sidebar {
+                                "📝"
+                            } else {
+                                "🗒"
+                            };
+                            if ui
+                                .selectable_label(
+                                    state.show_right_sidebar,
+                                    format!("{} Notes", icon),
+                                )
+                                .on_hover_text("Toggle Discussion Sidebar")
+                                .clicked()
+                            {
+                                state.show_right_sidebar = !state.show_right_sidebar;
+                            }
+                        }
+
+                        if let Some(msg) = status_msg {
                             ui.label(egui::RichText::new(msg).color(egui::Color32::LIGHT_BLUE));
-                        });
-                    }
+                        }
+                    });
                 });
             });
 
@@ -362,53 +382,62 @@ impl Gui {
                             if let Ok(mut state) =
                                 world.get::<&mut AnnotationState>(entities.annotations)
                             {
+                                let next_idx = state.annotations.len() + 1;
+                                let new_id = uuid::Uuid::new_v4();
                                 state.annotations.push(Annotation {
+                                    id: new_id,
                                     world_pos: current_pos,
-                                    label: "New".to_string(),
+                                    label: format!("Note {}", next_idx),
+                                    note: String::new(),
+                                    comments: vec![],
                                 });
+                                state.focused_id = Some(new_id);
+                                state.show_right_sidebar = true;
+                            }
+                        }
+
+                        if ui.button("📁 View All Notes").clicked() {
+                            if let Ok(mut state) =
+                                world.get::<&mut AnnotationState>(entities.annotations)
+                            {
+                                state.focused_id = None;
+                                state.show_right_sidebar = true;
                             }
                         }
 
                         ui.separator();
 
-                        let mut to_delete = None;
-                        let mut to_locate = None;
-
+                        if let Ok(mut state) =
+                            world.get::<&mut AnnotationState>(entities.annotations)
                         {
-                            if let Ok(mut state) =
-                                world.get::<&mut AnnotationState>(entities.annotations)
-                            {
-                                for (i, ann) in state.annotations.iter_mut().enumerate() {
-                                    ui.horizontal(|ui| {
-                                        if ui.button("🎯").on_hover_text("Locate").clicked() {
-                                            to_locate = Some(ann.world_pos);
+                            if !state.annotations.is_empty() {
+                                egui::ScrollArea::vertical()
+                                    .max_height(200.0)
+                                    .show(ui, |ui| {
+                                        let mut to_focus = None;
+                                        for ann in &state.annotations {
+                                            let is_focused = state.focused_id == Some(ann.id);
+                                            if ui
+                                                .selectable_label(
+                                                    is_focused,
+                                                    format!("📍 {}", ann.label),
+                                                )
+                                                .clicked()
+                                            {
+                                                to_focus = Some(ann.id);
+                                            }
                                         }
-                                        ui.text_edit_singleline(&mut ann.label);
-                                        if ui.button("🗑").clicked() {
-                                            to_delete = Some(i);
+                                        if let Some(id) = to_focus {
+                                            state.focused_id = Some(id);
+                                            state.show_right_sidebar = true;
                                         }
                                     });
-                                }
-
-                                if let Some(idx) = to_delete {
-                                    state.annotations.remove(idx);
-                                }
-                            }
-                        }
-
-                        if let Some(pos) = to_locate {
-                            if let Ok(mut t) = world.get::<&mut Transform>(entities.cursor) {
-                                t.position = pos.into();
-                            }
-                            for (_, (vp, vs)) in
-                                world.query_mut::<(&Viewport, &mut ViewportState)>()
-                            {
-                                vs.pan = match vp.mode {
-                                    ViewMode::Axial => [pos.x - 0.5, pos.y - 0.5],
-                                    ViewMode::Coronal => [pos.x - 0.5, pos.z - 0.5],
-                                    ViewMode::Sagittal => [pos.y - 0.5, pos.z - 0.5],
-                                    _ => vs.pan,
-                                };
+                            } else {
+                                ui.label(
+                                    egui::RichText::new("No notes yet.")
+                                        .size(10.0)
+                                        .color(egui::Color32::GRAY),
+                                );
                             }
                         }
                     });
@@ -683,34 +712,295 @@ impl Gui {
                 }
             }
 
-            // --- Instruction Overlay if empty ---
-            if volume_info.is_none() {
-                egui::Area::new("instructions".into())
-                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            // 3. Viewport Rect Calculation (Data-Driven by ViewportLayout)
+            let central_rect = ctx.available_rect();
+            let pixels_per_point = ctx.pixels_per_point();
+
+            let x0 = central_rect.min.x;
+            let y0 = central_rect.min.y;
+            let cw = central_rect.width();
+            let ch = central_rect.height();
+
+            let mut vps = Vec::new();
+            for (e, (vp, layout, _)) in
+                world.query_mut::<(&mut Viewport, &ViewportLayout, &ViewportState)>()
+            {
+                let rel = layout.relative_rect;
+                let rect = egui::Rect::from_min_size(
+                    egui::pos2(x0 + rel[0] * cw, y0 + rel[1] * ch),
+                    egui::vec2(rel[2] * cw, rel[3] * ch),
+                );
+
+                vp.rect = [
+                    rect.min.x * pixels_per_point,
+                    rect.min.y * pixels_per_point,
+                    rect.width() * pixels_per_point,
+                    rect.height() * pixels_per_point,
+                ];
+                vps.push((e, vp.mode, rect));
+            }
+
+            for (_, settings) in world.query_mut::<&mut WindowSettings>() {
+                settings.viewport_rect = [
+                    x0 * pixels_per_point,
+                    y0 * pixels_per_point,
+                    central_rect.width() * pixels_per_point,
+                    central_rect.height() * pixels_per_point,
+                ];
+            }
+
+            // --- Right Sidebar (Discussion Workflow) ---
+            let show_sidebar = world
+                .get::<&AnnotationState>(entities.annotations)
+                .map(|s| s.show_right_sidebar)
+                .unwrap_or(false);
+            if show_sidebar {
+                egui::SidePanel::right("discussion_panel")
+                    .resizable(true)
+                    .default_width(320.0)
                     .show(ctx, |ui| {
-                        ui.vertical_centered(|ui| {
-                            ui.add_space(20.0);
-                            ui.label(
-                                egui::RichText::new("No data loaded")
-                                    .size(32.0)
-                                    .strong()
-                                    .color(egui::Color32::from_gray(180)),
-                            );
-                            ui.label(
-                                egui::RichText::new(
-                                    "Use \u{1f4c2} Load Main Volume (NIfTI) to get started",
-                                )
-                                .size(18.0)
-                                .color(egui::Color32::from_gray(140)),
-                            );
+                        ui.heading("💬 Discussion");
+                        ui.separator();
+
+                        let mut to_delete = None;
+                        let mut to_locate = None;
+                        let mut comment_to_add = None;
+                        let mut new_focus = None;
+                        let mut back_to_list = false;
+
+                        if let Ok(mut state) =
+                            world.get::<&mut AnnotationState>(entities.annotations)
+                        {
+                            if let Some(focused_id) = state.focused_id {
+                                let ann_idx =
+                                    state.annotations.iter().position(|a| a.id == focused_id);
+                                if let Some(idx) = ann_idx {
+                                    let ann = &mut state.annotations[idx];
+                                    ui.horizontal(|ui| {
+                                        if ui.button("⬅").on_hover_text("Back to List").clicked()
+                                        {
+                                            back_to_list = true;
+                                        }
+                                        ui.add(
+                                            egui::TextEdit::singleline(&mut ann.label)
+                                                .font(egui::FontId::proportional(20.0)),
+                                        );
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if ui.button("🗑").on_hover_text("Delete").clicked()
+                                                {
+                                                    to_delete = Some(ann.id);
+                                                }
+                                                if ui.button("🎯").on_hover_text("Locate").clicked()
+                                                {
+                                                    to_locate = Some(ann.world_pos);
+                                                }
+                                            },
+                                        );
+                                    });
+
+                                    ui.add_space(4.0);
+                                    ui.label(egui::RichText::new("Notes").strong());
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut ann.note)
+                                            .hint_text("Add clinical observation notes...")
+                                            .desired_rows(5)
+                                            .desired_width(ui.available_width()),
+                                    );
+
+                                    ui.separator();
+                                    ui.label(egui::RichText::new("thread").strong());
+
+                                    egui::ScrollArea::vertical()
+                                        .max_height(300.0)
+                                        .show(ui, |ui| {
+                                            for comment in &ann.comments {
+                                                let response = ui
+                                                    .group(|ui| {
+                                                        ui.horizontal(|ui| {
+                                                            ui.label(
+                                                                egui::RichText::new(
+                                                                    &comment.author,
+                                                                )
+                                                                .strong()
+                                                                .color(egui::Color32::LIGHT_BLUE),
+                                                            );
+                                                            ui.label(
+                                                                egui::RichText::new("Just now")
+                                                                    .size(10.0)
+                                                                    .color(egui::Color32::GRAY),
+                                                            );
+                                                        });
+                                                        ui.label(&comment.text);
+                                                    })
+                                                    .response;
+
+                                                if response.hovered() {
+                                                    ui.painter().rect_filled(
+                                                        response.rect,
+                                                        2.0,
+                                                        egui::Color32::from_white_alpha(10),
+                                                    );
+                                                }
+                                            }
+                                            if ann.comments.is_empty() {
+                                                ui.label(
+                                                    egui::RichText::new("No comments yet.")
+                                                        .italics()
+                                                        .color(egui::Color32::GRAY),
+                                                );
+                                            }
+                                        });
+
+                                    ui.separator();
+                                    ui.horizontal(|ui| {
+                                        let dnd_id = egui::Id::new("comment_input");
+                                        let mut input_text = ctx.memory(|mem| {
+                                            mem.data.get_temp::<String>(dnd_id).unwrap_or_default()
+                                        });
+                                        let res = ui.add(
+                                            egui::TextEdit::singleline(&mut input_text)
+                                                .hint_text("Type a reply..."),
+                                        );
+                                        if (res.lost_focus()
+                                            && ctx.input(|i| i.key_pressed(egui::Key::Enter)))
+                                            || ui.button("Send").clicked()
+                                        {
+                                            if !input_text.is_empty() {
+                                                comment_to_add =
+                                                    Some((focused_id, input_text.clone()));
+                                                input_text.clear();
+                                            }
+                                        }
+                                        ctx.memory_mut(|mem| {
+                                            mem.data.insert_temp(dnd_id, input_text)
+                                        });
+                                    });
+                                } else {
+                                    back_to_list = true;
+                                }
+                            } else {
+                                ui.vertical(|ui| {
+                                    ui.add_space(8.0);
+                                    if state.annotations.is_empty() {
+                                        ui.vertical_centered(|ui| {
+                                            ui.add_space(50.0);
+                                            ui.label("No annotations yet.");
+                                            ui.label("Click \"Add at Cursor\" in the left panel.");
+                                        });
+                                    } else {
+                                        egui::ScrollArea::vertical().show(ui, |ui| {
+                                            for ann in &state.annotations {
+                                                let response = ui
+                                                    .group(|ui| {
+                                                        ui.horizontal(|ui| {
+                                                            ui.label(
+                                                                egui::RichText::new(&ann.label)
+                                                                    .strong(),
+                                                            );
+                                                            ui.with_layout(
+                                                                egui::Layout::right_to_left(
+                                                                    egui::Align::Center,
+                                                                ),
+                                                                |ui| {
+                                                                    if ui
+                                                                        .button("🗑")
+                                                                        .on_hover_text("Delete")
+                                                                        .clicked()
+                                                                    {
+                                                                        to_delete = Some(ann.id);
+                                                                    }
+                                                                    if ui
+                                                                        .button("🎯")
+                                                                        .on_hover_text("Locate")
+                                                                        .clicked()
+                                                                    {
+                                                                        to_locate =
+                                                                            Some(ann.world_pos);
+                                                                    }
+                                                                },
+                                                            );
+                                                        });
+                                                        let preview = if ann.note.len() > 64 {
+                                                            format!("{}...", &ann.note[..61])
+                                                        } else {
+                                                            ann.note.clone()
+                                                        };
+                                                        if !preview.is_empty() {
+                                                            ui.label(
+                                                                egui::RichText::new(preview)
+                                                                    .size(12.0)
+                                                                    .color(egui::Color32::GRAY),
+                                                            );
+                                                        } else {
+                                                            ui.label(
+                                                                egui::RichText::new(
+                                                                    "No notes yet...",
+                                                                )
+                                                                .italics()
+                                                                .color(egui::Color32::DARK_GRAY)
+                                                                .size(11.0),
+                                                            );
+                                                        }
+                                                    })
+                                                    .response
+                                                    .interact(egui::Sense::click());
+
+                                                if response.clicked() {
+                                                    new_focus = Some(ann.id);
+                                                }
+                                                if response.hovered() {
+                                                    ui.painter().rect_filled(
+                                                        response.rect,
+                                                        4.0,
+                                                        egui::Color32::from_white_alpha(15),
+                                                    );
+                                                }
+                                            }
+                                        });
+                                    }
+                                });
+                            }
+
+                            if back_to_list {
+                                state.focused_id = None;
+                            }
+                            if let Some(id) = new_focus {
+                                state.focused_id = Some(id);
+                            }
+                        }
+
+                        // Apply pending actions
+                        if let Some(id) = to_delete {
+                            let _ = event_proxy.send_event(AppEvent::DeleteAnnotation(id));
+                        }
+                        if let Some(pos) = to_locate {
+                            if let Ok(mut t) = world.get::<&mut Transform>(entities.cursor) {
+                                t.position = pos.into();
+                            }
+                        }
+                        if let Some((id, text)) = comment_to_add {
+                            let _ = event_proxy.send_event(AppEvent::AddComment(id, text));
+                        }
+
+                        ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                            if ui.button("Close Sidebar").clicked() {
+                                if let Ok(mut state) =
+                                    world.get::<&mut AnnotationState>(entities.annotations)
+                                {
+                                    state.show_right_sidebar = false;
+                                }
+                            }
                         });
                     });
             }
 
             // --- Draw Annotations ---
+            let mut clicked_id = None;
             egui::Area::new("annotations_layer".into())
                 .fixed_pos(central_rect.min)
-                .interactable(false)
+                .interactable(true)
                 .show(ctx, |ui| {
                     let mut vd_query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
                     let vol_data = vd_query.iter().next().map(|(_, vd)| vd);
@@ -720,23 +1010,44 @@ impl Gui {
                         world.get::<&mut OverlayManager>(entities.overlay),
                         vol_data,
                     ) {
+                        let focused_id = state.focused_id;
                         let items = &mut state.annotations;
 
                         // Loop over all viewports to draw annotations in each
+                        let cursor_pos = world
+                            .get::<&Transform>(entities.cursor)
+                            .map(|t| glam::Vec3::from(t.position))
+                            .unwrap_or(glam::Vec3::ZERO);
+
                         for (e, mode, rect) in vps {
                             if let Ok(vs) = world.get::<&ViewportState>(e) {
-                                draw_annotations(ui, items, &vs, vd, rect, mode, &mut overlay);
+                                if let Some(id) = draw_annotations(
+                                    ui,
+                                    items,
+                                    &vs,
+                                    vd,
+                                    rect,
+                                    mode,
+                                    &mut overlay,
+                                    focused_id,
+                                    cursor_pos,
+                                ) {
+                                    clicked_id = Some(id);
+                                }
                             }
                         }
                     }
                 });
-        });
 
-        // Update input state flag
-        if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
-            input.egui_wants_input =
-                self.context.wants_pointer_input() || self.context.is_using_pointer();
-        }
+            if let Some(id) = clicked_id {
+                let _ = event_proxy.send_event(AppEvent::FocusAnnotation(id));
+            }
+
+            // Update input state flag
+            if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+                input.egui_wants_input = ctx.wants_pointer_input() || ctx.is_using_pointer();
+            }
+        });
 
         self.output = Some(full_output);
     }
@@ -811,12 +1122,16 @@ fn draw_annotations(
     rect: egui::Rect,
     mode: ViewMode,
     overlay: &mut OverlayManager,
-) {
+    focused_id: Option<uuid::Uuid>,
+    cursor_pos: glam::Vec3,
+) -> Option<uuid::Uuid> {
     let aspect_ratios = vol.aspect_ratios();
 
     if vol.dimensions[0] == 0 {
-        return;
+        return None;
     }
+
+    let mut clicked_id = None;
 
     let viewport_idx = match mode {
         ViewMode::ThreeD => 0,
@@ -826,6 +1141,18 @@ fn draw_annotations(
     };
 
     for (idx, ann) in annotations.iter_mut().enumerate() {
+        // --- Slice filtering for 2D views ---
+        if let Some(plane) = crate::orientation::SlicePlane::from_mode(mode) {
+            let axis = plane.depth_axis();
+            let ann_depth = ann.world_pos[axis];
+            let current_depth = cursor_pos[axis];
+
+            // Threshold: 0.01 is roughly half a voxel in standard 1mm volumes
+            if (ann_depth - current_depth).abs() > 0.005 {
+                continue;
+            }
+        }
+
         if let Some(screen_pos) = world_to_screen(
             ann.world_pos,
             viewport_idx,
@@ -837,14 +1164,18 @@ fn draw_annotations(
             rect,
         ) {
             let sense = if viewport_idx > 0 {
-                egui::Sense::drag()
+                egui::Sense::click_and_drag()
             } else {
-                egui::Sense::hover()
+                egui::Sense::click()
             };
-            let id = ui.make_persistent_id(format!("ann_{}_{}", viewport_idx, idx));
+            let id = ui.make_persistent_id(format!("ann_{}_{}", viewport_idx, ann.id));
 
-            let point_rect = egui::Rect::from_center_size(screen_pos, egui::vec2(16.0, 16.0));
+            let point_rect = egui::Rect::from_center_size(screen_pos, egui::vec2(24.0, 24.0));
             let response = ui.interact(point_rect, id, sense);
+
+            if response.clicked() {
+                clicked_id = Some(ann.id);
+            }
 
             if viewport_idx > 0 && response.dragged() {
                 overlay.dragging_idx = Some(idx);
@@ -911,15 +1242,58 @@ fn draw_annotations(
                 .unwrap_or(screen_pos)
             };
 
+            let is_focused = focused_id == Some(ann.id);
+            let is_hovered = response.hovered();
+
+            ui.painter().circle_stroke(
+                draw_pos,
+                if is_focused {
+                    8.0
+                } else if is_hovered {
+                    6.0
+                } else {
+                    4.0
+                },
+                egui::Stroke::new(
+                    if is_focused {
+                        3.0
+                    } else if is_hovered {
+                        2.5
+                    } else {
+                        2.0
+                    },
+                    if is_focused {
+                        egui::Color32::from_rgb(255, 100, 100)
+                    } else if is_hovered {
+                        egui::Color32::from_rgb(255, 200, 200)
+                    } else {
+                        egui::Color32::WHITE
+                    },
+                ),
+            );
+
             ui.painter().text(
                 draw_pos + egui::vec2(8.0, -8.0),
                 egui::Align2::LEFT_BOTTOM,
                 &ann.label,
-                egui::FontId::proportional(14.0),
-                egui::Color32::WHITE,
+                egui::FontId::proportional(if is_focused {
+                    16.0
+                } else if is_hovered {
+                    15.0
+                } else {
+                    14.0
+                }),
+                if is_focused {
+                    egui::Color32::from_rgb(255, 100, 100)
+                } else if is_hovered {
+                    egui::Color32::from_rgb(255, 200, 200)
+                } else {
+                    egui::Color32::WHITE
+                },
             );
         }
     }
+    clicked_id
 }
 
 fn world_to_screen(

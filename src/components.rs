@@ -235,16 +235,28 @@ pub struct LoadedLabel {
     pub filename: String,
 }
 
-// --- ANNOTATIONS (kept for labels/text, positions sync to OverlayState) ---
+// --- ANNOTATIONS (Threaded discussions and notes) ---
+#[derive(Clone, Debug)]
+pub struct Comment {
+    pub author: String,
+    pub text: String,
+    pub timestamp: std::time::SystemTime,
+}
+
 #[derive(Clone, Debug)]
 pub struct Annotation {
+    pub id: uuid::Uuid,
     pub world_pos: Vec3,
     pub label: String,
+    pub note: String,
+    pub comments: Vec<Comment>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct AnnotationState {
     pub annotations: Vec<Annotation>,
+    pub focused_id: Option<uuid::Uuid>,
+    pub show_right_sidebar: bool,
 }
 
 // --- Singleton Entity Registry ---
