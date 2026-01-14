@@ -281,9 +281,9 @@ pub fn render_frame(
     gui: &mut gui::Gui,
     window: &Arc<Window>,
     event_proxy: winit::event_loop::EventLoopProxy<crate::AppEvent>,
-) {
+) -> std::time::Duration {
     if config.width == 0 || config.height == 0 {
-        return;
+        return std::time::Duration::MAX;
     }
 
     // 0. Process interaction and updates once per frame, right before rendering
@@ -376,8 +376,10 @@ pub fn render_frame(
         size_in_pixels: [config.width, config.height],
         pixels_per_point: window.scale_factor() as f32,
     };
-    gui.render(device, queue, &mut encoder, &view, &screen_descriptor);
+    let repaint_after = gui.render(device, queue, &mut encoder, &view, &screen_descriptor);
 
     queue.submit(std::iter::once(encoder.finish()));
     frame.present();
+
+    repaint_after
 }

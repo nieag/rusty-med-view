@@ -60,6 +60,9 @@ pub fn sys_handle_mouse_button(
     }
 
     if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+        if input.egui_wants_input {
+            return;
+        }
         active_vp = input.active_viewport;
         alt_pressed = input.modifiers.alt_key();
 
@@ -137,6 +140,9 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
     let mut is_zoom = false;
 
     if let Ok(input) = world.get::<&InputState>(entities.input) {
+        if input.egui_wants_input {
+            return;
+        }
         active_vp = input.active_viewport;
         mouse_uv = input.mouse_uv;
         is_zoom = input.modifiers.control_key();
@@ -243,6 +249,9 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
     }
 
     if let Ok(input) = world.get::<&InputState>(entities.input) {
+        if input.egui_wants_input && !input.is_dragging && !input.is_rotating && !input.is_panning {
+            return;
+        }
         active_vp = input.active_viewport;
         is_dragging = input.is_dragging;
         is_rotating = input.is_rotating;

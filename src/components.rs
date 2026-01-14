@@ -32,6 +32,7 @@ pub struct Viewport {
     pub uniform_index: u32,
 }
 
+#[derive(Clone, Copy)]
 pub struct ViewportState {
     pub zoom: f32,
     pub pan: [f32; 2],
@@ -47,12 +48,14 @@ pub struct ViewportLayout {
 /// Global Protocol State
 pub struct ProtocolState {
     pub active_protocol: String,
+    pub last_protocol: Option<String>,
 }
 
 impl Default for ProtocolState {
     fn default() -> Self {
         Self {
             active_protocol: "Standard 2x2".to_string(),
+            last_protocol: None,
         }
     }
 }

@@ -22,6 +22,18 @@ pub fn get_protocol_registry() -> Vec<HangingProtocol> {
             viewports: vec![(ViewMode::Axial, [0.0, 0.0, 1.0, 1.0])],
         },
         HangingProtocol {
+            name: "Single 3D".to_string(),
+            viewports: vec![(ViewMode::ThreeD, [0.0, 0.0, 1.0, 1.0])],
+        },
+        HangingProtocol {
+            name: "Single Coronal".to_string(),
+            viewports: vec![(ViewMode::Coronal, [0.0, 0.0, 1.0, 1.0])],
+        },
+        HangingProtocol {
+            name: "Single Sagittal".to_string(),
+            viewports: vec![(ViewMode::Sagittal, [0.0, 0.0, 1.0, 1.0])],
+        },
+        HangingProtocol {
             name: "Clinical Triple".to_string(),
             viewports: vec![
                 (ViewMode::ThreeD, [0.0, 0.0, 0.5, 1.0]),
@@ -38,6 +50,16 @@ pub fn apply_protocol(world: &mut World, entities: &AppEntities, protocol_name: 
         .iter()
         .find(|p| p.name == protocol_name)
         .unwrap_or(&registry[0]);
+
+    // If we are maximizing (going to a Single view), remember what we had before
+    if let Ok(mut proto_state) = world.get::<&mut ProtocolState>(entities.protocol) {
+        // If we are maximizing (going to a Single view), remember what we had before
+        if protocol_name.starts_with("Single") && !proto_state.active_protocol.starts_with("Single")
+        {
+            proto_state.last_protocol = Some(proto_state.active_protocol.clone());
+        }
+        proto_state.active_protocol = protocol_name.to_string();
+    }
 
     // 1. Remove existing viewports
     let to_remove: Vec<Entity> = world.query::<&Viewport>().iter().map(|(e, _)| e).collect();
@@ -64,14 +86,76 @@ pub fn apply_protocol(world: &mut World, entities: &AppEntities, protocol_name: 
         }
     }
 
-    // 3. Update active viewport and protocol name
+    // 3. Update active viewport
     if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
         if let Some(e) = first_vp {
             input.active_viewport = Some(e);
         }
     }
+}
 
-    if let Ok(mut proto_state) = world.get::<&mut ProtocolState>(entities.protocol) {
-        proto_state.active_protocol = protocol_name.to_string();
+pub fn toggle_maximize(world: &mut World, entities: &AppEntities, vp_entity: Entity) {
+    let (mode, is_already_maximized) = {
+        let proto_state = world.get::<&ProtocolState>(entities.protocol).unwrap();
+        let vp = world.get::<&Viewport>(vp_entity).unwrap();
+        (vp.mode, proto_state.active_protocol.starts_with("Single"))
+    };
+
+    if is_already_maximized {
+        // Restore
+        let restore_name = {
+            let mut proto_state = world.get::<&mut ProtocolState>(entities.protocol).unwrap();
+            proto_state
+                .last_protocol
+                .take()
+                .unwrap_or_else(|| "Standard 2x2".to_string())
+        };
+        apply_protocol(world, entities, &restore_name);
+    } else {
+        // Maximize
+        let protocol_name = match mode {
+            ViewMode::Axial => "Single Axial",
+            ViewMode::Coronal => "Single Coronal",
+            ViewMode::Sagittal => "Single Sagittal",
+            ViewMode::ThreeD => "Single 3D", // We should probably add this to the registry
+        };
+
+        // Ensure the "Single 3D" or similar exists or we fallback to one that fills the screen
+        apply_protocol(world, entities, protocol_name);
+    }
+}
+
+pub fn swap_viewports(
+    world: &mut World,
+    _entities: &AppEntities,
+    entity_a: Entity,
+    entity_b: Entity,
+) {
+    if entity_a == entity_b {
+        return;
+    }
+
+    let (mode_a, state_a) = {
+        let vp = world.get::<&Viewport>(entity_a).unwrap();
+        let vs = world.get::<&ViewportState>(entity_a).unwrap();
+        (vp.mode, (*vs).clone())
+    };
+    let (mode_b, state_b) = {
+        let vp = world.get::<&Viewport>(entity_b).unwrap();
+        let vs = world.get::<&ViewportState>(entity_b).unwrap();
+        (vp.mode, (*vs).clone())
+    };
+
+    {
+        let mut vp_a = world.get::<&mut Viewport>(entity_a).unwrap();
+        let mut vs_a = world.get::<&mut ViewportState>(entity_a).unwrap();
+        vp_a.mode = mode_b;
+        *vs_a = state_b;
+    }
+    {
+        let mut vp_b = world.get::<&mut Viewport>(entity_b).unwrap();
+        let mut vs_b = world.get::<&mut ViewportState>(entity_b).unwrap();
+        vp_b.mode = mode_a;
+        *vs_b = state_a;
     }
 }

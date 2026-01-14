@@ -31,6 +31,8 @@ pub enum AppEvent {
     RebuildBindGroups,
     CreateNewLayer,
     SwitchProtocol(String),
+    ToggleMaximize(hecs::Entity),
+    SwapViewports(hecs::Entity, hecs::Entity),
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -420,7 +422,7 @@ impl ApplicationHandler<AppEvent> for App {
                 ctx.window.request_redraw();
             }
             WindowEvent::RedrawRequested => {
-                render::render_frame(
+                let repaint_after = render::render_frame(
                     &ctx.device,
                     &ctx.queue,
                     &ctx.surface,
@@ -437,6 +439,10 @@ impl ApplicationHandler<AppEvent> for App {
                     &ctx.window,
                     ctx.event_proxy.clone(),
                 );
+
+                if repaint_after.is_zero() {
+                    ctx.window.request_redraw();
+                }
             }
             _ => {}
         }
@@ -617,6 +623,14 @@ impl ApplicationHandler<AppEvent> for App {
             }
             AppEvent::SwitchProtocol(name) => {
                 protocols::apply_protocol(&mut ctx.world, &ctx.entities, &name);
+                ctx.window.request_redraw();
+            }
+            AppEvent::ToggleMaximize(entity) => {
+                protocols::toggle_maximize(&mut ctx.world, &ctx.entities, entity);
+                ctx.window.request_redraw();
+            }
+            AppEvent::SwapViewports(a, b) => {
+                protocols::swap_viewports(&mut ctx.world, &ctx.entities, a, b);
                 ctx.window.request_redraw();
             }
         }

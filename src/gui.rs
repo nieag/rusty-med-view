@@ -198,12 +198,22 @@ impl Gui {
                                 .selected_text(&selected)
                                 .show_ui(ui, |ui| {
                                     for p in registry {
-                                        ui.selectable_value(&mut selected, p.name.clone(), &p.name);
+                                        if ui
+                                            .selectable_value(
+                                                &mut selected,
+                                                p.name.clone(),
+                                                &p.name,
+                                            )
+                                            .clicked()
+                                        {
+                                            ctx.request_repaint();
+                                        }
                                     }
                                 });
 
                             if selected != proto.active_protocol {
                                 let _ = event_proxy.send_event(AppEvent::SwitchProtocol(selected));
+                                ctx.request_repaint();
                             }
                         }
                     });
@@ -465,17 +475,28 @@ impl Gui {
                 cursor_pos = t.position;
             }
 
-            let draw_label = |ui: &mut egui::Ui, text: &str, is_active: bool| {
-                ui.add(egui::Label::new(
-                    egui::RichText::new(text)
-                        .color(if is_active {
-                            egui::Color32::GREEN
-                        } else {
-                            egui::Color32::WHITE
-                        })
-                        .size(16.0)
-                        .strong(),
-                ));
+            let draw_label = |ui: &mut egui::Ui, text: &str, is_active: bool| -> egui::Response {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_black_alpha(180))
+                    .corner_radius(4.0)
+                    .inner_margin(4.0)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::Button::new(
+                                egui::RichText::new(text)
+                                    .color(if is_active {
+                                        egui::Color32::GREEN
+                                    } else {
+                                        egui::Color32::WHITE
+                                    })
+                                    .size(14.0)
+                                    .strong(),
+                            )
+                            .fill(egui::Color32::TRANSPARENT)
+                            .sense(egui::Sense::click_and_drag()),
+                        )
+                    })
+                    .inner
             };
 
             let hw = central_rect.width() / 2.0;
@@ -491,38 +512,50 @@ impl Gui {
             }
 
             // --- Viewport Separation Lines ---
-            let painter = ctx.layer_painter(egui::LayerId::background());
-            let border_color = egui::Color32::from_gray(60);
-            painter.line_segment(
-                [
-                    egui::pos2(x0, y0 + hh),
-                    egui::pos2(x0 + central_rect.width(), y0 + hh),
-                ],
-                (2.0, border_color),
-            );
-            painter.line_segment(
-                [
-                    egui::pos2(x0 + hw, y0),
-                    egui::pos2(x0 + hw, y0 + central_rect.height()),
-                ],
-                (2.0, border_color),
-            );
-
-            // Viewport info helper
-            let draw_viewport_info = |ui: &mut egui::Ui,
-                                      name: &str,
-                                      active: bool,
-                                      slice: Option<(u32, u32)>,
-                                      world: &World,
-                                      entities: &AppEntities| {
-                draw_label(ui, name, active);
-                if let Some((curr, total)) = slice {
-                    ui.label(format!("Slice: {} / {}", curr, total));
-                }
-                if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
-                    ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
-                }
+            let active_protocol = {
+                world
+                    .get::<&ProtocolState>(entities.protocol)
+                    .map(|p| p.active_protocol.clone())
+                    .unwrap_or_else(|_| "Standard 2x2".to_string())
             };
+
+            if active_protocol == "Standard 2x2" {
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                let border_color = egui::Color32::from_gray(60);
+                painter.line_segment(
+                    [
+                        egui::pos2(x0, y0 + hh),
+                        egui::pos2(x0 + central_rect.width(), y0 + hh),
+                    ],
+                    (2.0, border_color),
+                );
+                painter.line_segment(
+                    [
+                        egui::pos2(x0 + hw, y0),
+                        egui::pos2(x0 + hw, y0 + central_rect.height()),
+                    ],
+                    (2.0, border_color),
+                );
+            } else if active_protocol == "Clinical Triple" {
+                let painter = ctx.layer_painter(egui::LayerId::background());
+                let border_color = egui::Color32::from_gray(60);
+                // Vertical line at 50% width
+                painter.line_segment(
+                    [
+                        egui::pos2(x0 + hw, y0),
+                        egui::pos2(x0 + hw, y0 + central_rect.height()),
+                    ],
+                    (2.0, border_color),
+                );
+                // Horizontal line on the right half at 50% height
+                painter.line_segment(
+                    [
+                        egui::pos2(x0 + hw, y0 + hh),
+                        egui::pos2(x0 + central_rect.width(), y0 + hh),
+                    ],
+                    (2.0, border_color),
+                );
+            }
 
             let vol_dims = volume_info.unwrap_or([0, 0, 0]);
 
@@ -544,12 +577,14 @@ impl Gui {
                 let rhh = rect.height() / 2.0;
                 let is_active = Some(e) == active_viewport_entity;
 
+                let mut label_res: Option<egui::Response> = None;
+
                 egui::Area::new(egui::Id::new("overlay").with(e))
                     .fixed_pos([rx0 + 10.0, ry0 + 10.0])
-                    .interactable(false)
+                    .interactable(true)
                     .show(ctx, |ui| match mode {
                         ViewMode::ThreeD => {
-                            draw_label(ui, "3D View", is_active);
+                            label_res = Some(draw_label(ui, "3D View", is_active));
                             if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing)
                             {
                                 ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
@@ -557,14 +592,15 @@ impl Gui {
                         }
                         ViewMode::Axial => {
                             let slice_z = (cursor_pos[2] * vol_dims[2] as f32).round() as u32;
-                            draw_viewport_info(
-                                ui,
-                                "Axial (Top)",
-                                is_active,
-                                Some((slice_z, vol_dims[2])),
-                                world,
-                                entities,
-                            );
+                            label_res = Some(draw_label(ui, "Axial (Top)", is_active));
+                            if let Some((curr, total)) = Some((slice_z, vol_dims[2])) {
+                                ui.label(format!("Slice: {} / {}", curr, total));
+                            }
+                            if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing)
+                            {
+                                ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
+                            }
+
                             marker(ui, "A", egui::pos2(rx0 + rhw, ry0 + 15.0));
                             marker(ui, "P", egui::pos2(rx0 + rhw, ry0 + rect.height() - 15.0));
                             marker(ui, "R", egui::pos2(rx0 + 15.0, ry0 + rhh));
@@ -572,14 +608,14 @@ impl Gui {
                         }
                         ViewMode::Coronal => {
                             let slice_y = (cursor_pos[1] * vol_dims[1] as f32).round() as u32;
-                            draw_viewport_info(
-                                ui,
-                                "Coronal (Front)",
-                                is_active,
-                                Some((slice_y, vol_dims[1])),
-                                world,
-                                entities,
-                            );
+                            label_res = Some(draw_label(ui, "Coronal (Front)", is_active));
+                            if let Some((curr, total)) = Some((slice_y, vol_dims[1])) {
+                                ui.label(format!("Slice: {} / {}", curr, total));
+                            }
+                            if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing)
+                            {
+                                ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
+                            }
                             marker(ui, "S", egui::pos2(rx0 + rhw, ry0 + 15.0));
                             marker(ui, "I", egui::pos2(rx0 + rhw, ry0 + rect.height() - 15.0));
                             marker(ui, "R", egui::pos2(rx0 + 15.0, ry0 + rhh));
@@ -587,20 +623,50 @@ impl Gui {
                         }
                         ViewMode::Sagittal => {
                             let slice_x = (cursor_pos[0] * vol_dims[0] as f32).round() as u32;
-                            draw_viewport_info(
-                                ui,
-                                "Sagittal (Side)",
-                                is_active,
-                                Some((slice_x, vol_dims[0])),
-                                world,
-                                entities,
-                            );
+                            label_res = Some(draw_label(ui, "Sagittal (Side)", is_active));
+                            if let Some((curr, total)) = Some((slice_x, vol_dims[0])) {
+                                ui.label(format!("Slice: {} / {}", curr, total));
+                            }
+                            if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing)
+                            {
+                                ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
+                            }
                             marker(ui, "S", egui::pos2(rx0 + rhw, ry0 + 15.0));
                             marker(ui, "I", egui::pos2(rx0 + rhw, ry0 + rect.height() - 15.0));
                             marker(ui, "A", egui::pos2(rx0 + 15.0, ry0 + rhh));
                             marker(ui, "P", egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh));
                         }
                     });
+
+                if let Some(res) = label_res {
+                    if res.double_clicked() {
+                        let _ = event_proxy.send_event(AppEvent::ToggleMaximize(e));
+                        ctx.request_repaint();
+                    }
+                    let dnd_id = egui::Id::new("viewport_dnd");
+                    if res.drag_started() {
+                        ctx.memory_mut(|mem| mem.data.insert_temp(dnd_id, e));
+                    }
+                    if res.drag_stopped() {
+                        if let Some(source_e) =
+                            ctx.memory(|mem| mem.data.get_temp::<hecs::Entity>(dnd_id))
+                        {
+                            // Find which viewport we dropped onto
+                            let drop_pos = ctx.input(|i| i.pointer.interact_pos());
+                            if let Some(pos) = drop_pos {
+                                for (target_e, _, target_rect) in vps.clone() {
+                                    if target_rect.contains(pos) && target_e != source_e {
+                                        let _ = event_proxy.send_event(AppEvent::SwapViewports(
+                                            source_e, target_e,
+                                        ));
+                                        ctx.request_repaint();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 if mode == ViewMode::ThreeD {
                     let gizmo_rect = egui::Rect::from_center_size(
@@ -682,11 +748,17 @@ impl Gui {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         screen_descriptor: &egui_wgpu::ScreenDescriptor,
-    ) {
+    ) -> std::time::Duration {
         let output = self
             .output
             .take()
             .expect("Gui::prepare() must be called before Gui::render()");
+
+        let repaint_after = output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .expect("Missing root viewport output")
+            .repaint_delay;
 
         let tessellation = self
             .context
@@ -724,6 +796,8 @@ impl Gui {
         for id in &output.textures_delta.free {
             self.renderer.free_texture(id);
         }
+
+        repaint_after
     }
 }
 
