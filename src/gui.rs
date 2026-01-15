@@ -534,9 +534,17 @@ impl Gui {
             let y0 = central_rect.min.y;
 
             let mut gizmo_rotation = [0.0f32, 0.0, 0.0, 1.0];
+            let mut data_orientation = [0.0f32, 0.0, 0.0, 1.0];
+            for (_, vol) in world.query::<&VolumeData>().with::<&MainVolumeTag>().iter() {
+                data_orientation = vol.orientation;
+            }
+
             for (_, (vp, vs)) in world.query::<(&Viewport, &ViewportState)>().iter() {
                 if vp.mode == ViewMode::ThreeD {
-                    gizmo_rotation = vs.rotation;
+                    gizmo_rotation = crate::orientation::compose_view_rotation(
+                        data_orientation,
+                        vs.user_rotation,
+                    );
                 }
             }
 
@@ -1159,7 +1167,7 @@ fn draw_annotations(
             view.zoom,
             view.pan,
             view.pivot,
-            view.rotation,
+            view.user_rotation,
             aspect_ratios,
             rect,
         ) {
@@ -1235,7 +1243,7 @@ fn draw_annotations(
                     view.zoom,
                     view.pan,
                     view.pivot,
-                    view.rotation,
+                    view.user_rotation,
                     aspect_ratios,
                     rect,
                 )

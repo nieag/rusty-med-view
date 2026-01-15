@@ -6,13 +6,10 @@ This document provides a technical overview of the **Rust Medical Imaging Viewer
 A high-performance 2D/3D medical volume viewer built with **Rust** and **WGPU**. It supports orthogonal slicing, volumetric X-ray rendering, and interactive crosshair picking.
 
 ### 📈 Recent Progress
-- **Orientation Consolidation**: Established `src/orientation.rs` as the single source of truth for all coordinate transforms and radiological axis mappings. All tools (Brush, Annotations, Crosshairs, Picking) are now synchronized via this centralized logic.
+- **Orientation Consolidation**: Centralized all 3D transforms in `src/orientation.rs`. Separated **Data Orientation** (from NIfTI) from **User Rotation** (interactive) to allow independent view manipulation and clean resets.
+- **Unified 3D API**: Implemented `screen_to_ray_3d` and `volume_to_screen_3d` as the single source of truth for picking and projection across CPU and GPU.
 - **Radiological Convention**: Native support for flipped X-axis (Right-on-Left) across picking, 2D slicing, and 3D volume rendering.
-- **3D Crosshairs**: Implemented axis-aligned, screen-projected crosshairs that tilt and foreshorten with volume rotation.
-- **Anatomical Color Coding**: Adopted RGB (XYZ) standard for crosshairs and anatomical orientation feedback.
-- **Testing**: Added "Reach-Through" parity tests to ensure Rust-side logic and WGSL shader math remain perfectly synchronized.
-- **Reactive Architecture**: Migrated from polling-based `about_to_wait` to a purely event-driven model using `UserEvent` and `EventLoopProxy`. This significantly reduced CPU usage when idle while maintaining zero-lag responsiveness.
-- **Reliability**: Expanded unit test suite to 26 tests covering quaternions, plane intersections, and orientation matrices.
+- **Parity Testing**: Expanded test suite to 30+ tests, including "Shader Parity" tests that verify Rust math exactly matches WGSL logic for raymarching and projection.
 
 ## 🛠 Tech Stack
 - **Graphics**: [wgpu](https://github.com/gfx-rs/wgpu) (using Metal, WebGPU/WebGL2)
@@ -43,6 +40,10 @@ A high-performance 2D/3D medical volume viewer built with **Rust** and **WGPU**.
 The app uses a strict **Radiological convention**:
 - **2D Views**: Axial (XY), Coronal (XZ), and Sagittal (YZ) planes.
 - **Signage**: Patient Right maps to Screen Left (flipped X).
+- **Rotation Composition**: Final view rotation is composed as `user_rotation * BASE_ROTATION * data_orientation`. 
+    - `data_orientation` is the intrinsic NIfTI orientation.
+    - `BASE_ROTATION` aligns "Superior" to "Up".
+    - `user_rotation` handles interactive drags.
 - **Parity**: Parity between CPU (Rust) and GPU (WGSL) is maintained via "Shader Emulation" unit tests in `orientation.rs`.
 
 ### Aligned 3D Crosshairs
@@ -78,6 +79,7 @@ In addition to Middle-mouse panning:
 
 ### 3D Picking & Crosshair
 Implements high-intensity raymarching to accurately place the crosshair.
+- **Centralized Logic**: Uses `orientation::screen_to_ray_3d` on the CPU to ensure picking rays perfectly match the visual raymarching in the shader.
 - **Continuous Update**: Navigation mode supports live crosshair updates during Left-click drags.
 - **Safety**: Tools (Brush/Eraser) are automatically inhibited during Zoom/Pan/Rotate operations.
 

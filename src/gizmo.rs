@@ -34,17 +34,21 @@ pub fn draw_gizmo(ui: &mut Ui, rect: Rect, view_rotation: Quat) {
     let mut transformed: Vec<TransformedAxis> = axes
         .iter()
         .map(|(vec, label, color)| {
-            // Apply rotation - direct multiplication for Object->World
+            // Use centralized projection
+            let proj = crate::orientation::project_axis_3d(
+                vec.to_array(),
+                view_rotation.to_array(),
+                [1.0, 1.0, 1.0], // Gizmo axes are unit length
+                1.0,             // Internal gizmo aspect is 1:1
+            );
+
+            let screen_x = center.x + proj[0] * axis_length;
+            let screen_y = center.y + proj[1] * axis_length;
+
+            // Get depth for Z-sorting (forward direction is +Z in projection)
             let q = view_rotation.to_array();
             let m = crate::orientation::quat_to_mat3(q);
             let rotated = crate::orientation::rotate_vec3(m, vec.to_array());
-
-            // Project to 2D (orthographic)
-            // Flip Y because screen Y is down, 3D Y is up
-            // RADIOLOGICAL: Rotated.X (Right) should map to Left on screen.
-            // AND we now have a vertical flip in the main 3D view too.
-            let screen_x = center.x - rotated[0] * axis_length;
-            let screen_y = center.y - rotated[1] * axis_length; // Match main 3D view's fix
 
             TransformedAxis {
                 pos2: Pos2::new(screen_x, screen_y),

@@ -87,7 +87,7 @@ pub fn sys_handle_mouse_button(
                     input.is_rotating = true;
                     input.rotation_start_pos = input.mouse_uv;
                     if let Ok(vs) = world.get::<&ViewportState>(avp) {
-                        input.rotation_start_val = vs.rotation;
+                        input.rotation_start_val = vs.user_rotation;
                     }
                 }
             }
@@ -333,7 +333,7 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
                 let pitch_quat = Quat::from_axis_angle(Vec3::X, delta_y);
                 (yaw_quat * pitch_quat * start_q).normalize()
             };
-            vs.rotation = new_quat.to_array();
+            vs.user_rotation = new_quat.to_array();
         }
     }
 

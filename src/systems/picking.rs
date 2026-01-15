@@ -1,6 +1,6 @@
 // src/systems/picking.rs
 use crate::components::*;
-use glam::{Mat3, Quat, Vec3};
+use glam::Vec3;
 use hecs::World;
 
 /// Get the HU intensity value at the current mouse position.
@@ -40,11 +40,11 @@ pub fn get_voxel_at_mouse(
     viewport_entity: hecs::Entity,
     mouse_uv: [f32; 2],
 ) -> Option<[f32; 3]> {
-    let (zoom, pan, rotation, mode) = if let (Ok(vp), Ok(vs)) = (
+    let (zoom, pan, user_rotation, mode) = if let (Ok(vp), Ok(vs)) = (
         world.get::<&Viewport>(viewport_entity),
         world.get::<&ViewportState>(viewport_entity),
     ) {
-        (vs.zoom, vs.pan, vs.rotation, vp.mode)
+        (vs.zoom, vs.pan, vs.user_rotation, vp.mode)
     } else {
         (1.0, [0.0, 0.0], [0.0, 0.0, 0.0, 1.0], ViewMode::ThreeD)
     };
@@ -102,40 +102,28 @@ pub fn get_voxel_at_mouse(
         }
 
         if let Some([width, height, depth]) = vol_dims {
+            // --- Phase 3: Centralized Picking ---
+            let mut data_orientation = [0.0f32, 0.0, 0.0, 1.0];
+            let mut vol_aspects = [1.0f32; 3];
+            for (_, vol) in world.query::<&VolumeData>().iter() {
+                data_orientation = vol.orientation;
+                vol_aspects = vol.aspect_ratios();
+            }
+
+            let final_rotation =
+                crate::orientation::compose_view_rotation(data_orientation, user_rotation);
+            let (cam_pos_obj_raw, ray_dir_obj_raw) =
+                crate::orientation::screen_to_ray_3d(mouse_uv, final_rotation, zoom, pan, aspect);
+
+            let cam_pos_obj = Vec3::from(cam_pos_obj_raw);
+            let ray_dir_obj = Vec3::from(ray_dir_obj_raw);
+
             let aspect_ratios = vol_aspects;
             let half_ar = [
                 aspect_ratios[0] * 0.5,
                 aspect_ratios[1] * 0.5,
                 aspect_ratios[2] * 0.5,
             ];
-
-            let pivot = [0.5, 0.5];
-            let zoomed_uv = [
-                (mouse_uv[0] - pivot[0]) / zoom + pivot[0] + pan[0],
-                (mouse_uv[1] - pivot[1]) / zoom + pivot[1] + pan[1],
-            ];
-            let uv = [zoomed_uv[0] - 0.5, zoomed_uv[1] - 0.5];
-            // RADIOLOGICAL: Flip X (Patient Right on Screen Left). Flip Y (Vertical screen orientation).
-            let screen_pos = [-uv[0] * aspect, -uv[1]];
-
-            let cam_pos_world = [0.0, 0.0, -3.5];
-            let forward = [0.0, 0.0, 1.0];
-            let right = [1.0, 0.0, 0.0];
-            let up = [0.0, 1.0, 0.0];
-
-            let raw_dir = [
-                forward[0] + right[0] * screen_pos[0] + up[0] * screen_pos[1],
-                forward[1] + right[1] * screen_pos[0] + up[1] * screen_pos[1],
-                forward[2] + right[2] * screen_pos[0] + up[2] * screen_pos[1],
-            ];
-            let ray_dir_world = Vec3::from(raw_dir).normalize();
-
-            let rot_quat = Quat::from_array(rotation);
-            let rot_mat = Mat3::from_quat(rot_quat);
-            let inv_rot_mat = rot_mat.inverse();
-
-            let cam_pos_obj = inv_rot_mat * Vec3::from(cam_pos_world);
-            let ray_dir_obj = (inv_rot_mat * ray_dir_world).normalize();
 
             let min_bound = Vec3::from([-half_ar[0], -half_ar[1], -half_ar[2]]);
             let max_bound = Vec3::from([half_ar[0], half_ar[1], half_ar[2]]);

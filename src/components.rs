@@ -37,7 +37,7 @@ pub struct ViewportState {
     pub zoom: f32,
     pub pan: [f32; 2],
     pub pivot: [f32; 2],
-    pub rotation: [f32; 4],
+    pub user_rotation: [f32; 4],
 }
 
 /// Viewport Layout (Normalized 0..1 coordinates)
@@ -66,7 +66,7 @@ impl Default for ViewportState {
             zoom: 1.0,
             pan: [0.0, 0.0],
             pivot: [0.5, 0.5],
-            rotation: [0.0, 0.0, 0.0, 1.0],
+            user_rotation: [0.0, 0.0, 0.0, 1.0],
         }
     }
 }

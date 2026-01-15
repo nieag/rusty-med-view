@@ -1,6 +1,6 @@
 // src/geometry.rs
 // use crate::components::ViewState; // Removed
-use glam::{Quat, Vec3};
+use glam::Vec3;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -78,29 +78,13 @@ pub fn world_to_ndc(
         Some([ndc_x, ndc_y])
     } else {
         // --- 3D Viewport ---
-        let p_centered = pos - Vec3::new(0.5, 0.5, 0.5);
-        let p_scaled = p_centered * Vec3::from(aspect_ratios);
-        let rot_quat = Quat::from_array(rotation);
-        let p_rotated = rot_quat * p_scaled;
-        let p_cam = p_rotated + Vec3::new(0.0, 0.0, 3.5);
-
-        if p_cam.z <= 0.1 {
-            return None;
-        }
-
-        let proj_x = p_cam.x / p_cam.z;
-        let proj_y = p_cam.y / p_cam.z;
-
-        // RADIOLOGICAL: Patient Right (x=+) maps to Screen Left (uv < 0.5). Flip Y to match screen coords.
-        let uv_centered_x = -proj_x / screen_aspect;
-        let uv_centered_y = -proj_y;
-
-        let zoomed_uv_x = uv_centered_x + 0.5;
-        let zoomed_uv_y = uv_centered_y + 0.5;
-
-        let final_u = ((zoomed_uv_x - pivot[0] - pan[0]) * zoom) + pivot[0];
-        let final_v = ((zoomed_uv_y - pivot[1] - pan[1]) * zoom) + pivot[1];
-
-        Some([final_u, final_v])
+        crate::orientation::volume_to_screen_3d(
+            pos.into(),
+            rotation,
+            aspect_ratios,
+            zoom,
+            pan,
+            screen_aspect,
+        )
     }
 }

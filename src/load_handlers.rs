@@ -42,14 +42,10 @@ pub fn handle_volume_load(
         gpu_res.sampler = new_sampler;
     }
 
-    // Initialize 3D view rotation with volume orientation from NIfTI
-    // We apply an additional 90 degree rotation around X to make Superior UP and Anterior FORWARD (facing camera)
+    // Reset user rotation when loading new volume
     for (_, (vp, vs)) in world.query_mut::<(&Viewport, &mut ViewportState)>() {
         if vp.mode == ViewMode::ThreeD {
-            use glam::{Quat, Vec3};
-            let nifti_quat = Quat::from_array(loaded.orientation);
-            let base_rot = Quat::from_axis_angle(Vec3::X, std::f32::consts::FRAC_PI_2);
-            vs.rotation = (base_rot * nifti_quat).to_array();
+            vs.user_rotation = [0.0, 0.0, 0.0, 1.0]; // Identity
         }
     }
 

@@ -12,7 +12,7 @@ pub fn sys_prepare_render_data(
     viewport_entity: hecs::Entity,
 ) -> Uniforms {
     // 1. Get Viewport and State
-    let (vp_rect, view_mode, zoom_val, pan, zoom_pivot, rotation) = if let (Ok(vp), Ok(vs)) = (
+    let (vp_rect, view_mode, zoom_val, pan, zoom_pivot, user_rotation) = if let (Ok(vp), Ok(vs)) = (
         world.get::<&Viewport>(viewport_entity),
         world.get::<&ViewportState>(viewport_entity),
     ) {
@@ -22,7 +22,7 @@ pub fn sys_prepare_render_data(
             vs.zoom,
             vs.pan,
             vs.pivot,
-            vs.rotation,
+            vs.user_rotation,
         )
     } else {
         (
@@ -53,15 +53,24 @@ pub fn sys_prepare_render_data(
         active_viewport_entity = inp.active_viewport;
     }
 
-    // 5. Get Volume Info
+    // 5. Get Volume Info and Compose Rotation
     let mut volume_dims = [0u32; 4];
     let mut volume_spacing = [0.0f32; 4];
     let mut volume_intensity_range = [-1000.0, 1000.0];
+    let mut data_orientation = [0.0f32; 4];
     for (_, vol) in world.query::<&VolumeData>().iter() {
         volume_dims = [vol.dimensions[0], vol.dimensions[1], vol.dimensions[2], 0];
         volume_spacing = [vol.spacing[0], vol.spacing[1], vol.spacing[2], 0.0];
         volume_intensity_range = vol.intensity_range;
+        data_orientation = vol.orientation;
     }
+
+    let composed_rotation = if view_mode == 0 {
+        // 3D
+        crate::orientation::compose_view_rotation(data_orientation, user_rotation)
+    } else {
+        user_rotation
+    };
 
     // 6. Get Overlay Info
     let mut overlay_flags = 0u32;
@@ -131,7 +140,7 @@ pub fn sys_prepare_render_data(
         mouse_uv,
         pan,
         zoom_pivot,
-        rotation,
+        rotation: composed_rotation,
         overlay_mouse_uv: mouse_uv,
         overlay_primitive_count: 0,
         overlay_dragging_idx: u32::MAX,

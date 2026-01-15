@@ -84,7 +84,19 @@ impl SlicePlane {
     }
 }
 
-/// Convert quaternion [x, i, j, k] to 3x3 rotation matrix (column-major)
+/// Base rotation to make Superior UP in default 3D view
+pub const BASE_ROTATION: [f32; 4] = [0.7071068, 0.0, 0.0, 0.7071068]; // 90° rotation around X
+
+/// Compose final view rotation from data orientation and user rotation.
+/// Formula: final = user_rotation * BASE_ROTATION * data_orientation
+pub fn compose_view_rotation(data_orientation: [f32; 4], user_rotation: [f32; 4]) -> [f32; 4] {
+    let data = glam::Quat::from_array(data_orientation);
+    let base = glam::Quat::from_array(BASE_ROTATION);
+    let user = glam::Quat::from_array(user_rotation);
+    (user * base * data).normalize().to_array()
+}
+
+/// Convert quaternion [x, y, z, w] to 3x3 rotation matrix (column-major)
 pub fn quat_to_mat3(q: [f32; 4]) -> [[f32; 3]; 3] {
     let x2 = q[0] + q[0];
     let y2 = q[1] + q[1];
@@ -106,6 +118,15 @@ pub fn quat_to_mat3(q: [f32; 4]) -> [[f32; 3]; 3] {
     ]
 }
 
+/// Transpose a 3x3 matrix (for inverse of rotation)
+pub fn transpose_mat3(m: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    [
+        [m[0][0], m[1][0], m[2][0]],
+        [m[0][1], m[1][1], m[2][1]],
+        [m[0][2], m[1][2], m[2][2]],
+    ]
+}
+
 /// Apply a 3x3 rotation matrix to a 3D vector
 pub fn rotate_vec3(m: [[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
     [
@@ -113,6 +134,131 @@ pub fn rotate_vec3(m: [[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
         m[0][1] * v[0] + m[1][1] * v[1] + m[2][1] * v[2],
         m[0][2] * v[0] + m[1][2] * v[1] + m[2][2] * v[2],
     ]
+}
+
+/// Normalize a 3D vector
+pub fn normalize_vec3(v: [f32; 3]) -> [f32; 3] {
+    let len_sq = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    if len_sq > 1e-8 {
+        let len = len_sq.sqrt();
+        [v[0] / len, v[1] / len, v[2] / len]
+    } else {
+        [0.0, 0.0, 0.0]
+    }
+}
+
+/// Screen UV → Ray for 3D picking (in object space)
+/// Returns (origin, direction) in object space.
+pub fn screen_to_ray_3d(
+    screen_uv: [f32; 2],
+    rotation: [f32; 4],
+    zoom: f32,
+    pan: [f32; 2],
+    screen_aspect: f32,
+) -> ([f32; 3], [f32; 3]) {
+    let pivot = [0.5, 0.5];
+    let zoomed_uv = [
+        (screen_uv[0] - pivot[0]) / zoom + pivot[0] + pan[0],
+        (screen_uv[1] - pivot[1]) / zoom + pivot[1] + pan[1],
+    ];
+
+    // RADIOLOGICAL: Flip X (Patient Right on Screen Left). Flip Y (Vertical screen orientation).
+    let uv = [zoomed_uv[0] - 0.5, zoomed_uv[1] - 0.5];
+    let screen_pos = [-uv[0] * screen_aspect, -uv[1]];
+
+    let cam_pos_world = [0.0, 0.0, -3.5];
+    let forward = [0.0, 0.0, 1.0];
+    let right = [1.0, 0.0, 0.0];
+    let up = [0.0, 1.0, 0.0];
+
+    let raw_dir = [
+        forward[0] + right[0] * screen_pos[0] + up[0] * screen_pos[1],
+        forward[1] + right[1] * screen_pos[0] + up[1] * screen_pos[1],
+        forward[2] + right[2] * screen_pos[0] + up[2] * screen_pos[1],
+    ];
+    let ray_dir_world = normalize_vec3(raw_dir);
+
+    let rot_mat = quat_to_mat3(rotation);
+    let inv_rot_mat = transpose_mat3(rot_mat);
+
+    let cam_pos_obj = rotate_vec3(inv_rot_mat, cam_pos_world);
+    let ray_dir_obj = normalize_vec3(rotate_vec3(inv_rot_mat, ray_dir_world));
+
+    (cam_pos_obj, ray_dir_obj)
+}
+
+/// Volume UV → Screen UV for 3D projection
+pub fn volume_to_screen_3d(
+    volume_pos: [f32; 3],
+    rotation: [f32; 4],
+    vol_aspects: [f32; 3],
+    zoom: f32,
+    pan: [f32; 2],
+    screen_aspect: f32,
+) -> Option<[f32; 2]> {
+    let pivot = [0.5, 0.5];
+    let cursor_obj = [
+        (volume_pos[0] - 0.5) * vol_aspects[0],
+        (volume_pos[1] - 0.5) * vol_aspects[1],
+        (volume_pos[2] - 0.5) * vol_aspects[2],
+    ];
+
+    let rot_mat = quat_to_mat3(rotation);
+    let cursor_world = rotate_vec3(rot_mat, cursor_obj);
+
+    let cam_pos = [0.0, 0.0, -3.5];
+    let forward = [0.0, 0.0, 1.0];
+    let right = [1.0, 0.0, 0.0];
+    let up = [0.0, 1.0, 0.0];
+
+    let to_cursor = [
+        cursor_world[0] - cam_pos[0],
+        cursor_world[1] - cam_pos[1],
+        cursor_world[2] - cam_pos[2],
+    ];
+
+    let dist_z = to_cursor[0] * forward[0] + to_cursor[1] * forward[1] + to_cursor[2] * forward[2];
+    if dist_z <= 0.01 {
+        return None;
+    }
+
+    let dist_x = to_cursor[0] * right[0] + to_cursor[1] * right[1] + to_cursor[2] * right[2];
+    let dist_y = to_cursor[0] * up[0] + to_cursor[1] * up[1] + to_cursor[2] * up[2];
+
+    // RADIOLOGICAL: Flip X and Y projection
+    let screen_u = -(dist_x / dist_z) / screen_aspect;
+    let screen_v = -(dist_y / dist_z);
+
+    let p_uv = [screen_u + 0.5, screen_v + 0.5];
+
+    let final_u = (p_uv[0] - pan[0] - pivot[0]) * zoom + pivot[0];
+    let final_v = (p_uv[1] - pan[1] - pivot[1]) * zoom + pivot[1];
+
+    Some([final_u, final_v])
+}
+
+/// Project axis direction to screen (for gizmo/crosshairs)
+pub fn project_axis_3d(
+    axis: [f32; 3],
+    rotation: [f32; 4],
+    vol_aspects: [f32; 3],
+    screen_aspect: f32,
+) -> [f32; 2] {
+    let rot_mat = quat_to_mat3(rotation);
+    let world_axis = [
+        rot_mat[0][0] * axis[0] * vol_aspects[0]
+            + rot_mat[1][0] * axis[1] * vol_aspects[1]
+            + rot_mat[2][0] * axis[2] * vol_aspects[2],
+        rot_mat[0][1] * axis[0] * vol_aspects[0]
+            + rot_mat[1][1] * axis[1] * vol_aspects[1]
+            + rot_mat[2][1] * axis[2] * vol_aspects[2],
+        rot_mat[0][2] * axis[0] * vol_aspects[0]
+            + rot_mat[1][2] * axis[1] * vol_aspects[1]
+            + rot_mat[2][2] * axis[2] * vol_aspects[2],
+    ];
+
+    // RADIOLOGICAL: Flip X and Y projection
+    [-world_axis[0] / screen_aspect, -world_axis[1]]
 }
 
 #[cfg(test)]
@@ -165,6 +311,88 @@ mod tests {
         let q = [0.0, 0.0, 0.0, 1.0];
         let m = quat_to_mat3(q);
         assert_eq!(m, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+    }
+
+    #[test]
+    fn test_screen_to_ray_matches_shader() {
+        let rotation = [0.0, 0.0, 0.0, 1.0]; // Identity
+        let (cam, dir) = screen_to_ray_3d([0.5, 0.5], rotation, 1.0, [0.0, 0.0], 1.0);
+
+        // Center screen should give forward ray (0,0,1)
+        assert!((dir[0]).abs() < 1e-5);
+        assert!((dir[1]).abs() < 1e-5);
+        assert!((dir[2] - 1.0).abs() < 1e-5);
+
+        // Camera should be at (0,0,-3.5)
+        assert!((cam[0]).abs() < 1e-5);
+        assert!((cam[1]).abs() < 1e-5);
+        assert!((cam[2] + 3.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_volume_to_screen_roundtrip() {
+        let rotation = [0.0, 0.0, 0.0, 1.0];
+        let vol_pos = [0.4, 0.6, 0.5]; // Some point in the volume
+        let aspects = [1.0, 1.0, 1.0];
+
+        let screen = volume_to_screen_3d(vol_pos, rotation, aspects, 1.0, [0.0, 0.0], 1.0);
+        assert!(screen.is_some());
+
+        let (cam, dir) = screen_to_ray_3d(screen.unwrap(), rotation, 1.0, [0.0, 0.0], 1.0);
+
+        // Ray p = cam + t*dir. For vol_pos [0.4, 0.6, 0.5], object pos is (0.4-0.5, 0.6-0.5, 0.5-0.5) = (-0.1, 0.1, 0.0)
+        // Since cam is at (0,0,-3.5) and point has Z=0, t should be 3.5 / dir[2]
+        let t = 3.5 / dir[2];
+        let p = [
+            cam[0] + t * dir[0],
+            cam[1] + t * dir[1],
+            cam[2] + t * dir[2],
+        ];
+
+        assert!((p[0] - (-0.1)).abs() < 1e-4);
+        assert!((p[1] - 0.1).abs() < 1e-4);
+        assert!((p[2] - 0.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_compose_rotation() {
+        let data = [0.0, 0.0, 0.0, 1.0];
+        let user = [0.0, 0.0, 0.0, 1.0];
+        let result = compose_view_rotation(data, user);
+
+        // Should equal BASE_ROTATION
+        assert!((result[0] - BASE_ROTATION[0]).abs() < 1e-5);
+        assert!((result[1] - BASE_ROTATION[1]).abs() < 1e-5);
+        assert!((result[2] - BASE_ROTATION[2]).abs() < 1e-5);
+        assert!((result[3] - BASE_ROTATION[3]).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_project_axis() {
+        let rotation = [0.0, 0.0, 0.0, 1.0];
+        let aspects = [1.0, 1.0, 1.0];
+
+        // X Axis (Right)
+        let proj_x = project_axis_3d([1.0, 0.0, 0.0], rotation, aspects, 1.0);
+        // Should be negative X on screen (Radiological)
+        assert!(proj_x[0] < -0.5); // Large negative value
+        assert!(proj_x[1].abs() < 1e-5);
+
+        // Y Axis (Anterior)
+        let proj_y = project_axis_3d([0.0, 1.0, 0.0], rotation, aspects, 1.0);
+        // At identity BASE_ROTATION (90 deg around X), Y is rotated to Z?
+        // Let's check: BASE rotates Object Y (Anterior) to World -Z (Inferior)?
+        // Wait, sin(45) = 0.707. BASE = [0.707, 0, 0, 0.707].
+        // Quat * [0, 1, 0] * Conj(Quat)
+        // Y becomes Z globally.
+        assert!((proj_y[0]).abs() < 1e-5);
+        assert!((proj_y[1] - (-1.0)).abs() < 1e-5); // Y points UP (negative screen Y)
+
+        // Z Axis (Superior)
+        let proj_z = project_axis_3d([0.0, 0.0, 1.0], rotation, aspects, 1.0);
+        // Z becomes -Y? (Inferior)
+        assert!((proj_z[0]).abs() < 1e-5);
+        assert!((proj_z[1] - 0.0).abs() < 1e-5); // Z points straight (no Y component in screen space at this specific BASE_ROTATION)
     }
 
     /// Replicates the shader logic from `fs_main` in pure Rust for parity checking.
