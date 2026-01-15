@@ -54,12 +54,12 @@ pub fn get_voxel_at_mouse(
         .map(|w| w.viewport_rect)
         .unwrap_or([0.0, 0.0, 100.0, 100.0]);
 
-    let (vol_aspects, vol_dims) = {
+    let (vol_aspects, vol_dims, data_orientation) = {
         let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
         if let Some((_, vol)) = query.iter().next() {
-            (vol.aspect_ratios(), Some(vol.dimensions))
+            (vol.aspect_ratios(), Some(vol.dimensions), vol.orientation)
         } else {
-            ([1.0, 1.0, 1.0], None)
+            ([1.0, 1.0, 1.0], None, [0.0, 0.0, 0.0, 1.0])
         }
     };
 
@@ -78,7 +78,7 @@ pub fn get_voxel_at_mouse(
             1.0
         };
         if let Some(plane) = crate::util::orientation::SlicePlane::from_mode(mode) {
-            let slice_aspect = plane.slice_aspect(vol_aspects);
+            let slice_aspect = plane.slice_aspect(vol_aspects, data_orientation);
             let k = screen_aspect / slice_aspect;
 
             let volume_uv = [
@@ -86,7 +86,11 @@ pub fn get_voxel_at_mouse(
                 (mouse_uv[1] - 0.5) / zoom + 0.5 + pan[1],
             ];
 
-            let pos = plane.screen_uv_to_volume(volume_uv, cursor_pos[plane.depth_axis()]);
+            let pos = plane.screen_uv_to_volume(
+                volume_uv,
+                cursor_pos[plane.depth_axis(data_orientation)],
+                data_orientation,
+            );
             if (0.0..=1.0).contains(&pos[0])
                 && (0.0..=1.0).contains(&pos[1])
                 && (0.0..=1.0).contains(&pos[2])

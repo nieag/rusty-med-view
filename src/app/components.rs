@@ -18,7 +18,7 @@ pub struct Transform {
     pub position: [f32; 3],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ViewMode {
     ThreeD = 0,
     Axial = 1,
@@ -146,6 +146,10 @@ pub struct Uniforms {
     // --- Brush preview ---
     pub brush_preview: [f32; 4], // [brush_size, active (0/1), viewport, _]
     pub brush_center_voxel: [f32; 4], // [voxel_x, voxel_y, voxel_z, valid (0/1)]
+    // --- Orientation Support ---
+    pub volume_orientation_quat: [f32; 4],
+    pub slice_axis_mapping: [u32; 4], // [R_axis, A_axis, S_axis, _]
+    pub slice_axis_flips: [u32; 4],   // [R_flip, A_flip, S_flip, _]
     // ---
     pub zoom: f32,
     pub view_mode: u32,
@@ -190,6 +194,7 @@ impl Default for EditorState {
 pub struct Segmentation {
     pub name: String,
     pub is_visible: bool,
+    pub contour_set: crate::segmentation::ContourSet,
 }
 
 pub struct LayerSettings {
@@ -269,6 +274,7 @@ pub struct AppEntities {
     pub protocol: hecs::Entity,
     pub cursor: hecs::Entity,
     pub window_settings: hecs::Entity,
+    pub segmentation: hecs::Entity, // Add segmentation singleton candidate
 }
 
 #[cfg(test)]
@@ -307,12 +313,13 @@ mod tests {
 
     #[test]
     fn test_aspect_ratio_zero_dims() {
+        let las_quat = glam::Quat::from_rotation_y(std::f32::consts::PI).to_array();
         let vol = VolumeData {
             dimensions: [0, 0, 0],
             spacing: [1.0, 1.0, 1.0],
             intensities: vec![],
             intensity_range: [0.0, 1.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
+            orientation: las_quat,
         };
         let ar = vol.aspect_ratios();
         assert_eq!(ar, [1.0, 1.0, 1.0]);

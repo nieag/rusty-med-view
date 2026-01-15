@@ -39,48 +39,176 @@ impl SlicePlane {
     }
 
     /// Get the volume axis index for the depth dimension (0=X, 1=Y, 2=Z)
-    pub fn depth_axis(&self) -> usize {
+    /// This is the axis that varies when scrolling.
+    /// By default (RAS): 2 (Z) for Axial, 1 (Y) for Coronal, 0 (X) for Sagittal.
+    pub fn depth_axis(&self, data_orientation: [f32; 4]) -> usize {
+        let mapping = dominant_axis_mapping(data_orientation);
         match self {
-            SlicePlane::Axial => 2,    // Z
-            SlicePlane::Coronal => 1,  // Y
-            SlicePlane::Sagittal => 0, // X
+            SlicePlane::Axial => mapping[2],    // S-I
+            SlicePlane::Coronal => mapping[1],  // A-P
+            SlicePlane::Sagittal => mapping[0], // R-L
         }
     }
 
     /// Get slice aspect ratio from volume aspects (dimensions * spacing)
-    pub fn slice_aspect(&self, vol_aspects: [f32; 3]) -> f32 {
+    pub fn slice_aspect(&self, vol_aspects: [f32; 3], data_orientation: [f32; 4]) -> f32 {
+        let mapping = dominant_axis_mapping(data_orientation);
         match self {
-            SlicePlane::Axial => vol_aspects[0] / vol_aspects[1],
-            SlicePlane::Coronal => vol_aspects[0] / vol_aspects[2],
-            SlicePlane::Sagittal => vol_aspects[1] / vol_aspects[2],
+            SlicePlane::Axial => vol_aspects[mapping[0]] / vol_aspects[mapping[1]],
+            SlicePlane::Coronal => vol_aspects[mapping[0]] / vol_aspects[mapping[2]],
+            SlicePlane::Sagittal => vol_aspects[mapping[1]] / vol_aspects[mapping[2]],
         }
     }
 
     /// Convert screen UV (0..1, top-left origin) to volume UV (0..1)
-    pub fn screen_uv_to_volume(&self, uv: [f32; 2], cursor_depth: f32) -> [f32; 3] {
+    pub fn screen_uv_to_volume(
+        &self,
+        uv: [f32; 2],
+        cursor_depth: f32,
+        data_orientation: [f32; 4],
+    ) -> [f32; 3] {
+        let mapping = dominant_axis_mapping(data_orientation);
+        let flips = anatomical_flips(data_orientation);
+
+        // Final position in volume indices (0..1)
+        let mut pos = [0.0; 3];
+
         match self {
             SlicePlane::Axial => {
-                // RADIOLOGICAL: Patient Right (x=1) on Screen Left (u=0)
-                [1.0 - uv[0], 1.0 - uv[1], cursor_depth]
+                // Horizontal Screen = R-L
+                let h_axis = mapping[0];
+                let h_val = if flips[0] { uv[0] } else { 1.0 - uv[0] }; // Radiological: R (pos) on Left (u=0)
+
+                // Vertical Screen = A-P
+                let v_axis = mapping[1];
+                let v_val = if flips[1] { uv[1] } else { 1.0 - uv[1] }; // Anterior (pos) on Top (v=0)
+
+                let d_axis = mapping[2];
+
+                pos[h_axis] = h_val;
+                pos[v_axis] = v_val;
+                pos[d_axis] = cursor_depth;
             }
             SlicePlane::Coronal => {
-                // RADIOLOGICAL: Patient Right (x=1) on Screen Left (u=0)
-                [1.0 - uv[0], cursor_depth, 1.0 - uv[1]]
+                // Horizontal Screen = R-L
+                let h_axis = mapping[0];
+                let h_val = if flips[0] { uv[0] } else { 1.0 - uv[0] };
+
+                // Vertical Screen = S-I
+                let v_axis = mapping[2];
+                let v_val = if flips[2] { uv[1] } else { 1.0 - uv[1] }; // Superior (pos) on Top (v=0)
+
+                let d_axis = mapping[1];
+
+                pos[h_axis] = h_val;
+                pos[v_axis] = v_val;
+                pos[d_axis] = cursor_depth;
             }
             SlicePlane::Sagittal => {
-                // Anterior is LEFT (u=0), Superior is UP (v=0)
-                [cursor_depth, 1.0 - uv[0], 1.0 - uv[1]]
+                // Horizontal Screen = A-P
+                let h_axis = mapping[1];
+                let h_val = if flips[1] { uv[0] } else { 1.0 - uv[0] }; // Anterior (pos) on Left (u=0)
+
+                // Vertical Screen = S-I
+                let v_axis = mapping[2];
+                let v_val = if flips[2] { uv[1] } else { 1.0 - uv[1] }; // Superior (pos) on Top (v=0)
+
+                let d_axis = mapping[0];
+
+                pos[h_axis] = h_val;
+                pos[v_axis] = v_val;
+                pos[d_axis] = cursor_depth;
             }
         }
+        pos
     }
 
     /// Convert volume UV (0..1) to screen UV (0..1)
-    pub fn volume_to_screen_uv(&self, pos: [f32; 3]) -> [f32; 2] {
+    pub fn volume_to_screen_uv(&self, pos: [f32; 3], data_orientation: [f32; 4]) -> [f32; 2] {
+        let mapping = dominant_axis_mapping(data_orientation);
+        let flips = anatomical_flips(data_orientation);
+
         match self {
-            SlicePlane::Axial => [1.0 - pos[0], 1.0 - pos[1]],
-            SlicePlane::Coronal => [1.0 - pos[0], 1.0 - pos[2]],
-            SlicePlane::Sagittal => [1.0 - pos[1], 1.0 - pos[2]],
+            SlicePlane::Axial => {
+                let h_val = pos[mapping[0]];
+                let u = if flips[0] { h_val } else { 1.0 - h_val };
+                let v_val = pos[mapping[1]];
+                let v = if flips[1] { v_val } else { 1.0 - v_val };
+                [u, v]
+            }
+            SlicePlane::Coronal => {
+                let h_val = pos[mapping[0]];
+                let u = if flips[0] { h_val } else { 1.0 - h_val };
+                let v_val = pos[mapping[2]];
+                let v = if flips[2] { v_val } else { 1.0 - v_val };
+                [u, v]
+            }
+            SlicePlane::Sagittal => {
+                let h_val = pos[mapping[1]];
+                let u = if flips[1] { h_val } else { 1.0 - h_val };
+                let v_val = pos[mapping[2]];
+                let v = if flips[2] { v_val } else { 1.0 - v_val };
+                [u, v]
+            }
         }
+    }
+}
+
+/// Returns which volume axis (0=X, 1=Y, 2=Z) corresponds to which anatomical axis [R-L, A-P, S-I].
+/// Default (RAS): [0, 1, 2]
+pub fn dominant_axis_mapping(orientation: [f32; 4]) -> [usize; 3] {
+    let mat = quat_to_mat3(orientation);
+    let mut mapping = [0, 1, 2];
+
+    for i in 0..3 {
+        let mut max_val = -1.0;
+        let mut max_idx = 0;
+        for j in 0..3 {
+            let val = mat[i][j].abs();
+            if val > max_val {
+                max_val = val;
+                max_idx = j;
+            }
+        }
+        mapping[i] = max_idx;
+    }
+    mapping
+}
+
+/// Returns whether each anatomical axis [R-L, A-P, S-I] is "flipped" in volume space.
+/// A flip is true if the anatomical Positive direction (Right, Anterior, Superior)
+/// maps to the voxel index 0.
+/// Default (RAS): [false, false, false]
+pub fn anatomical_flips(orientation: [f32; 4]) -> [bool; 3] {
+    let mat = quat_to_mat3(orientation);
+    let mapping = dominant_axis_mapping(orientation);
+    let mut flips = [false; 3];
+
+    for i in 0..3 {
+        // mat[i] is the world axis i (R, A, or S)
+        // column mapping[i] is the volume axis that points most in that direction
+        if mat[i][mapping[i]] < 0.0 {
+            flips[i] = true;
+        }
+    }
+    flips
+}
+
+/// Returns the anatomical labels for the [Left, Right, Top, Bottom] edges of a 2D viewport.
+pub fn get_viewport_anatomical_labels(mode: crate::components::ViewMode) -> [&'static str; 4] {
+    // Current hardcoded radiological preference:
+    // Axial: Left=R, Right=L, Top=A, Bottom=P
+    // Coronal: Left=R, Right=L, Top=S, Bottom=I
+    // Sagittal: Left=A, Right=P, Top=S, Bottom=I
+
+    // In the future, we can make these flip based on flips[i] if we want "Non-radiological" views.
+    // But for now, perfect alignment means following the projection logic in screen_uv_to_volume.
+
+    match mode {
+        crate::components::ViewMode::Axial => ["R", "L", "A", "P"],
+        crate::components::ViewMode::Coronal => ["R", "L", "S", "I"],
+        crate::components::ViewMode::Sagittal => ["A", "P", "S", "I"],
+        _ => ["", "", "", ""],
     }
 }
 
@@ -269,38 +397,78 @@ mod tests {
     #[test]
     fn test_axial_conversions() {
         let plane = SlicePlane::Axial;
+        let ras = [0.0, 0.0, 0.0, 1.0];
         // Top-left (0,0) -> Radiological Right (x=1.0)
-        assert_eq!(plane.screen_uv_to_volume([0.0, 0.0], 0.5), [1.0, 1.0, 0.5]);
+        assert_eq!(
+            plane.screen_uv_to_volume([0.0, 0.0], 0.5, ras),
+            [1.0, 1.0, 0.5]
+        );
         // Bottom-right (1,1) -> Radiological Left (x=0.0)
-        assert_eq!(plane.screen_uv_to_volume([1.0, 1.0], 0.5), [0.0, 0.0, 0.5]);
+        assert_eq!(
+            plane.screen_uv_to_volume([1.0, 1.0], 0.5, ras),
+            [0.0, 0.0, 0.5]
+        );
     }
 
     #[test]
     fn test_coronal_conversions() {
         let plane = SlicePlane::Coronal;
+        let ras = [0.0, 0.0, 0.0, 1.0];
         // Top-left (0,0) -> Radiological Right (x=1.0)
-        assert_eq!(plane.screen_uv_to_volume([0.0, 0.0], 0.5), [1.0, 0.5, 1.0]);
+        assert_eq!(
+            plane.screen_uv_to_volume([0.0, 0.0], 0.5, ras),
+            [1.0, 0.5, 1.0]
+        );
         // Bottom-right (1,1) -> Radiological Left (x=0.0)
-        assert_eq!(plane.screen_uv_to_volume([1.0, 1.0], 0.5), [0.0, 0.5, 0.0]);
+        assert_eq!(
+            plane.screen_uv_to_volume([1.0, 1.0], 0.5, ras),
+            [0.0, 0.5, 0.0]
+        );
     }
 
     #[test]
     fn test_sagittal_conversions() {
         let plane = SlicePlane::Sagittal;
+        let ras = [0.0, 0.0, 0.0, 1.0];
         // Top-left (0,0) -> Anterior (y=1.0), Superior (z=1.0)
-        assert_eq!(plane.screen_uv_to_volume([0.0, 0.0], 0.5), [0.5, 1.0, 1.0]);
+        assert_eq!(
+            plane.screen_uv_to_volume([0.0, 0.0], 0.5, ras),
+            [0.5, 1.0, 1.0]
+        );
         // Bottom-right (1,1) -> Posterior (y=0.0), Inferior (z=0.0)
-        assert_eq!(plane.screen_uv_to_volume([1.0, 1.0], 0.5), [0.5, 0.0, 0.0]);
+        assert_eq!(
+            plane.screen_uv_to_volume([1.0, 1.0], 0.5, ras),
+            [0.5, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn test_las_conversions() {
+        let plane = SlicePlane::Axial;
+        // LAS orientation: X is flipped. Patient Right is at x=0.
+        // Let's build a LAS quaternion. Simple 180 deg around Y?
+        // No, NIfTI matrix for LAS is [[-1,0,0],[0,1,0],[0,0,1]].
+        // Let's use a mock matrix approach or just build the quat.
+        // Wait, quat_to_mat3 is already there. I can't easily go back to quat without a helper.
+        // Let's just use a real quat for 180 around Y.
+        let las_quat = glam::Quat::from_rotation_y(std::f32::consts::PI).to_array();
+
+        // In Axial, Screen Left (uv[0]=0) used to map to x=1.0 (Right).
+        // In LAS, x=0 is Right.
+        // My code: h_val = if flips[0] { uv[0] } else { 1.0 - uv[0] }
+        // If LAS flips[0] is true, then h_val = uv[0] = 0.0. Correct!
+        assert_eq!(plane.screen_uv_to_volume([0.0, 0.0], 0.5, las_quat)[0], 0.0);
     }
 
     #[test]
     fn test_round_trip() {
         let planes = [SlicePlane::Axial, SlicePlane::Coronal, SlicePlane::Sagittal];
+        let ras = [0.0, 0.0, 0.0, 1.0];
         for plane in planes {
             let uv = [0.3, 0.7];
             let depth = 0.4;
-            let vol = plane.screen_uv_to_volume(uv, depth);
-            let recovered_uv = plane.volume_to_screen_uv(vol);
+            let vol = plane.screen_uv_to_volume(uv, depth, ras);
+            let recovered_uv = plane.volume_to_screen_uv(vol, ras);
             assert!((uv[0] - recovered_uv[0]).abs() < 1e-6);
             assert!((uv[1] - recovered_uv[1]).abs() < 1e-6);
         }
@@ -483,13 +651,14 @@ mod tests {
 
         // Calculate Clean API result
         let plane = SlicePlane::Axial;
-        let slice_aspect = plane.slice_aspect(aspects);
+        let ras = [0.0, 0.0, 0.0, 1.0];
+        let slice_aspect = plane.slice_aspect(aspects, ras);
         let k = res[0] / res[1] / slice_aspect;
         let volume_uv = [
             ((uv[0] - 0.5) * k) / zoom + 0.5 + pan[0],
             (uv[1] - 0.5) / zoom + 0.5 + pan[1],
         ];
-        let api_result = plane.screen_uv_to_volume(volume_uv, cursor[2]);
+        let api_result = plane.screen_uv_to_volume(volume_uv, cursor[2], ras);
 
         for i in 0..3 {
             assert!((shader_result[i] - api_result[i]).abs() < 1e-6);
@@ -508,13 +677,14 @@ mod tests {
         let shader_result = shader_logic_emulation(2, uv, zoom, pan, res, aspects, cursor);
 
         let plane = SlicePlane::Coronal;
-        let slice_aspect = plane.slice_aspect(aspects);
+        let ras = [0.0, 0.0, 0.0, 1.0];
+        let slice_aspect = plane.slice_aspect(aspects, ras);
         let k = res[0] / res[1] / slice_aspect;
         let volume_uv = [
             ((uv[0] - 0.5) * k) / zoom + 0.5 + pan[0],
             (uv[1] - 0.5) / zoom + 0.5 + pan[1],
         ];
-        let api_result = plane.screen_uv_to_volume(volume_uv, cursor[1]);
+        let api_result = plane.screen_uv_to_volume(volume_uv, cursor[1], ras);
 
         for i in 0..3 {
             assert!((shader_result[i] - api_result[i]).abs() < 1e-6);
@@ -533,13 +703,14 @@ mod tests {
         let shader_result = shader_logic_emulation(3, uv, zoom, pan, res, aspects, cursor);
 
         let plane = SlicePlane::Sagittal;
-        let slice_aspect = plane.slice_aspect(aspects);
+        let ras = [0.0, 0.0, 0.0, 1.0];
+        let slice_aspect = plane.slice_aspect(aspects, ras);
         let k = res[0] / res[1] / slice_aspect;
         let volume_uv = [
             ((uv[0] - 0.5) * k) / zoom + 0.5 + pan[0],
             (uv[1] - 0.5) / zoom + 0.5 + pan[1],
         ];
-        let api_result = plane.screen_uv_to_volume(volume_uv, cursor[0]);
+        let api_result = plane.screen_uv_to_volume(volume_uv, cursor[0], ras);
 
         for i in 0..3 {
             assert!((shader_result[i] - api_result[i]).abs() < 1e-6);

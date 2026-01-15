@@ -275,6 +275,7 @@ impl ApplicationHandler<AppEvent> for App {
                     Segmentation {
                         name,
                         is_visible: true,
+                        contour_set: crate::segmentation::ContourSet::new(),
                     },
                     LayerSettings { opacity: 0.7 },
                     LabelmapData {

@@ -37,6 +37,10 @@ struct Uniforms {
     // Brush preview
     brush_preview: vec4<f32>,        // [brush_size, active, viewport, _]
     brush_center_voxel: vec4<f32>,   // [voxel_x, voxel_y, voxel_z, valid]
+    // --- Orientation Support ---
+    volume_orientation_quat: vec4<f32>,
+    slice_axis_mapping: vec4<u32>,
+    slice_axis_flips: vec4<u32>,
     // ---
     zoom: f32,
     view_mode: u32,
@@ -271,33 +275,68 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Apply Zoom and Pan
         let zoomed_uv = centered_uv / zoom + pivot + pan;
 
+        // Orientation from Uniforms
+        let mapping = uniforms.slice_axis_mapping.xyz;
+        let flips = uniforms.slice_axis_flips.xyz;
+
         if any(zoomed_uv < vec2<f32>(0.0)) || any(zoomed_uv > vec2<f32>(1.0)) {
             final_color = vec4<f32>(0.0, 0.0, 0.0, 1.0);
             draw_crosshair = false;
         } else {
             if uniforms.view_mode == 1u { // Axial (XY)
-                // RADIOLOGICAL: Patient Right (x=1) on Screen Left (u=0)
-                sample_pos = vec3<f32>(1.0 - zoomed_uv.x, 1.0 - zoomed_uv.y, cursor.z);
-                let rel_pos = (vec2<f32>(1.0 - cursor.x, 1.0 - cursor.y) - pan - pivot) * zoom;
+                let h_axis = mapping.x;
+                let h_val = select(1.0 - zoomed_uv.x, zoomed_uv.x, flips.x == 1u);
+                let v_axis = mapping.y;
+                let v_val = select(1.0 - zoomed_uv.y, zoomed_uv.y, flips.y == 1u);
+                let d_axis = mapping.z;
+
+                sample_pos[h_axis] = h_val;
+                sample_pos[v_axis] = v_val;
+                sample_pos[d_axis] = cursor.z;
+
+                let h_rel = select(1.0 - cursor[h_axis], cursor[h_axis], flips.x == 1u);
+                let v_rel = select(1.0 - cursor[v_axis], cursor[v_axis], flips.y == 1u);
+                let rel_pos = (vec2<f32>(h_rel, v_rel) - pan - pivot) * zoom;
+
                 crosshair_screen_pos = (rel_pos / vec2<f32>(k, 1.0)) + pivot;
-                ch_v1 = vec2<f32>(-1.0, 0.0); // +X (Red) -> Left
-                ch_v2 = vec2<f32>(0.0, -1.0); // +Y (Green) -> Up
+                ch_v1 = vec2<f32>(select(-1.0, 1.0, flips.x == 1u), 0.0);
+                ch_v2 = vec2<f32>(0.0, select(-1.0, 1.0, flips.y == 1u));
             } else if uniforms.view_mode == 2u { // Coronal (XZ)
-                // RADIOLOGICAL: Patient Right (x=1) on Screen Left (u=0)
-                sample_pos = vec3<f32>(1.0 - zoomed_uv.x, cursor.y, 1.0 - zoomed_uv.y);
-                let rel_pos = (vec2<f32>(1.0 - cursor.x, 1.0 - cursor.z) - pan - pivot) * zoom;
+                let h_axis = mapping.x;
+                let h_val = select(1.0 - zoomed_uv.x, zoomed_uv.x, flips.x == 1u);
+                let v_axis = mapping.z;
+                let v_val = select(1.0 - zoomed_uv.y, zoomed_uv.y, flips.z == 1u);
+                let d_axis = mapping.y;
+
+                sample_pos[h_axis] = h_val;
+                sample_pos[v_axis] = v_val;
+                sample_pos[d_axis] = cursor.y;
+
+                let h_rel = select(1.0 - cursor[h_axis], cursor[h_axis], flips.x == 1u);
+                let v_rel = select(1.0 - cursor[v_axis], cursor[v_axis], flips.z == 1u);
+                let rel_pos = (vec2<f32>(h_rel, v_rel) - pan - pivot) * zoom;
+
                 crosshair_screen_pos = (rel_pos / vec2<f32>(k, 1.0)) + pivot;
-                ch_v1 = vec2<f32>(-1.0, 0.0); // +X (Red) -> Left
-                ch_v2 = vec2<f32>(0.0, 0.0);
-                ch_v3 = vec2<f32>(0.0, -1.0); // +Z (Blue) -> Up
+                ch_v1 = vec2<f32>(select(-1.0, 1.0, flips.x == 1u), 0.0);
+                ch_v3 = vec2<f32>(0.0, select(-1.0, 1.0, flips.z == 1u));
             } else if uniforms.view_mode == 3u { // Sagittal (YZ)
-                // Anterior is LEFT, Superior is UP
-                sample_pos = vec3<f32>(cursor.x, 1.0 - zoomed_uv.x, 1.0 - zoomed_uv.y);
-                let rel_pos = (vec2<f32>(1.0 - cursor.y, 1.0 - cursor.z) - pan - pivot) * zoom;
+                let h_axis = mapping.y;
+                let h_val = select(1.0 - zoomed_uv.x, zoomed_uv.x, flips.y == 1u);
+                let v_axis = mapping.z;
+                let v_val = select(1.0 - zoomed_uv.y, zoomed_uv.y, flips.z == 1u);
+                let d_axis = mapping.x;
+
+                sample_pos[h_axis] = h_val;
+                sample_pos[v_axis] = v_val;
+                sample_pos[d_axis] = cursor.x;
+
+                let h_rel = select(1.0 - cursor[h_axis], cursor[h_axis], flips.y == 1u);
+                let v_rel = select(1.0 - cursor[v_axis], cursor[v_axis], flips.z == 1u);
+                let rel_pos = (vec2<f32>(h_rel, v_rel) - pan - pivot) * zoom;
+
                 crosshair_screen_pos = (rel_pos / vec2<f32>(k, 1.0)) + pivot;
-                ch_v1 = vec2<f32>(0.0, 0.0);
-                ch_v2 = vec2<f32>(-1.0, 0.0); // +Y (Green) -> Left
-                ch_v3 = vec2<f32>(0.0, -1.0); // +Z (Blue) -> Up
+                ch_v2 = vec2<f32>(select(-1.0, 1.0, flips.y == 1u), 0.0);
+                ch_v3 = vec2<f32>(0.0, select(-1.0, 1.0, flips.z == 1u));
             }
 
             // 1. Sample Main Volume and apply windowing

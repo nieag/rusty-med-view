@@ -78,6 +78,7 @@ pub fn handle_label_load(
         Segmentation {
             name: loaded_label.filename.clone(),
             is_visible: true,
+            contour_set: crate::segmentation::ContourSet::new(),
         },
         LayerSettings { opacity: 0.5 },
         LabelmapData {

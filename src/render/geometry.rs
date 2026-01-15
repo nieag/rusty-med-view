@@ -62,15 +62,17 @@ pub fn world_to_ndc(
     zoom: f32,
     pan: [f32; 2],
     pivot: [f32; 2],
-    rotation: [f32; 4],
+    rotation: [f32; 4],         // User rotation
+    data_orientation: [f32; 4], // NIfTI orientation
     aspect_ratios: [f32; 3],
     screen_aspect: f32,
 ) -> Option<[f32; 2]> {
     if viewport_idx > 0 {
         // --- 2D Viewports ---
         let plane = crate::util::orientation::SlicePlane::from_viewport(viewport_idx as u32)?;
-        let [ndc_x_relative, ndc_y_relative] = plane.volume_to_screen_uv(pos.into());
-        let k = screen_aspect / plane.slice_aspect(aspect_ratios);
+        let [ndc_x_relative, ndc_y_relative] =
+            plane.volume_to_screen_uv(pos.into(), data_orientation);
+        let k = screen_aspect / plane.slice_aspect(aspect_ratios, data_orientation);
 
         let ndc_x = ((ndc_x_relative - pivot[0] - pan[0]) * zoom / k) + pivot[0];
         let ndc_y = ((ndc_y_relative - pivot[1] - pan[1]) * zoom) + pivot[1];

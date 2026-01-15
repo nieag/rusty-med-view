@@ -9,6 +9,7 @@ pub mod util;
 
 pub mod file_dialog;
 pub mod overlay;
+pub mod segmentation;
 
 pub use crate::app::App;
 pub use crate::io::handlers as load_handlers;

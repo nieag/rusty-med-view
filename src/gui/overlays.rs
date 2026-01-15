@@ -33,7 +33,7 @@ pub fn draw_viewport_overlays(
     for (_, (vp, vs)) in world.query::<(&Viewport, &ViewportState)>().iter() {
         if vp.mode == ViewMode::ThreeD {
             gizmo_rotation =
-                crate::orientation::compose_view_rotation(data_orientation, vs.user_rotation);
+                crate::util::orientation::compose_view_rotation(data_orientation, vs.user_rotation);
         }
     }
 
@@ -83,6 +83,7 @@ pub fn draw_viewport_overlays(
 
     let vol_dims = volume_info.unwrap_or([0, 0, 0]);
 
+    // 1. Draw Viewport Labels and Gizmos
     for (e, mode, rect) in vps.iter() {
         let rx0 = rect.min.x;
         let ry0 = rect.min.y;
@@ -110,10 +111,19 @@ pub fn draw_viewport_overlays(
                         ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
                     }
 
-                    marker(ui, "A", egui::pos2(rx0 + rhw, ry0 + 15.0));
-                    marker(ui, "P", egui::pos2(rx0 + rhw, ry0 + rect.height() - 15.0));
-                    marker(ui, "R", egui::pos2(rx0 + 15.0, ry0 + rhh));
-                    marker(ui, "L", egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh));
+                    let labels = crate::util::orientation::get_viewport_anatomical_labels(*mode);
+                    marker(ui, labels[2], egui::pos2(rx0 + rhw, ry0 + 15.0)); // Top
+                    marker(
+                        ui,
+                        labels[3],
+                        egui::pos2(rx0 + rhw, ry0 + rect.height() - 15.0),
+                    ); // Bottom
+                    marker(ui, labels[0], egui::pos2(rx0 + 15.0, ry0 + rhh)); // Left
+                    marker(
+                        ui,
+                        labels[1],
+                        egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh),
+                    ); // Right
                 }
                 ViewMode::Coronal => {
                     let slice_y = (cursor_pos[1] * vol_dims[1] as f32).round() as u32;
@@ -122,10 +132,19 @@ pub fn draw_viewport_overlays(
                     if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
                         ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
                     }
-                    marker(ui, "S", egui::pos2(rx0 + rhw, ry0 + 15.0));
-                    marker(ui, "I", egui::pos2(rx0 + rhw, ry0 + rect.height() - 15.0));
-                    marker(ui, "R", egui::pos2(rx0 + 15.0, ry0 + rhh));
-                    marker(ui, "L", egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh));
+                    let labels = crate::util::orientation::get_viewport_anatomical_labels(*mode);
+                    marker(ui, labels[2], egui::pos2(rx0 + rhw, ry0 + 15.0));
+                    marker(
+                        ui,
+                        labels[3],
+                        egui::pos2(rx0 + rhw, ry0 + rect.height() - 15.0),
+                    );
+                    marker(ui, labels[0], egui::pos2(rx0 + 15.0, ry0 + rhh));
+                    marker(
+                        ui,
+                        labels[1],
+                        egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh),
+                    );
                 }
                 ViewMode::Sagittal => {
                     let slice_x = (cursor_pos[0] * vol_dims[0] as f32).round() as u32;
@@ -134,10 +153,19 @@ pub fn draw_viewport_overlays(
                     if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
                         ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
                     }
-                    marker(ui, "S", egui::pos2(rx0 + rhw, ry0 + 15.0));
-                    marker(ui, "I", egui::pos2(rx0 + rhw, ry0 + rect.height() - 15.0));
-                    marker(ui, "A", egui::pos2(rx0 + 15.0, ry0 + rhh));
-                    marker(ui, "P", egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh));
+                    let labels = crate::util::orientation::get_viewport_anatomical_labels(*mode);
+                    marker(ui, labels[2], egui::pos2(rx0 + rhw, ry0 + 15.0));
+                    marker(
+                        ui,
+                        labels[3],
+                        egui::pos2(rx0 + rhw, ry0 + rect.height() - 15.0),
+                    );
+                    marker(ui, labels[0], egui::pos2(rx0 + 15.0, ry0 + rhh));
+                    marker(
+                        ui,
+                        labels[1],
+                        egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh),
+                    );
                 }
             });
 
@@ -182,7 +210,7 @@ pub fn draw_viewport_overlays(
         }
     }
 
-    // --- Draw Annotation Markers ---
+    // 2. Draw Annotation Markers and Segmentation Contours (layered)
     egui::Area::new("annotations_layer".into())
         .fixed_pos(central_rect.min)
         .interactable(true)
@@ -198,26 +226,63 @@ pub fn draw_viewport_overlays(
                 let focused_id = state.focused_id;
                 let items = &mut state.annotations;
 
-                let cursor_pos = world
-                    .get::<&Transform>(entities.cursor)
-                    .map(|t| glam::Vec3::from(t.position))
-                    .unwrap_or(glam::Vec3::ZERO);
+                let cursor_vec = glam::Vec3::from(cursor_pos);
 
                 let mut clicked_id = None;
                 for (e, mode, rect) in vps {
                     if let Ok(vs) = world.get::<&ViewportState>(*e) {
+                        // --- Draw Annotations ---
                         if let Some(id) = draw_annotations(
                             ui,
                             items,
                             &vs,
                             vd,
+                            data_orientation,
                             *rect,
                             *mode,
                             &mut overlay,
                             focused_id,
-                            cursor_pos,
+                            cursor_vec,
                         ) {
                             clicked_id = Some(id);
+                        }
+
+                        // --- Draw Segmentation Contours ---
+                        if mode != &ViewMode::ThreeD {
+                            let mut seg_query = world.query::<&Segmentation>();
+                            for (_, seg) in seg_query.iter() {
+                                if !seg.is_visible {
+                                    continue;
+                                }
+
+                                let current_slice = match mode {
+                                    ViewMode::Axial => {
+                                        (cursor_pos[2] * vol_dims[2] as f32).round() as i32
+                                    }
+                                    ViewMode::Coronal => {
+                                        (cursor_pos[1] * vol_dims[1] as f32).round() as i32
+                                    }
+                                    ViewMode::Sagittal => {
+                                        (cursor_pos[0] * vol_dims[0] as f32).round() as i32
+                                    }
+                                    _ => 0,
+                                };
+
+                                if let Some(slice_contours) =
+                                    seg.contour_set.get_slice(*mode, current_slice)
+                                {
+                                    draw_contours_2d(
+                                        ui.painter(),
+                                        slice_contours,
+                                        &vs,
+                                        *rect,
+                                        vol_dims,
+                                        vd.spacing,
+                                        data_orientation,
+                                        *mode,
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -267,6 +332,7 @@ fn draw_annotations(
     annotations: &mut [Annotation],
     view: &ViewportState,
     vol: &VolumeData,
+    data_orientation: [f32; 4],
     rect: egui::Rect,
     mode: ViewMode,
     overlay: &mut OverlayManager,
@@ -290,7 +356,7 @@ fn draw_annotations(
 
     for (idx, ann) in annotations.iter_mut().enumerate() {
         if let Some(plane) = crate::util::orientation::SlicePlane::from_mode(mode) {
-            let axis = plane.depth_axis();
+            let axis = plane.depth_axis(data_orientation);
             let ann_depth = ann.world_pos[axis];
             let current_depth = cursor_pos[axis];
 
@@ -306,6 +372,7 @@ fn draw_annotations(
             view.pan,
             view.pivot,
             view.user_rotation,
+            data_orientation,
             aspect_ratios,
             rect,
         ) {
@@ -340,28 +407,25 @@ fn draw_annotations(
                         1.0
                     };
 
-                    let slice_aspect = match viewport_idx {
-                        1 => aspect_ratios[0] / aspect_ratios[1],
-                        2 => aspect_ratios[0] / aspect_ratios[2],
-                        3 => aspect_ratios[1] / aspect_ratios[2],
-                        _ => 1.0,
-                    };
-                    let k = screen_aspect / slice_aspect;
-
-                    let ndc_x = (mouse_pos.x - rect.min.x) / rect.width();
-                    let ndc_y = (mouse_pos.y - rect.min.y) / rect.height();
-
-                    overlay.mouse_screen_uv = [ndc_x, ndc_y];
-
-                    let world_u = ((ndc_x - pivot[0]) * k / zoom) + pivot[0] + pan[0];
-                    let world_v = ((ndc_y - pivot[1]) / zoom) + pivot[1] + pan[1];
-
                     if let Some(plane) =
                         crate::util::orientation::SlicePlane::from_viewport(viewport_idx as u32)
                     {
+                        let slice_aspect = plane.slice_aspect(aspect_ratios, data_orientation);
+                        let k = screen_aspect / slice_aspect;
+
+                        let ndc_x = (mouse_pos.x - rect.min.x) / rect.width();
+                        let ndc_y = (mouse_pos.y - rect.min.y) / rect.height();
+
+                        overlay.mouse_screen_uv = [ndc_x, ndc_y];
+
+                        let world_u = ((ndc_x - pivot[0]) * k / zoom) + pivot[0] + pan[0];
+                        let world_v = ((ndc_y - pivot[1]) / zoom) + pivot[1] + pan[1];
+
+                        let depth_axis = plane.depth_axis(data_orientation);
                         let vol_pos = plane.screen_uv_to_volume(
                             [world_u, world_v],
-                            ann.world_pos[plane.depth_axis()],
+                            ann.world_pos[depth_axis],
+                            data_orientation,
                         );
                         ann.world_pos = glam::Vec3::from(vol_pos);
                     }
@@ -382,6 +446,7 @@ fn draw_annotations(
                     view.pan,
                     view.pivot,
                     view.user_rotation,
+                    data_orientation,
                     aspect_ratios,
                     rect,
                 )
@@ -449,6 +514,7 @@ fn world_to_screen(
     pan: [f32; 2],
     pivot: [f32; 2],
     rotation: [f32; 4],
+    data_orientation: [f32; 4],
     aspect_ratios: [f32; 3],
     rect: egui::Rect,
 ) -> Option<egui::Pos2> {
@@ -465,6 +531,7 @@ fn world_to_screen(
         pan,
         pivot,
         rotation,
+        data_orientation,
         aspect_ratios,
         screen_aspect,
     ) {
@@ -478,5 +545,74 @@ fn world_to_screen(
         ))
     } else {
         None
+    }
+}
+
+fn draw_contours_2d(
+    painter: &egui::Painter,
+    slice: &crate::segmentation::SliceContours,
+    view: &ViewportState,
+    rect: egui::Rect,
+    vol_dims: [u32; 3],
+    vol_spacing: [f32; 3],
+    data_orientation: [f32; 4],
+    mode: ViewMode,
+) {
+    let zoom = view.zoom;
+    let pan = view.pan;
+    let pivot = view.pivot;
+
+    let plane = if let Some(p) = crate::util::orientation::SlicePlane::from_mode(mode) {
+        p
+    } else {
+        return;
+    };
+
+    let screen_w = rect.width();
+    let screen_h = rect.height();
+    let screen_aspect = if screen_h > 0.0 {
+        screen_w / screen_h
+    } else {
+        1.0
+    };
+
+    let vol_aspects = [
+        vol_dims[0] as f32 * vol_spacing[0],
+        vol_dims[1] as f32 * vol_spacing[1],
+        vol_dims[2] as f32 * vol_spacing[2],
+    ];
+
+    let slice_aspect = plane.slice_aspect(vol_aspects, data_orientation);
+    let k = screen_aspect / slice_aspect;
+
+    for contour in &slice.contours {
+        let mut points = Vec::new();
+        for p in &contour.points {
+            // Map 2D slice UV to 3D volume UV for the projection API
+            let vol_uv = match plane {
+                crate::util::orientation::SlicePlane::Axial => [p.x, p.y, 0.0],
+                crate::util::orientation::SlicePlane::Coronal => [p.x, 0.0, p.y],
+                crate::util::orientation::SlicePlane::Sagittal => [0.0, p.x, p.y],
+            };
+
+            let [ndc_u, ndc_v] = plane.volume_to_screen_uv(vol_uv, data_orientation);
+
+            let ndc_x = (ndc_u - pivot[0] - pan[0]) * zoom / k + pivot[0];
+            let ndc_y = (ndc_v - pivot[1] - pan[1]) * zoom + pivot[1];
+
+            points.push(egui::pos2(
+                rect.min.x + ndc_x * rect.width(),
+                rect.min.y + ndc_y * rect.height(),
+            ));
+        }
+
+        if points.len() > 1 {
+            let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(0, 255, 255));
+            if contour.is_closed {
+                painter.add(egui::Shape::closed_line(points, stroke));
+            } else {
+                painter.add(egui::Shape::line(points, stroke));
+            }
+        }
     }
 }

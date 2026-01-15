@@ -6,10 +6,10 @@ This document provides a technical overview of the **Rust Medical Imaging Viewer
 A high-performance 2D/3D medical volume viewer built with **Rust** and **WGPU**. It supports orthogonal slicing, volumetric X-ray rendering, and interactive crosshair picking.
 
 ### 📈 Recent Progress
-- **Orientation Consolidation**: Centralized all 3D transforms in `src/orientation.rs`. Separated **Data Orientation** (from NIfTI) from **User Rotation** (interactive) to allow independent view manipulation and clean resets.
-- **Unified 3D API**: Implemented `screen_to_ray_3d` and `volume_to_screen_3d` as the single source of truth for picking and projection across CPU and GPU.
-- **Radiological Convention**: Native support for flipped X-axis (Right-on-Left) across picking, 2D slicing, and 3D volume rendering.
-- **Parity Testing**: Expanded test suite to 30+ tests, including "Shader Parity" tests that verify Rust math exactly matches WGSL logic for raymarching and projection.
+- **Dynamic Orientation Consolidation**: Centralized all 3D transforms in `src/util/orientation.rs`. The system now dynamically calculates anatomical flips and axis mappings from the NIfTI quaternion, supporting non-RAS volumes (LAS, LPS, etc.) natively in both 2D and 3D.
+- **Unified Coordinate Pipeline**: Propagated orientation-aware logic to `picking.rs`, `geometry.rs`, and `shader.wgsl` via centralized `SlicePlane` API. The shader now uses dynamic axis mapping for zero-lag 2D projection.
+- **Radiological Convention**: Enforced "Right-on-Left" convention across all viewports with dynamic anatomical markers (R, L, A, P, S, I).
+- **Parity Testing**: Expanded test suite with "Shader Parity" tests that verify Rust math exactly matches WGSL logic for raymarching and projection.
 
 ## 🛠 Tech Stack
 - **Graphics**: [wgpu](https://github.com/gfx-rs/wgpu) (using Metal, WebGPU/WebGL2)

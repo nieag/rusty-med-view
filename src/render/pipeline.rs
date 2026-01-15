@@ -291,6 +291,7 @@ pub fn render_frame(
     // 0. Process interaction and updates once per frame, right before rendering
     systems::sys_handle_mouse_drag(world, entities);
     systems::sys_paint(world, entities, queue);
+    crate::segmentation::sys_sync_labelmap_to_contours(world);
 
     // 1. Run GUI first so it can process interactions and update ECS state for THIS frame
     gui.prepare(window, world, entities, event_proxy);

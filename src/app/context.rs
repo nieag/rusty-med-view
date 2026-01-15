@@ -152,6 +152,8 @@ impl RenderingContext {
         let annotations = world.spawn((AnnotationState::default(),));
         let overlay = world.spawn((OverlayManager::default(),));
 
+        let segmentation = world.spawn((SegmentationTag,));
+
         let entities = AppEntities {
             input,
             editor,
@@ -162,6 +164,7 @@ impl RenderingContext {
             protocol,
             cursor,
             window_settings: settings_entity,
+            segmentation,
         };
 
         protocols::apply_protocol(&mut world, &entities, "Standard 2x2");

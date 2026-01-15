@@ -146,6 +146,15 @@ pub fn sys_prepare_render_data(
         overlay_dragging_idx: u32::MAX,
         brush_preview,
         brush_center_voxel,
+        volume_orientation_quat: data_orientation,
+        slice_axis_mapping: {
+            let mapping = crate::util::orientation::dominant_axis_mapping(data_orientation);
+            [mapping[0] as u32, mapping[1] as u32, mapping[2] as u32, 0]
+        },
+        slice_axis_flips: {
+            let flips = crate::util::orientation::anatomical_flips(data_orientation);
+            [flips[0] as u32, flips[1] as u32, flips[2] as u32, 0]
+        },
         zoom: zoom_val,
         view_mode,
         overlay_flags,
