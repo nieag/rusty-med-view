@@ -77,21 +77,22 @@ pub fn get_voxel_at_mouse(
         } else {
             1.0
         };
-        let plane = crate::orientation::SlicePlane::from_mode(mode)?;
-        let slice_aspect = plane.slice_aspect(vol_aspects);
-        let k = screen_aspect / slice_aspect;
+        if let Some(plane) = crate::util::orientation::SlicePlane::from_mode(mode) {
+            let slice_aspect = plane.slice_aspect(vol_aspects);
+            let k = screen_aspect / slice_aspect;
 
-        let volume_uv = [
-            ((mouse_uv[0] - 0.5) * k) / zoom + 0.5 + pan[0],
-            (mouse_uv[1] - 0.5) / zoom + 0.5 + pan[1],
-        ];
+            let volume_uv = [
+                ((mouse_uv[0] - 0.5) * k) / zoom + 0.5 + pan[0],
+                (mouse_uv[1] - 0.5) / zoom + 0.5 + pan[1],
+            ];
 
-        let pos = plane.screen_uv_to_volume(volume_uv, cursor_pos[plane.depth_axis()]);
-        if (0.0..=1.0).contains(&pos[0])
-            && (0.0..=1.0).contains(&pos[1])
-            && (0.0..=1.0).contains(&pos[2])
-        {
-            return Some(pos);
+            let pos = plane.screen_uv_to_volume(volume_uv, cursor_pos[plane.depth_axis()]);
+            if (0.0..=1.0).contains(&pos[0])
+                && (0.0..=1.0).contains(&pos[1])
+                && (0.0..=1.0).contains(&pos[2])
+            {
+                return Some(pos);
+            }
         }
         None
     } else {
@@ -111,9 +112,14 @@ pub fn get_voxel_at_mouse(
             }
 
             let final_rotation =
-                crate::orientation::compose_view_rotation(data_orientation, user_rotation);
-            let (cam_pos_obj_raw, ray_dir_obj_raw) =
-                crate::orientation::screen_to_ray_3d(mouse_uv, final_rotation, zoom, pan, aspect);
+                crate::util::orientation::compose_view_rotation(data_orientation, user_rotation);
+            let (cam_pos_obj_raw, ray_dir_obj_raw) = crate::util::orientation::screen_to_ray_3d(
+                mouse_uv,
+                final_rotation,
+                zoom,
+                pan,
+                aspect,
+            );
 
             let cam_pos_obj = Vec3::from(cam_pos_obj_raw);
             let ray_dir_obj = Vec3::from(ray_dir_obj_raw);

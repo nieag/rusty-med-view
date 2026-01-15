@@ -67,7 +67,7 @@ pub fn sys_prepare_render_data(
 
     let composed_rotation = if view_mode == 0 {
         // 3D
-        crate::orientation::compose_view_rotation(data_orientation, user_rotation)
+        crate::util::orientation::compose_view_rotation(data_orientation, user_rotation)
     } else {
         user_rotation
     };

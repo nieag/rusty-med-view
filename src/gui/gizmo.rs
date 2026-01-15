@@ -35,7 +35,7 @@ pub fn draw_gizmo(ui: &mut Ui, rect: Rect, view_rotation: Quat) {
         .iter()
         .map(|(vec, label, color)| {
             // Use centralized projection
-            let proj = crate::orientation::project_axis_3d(
+            let proj = crate::util::orientation::project_axis_3d(
                 vec.to_array(),
                 view_rotation.to_array(),
                 [1.0, 1.0, 1.0], // Gizmo axes are unit length
@@ -47,8 +47,8 @@ pub fn draw_gizmo(ui: &mut Ui, rect: Rect, view_rotation: Quat) {
 
             // Get depth for Z-sorting (forward direction is +Z in projection)
             let q = view_rotation.to_array();
-            let m = crate::orientation::quat_to_mat3(q);
-            let rotated = crate::orientation::rotate_vec3(m, vec.to_array());
+            let m = crate::util::orientation::quat_to_mat3(q);
+            let rotated = crate::util::orientation::rotate_vec3(m, vec.to_array());
 
             TransformedAxis {
                 pos2: Pos2::new(screen_x, screen_y),

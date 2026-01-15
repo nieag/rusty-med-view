@@ -3,9 +3,9 @@
 // Rendering infrastructure: pipeline setup, bind group creation, and frame rendering.
 
 use crate::components::*;
-use crate::geometry;
 use crate::gui;
 use crate::overlay::OverlayPrimitive;
+use crate::render::geometry;
 use crate::systems;
 use hecs::World;
 use std::sync::Arc;
@@ -128,8 +128,10 @@ pub fn create_render_pipeline(
     surface_format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shader.wgsl").into()),
+        label: Some("Main Shader"),
+        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+            "../shaders/shader.wgsl"
+        ))),
     });
 
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

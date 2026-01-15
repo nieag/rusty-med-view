@@ -71,6 +71,7 @@ impl Default for ViewportState {
     }
 }
 
+#[derive(Default)]
 pub struct InputState {
     pub last_mouse_pos: [f64; 2],
     pub mouse_uv: [f32; 2],
@@ -220,11 +221,9 @@ impl Default for VolumeWindowing {
 }
 
 // --- Load Result ---
-use crate::nifti_loader; // Assuming crate root has nifti_loader mod
-
 #[derive(Debug)]
 pub enum LoadResult {
-    Volume(nifti_loader::LoadedVolume),
+    Volume(crate::io::nifti::LoadedVolume),
     Label(LoadedLabel), // Changed to local LoadedLabel
 }
 
@@ -240,7 +239,6 @@ pub struct LoadedLabel {
 pub struct Comment {
     pub author: String,
     pub text: String,
-    pub timestamp: std::time::SystemTime,
 }
 
 #[derive(Clone, Debug)]

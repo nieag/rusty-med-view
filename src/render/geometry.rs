@@ -68,7 +68,7 @@ pub fn world_to_ndc(
 ) -> Option<[f32; 2]> {
     if viewport_idx > 0 {
         // --- 2D Viewports ---
-        let plane = crate::orientation::SlicePlane::from_viewport(viewport_idx as u32)?;
+        let plane = crate::util::orientation::SlicePlane::from_viewport(viewport_idx as u32)?;
         let [ndc_x_relative, ndc_y_relative] = plane.volume_to_screen_uv(pos.into());
         let k = screen_aspect / plane.slice_aspect(aspect_ratios);
 
@@ -78,7 +78,7 @@ pub fn world_to_ndc(
         Some([ndc_x, ndc_y])
     } else {
         // --- 3D Viewport ---
-        crate::orientation::volume_to_screen_3d(
+        crate::util::orientation::volume_to_screen_3d(
             pos.into(),
             rotation,
             aspect_ratios,

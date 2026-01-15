@@ -5,7 +5,6 @@
 
 use crate::components::*;
 use crate::nifti_loader::LoadedVolume;
-use crate::render;
 use crate::volume;
 use hecs::World;
 
@@ -150,7 +149,7 @@ pub fn recreate_bind_groups(
     let overlay1_view = overlay_views.first().unwrap_or(dummy_view);
     let overlay2_view = overlay_views.get(1).unwrap_or(dummy_view);
 
-    let new_bind_group = render::create_scene_bind_group(
+    let new_bind_group = crate::render::pipeline::create_scene_bind_group(
         device,
         texture_bind_group_layout,
         main_view_ref,
