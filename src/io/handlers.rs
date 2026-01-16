@@ -79,6 +79,8 @@ pub fn handle_label_load(
             name: loaded_label.filename.clone(),
             is_visible: true,
             contour_set: crate::segmentation::ContourSet::new(),
+            mesh: crate::segmentation::mesh::SegmentationMesh::default(),
+            gpu_mesh: None,
         },
         LayerSettings { opacity: 0.5 },
         LabelmapData {
@@ -128,8 +130,9 @@ pub fn recreate_bind_groups(
         // 1. Prioritize active layer if it exists and is a voxel representation
         if let Some(active) = active_layer {
             if let Ok(repr) = world.get::<&Representation>(active) {
-                let Representation::Voxel(res) = &*repr;
-                overlay_views.push(res.view.clone());
+                if let Representation::Voxel(res) = &*repr {
+                    overlay_views.push(res.view.clone());
+                }
             }
         }
 
@@ -139,8 +142,9 @@ pub fn recreate_bind_groups(
             if Some(e) == active_layer {
                 continue;
             }
-            let Representation::Voxel(res) = repr;
-            overlay_views.push(res.view.clone());
+            if let Representation::Voxel(res) = repr {
+                overlay_views.push(res.view.clone());
+            }
         }
     }
 
@@ -168,8 +172,9 @@ pub fn recreate_bind_groups(
         res.bind_group = new_bind_group.clone();
     }
     for (_, repr) in world.query_mut::<&mut Representation>() {
-        let Representation::Voxel(res) = repr;
-        res.bind_group = new_bind_group.clone();
+        if let Representation::Voxel(res) = repr {
+            res.bind_group = new_bind_group.clone();
+        }
     }
 }
 

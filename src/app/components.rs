@@ -195,6 +195,8 @@ pub struct Segmentation {
     pub name: String,
     pub is_visible: bool,
     pub contour_set: crate::segmentation::ContourSet,
+    pub mesh: crate::segmentation::mesh::SegmentationMesh,
+    pub gpu_mesh: Option<crate::segmentation::mesh::GpuMeshResources>,
 }
 
 pub struct LayerSettings {
@@ -208,6 +210,7 @@ pub struct LabelmapData {
 
 pub enum Representation {
     Voxel(GpuVolumeResources),
+    Mesh(crate::segmentation::mesh::GpuMeshResources),
 }
 
 #[derive(Clone, Copy)]

@@ -62,7 +62,11 @@ pub fn sys_paint(world: &mut World, entities: &AppEntities, queue: &wgpu::Queue)
                 world.query_one::<(&mut LabelmapData, &Representation)>(layer_ent)
             {
                 if let Some((label_data, repr)) = query.get() {
-                    let Representation::Voxel(res) = repr;
+                    let res = if let Representation::Voxel(res) = repr {
+                        res
+                    } else {
+                        continue;
+                    };
                     let dim = label_data.dimensions;
                     let width = dim[0];
                     let height = dim[1];

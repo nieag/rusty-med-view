@@ -25,6 +25,8 @@ pub struct RenderingContext {
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
     pub num_indices: u32,
+    pub mesh_pipeline: crate::render::mesh_renderer::MeshPipeline,
+    pub mesh_bind_group: wgpu::BindGroup,
 
     // ECS and GUI
     pub world: World,
@@ -36,6 +38,7 @@ pub struct RenderingContext {
     pub dummy_r8: (wgpu::Texture, wgpu::TextureView, wgpu::Sampler),
     pub default_lut: (wgpu::Texture, wgpu::TextureView),
     pub overlay_buffer: wgpu::Buffer,
+    pub depth_view: wgpu::TextureView,
 
     // Proxy for waking up the event loop from async tasks
     pub event_proxy: EventLoopProxy<AppEvent>,
@@ -167,10 +170,40 @@ impl RenderingContext {
             segmentation,
         };
 
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Depth Texture"),
+            size: wgpu::Extent3d {
+                width: config.width.max(1),
+                height: config.height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
         protocols::apply_protocol(&mut world, &entities, "Standard 2x2");
 
         let render_pipeline =
             pipeline::create_render_pipeline(&device, &texture_bind_group_layout, config.format);
+        let mesh_pipeline = crate::render::mesh_renderer::MeshPipeline::new(&device, config.format);
+        let mesh_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &mesh_pipeline.bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &uniform_buffer,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(256),
+                }),
+            }],
+            label: Some("mesh_bind_group"),
+        });
+
         let (vertex_buffer, index_buffer, num_indices) = pipeline::create_geometry_buffers(&device);
 
         let gui = Gui::new(&device, config.format, &window);
@@ -199,6 +232,8 @@ impl RenderingContext {
             vertex_buffer,
             index_buffer,
             num_indices,
+            mesh_pipeline,
+            mesh_bind_group,
             world,
             entities,
             gui,
@@ -206,6 +241,7 @@ impl RenderingContext {
             dummy_r8,
             default_lut,
             overlay_buffer,
+            depth_view,
             event_proxy,
         }
     }

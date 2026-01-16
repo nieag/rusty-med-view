@@ -23,16 +23,16 @@
 
 ---
 
-## Milestone 2: Mesh Data Structure
+## Milestone 2: Mesh Data Structure [COMPLETE]
 **Goal**: Display 3D mesh from labelmap  
 **Deliverable**: Smooth mesh visible in 3D view
 
-- [ ] `SegmentationMesh` struct (vertices, normals, indices)
-- [ ] GPU buffer management (create/update)
-- [ ] Surface Nets algorithm
-- [ ] Mesh render pipeline (Phong shading)
-- [ ] `mesh.wgsl` fragment shader
-- [ ] Unit tests for Surface Nets
+- [x] `SegmentationMesh` struct (vertices, normals, indices)
+- [x] GPU buffer management (create/update)
+- [x] Surface Nets algorithm
+- [x] Mesh render pipeline (Phong shading)
+- [x] `mesh.wgsl` fragment shader
+- [x] Unit tests for Surface Nets
 
 ---
 

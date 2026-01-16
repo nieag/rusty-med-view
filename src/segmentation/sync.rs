@@ -1,18 +1,32 @@
-use crate::app::components::*;
-use crate::segmentation::algorithms::MarchingSquares;
+use crate::app::components::{LabelmapData, Segmentation, ViewMode};
+use crate::segmentation::algorithms::{MarchingSquares, SurfaceNets};
+use crate::segmentation::mesh::GpuMeshResources;
 use hecs::World;
 
 /// System to synchronize Labelmap voxel data to 2D contours
 pub fn sys_sync_labelmap_to_contours(world: &mut World) {
     let mut to_update = Vec::new();
-
-    // Find all segmentations that have a labelmap and might need update
     for (entity, (seg, _labelmap)) in world.query_mut::<(&mut Segmentation, &LabelmapData)>() {
-        // For now, let's sync if the contour set is empty or we can add a dirty flag to LabelmapData later.
-        // To be safe and performant, we only sync the slices currently visible in the viewports?
-        // Or just sync everything once for now.
-
         if seg.contour_set.slices.is_empty() {
+            to_update.push(entity);
+        }
+    }
+    for entity in to_update {
+        if let Ok(mut seg) = world.get::<&mut Segmentation>(entity) {
+            if let Ok(labelmap) = world.get::<&LabelmapData>(entity) {
+                sync_full_labelmap(&mut seg, &*labelmap);
+            }
+        }
+    }
+}
+
+/// System to synchronize Labelmap voxel data to 3D mesh
+pub fn sys_sync_labelmap_to_mesh(device: &wgpu::Device, world: &mut World) {
+    let mut to_update = Vec::new();
+    for (entity, (seg, _labelmap)) in world.query_mut::<(&mut Segmentation, &LabelmapData)>() {
+        // For M2, we sync if the mesh is empty.
+        // In M4 we'll add dirty tracking.
+        if seg.mesh.vertices.is_empty() && !_labelmap.raw_data.is_empty() {
             to_update.push(entity);
         }
     }
@@ -20,7 +34,18 @@ pub fn sys_sync_labelmap_to_contours(world: &mut World) {
     for entity in to_update {
         if let Ok(mut seg) = world.get::<&mut Segmentation>(entity) {
             if let Ok(labelmap) = world.get::<&LabelmapData>(entity) {
-                sync_full_labelmap(&mut seg, &*labelmap);
+                let sn = SurfaceNets::new(0.5);
+                let (v, n, i) = sn.extract(&labelmap.raw_data, labelmap.dimensions);
+                seg.mesh.vertices = v;
+                seg.mesh.normals = n;
+                seg.mesh.indices = i;
+
+                // Initialize/Update GPU resources
+                if seg.gpu_mesh.is_none() {
+                    seg.gpu_mesh = Some(GpuMeshResources::new(device, &seg.mesh));
+                } else if let Some(ref mut gpu) = seg.gpu_mesh {
+                    gpu.is_dirty = true; // Signal for update in render pipeline
+                }
             }
         }
     }

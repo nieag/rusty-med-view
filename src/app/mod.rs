@@ -118,16 +118,38 @@ impl ApplicationHandler<AppEvent> for App {
                 ctx.window.request_redraw();
             }
             WindowEvent::Resized(size) => {
-                ctx.config.width = size.width;
-                ctx.config.height = size.height;
-                ctx.surface.configure(&ctx.device, &ctx.config);
-                let mut query = ctx
-                    .world
-                    .query_one::<&mut WindowSettings>(ctx.settings_entity)
-                    .unwrap();
-                if let Some(settings) = query.get() {
-                    settings.width = size.width;
-                    settings.height = size.height;
+                if size.width > 0 && size.height > 0 {
+                    ctx.config.width = size.width;
+                    ctx.config.height = size.height;
+                    ctx.surface.configure(&ctx.device, &ctx.config);
+
+                    // Recreate depth texture
+                    let depth_texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("Depth Texture"),
+                        size: wgpu::Extent3d {
+                            width: size.width,
+                            height: size.height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Depth32Float,
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::TEXTURE_BINDING,
+                        view_formats: &[],
+                    });
+                    ctx.depth_view =
+                        depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+                    let mut query = ctx
+                        .world
+                        .query_one::<&mut WindowSettings>(ctx.settings_entity)
+                        .unwrap();
+                    if let Some(settings) = query.get() {
+                        settings.width = size.width;
+                        settings.height = size.height;
+                    }
                 }
                 ctx.window.request_redraw();
             }
@@ -143,6 +165,9 @@ impl ApplicationHandler<AppEvent> for App {
                     &ctx.index_buffer,
                     ctx.num_indices,
                     &ctx.overlay_buffer,
+                    &ctx.mesh_pipeline,
+                    &ctx.mesh_bind_group,
+                    &ctx.depth_view,
                     &mut ctx.world,
                     &ctx.entities,
                     &mut ctx.gui,
@@ -276,6 +301,8 @@ impl ApplicationHandler<AppEvent> for App {
                         name,
                         is_visible: true,
                         contour_set: crate::segmentation::ContourSet::new(),
+                        mesh: crate::segmentation::mesh::SegmentationMesh::default(),
+                        gpu_mesh: None,
                     },
                     LayerSettings { opacity: 0.7 },
                     LabelmapData {

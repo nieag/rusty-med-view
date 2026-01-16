@@ -168,7 +168,13 @@ pub fn create_render_pipeline(
             unclipped_depth: false,
             conservative: false,
         },
-        depth_stencil: None,
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: false, // Volume doesn't write to depth
+            depth_compare: wgpu::CompareFunction::Always,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
         multisample: wgpu::MultisampleState::default(),
         multiview: None,
         cache: None,
@@ -278,6 +284,9 @@ pub fn render_frame(
     index_buffer: &wgpu::Buffer,
     num_indices: u32,
     overlay_buffer: &wgpu::Buffer,
+    mesh_pipeline: &crate::render::mesh_renderer::MeshPipeline,
+    mesh_bind_group: &wgpu::BindGroup,
+    depth_view: &wgpu::TextureView,
     world: &mut World,
     entities: &AppEntities,
     gui: &mut gui::Gui,
@@ -292,6 +301,7 @@ pub fn render_frame(
     systems::sys_handle_mouse_drag(world, entities);
     systems::sys_paint(world, entities, queue);
     crate::segmentation::sys_sync_labelmap_to_contours(world);
+    crate::segmentation::sys_sync_labelmap_to_mesh(device, world);
 
     // 1. Run GUI first so it can process interactions and update ECS state for THIS frame
     gui.prepare(window, world, entities, event_proxy);
@@ -325,6 +335,43 @@ pub fn render_frame(
         queue.write_buffer(uniform_buffer, offset, bytemuck::cast_slice(&[u]));
     }
 
+    // Sync mesh resources once per frame
+    crate::segmentation::sys_sync_labelmap_to_mesh(device, world);
+
+    // Prepare mesh rendering data for 3D views - Collect to release world borrow
+    let mesh_render_data: Vec<_> = world
+        .query_mut::<(&Segmentation, &SegmentationTag)>()
+        .into_iter()
+        .filter(|(_, (seg, _))| seg.is_visible && seg.gpu_mesh.is_some())
+        .map(|(_, (seg, _))| {
+            let gpu = seg.gpu_mesh.as_ref().unwrap();
+            (
+                gpu.vertex_buffer.clone(),
+                gpu.index_buffer.clone(),
+                gpu.num_indices,
+            )
+        })
+        .collect();
+
+    // Prepare viewport info to avoid querying world inside the render pass loop
+    let mut viewport_render_info = Vec::new();
+    for (e, rect, u_idx) in &viewports {
+        let (is_3d, rotation, zoom) = if let Ok(vp) = world.get::<&Viewport>(*e) {
+            if vp.mode == ViewMode::ThreeD {
+                if let Ok(state) = world.get::<&ViewportState>(*e) {
+                    (true, state.user_rotation, state.zoom)
+                } else {
+                    (true, [0.0, 0.0, 0.0, 1.0], 1.0)
+                }
+            } else {
+                (false, [0.0, 0.0, 0.0, 1.0], 1.0)
+            }
+        } else {
+            (false, [0.0, 0.0, 0.0, 1.0], 1.0)
+        };
+        viewport_render_info.push((*rect, *u_idx, is_3d, rotation, zoom));
+    }
+
     let frame = surface.get_current_texture().unwrap();
     let view = frame
         .texture
@@ -350,7 +397,14 @@ pub fn render_frame(
                 },
                 depth_slice: None,
             })],
-            depth_stencil_attachment: None,
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
             timestamp_writes: None,
             occlusion_query_set: None,
         });
@@ -366,10 +420,28 @@ pub fn render_frame(
                 .with::<&MainVolumeTag>();
             if let Some((_, res)) = query.iter().next() {
                 let bg = &res.bind_group;
-                for (_, rect, u_idx) in &viewports {
+                for (rect, u_idx, is_3d, _rotation, _zoom) in viewport_render_info {
                     render_pass.set_viewport(rect[0], rect[1], rect[2], rect[3], 0.0, 1.0);
-                    render_pass.set_bind_group(0, bg, &[*u_idx * 256]);
+                    render_pass.set_bind_group(0, bg, &[u_idx * 256]);
                     render_pass.draw_indexed(0..num_indices, 0, 0..1);
+
+                    if is_3d {
+                        render_pass.set_pipeline(&mesh_pipeline.pipeline);
+                        // Use the main uniform buffer slot with dynamic offset
+                        render_pass.set_bind_group(0, mesh_bind_group, &[(u_idx * 256) as u32]);
+
+                        for (v_buf, i_buf, n_indices) in &mesh_render_data {
+                            render_pass.set_vertex_buffer(0, v_buf.slice(..));
+                            render_pass
+                                .set_index_buffer(i_buf.slice(..), wgpu::IndexFormat::Uint32);
+                            render_pass.draw_indexed(0..*n_indices, 0, 0..1);
+                        }
+                        // Restore volume pipeline and buffers for other viewports
+                        render_pass.set_pipeline(render_pipeline);
+                        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                        render_pass
+                            .set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                    }
                 }
             }
         }

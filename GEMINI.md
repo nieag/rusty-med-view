@@ -9,6 +9,7 @@ A high-performance 2D/3D medical volume viewer built with **Rust** and **WGPU**.
 - **Dynamic Orientation Consolidation**: Centralized all 3D transforms in `src/util/orientation.rs`. The system now dynamically calculates anatomical flips and axis mappings from the NIfTI quaternion, supporting non-RAS volumes (LAS, LPS, etc.) natively in both 2D and 3D.
 - **Unified Coordinate Pipeline**: Propagated orientation-aware logic to `picking.rs`, `geometry.rs`, and `shader.wgsl` via centralized `SlicePlane` API. The shader now uses dynamic axis mapping for zero-lag 2D projection.
 - **Radiological Convention**: Enforced "Right-on-Left" convention across all viewports with dynamic anatomical markers (R, L, A, P, S, I).
+- **3D Mesh Rendering**: Implemented a dedicated rendering pipeline for segmentation meshes. This includes a Surface Nets algorithm for dual-mesh extraction from labelmaps and a Phong-shaded WGSL pipeline with proper depth-stencil integration.
 - **Parity Testing**: Expanded test suite with "Shader Parity" tests that verify Rust math exactly matches WGSL logic for raymarching and projection.
 
 ## 🛠 Tech Stack
@@ -82,6 +83,13 @@ Implements high-intensity raymarching to accurately place the crosshair.
 - **Centralized Logic**: Uses `orientation::screen_to_ray_3d` on the CPU to ensure picking rays perfectly match the visual raymarching in the shader.
 - **Continuous Update**: Navigation mode supports live crosshair updates during Left-click drags.
 - **Safety**: Tools (Brush/Eraser) are automatically inhibited during Zoom/Pan/Rotate operations.
+
+### 3D Mesh Representation
+Implemented as a secondary, high-performance representation for 3D visualization:
+- **Algorithm**: Uses **Surface Nets** for smooth dual-mesh generation directly from voxel labelmaps. This provides superior visual quality compared to Marching Cubes for semantic segmentation.
+- **GPU Integration**: Managed via `GpuMeshResources`, which handles indexed vertex buffers (Position + Normal).
+- **Shader Projection**: The `mesh.wgsl` vertex shader replicates the volume's physical aspect ratio and radiological projection logic, ensuring the teal mesh perfectly overlays the 3D X-ray volume.
+- **Depth Composition**: Uses a dedicated depth-stencil pass to correctly interleave the mesh with the volume rendering and annotations.
 
 ### Labelmap Overlays
 The system supports raw **Hounsfield Unit (HU)** based windowing and translucent overlays.
