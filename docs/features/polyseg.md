@@ -1,3 +1,8 @@
+# PolySeg - Vector/TSDF Hybrid Draft (SUPERSEDED)
+
+> [!NOTE]
+> This document represents the initial draft for the TSDF system. It has been **superseded** by the [Vector-Authoritative Segmentation Architecture](./segmentation_architecture.md). Please refer to the new architecture and [Milestones](./segmentation_milestones.md) for current implementation details.
+
 Targeting **WASM** fundamentally changes the architecture because you lose two luxuries of native development:
 1.  **Shared Memory Multithreading:** While `SharedArrayBuffer` exists, it requires strict security headers (COOP/COEP) that make deployment specific. We should design for **Message Passing** (Actors) to be safe.
 2.  **Unlimited Memory/Bandwidth:** You cannot re-upload a 512MB 3D texture to the GPU every frame in a browser without killing the framerate.

@@ -1,6 +1,7 @@
 pub mod handoff;
 pub mod incremental_mesher;
 pub mod marching_squares;
+pub mod projection;
 pub mod surface_nets;
 pub mod tsdf_import;
 

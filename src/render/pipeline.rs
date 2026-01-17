@@ -301,6 +301,7 @@ pub fn render_frame(
     systems::sys_handle_mouse_drag(world, entities);
     systems::sys_paint(world, entities, queue);
     crate::segmentation::sys_sync_labelmap_to_contours(world);
+    crate::segmentation::sys_sync_vector_to_contours(world);
     crate::segmentation::sys_sync_labelmap_to_mesh(device, queue, world);
 
     // 1. Run GUI first so it can process interactions and update ECS state for THIS frame

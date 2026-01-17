@@ -77,25 +77,28 @@
 
 ---
 
-## Milestone 5.5: Legacy Import Pipeline (Promote to Vector)
+## Milestone 5.5: Legacy Import Pipeline (Promote to Vector) [COMPLETE]
 **Goal**: Convert voxel labelmaps into the vector-authoritative system  
 **Deliverable**: Importing a .nii.gz labelmap generates initial 3D Vector Contours
 
-- [ ] Voxel-to-TSDF promotion (Physical space distance transform)
-- [ ] TSDF smoothing to remove staircase artifacts
-- [ ] Slice TSDF to generate initial `SpatialContour` set (Authority Handoff)
-- [ ] Multi-label handling (Separate TSDFs/Contour sets per label)
+- [x] Voxel-to-TSDF promotion (Physical space distance transform)
+- [x] TSDF smoothing to remove staircase artifacts
+- [x] Slice TSDF to generate initial `SpatialContour` set (Authority Handoff)
+- [x] RDP Simplification (0.0001 tolerance) for sub-voxel precision
+- [x] Multi-label handling (Separate TSDFs/Contour sets per label)
 
 ---
 
-## Milestone 6: Vector-Authoritative Layer
+## Milestone 6: Vector-Authoritative Layer [COMPLETE]
 **Goal**: Transition from slice-based to 3D-spatial contours  
 **Deliverable**: 3D vector contours rendered dynamically in all views
 
-- [ ] `SpatialContour` struct (3D plane, 3D polyline, influence radius)
-- [ ] `VectorContourSet` storage in `Segmentation` component
-- [ ] Dynamic 2D projection: Project 3D contours onto active axial/coronal/sagittal planes
-- [ ] Render projected vectors directly (bypass Marching Squares for these)
+- [x] `SpatialContour` struct (3D plane, origin/axes, 2D polyline, influence)
+- [x] `VectorContourSet` storage in `Segmentation` component
+- [x] Dynamic 2D projection: Project 3D contours onto active axial/coronal/sagittal planes
+- [x] High-fidelity intersection solver (Point-box rendering for perpendicular planes)
+- [x] Render projected vectors directly (bypass Marching Squares for these)
+- [x] Unit tests for projection math (19+ algorithm tests passing)
 
 ---
 

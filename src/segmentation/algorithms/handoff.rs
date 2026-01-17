@@ -12,9 +12,8 @@ pub fn tsdf_to_spatial_contours(tsdf: &ChunkedTSDF, spacing: [f32; 3]) -> Vector
     let mut contour_set = VectorContourSet::new();
     let (min, max) = tsdf.bounds();
 
-    // We'll slice at intervals. For now, let's take every 4th slice as a "key" contour
-    // in each orthogonal direction to keep the initial vector count manageable.
-    let slice_step = 4;
+    // We'll slice at every index to ensure smooth scrolling in all views.
+    let slice_step = 1;
 
     // Axial (Z)
     for z in (min[2]..max[2]).step_by(slice_step) {
@@ -71,51 +70,38 @@ fn extract_and_add(
     let ms = MarchingSquares::new(0.0); // Surface is at distance 0.0
     let raw_contours = ms.extract(&slice_values, (width as u32, height as u32), 1);
 
+    if !raw_contours.is_empty() {
+        println!(
+            "HANDOFF: Extracted {} contours for slice {}",
+            raw_contours.len(),
+            slice_idx
+        );
+    }
+
     for contour in raw_contours {
         if contour.points.len() < 3 {
             continue;
         }
 
-        // Simplify via RDP
-        let simplified = rdp_simplify(&contour.points, 0.01); // Tolerance in UV space
+        // Simplify via RDP (very tight to represent the voxel grid accurately)
+        let simplified = rdp_simplify(&contour.points, 0.0001);
 
-        // Convert to SpatialContour
+        // Convert to SpatialContour (using VOXEL SPACE)
         let origin = match view_mode {
-            ViewMode::Axial => Vec3::new(
-                min[0] as f32 * spacing[0],
-                min[1] as f32 * spacing[1],
-                slice_idx as f32 * spacing[2],
-            ),
-            ViewMode::Coronal => Vec3::new(
-                min[0] as f32 * spacing[0],
-                slice_idx as f32 * spacing[1],
-                min[2] as f32 * spacing[2],
-            ),
-            ViewMode::Sagittal => Vec3::new(
-                slice_idx as f32 * spacing[0],
-                min[1] as f32 * spacing[1],
-                min[2] as f32 * spacing[2],
-            ),
+            ViewMode::Axial => Vec3::new(min[0] as f32, min[1] as f32, slice_idx as f32),
+            ViewMode::Coronal => Vec3::new(min[0] as f32, slice_idx as f32, min[2] as f32),
+            ViewMode::Sagittal => Vec3::new(slice_idx as f32, min[1] as f32, min[2] as f32),
             _ => continue,
         };
 
         let (right, up) = match view_mode {
-            ViewMode::Axial => (
-                Vec3::X * spacing[0] * width as f32,
-                Vec3::Y * spacing[1] * height as f32,
-            ),
-            ViewMode::Coronal => (
-                Vec3::X * spacing[0] * width as f32,
-                Vec3::Z * spacing[2] * height as f32,
-            ),
-            ViewMode::Sagittal => (
-                Vec3::Y * spacing[1] * width as f32,
-                Vec3::Z * spacing[2] * height as f32,
-            ),
+            ViewMode::Axial => (Vec3::X * width as f32, Vec3::Y * height as f32),
+            ViewMode::Coronal => (Vec3::X * width as f32, Vec3::Z * height as f32),
+            ViewMode::Sagittal => (Vec3::Y * width as f32, Vec3::Z * height as f32),
             _ => continue,
         };
 
-        set.contours.push(SpatialContour {
+        let mut sc = SpatialContour {
             id: Uuid::new_v4(),
             origin,
             normal: match view_mode {
@@ -133,8 +119,24 @@ fn extract_and_add(
                 ViewMode::Sagittal => spacing[0] * 2.0,
                 _ => 1.0,
             },
+            is_closed: contour.is_closed,
             label_index: contour.label_index,
-        });
+        };
+
+        // Safeguard: If this is a closed loop, ensure first and last points are reasonably close
+        // (after RDP they won't be identical, but they should be adjacent)
+        if sc.is_closed && sc.points.len() >= 2 {
+            let first = sc.points[0];
+            let last = *sc.points.last().unwrap();
+            let dist = (first - last).length();
+            if dist > 0.5 {
+                // That's a huge gap for a "closed" loop. Likely an RDP artifact or boundary cut.
+                // Force open to avoid the diagonal chord across the organ.
+                sc.is_closed = false;
+            }
+        }
+
+        set.contours.push(sc);
     }
 }
 

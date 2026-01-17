@@ -6,14 +6,12 @@ This document provides a technical overview of the **Rust Medical Imaging Viewer
 A high-performance 2D/3D medical volume viewer built with **Rust** and **WGPU**. It supports orthogonal slicing, volumetric X-ray rendering, and interactive crosshair picking.
 
 ### 📈 Recent Progress
-- **Incremental Surface Nets**: Implemented `IncrementalMesher` for chunk-based meshing. Only dirty 32³ chunks are re-meshed, providing 50-500x speedup over full-volume meshing. Includes boundary stitching for seamless chunk edges.
-- **Mesh Update Throttling**: Throttled mesh sync to ~20fps during brushing to reduce WASM lag while preserving live visual feedback.
-- **WASM Performance**: Enabled SIMD128 via `.cargo/config.toml` and switched to `FxHashMap` for faster hash lookups.
-- **TSDF-Centric Architecture**: Transitioned the segmentation system to use **Truncated Signed Distance Fields (TSDF)** as the primary source of truth. This enables smooth, sub-voxel editing and unified reactive synchronization across all views.
-- **Reactive Sync Pipeline**: High-performance 3D mesh and 2D contours are now derived from the chunked TSDF field. Implemented sparse dirty-tracking to ensure only modified regions of the volume are re-sliced or re-meshed.
-- **Dynamic Orientation Consolidation**: Centralized all 3D transforms in `src/util/orientation.rs`. The system now dynamically calculates anatomical flips and axis mappings from the NIfTI quaternion, supporting non-RAS volumes natively.
-- **Radiological Convention**: Enforced "Right-on-Left" convention across all viewports with dynamic anatomical markers.
-- **Parity Testing**: Expanded test suite with "Shader Parity" tests and TSDF math validation.
+- **Vector-Authoritative Segmentation**: Transitioned from a voxel-centric model to a **Vector-Authoritative Architecture**. Primary storage now resides in 3D `SpatialContour` objects, which are promoted from legacy voxel data via a high-fidelity TSDF intermediary.
+- **Dynamic Contour Projection**: Implemented a real-time projection engine that calculates intersections between 3D vector contours and the active 2D viewing plane (Axial/Coronal/Sagittal), ensuring perfect geometric fidelity across all viewports.
+- **Sub-Voxel Precision**: Refined contour extraction to use a 0.0001 RDP tolerance, enabling the system to track voxel boundaries with sub-pixel accuracy while maintaining smooth polyline representations.
+- **Incremental Surface Nets**: Implemented `IncrementalMesher` for chunk-based meshing. Only dirty 32³ chunks are re-meshed, providing 50-500x speedup over full-volume meshing.
+- **Orientation-Aware Projection**: Centralized all projection and slicing logic in `src/util/orientation.rs` and `src/segmentation/algorithms/projection.rs`, supporting radiological conventions and arbitrary anatomical orientations.
+- **Parity Testing**: Expanded test suite to 19+ algorithm-level tests, covering TSDF math, RDP simplification, and 3D-to-2D projection accuracy.
 
 ## 🛠 Tech Stack
 - **Graphics**: [wgpu](https://github.com/gfx-rs/wgpu) (using Metal, WebGPU/WebGL2)
@@ -88,17 +86,14 @@ Implements high-intensity raymarching to accurately place the crosshair.
 - **Continuous Update**: Navigation mode supports live crosshair updates during Left-click drags.
 - **Safety**: Tools (Brush/Eraser) are automatically inhibited during Zoom/Pan/Rotate operations.
 
-### TSDF-Centric Representation
-The system uses a **Chunked TSDF** (32x32x32 `i8` chunks) as its primary volumetric data source:
-- **Sub-voxel Precision**: Brush tools modify a signed distance field rather than discrete voxels, enabling smooth, resolution-independent boundaries.
-- **Sparse Synchronization**:
-    - **AABB Voxel Sync**: `paint.rs` calculates the bounding box of each brush stroke to update the 2D labelmap overlay in a single efficient pass.
-    - **Dirty-Slice Tracking**: `sync.rs` tracks which chunks were modified to re-slice only the affected 2D axial/coronal/sagittal planes.
-- **Incremental Meshing**: Uses `IncrementalMesher` (`src/segmentation/algorithms/incremental_mesher.rs`) for chunk-based Surface Nets:
-    - Only dirty chunks are re-meshed (O(dirty_chunks × 32³) vs O(volume³)).
-    - Per-chunk meshes are flattened to a single GPU buffer for rendering.
-    - Provides 50-500x speedup for typical brush operations.
-- **Composite Rendering**: Uses a dedicated depth-stencil pass to correctly interleave the mesh with the volume rendering and annotations.
+### Vector-Authoritative Representation
+The system uses **3D Spatial Contours** as its primary source of truth, supported by a **Chunked TSDF** (32x32x32 `i8` chunks) for topological resolution:
+- **Spatial Authority**: All user edits and imported labels are stored as floating-point vector geometry in 3D space.
+- **Sub-voxel Precision**: Contours are extracted from the TSDF with infinite precision (simplifying at 0.0001 tolerance), preserving sharp boundaries and fine details.
+- **Dynamic Projection**: A dedicated projection engine (`projection.rs`) calculates intersections between 3D contours and 2D slices on-the-fly, bypassing low-resolution rasterization.
+- **AABB Dirty Tracking**: The system tracks which 3D contours have been modified and re-slices only the affected orthogonal planes.
+- **Incremental Meshing**: Uses `IncrementalMesher` (`src/segmentation/algorithms/incremental_mesher.rs`) for chunk-based Surface Nets.
+- **Composite Rendering**: Uses a dedicated depth-stencil pass to correctly interleave the mesh with the volume rendering and vector overlays.
 
 ### Labelmap Overlays
 The system supports raw **Hounsfield Unit (HU)** based windowing and translucent overlays.

@@ -1,13 +1,20 @@
-use crate::app::components::{LabelmapData, Segmentation, ViewMode};
+use crate::app::components::{LabelmapData, Segmentation, ViewMode, VolumeData};
 use crate::segmentation::algorithms::surface_nets::DistanceSampler;
-use crate::segmentation::algorithms::MarchingSquares;
+use crate::segmentation::algorithms::{projection, MarchingSquares};
+use crate::segmentation::contour::Contour;
 use crate::segmentation::mesh::GpuMeshResources;
+use glam::Vec3;
 use hecs::World;
 
 /// System to synchronize Labelmap voxel data to 2D contours
 pub fn sys_sync_labelmap_to_contours(world: &mut World) {
     let mut to_update = Vec::new();
     for (entity, seg) in world.query_mut::<&mut Segmentation>() {
+        // Skip legacy sync if vector contours are present and active
+        if !seg.vector_contours.contours.is_empty() {
+            continue;
+        }
+
         if let Some(ref tsdf) = seg.tsdf {
             if !tsdf.dirty_chunks.is_empty() || seg.contour_set.slices.is_empty() {
                 to_update.push(entity);
@@ -27,6 +34,279 @@ pub fn sys_sync_labelmap_to_contours(world: &mut World) {
                 }
             }
         }
+    }
+}
+
+/// System to project 3D authoritative vectors into 2D contours
+pub fn sys_sync_vector_to_contours(world: &mut World) {
+    let mut _spacing = [1.0, 1.0, 1.0];
+    if let Some((_, vol)) = world.query::<&VolumeData>().iter().next() {
+        _spacing = vol.spacing;
+    }
+
+    for (_, (seg, labelmap)) in world.query_mut::<(&mut Segmentation, &LabelmapData)>() {
+        if seg.vector_contours.contours.is_empty() {
+            continue;
+        }
+
+        let dims = labelmap.dimensions;
+        let dims_f = Vec3::new(dims[0] as f32, dims[1] as f32, dims[2] as f32);
+
+        // Clear OLD projections (from legacy or previous frame) to ensure authority
+        seg.contour_set.clear();
+
+        let mut new_projections = Vec::new();
+
+        for contour in &seg.vector_contours.contours {
+            // Find which orthogonal slices this contour intersects or is parallel to.
+            // 1. Axial (XY)
+            let axial_normal = Vec3::Z;
+            let axial_right = Vec3::X;
+            let axial_up = Vec3::Y;
+
+            // If parallel to Axial, it's at a specific Z
+            if contour.normal.dot(axial_normal).abs() > 0.99 {
+                let z_idx = (contour.origin.z).round() as i32;
+                if z_idx >= 0 && z_idx < dims[2] as i32 {
+                    if let Some(projection::ProjectedResult::Full(points)) =
+                        projection::project_to_plane(
+                            contour,
+                            Vec3::new(0.0, 0.0, z_idx as f32),
+                            axial_normal,
+                            axial_right,
+                            axial_up,
+                        )
+                    {
+                        // Normalize points to 0..1 for rendering
+                        let norm_points = points
+                            .into_iter()
+                            .map(|p| {
+                                glam::Vec2::new(p.x / (dims_f.x - 1.0), p.y / (dims_f.y - 1.0))
+                            })
+                            .collect();
+
+                        new_projections.push((
+                            ViewMode::Axial,
+                            z_idx,
+                            Contour {
+                                points: norm_points,
+                                is_closed: contour.is_closed,
+                                segment_id: contour.id,
+                                label_index: contour.label_index,
+                            },
+                        ));
+                    }
+                }
+            } else {
+                // Intersects Axial slices.
+                let z_start = (contour.origin.z - contour.influence).floor() as i32;
+                let z_end = (contour.origin.z + contour.influence).ceil() as i32;
+
+                for z_idx in z_start..=z_end {
+                    if z_idx < 0 || z_idx >= dims[2] as i32 {
+                        continue;
+                    }
+
+                    if let Some(projection::ProjectedResult::Intersections(points)) =
+                        projection::project_to_plane(
+                            contour,
+                            Vec3::new(0.0, 0.0, z_idx as f32),
+                            axial_normal,
+                            axial_right,
+                            axial_up,
+                        )
+                    {
+                        for p in points {
+                            let norm_p =
+                                glam::Vec2::new(p.x / (dims_f.x - 1.0), p.y / (dims_f.y - 1.0));
+                            new_projections.push((
+                                ViewMode::Axial,
+                                z_idx,
+                                Contour {
+                                    points: vec![
+                                        norm_p + glam::Vec2::new(-0.003, -0.003),
+                                        norm_p + glam::Vec2::new(0.003, -0.003),
+                                        norm_p + glam::Vec2::new(0.003, 0.003),
+                                        norm_p + glam::Vec2::new(-0.003, 0.003),
+                                    ],
+                                    is_closed: true,
+                                    segment_id: uuid::Uuid::new_v4(), // Dot box needs unique ID to avoid deduplication
+                                    label_index: contour.label_index,
+                                },
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // 2. Coronal (XZ)
+            let coronal_normal = Vec3::Y;
+            let coronal_right = Vec3::X;
+            let coronal_up = Vec3::Z;
+            if contour.normal.dot(coronal_normal).abs() > 0.99 {
+                let y_idx = (contour.origin.y).round() as i32;
+                if y_idx >= 0 && y_idx < dims[1] as i32 {
+                    if let Some(projection::ProjectedResult::Full(points)) =
+                        projection::project_to_plane(
+                            contour,
+                            Vec3::new(0.0, y_idx as f32, 0.0),
+                            coronal_normal,
+                            coronal_right,
+                            coronal_up,
+                        )
+                    {
+                        let norm_points = points
+                            .into_iter()
+                            .map(|p| {
+                                glam::Vec2::new(p.x / (dims_f.x - 1.0), p.y / (dims_f.z - 1.0))
+                            })
+                            .collect();
+                        new_projections.push((
+                            ViewMode::Coronal,
+                            y_idx,
+                            Contour {
+                                points: norm_points,
+                                is_closed: contour.is_closed,
+                                segment_id: contour.id,
+                                label_index: contour.label_index,
+                            },
+                        ));
+                    }
+                }
+            } else {
+                // Intersects Coronal
+                let y_start = (contour.origin.y - contour.influence).floor() as i32;
+                let y_end = (contour.origin.y + contour.influence).ceil() as i32;
+                for y_idx in y_start..=y_end {
+                    if y_idx < 0 || y_idx >= dims[1] as i32 {
+                        continue;
+                    }
+                    if let Some(projection::ProjectedResult::Intersections(points)) =
+                        projection::project_to_plane(
+                            contour,
+                            Vec3::new(0.0, y_idx as f32, 0.0),
+                            coronal_normal,
+                            coronal_right,
+                            coronal_up,
+                        )
+                    {
+                        for p in points {
+                            let norm_p =
+                                glam::Vec2::new(p.x / (dims_f.x - 1.0), p.y / (dims_f.z - 1.0));
+                            new_projections.push((
+                                ViewMode::Coronal,
+                                y_idx,
+                                Contour {
+                                    points: vec![
+                                        norm_p + glam::Vec2::new(-0.003, -0.003),
+                                        norm_p + glam::Vec2::new(0.003, -0.003),
+                                        norm_p + glam::Vec2::new(0.003, 0.003),
+                                        norm_p + glam::Vec2::new(-0.003, 0.003),
+                                    ],
+                                    is_closed: true,
+                                    segment_id: uuid::Uuid::new_v4(), // Dot box needs unique ID
+                                    label_index: contour.label_index,
+                                },
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // 3. Sagittal (YZ)
+            let sagittal_normal = Vec3::X;
+            let sagittal_right = Vec3::Y;
+            let sagittal_up = Vec3::Z;
+            if contour.normal.dot(sagittal_normal).abs() > 0.99 {
+                let x_idx = (contour.origin.x).round() as i32;
+                if x_idx >= 0 && x_idx < dims[0] as i32 {
+                    if let Some(projection::ProjectedResult::Full(points)) =
+                        projection::project_to_plane(
+                            contour,
+                            Vec3::new(x_idx as f32, 0.0, 0.0),
+                            sagittal_normal,
+                            sagittal_right,
+                            sagittal_up,
+                        )
+                    {
+                        let norm_points = points
+                            .into_iter()
+                            .map(|p| {
+                                glam::Vec2::new(p.x / (dims_f.y - 1.0), p.y / (dims_f.z - 1.0))
+                            })
+                            .collect();
+                        new_projections.push((
+                            ViewMode::Sagittal,
+                            x_idx,
+                            Contour {
+                                points: norm_points,
+                                is_closed: contour.is_closed,
+                                segment_id: contour.id,
+                                label_index: contour.label_index,
+                            },
+                        ));
+                    }
+                }
+            } else {
+                // Intersects Sagittal
+                let x_start = (contour.origin.x - contour.influence).floor() as i32;
+                let x_end = (contour.origin.x + contour.influence).ceil() as i32;
+                for x_idx in x_start..=x_end {
+                    if x_idx < 0 || x_idx >= dims[0] as i32 {
+                        continue;
+                    }
+                    if let Some(projection::ProjectedResult::Intersections(points)) =
+                        projection::project_to_plane(
+                            contour,
+                            Vec3::new(x_idx as f32, 0.0, 0.0),
+                            sagittal_normal,
+                            sagittal_right,
+                            sagittal_up,
+                        )
+                    {
+                        for p in points {
+                            let norm_p =
+                                glam::Vec2::new(p.x / (dims_f.y - 1.0), p.y / (dims_f.z - 1.0));
+                            new_projections.push((
+                                ViewMode::Sagittal,
+                                x_idx,
+                                Contour {
+                                    points: vec![
+                                        norm_p + glam::Vec2::new(-0.003, -0.003),
+                                        norm_p + glam::Vec2::new(0.003, -0.003),
+                                        norm_p + glam::Vec2::new(0.003, 0.003),
+                                        norm_p + glam::Vec2::new(-0.003, 0.003),
+                                    ],
+                                    is_closed: true,
+                                    segment_id: uuid::Uuid::new_v4(), // Dot box needs unique ID
+                                    label_index: contour.label_index,
+                                },
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply all collected projections for this segmentation
+        for (mode, idx, c) in new_projections {
+            append_contour_to_slice(seg, mode, idx, c);
+        }
+    }
+}
+
+fn append_contour_to_slice(seg: &mut Segmentation, mode: ViewMode, idx: i32, contour: Contour) {
+    if let Some(slice) = seg.contour_set.slices.get_mut(&(mode, idx)) {
+        // Avoid duplicates if already projected
+        if !slice
+            .contours
+            .iter()
+            .any(|c| c.segment_id == contour.segment_id)
+        {
+            slice.contours.push(contour);
+        }
+    } else {
+        seg.contour_set.update_slice(mode, idx, vec![contour]);
     }
 }
 

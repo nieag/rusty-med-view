@@ -23,6 +23,7 @@ pub struct SpatialContour {
     pub up: Vec3,          // "Up" vector for the 2D coordinate system in the plane
     pub points: Vec<Vec2>, // 2D points relative to origin/right/up
     pub influence: f32,    // Spatial falloff radius (uncertainty)
+    pub is_closed: bool,
     pub label_index: u8,
 }
 

@@ -104,9 +104,14 @@ Lofting is **not** the foundational mechanism of this system. The TSDF handles a
 ### Vector Layer (Source of Truth)
 ```rust
 pub struct SpatialContour {
-    pub plane: Plane3,           // 3D orientation
-    pub polyline: Vec<Vec3>,     // 3D vertices
-    pub influence: f32,          // Spatial falloff radius (uncertainty)
+    pub id: Uuid,
+    pub origin: Vec3,         // Root position in voxel space
+    pub normal: Vec3,         // Plane normal
+    pub right: Vec3,          // In-plane right vector
+    pub up: Vec3,             // In-plane up vector
+    pub points: Vec<Vec2>,    // Normalized 2D points relative to origin
+    pub influence: f32,       // Spatial falloff radius
+    pub is_closed: bool,      // Loop vs Open polyline
     pub label_index: u8,
 }
 
@@ -145,8 +150,8 @@ pub struct SegmentationMesh {
 ## Implementation Roadmap
 
 The implementation is broken down into four phases:
-1. **[Legacy Import](file:///Users/nieage/dev/git/rust_starter_app/docs/features/vector_plans/phase_1_import_plan.md)**: Promoting voxels to vectors.
-2. **[Vector Layer](file:///Users/nieage/dev/git/rust_starter_app/docs/features/vector_plans/phase_2_vector_layer_plan.md)**: 3D storage and dynamic 2D projection.
+1. **Legacy Import [COMPLETE]**: Promoting voxels to vectors.
+2. **Vector Layer [COMPLETE]**: 3D storage and dynamic 2D projection.
 3. **[TSDF Baking](file:///Users/nieage/dev/git/rust_starter_app/docs/features/vector_plans/phase_3_baking_plan.md)**: Reconciling vectors into a volumetric field.
 4. **[Mesh Snapping](file:///Users/nieage/dev/git/rust_starter_app/docs/features/vector_plans/phase_4_snapping_plan.md)**: Ensuring perfect mesh/contour agreement.
 

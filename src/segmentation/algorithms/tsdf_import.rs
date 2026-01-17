@@ -70,54 +70,68 @@ pub fn voxel_to_tsdf(labelmap: &LabelmapData, spacing: [f32; 3], truncation: f32
         }
     }
 
-    // 2. Propagation with physical spacing
+    // 2. Propagation with 26-connectivity for better Euclidean approximation
     while let Some((x, y, z)) = queue.pop_front() {
         let current_dist = distances[get_idx(x as u32, y as u32, z as u32)];
 
-        for (dx, dy, dz) in neighbors {
-            let nx = x + dx;
-            let ny = y + dy;
-            let nz = z + dz;
+        for dz in -1..=1 {
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    if dx == 0 && dy == 0 && dz == 0 {
+                        continue;
+                    }
 
-            if nx >= 0
-                && nx < dims[0] as i32
-                && ny >= 0
-                && ny < dims[1] as i32
-                && nz >= 0
-                && nz < dims[2] as i32
-            {
-                let n_idx = get_idx(nx as u32, ny as u32, nz as u32);
+                    let nx = x + dx;
+                    let ny = y + dy;
+                    let nz = z + dz;
 
-                // Euclidean step based on axis
-                let step = if dx != 0 {
-                    spacing[0]
-                } else if dy != 0 {
-                    spacing[1]
-                } else {
-                    spacing[2]
-                };
+                    if nx >= 0
+                        && nx < dims[0] as i32
+                        && ny >= 0
+                        && ny < dims[1] as i32
+                        && nz >= 0
+                        && nz < dims[2] as i32
+                    {
+                        let n_idx = get_idx(nx as u32, ny as u32, nz as u32);
 
-                let new_dist = current_dist + step;
-                if new_dist < distances[n_idx] {
-                    distances[n_idx] = new_dist;
-                    queue.push_back((nx, ny, nz));
+                        // Distance increments based on spacing
+                        let step = ((dx as f32 * spacing[0]).powi(2)
+                            + (dy as f32 * spacing[1]).powi(2)
+                            + (dz as f32 * spacing[2]).powi(2))
+                        .sqrt();
+
+                        let new_dist = current_dist + step;
+                        if new_dist < distances[n_idx] {
+                            distances[n_idx] = new_dist;
+                            queue.push_back((nx, ny, nz));
+                        }
+                    }
                 }
             }
         }
     }
 
-    // 3. Populate TSDF with sign
+    // 3. Apply signs and truncation
+    let mut final_distances = vec![0.0f32; total_voxels];
     for z in 0..dims[2] {
         for y in 0..dims[1] {
             for x in 0..dims[0] {
                 let idx = get_idx(x, y, z);
                 let label = data[idx];
                 let dist = distances[idx];
+                final_distances[idx] = if label > 0 { -dist } else { dist };
+            }
+        }
+    }
 
-                let signed_dist = if label > 0 { -dist } else { dist };
-                if signed_dist.abs() <= truncation {
-                    tsdf.set_distance(x as i32, y as i32, z as i32, signed_dist);
-                } else if signed_dist < 0.0 {
+    // 4. Populate TSDF directly from signed distance field
+    for z in 0..dims[2] {
+        for y in 0..dims[1] {
+            for x in 0..dims[0] {
+                let val = final_distances[get_idx(x, y, z)];
+                if val.abs() <= truncation {
+                    tsdf.set_distance(x as i32, y as i32, z as i32, val);
+                } else if val < 0.0 {
                     tsdf.set_distance(x as i32, y as i32, z as i32, -truncation);
                 }
             }
