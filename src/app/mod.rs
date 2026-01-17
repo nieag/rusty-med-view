@@ -10,6 +10,8 @@ use crate::render::pipeline;
 use crate::render::protocols;
 use crate::systems;
 use std::sync::Arc;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
 use winit::{
     application::ApplicationHandler,
     event::*,
@@ -311,6 +313,8 @@ impl ApplicationHandler<AppEvent> for App {
                         mesh: crate::segmentation::mesh::SegmentationMesh::default(),
                         gpu_mesh: None,
                         tsdf: Some(tsdf),
+                        mesher: None,
+                        last_mesh_update: None,
                     },
                     LayerSettings { opacity: 0.7 },
                     labelmap,

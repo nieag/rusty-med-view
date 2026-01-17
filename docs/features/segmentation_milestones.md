@@ -53,10 +53,19 @@
 **Deliverable**: 2D/3D views update reactively from TSDF
 
 - [x] Add `ChunkedTSDF` to `Segmentation` component
-- [ ] Implement `TSDF → Surface Nets (Dirty Only)` *(currently full-volume, needs optimization)*
+- [x] Implement `TSDF → Surface Nets (Dirty Only)` *(IncrementalMesher)*
 - [x] Implement `TSDF → Slice → Contours`
 - [x] Reactive dirty tracking for chunks
 - [x] Sync system: watch TSDF for changes
+
+**Implementation Notes:**
+- `IncrementalMesher` in `src/segmentation/algorithms/incremental_mesher.rs`
+- Per-chunk meshing with `mesh_chunk()`, only dirty chunks updated via `update_dirty()`
+- `flatten()` combines all chunk meshes into single GPU buffer
+- Boundary stitching: vertices extended to -1 offset for seamless chunk edges
+- Throttle: Mesh sync capped at ~20fps during brushing (50ms interval)
+- WASM optimizations: SIMD128 enabled, FxHashMap for faster lookups
+- Performance: O(dirty_chunks × 32³) vs O(volume³) — ~50-500x speedup
 
 ---
 

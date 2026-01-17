@@ -23,6 +23,7 @@ log = "0.4"
 env_logger = "0.11"
 web-time = "1.1"
 glam = "0.29"
+rustc-hash = "2.1"
 
 # NIfTI medical image loading
 nifti = { version = "0.17", default-features = false }

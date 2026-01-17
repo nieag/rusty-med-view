@@ -1,6 +1,6 @@
 use crate::app::components::{LabelmapData, Segmentation, ViewMode};
 use crate::segmentation::algorithms::surface_nets::DistanceSampler;
-use crate::segmentation::algorithms::{MarchingSquares, SurfaceNets};
+use crate::segmentation::algorithms::MarchingSquares;
 use crate::segmentation::mesh::GpuMeshResources;
 use hecs::World;
 
@@ -164,14 +164,29 @@ pub fn sync_tsdf_to_contours(seg: &mut Segmentation, dims: [u32; 3]) {
     seg.tsdf = Some(tsdf);
 }
 
-/// System to synchronize Labelmap voxel data to 3D mesh
+/// System to synchronize Labelmap voxel data to 3D mesh using incremental meshing
+/// Throttled to max ~20fps mesh updates to reduce WASM lag
 pub fn sys_sync_labelmap_to_mesh(device: &wgpu::Device, queue: &wgpu::Queue, world: &mut World) {
+    use crate::segmentation::algorithms::IncrementalMesher;
+    use web_time::{Duration, Instant};
+
+    const MESH_THROTTLE_MS: u64 = 50; // ~20fps max for mesh updates
+
     let mut to_update = Vec::new();
     for (entity, seg) in world.query_mut::<&mut Segmentation>() {
         // Switch to TSDF-based sync if available
-        if let Some(ref mut tsdf) = seg.tsdf {
+        if let Some(ref tsdf) = seg.tsdf {
             if !tsdf.dirty_chunks.is_empty() || seg.mesh.vertices.is_empty() {
-                to_update.push(entity);
+                // Check throttle - always update if mesh is empty (initial) or enough time passed
+                let should_update = seg.mesh.vertices.is_empty()
+                    || seg
+                        .last_mesh_update
+                        .map(|t| t.elapsed() > Duration::from_millis(MESH_THROTTLE_MS))
+                        .unwrap_or(true);
+
+                if should_update {
+                    to_update.push(entity);
+                }
             }
         }
     }
@@ -179,17 +194,27 @@ pub fn sys_sync_labelmap_to_mesh(device: &wgpu::Device, queue: &wgpu::Queue, wor
     for entity in to_update {
         if let Ok(mut query) = world.query_one::<(&mut Segmentation, &LabelmapData)>(entity) {
             if let Some((seg, labelmap)) = query.get() {
-                let sn = SurfaceNets::new(0.0);
-
                 if let Some(mut tsdf) = seg.tsdf.take() {
-                    let (v, n, i) = sn.extract(&tsdf, labelmap.dimensions);
+                    // Initialize mesher if needed
+                    let mesher = seg
+                        .mesher
+                        .get_or_insert_with(|| IncrementalMesher::new(0.0));
 
+                    // Update only dirty chunks
+                    mesher.update_dirty(&tsdf, labelmap.dimensions);
+
+                    // Flatten to single mesh for GPU
+                    let (v, n, i) = mesher.flatten();
                     seg.mesh.vertices = v;
                     seg.mesh.normals = n;
                     seg.mesh.indices = i;
+
+                    // Clear dirty tracking and update timestamp
                     tsdf.dirty_chunks.clear();
                     seg.tsdf = Some(tsdf);
+                    seg.last_mesh_update = Some(Instant::now());
 
+                    // Update GPU buffers
                     if seg.gpu_mesh.is_none() {
                         seg.gpu_mesh = Some(GpuMeshResources::new(device, &seg.mesh));
                     } else if let Some(ref mut gpu) = seg.gpu_mesh {

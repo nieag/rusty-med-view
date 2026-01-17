@@ -198,6 +198,8 @@ pub struct Segmentation {
     pub mesh: crate::segmentation::mesh::SegmentationMesh,
     pub gpu_mesh: Option<crate::segmentation::mesh::GpuMeshResources>,
     pub tsdf: Option<crate::segmentation::ChunkedTSDF>,
+    pub mesher: Option<crate::segmentation::algorithms::IncrementalMesher>,
+    pub last_mesh_update: Option<web_time::Instant>,
 }
 
 pub struct LayerSettings {

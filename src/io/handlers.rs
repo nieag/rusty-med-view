@@ -89,6 +89,8 @@ pub fn handle_label_load(
             mesh: crate::segmentation::mesh::SegmentationMesh::default(),
             gpu_mesh: None,
             tsdf: Some(tsdf),
+            mesher: None,
+            last_mesh_update: None,
         },
         LayerSettings { opacity: 0.5 },
         labelmap,
