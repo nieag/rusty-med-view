@@ -86,20 +86,41 @@ fn extract_and_add(
         // Simplify via RDP (very tight to represent the voxel grid accurately)
         let simplified = rdp_simplify(&contour.points, 0.0001);
 
-        // Convert to SpatialContour (using VOXEL SPACE)
+        // Convert to SpatialContour (using absolute VOXEL SPACE units)
+        let spacing_v = Vec3::from(spacing);
         let origin = match view_mode {
-            ViewMode::Axial => Vec3::new(min[0] as f32, min[1] as f32, slice_idx as f32),
-            ViewMode::Coronal => Vec3::new(min[0] as f32, slice_idx as f32, min[2] as f32),
-            ViewMode::Sagittal => Vec3::new(slice_idx as f32, min[1] as f32, min[2] as f32),
+            ViewMode::Axial => {
+                Vec3::new(min[0] as f32, min[1] as f32, slice_idx as f32 + 0.5) * spacing_v
+            }
+            ViewMode::Coronal => {
+                Vec3::new(min[0] as f32, slice_idx as f32 + 0.5, min[2] as f32) * spacing_v
+            }
+            ViewMode::Sagittal => {
+                Vec3::new(slice_idx as f32 + 0.5, min[1] as f32, min[2] as f32) * spacing_v
+            }
             _ => continue,
         };
 
         let (right, up) = match view_mode {
-            ViewMode::Axial => (Vec3::X * width as f32, Vec3::Y * height as f32),
-            ViewMode::Coronal => (Vec3::X * width as f32, Vec3::Z * height as f32),
-            ViewMode::Sagittal => (Vec3::Y * width as f32, Vec3::Z * height as f32),
+            ViewMode::Axial => (Vec3::X, Vec3::Y),
+            ViewMode::Coronal => (Vec3::X, Vec3::Z),
+            ViewMode::Sagittal => (Vec3::Y, Vec3::Z),
             _ => continue,
         };
+
+        // Scale simplified 0..1 coordinates to physical Millimeters
+        let (sp_right, sp_up) = match view_mode {
+            ViewMode::Axial => (spacing[0], spacing[1]),
+            ViewMode::Coronal => (spacing[0], spacing[2]),
+            ViewMode::Sagittal => (spacing[1], spacing[2]),
+            _ => (1.0, 1.0),
+        };
+
+        let mut voxel_points = simplified;
+        for p in &mut voxel_points {
+            p.x *= width as f32 * sp_right;
+            p.y *= height as f32 * sp_up;
+        }
 
         let mut sc = SpatialContour {
             id: Uuid::new_v4(),
@@ -112,7 +133,7 @@ fn extract_and_add(
             },
             right,
             up,
-            points: simplified,
+            points: voxel_points,
             influence: match view_mode {
                 ViewMode::Axial => spacing[2] * 2.0,
                 ViewMode::Coronal => spacing[1] * 2.0,
@@ -129,9 +150,7 @@ fn extract_and_add(
             let first = sc.points[0];
             let last = *sc.points.last().unwrap();
             let dist = (first - last).length();
-            if dist > 0.5 {
-                // That's a huge gap for a "closed" loop. Likely an RDP artifact or boundary cut.
-                // Force open to avoid the diagonal chord across the organ.
+            if dist > 0.02 {
                 sc.is_closed = false;
             }
         }
@@ -235,5 +254,79 @@ mod tests {
                 c.origin
             );
         }
+    }
+
+    #[test]
+    fn test_handoff_boundary_touching() {
+        let mut tsdf = ChunkedTSDF::new(4.0);
+        // Create a half-sphere that hits the Z=10 boundary (simulated start of volume)
+        for z in 10..15 {
+            for y in 10..20 {
+                for x in 10..20 {
+                    let d = ((x as i32 - 15).pow(2)
+                        + (y as i32 - 15).pow(2)
+                        + (z as i32 - 15).pow(2)) as f32;
+                    let dist = d.sqrt() - 4.0;
+                    if dist < 4.0 {
+                        tsdf.set_distance(x, y, z, dist);
+                    }
+                }
+            }
+        }
+
+        let spacing = [1.0, 1.0, 1.0];
+        let contours = tsdf_to_spatial_contours(&tsdf, spacing);
+
+        // Axial slice at z=10 should hit the boundary and be OPEN
+        let axial_10 = contours
+            .contours
+            .iter()
+            .find(|c| c.normal == glam::Vec3::Z && (c.origin.z - 10.0).abs() < 1e-5);
+
+        if let Some(c) = axial_10 {
+            assert!(
+                !c.is_closed,
+                "Contour at volume boundary should be open to avoid diagonal chords"
+            );
+        }
+    }
+
+    #[test]
+    fn test_handoff_with_anisotropic_spacing() {
+        let mut tsdf = ChunkedTSDF::new(4.0);
+        // Single voxel at (15, 15, 15)
+        tsdf.set_distance(15, 15, 15, -1.0);
+
+        let spacing = [1.0, 2.0, 4.0];
+        let contours = tsdf_to_spatial_contours(&tsdf, spacing);
+
+        // Origin: (voxel_index + 0.5) * spacing
+        // For Axial slice at Z=15
+        let axial_15 = contours
+            .contours
+            .iter()
+            .find(|c| c.normal == glam::Vec3::Z && (c.origin.z - (15.5 * 4.0)).abs() < 1e-4);
+
+        assert!(
+            axial_15.is_some(),
+            "Should find axial slice at physical Z = 15.5 * 4.0 = 62.0"
+        );
+        let c = axial_15.unwrap();
+
+        // Check that origin matches the chunk boundary (0,0 in this case) * spacing
+        assert!((c.origin.x - 0.0).abs() < 1e-4);
+        assert!((c.origin.y - 0.0).abs() < 1e-4);
+        assert!((c.origin.z - 62.0).abs() < 1e-4);
+
+        // Check that points are physical (relative to origin)
+        // One of the points in the small loop around (15, 15) should be near (15*1.0, 15*2.0)
+        let has_correct_pt = c
+            .points
+            .iter()
+            .any(|p| (p.x - 15.0).abs() < 1.0 && (p.y - 30.0).abs() < 1.0);
+        assert!(
+            has_correct_pt,
+            "Should find a point near physical (15.0, 30.0) relative to origin"
+        );
     }
 }

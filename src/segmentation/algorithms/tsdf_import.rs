@@ -33,10 +33,6 @@ pub fn voxel_to_tsdf(labelmap: &LabelmapData, spacing: [f32; 3], truncation: f32
             for x in 0..dims[0] {
                 let idx = get_idx(x, y, z);
                 let label = data[idx];
-                if label == 0 {
-                    continue;
-                }
-
                 let mut is_boundary = false;
                 for (dx, dy, dz) in neighbors {
                     let nx = x as i32 + dx;
@@ -51,11 +47,11 @@ pub fn voxel_to_tsdf(labelmap: &LabelmapData, spacing: [f32; 3], truncation: f32
                         && nz < dims[2] as i32
                     {
                         let n_idx = get_idx(nx as u32, ny as u32, nz as u32);
-                        if data[n_idx] == 0 {
+                        if data[n_idx] != label {
                             is_boundary = true;
                             break;
                         }
-                    } else {
+                    } else if label > 0 {
                         // Volume boundary counts as interface if label is > 0
                         is_boundary = true;
                         break;
@@ -63,7 +59,7 @@ pub fn voxel_to_tsdf(labelmap: &LabelmapData, spacing: [f32; 3], truncation: f32
                 }
 
                 if is_boundary {
-                    distances[idx] = 0.0;
+                    distances[idx] = 0.5; // Half-voxel distance to boundary
                     queue.push_back((x as i32, y as i32, z as i32));
                 }
             }
@@ -185,26 +181,24 @@ mod tests {
         let spacing = [1.0, 2.0, 4.0];
         let tsdf = voxel_to_tsdf(&labelmap, spacing, 10.0);
 
-        // x neighbor (1.0 away)
+        // immediate neighbors are now part of the boundary initialization group at 0.5
         let dx = tsdf.get_distance(6, 5, 5);
-        // y neighbor (2.0 away)
         let dy = tsdf.get_distance(5, 6, 5);
-        // z neighbor (4.0 away)
         let dz = tsdf.get_distance(5, 5, 6);
 
         assert!(
-            (dx - 1.0).abs() < 0.1,
-            "X distance should be ~1.0, got {}",
+            (dx - 0.5).abs() < 0.1,
+            "X neighbor distance should be ~0.5 (boundary), got {}",
             dx
         );
         assert!(
-            (dy - 2.0).abs() < 0.1,
-            "Y distance should be ~2.0, got {}",
+            (dy - 0.5).abs() < 0.1,
+            "Y neighbor distance should be ~0.5 (boundary), got {}",
             dy
         );
         assert!(
-            (dz - 4.0).abs() < 0.1,
-            "Z distance should be ~4.0, got {}",
+            (dz - 0.5).abs() < 0.1,
+            "Z neighbor distance should be ~0.5 (boundary), got {}",
             dz
         );
     }

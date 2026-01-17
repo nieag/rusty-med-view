@@ -96,15 +96,14 @@ pub fn draw_viewport_overlays(
         egui::Area::new(egui::Id::new("overlay").with(e))
             .fixed_pos([rx0 + 10.0, ry0 + 10.0])
             .interactable(true)
-            .show(ctx, |ui| match mode {
-                ViewMode::ThreeD => {
+            .show(ctx, |ui| {
+                if mode == &ViewMode::ThreeD {
                     label_res = Some(draw_label(ui, "3D View", is_active));
                     if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
                         ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
                     }
-                }
-                ViewMode::Axial => {
-                    let slice_z = (cursor_pos[2] * vol_dims[2] as f32).round() as u32;
+                } else if mode == &ViewMode::Axial {
+                    let slice_z = (cursor_pos[2] * vol_dims[2] as f32).floor() as u32;
                     label_res = Some(draw_label(ui, "Axial (Top)", is_active));
                     ui.label(format!("Slice: {} / {}", slice_z, vol_dims[2]));
                     if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
@@ -124,9 +123,8 @@ pub fn draw_viewport_overlays(
                         labels[1],
                         egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh),
                     ); // Right
-                }
-                ViewMode::Coronal => {
-                    let slice_y = (cursor_pos[1] * vol_dims[1] as f32).round() as u32;
+                } else if mode == &ViewMode::Coronal {
+                    let slice_y = (cursor_pos[1] * vol_dims[1] as f32).floor() as u32;
                     label_res = Some(draw_label(ui, "Coronal (Front)", is_active));
                     ui.label(format!("Slice: {} / {}", slice_y, vol_dims[1]));
                     if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
@@ -145,9 +143,8 @@ pub fn draw_viewport_overlays(
                         labels[1],
                         egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh),
                     );
-                }
-                ViewMode::Sagittal => {
-                    let slice_x = (cursor_pos[0] * vol_dims[0] as f32).round() as u32;
+                } else if mode == &ViewMode::Sagittal {
+                    let slice_x = (cursor_pos[0] * vol_dims[0] as f32).floor() as u32;
                     label_res = Some(draw_label(ui, "Sagittal (Side)", is_active));
                     ui.label(format!("Slice: {} / {}", slice_x, vol_dims[0]));
                     if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
@@ -257,13 +254,13 @@ pub fn draw_viewport_overlays(
 
                                 let current_slice = match mode {
                                     ViewMode::Axial => {
-                                        (cursor_pos[2] * vol_dims[2] as f32).round() as i32
+                                        (cursor_pos[2] * vol_dims[2] as f32).floor() as i32
                                     }
                                     ViewMode::Coronal => {
-                                        (cursor_pos[1] * vol_dims[1] as f32).round() as i32
+                                        (cursor_pos[1] * vol_dims[1] as f32).floor() as i32
                                     }
                                     ViewMode::Sagittal => {
-                                        (cursor_pos[0] * vol_dims[0] as f32).round() as i32
+                                        (cursor_pos[0] * vol_dims[0] as f32).floor() as i32
                                     }
                                     _ => 0,
                                 };
@@ -558,6 +555,11 @@ fn draw_contours_2d(
     data_orientation: [f32; 4],
     mode: ViewMode,
 ) {
+    // TODO: This function couples the segmentation rendering to the egui UI layer (epaint).
+    // In a future Level 3 architecture, we should move this to a custom wgpu pipeline
+    // using a neutral tessellator (like lyon) to support UI-agnostic rendering and
+    // better 3D depth integration.
+
     let zoom = view.zoom;
     let pan = view.pan;
     let pivot = view.pivot;
@@ -608,8 +610,14 @@ fn draw_contours_2d(
 
         if points.len() > 1 {
             let stroke = egui::Stroke::new(1.5, egui::Color32::from_rgb(0, 255, 255));
+
             if contour.is_closed {
-                painter.add(egui::Shape::closed_line(points, stroke));
+                let first = points[0];
+
+                // Manually draw to avoid any egui closed_line weirdness
+                let mut p_loop = points.clone();
+                p_loop.push(first);
+                painter.add(egui::Shape::line(p_loop, stroke));
             } else {
                 painter.add(egui::Shape::line(points, stroke));
             }
