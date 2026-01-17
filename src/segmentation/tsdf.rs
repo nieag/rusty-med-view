@@ -392,4 +392,96 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_brush_to_labelmap_roundtrip() {
+        let mut tsdf = ChunkedTSDF::new(4.0);
+        tsdf.apply_brush([50, 50, 50], 5.0);
+
+        let labelmap = tsdf.to_labelmap([100, 100, 100]);
+
+        // Center should be labeled
+        let center_idx = 50 * 100 * 100 + 50 * 100 + 50;
+        assert_eq!(labelmap.raw_data[center_idx], 1, "Center should be labeled");
+
+        // Far corner should not be labeled
+        assert_eq!(labelmap.raw_data[0], 0, "Far corner should not be labeled");
+
+        // Edge of brush should be labeled (within radius)
+        let edge_idx = 50 * 100 * 100 + 50 * 100 + 54; // 4 voxels away in X
+        assert_eq!(
+            labelmap.raw_data[edge_idx], 1,
+            "Near edge should be labeled"
+        );
+    }
+
+    #[test]
+    fn test_dirty_chunk_tracking() {
+        let mut tsdf = ChunkedTSDF::new(4.0);
+        assert!(
+            tsdf.dirty_chunks.is_empty(),
+            "Fresh TSDF should have no dirty chunks"
+        );
+
+        tsdf.set_distance(50, 50, 50, -1.0);
+        assert!(
+            !tsdf.dirty_chunks.is_empty(),
+            "Setting distance should mark chunk dirty"
+        );
+        assert!(
+            tsdf.dirty_chunks.contains(&(1, 1, 1)),
+            "Chunk (1,1,1) should be dirty for voxel at (50,50,50)"
+        );
+
+        // Clear and verify
+        tsdf.dirty_chunks.clear();
+        assert!(
+            tsdf.dirty_chunks.is_empty(),
+            "Dirty chunks should be clearable"
+        );
+
+        // Brush should also mark dirty
+        tsdf.apply_brush([16, 16, 16], 3.0);
+        assert!(
+            !tsdf.dirty_chunks.is_empty(),
+            "Brush should mark chunks dirty"
+        );
+    }
+
+    #[test]
+    fn test_eraser_removes_geometry() {
+        let mut tsdf = ChunkedTSDF::new(4.0);
+
+        // Apply brush - center should be inside (negative distance)
+        tsdf.apply_brush([50, 50, 50], 10.0);
+        assert!(
+            tsdf.get_distance(50, 50, 50) < 0.0,
+            "After brush, center should be inside (negative distance)"
+        );
+
+        // Apply eraser - center should be outside (positive distance)
+        tsdf.apply_eraser([50, 50, 50], 10.0);
+        assert!(
+            tsdf.get_distance(50, 50, 50) > 0.0,
+            "After eraser, center should be outside (positive distance)"
+        );
+    }
+
+    #[test]
+    fn test_boundary_chunk_marking() {
+        let mut tsdf = ChunkedTSDF::new(4.0);
+
+        // Set a voxel at a chunk boundary (x=31 is at edge of chunk 0)
+        tsdf.set_distance(31, 16, 16, -1.0);
+
+        // Should mark both the current chunk and the neighbor
+        assert!(
+            tsdf.dirty_chunks.contains(&(0, 0, 0)),
+            "Current chunk should be dirty"
+        );
+        assert!(
+            tsdf.dirty_chunks.contains(&(1, 0, 0)),
+            "Neighbor chunk should be dirty due to boundary"
+        );
+    }
 }

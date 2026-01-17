@@ -52,11 +52,11 @@
 **Goal**: Sync TSDF to display representations  
 **Deliverable**: 2D/3D views update reactively from TSDF
 
-- [ ] Add `ChunkedTSDF` to `Segmentation` component
-- [ ] Implement `TSDF → Surface Nets (Dirty Only)`
-- [ ] Implement `TSDF → Slice → Contours`
-- [ ] Reactive dirty tracking for chunks
-- [ ] Sync system: watch TSDF for changes
+- [x] Add `ChunkedTSDF` to `Segmentation` component
+- [ ] Implement `TSDF → Surface Nets (Dirty Only)` *(currently full-volume, needs optimization)*
+- [x] Implement `TSDF → Slice → Contours`
+- [x] Reactive dirty tracking for chunks
+- [x] Sync system: watch TSDF for changes
 
 ---
 
@@ -64,10 +64,10 @@
 **Goal**: Modify TSDF directly via Brush  
 **Deliverable**: 2D Brush and Eraser update TSDF chunks
 
-- [ ] Port `paint.rs` to use TSDF instead of Labelmap
+- [x] Port `paint.rs` to use TSDF instead of Labelmap
 - [ ] Multi-label support in TSDF (optional/next)
 - [ ] Sub-voxel brush falloff (soft edges)
-- [ ] Live Mesh/Contour update during brush stroke
+- [x] Live Mesh/Contour update during brush stroke
 
 ---
 

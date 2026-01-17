@@ -44,11 +44,33 @@ impl GpuMeshResources {
         }
     }
 
-    pub fn update(&mut self, _queue: &wgpu::Queue, mesh: &SegmentationMesh) {
-        // Simple update: if indices count changed, we might need to recreate,
-        // but for now let's assume queue.write_buffer is enough if size matches or we recreate.
-        // Actually, let's keep it simple for M2: just recreate if count changes.
-        // In a real system we'd use a pool or large buffers.
+    /// Update GPU buffers with new mesh data. Recreates buffers if size changed.
+    pub fn update(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, mesh: &SegmentationMesh) {
+        let vertex_data: Vec<f32> = mesh
+            .vertices
+            .iter()
+            .zip(mesh.normals.iter())
+            .flat_map(|(v, n)| [v.x, v.y, v.z, n.x, n.y, n.z])
+            .collect();
+
+        let vertex_byte_size = (vertex_data.len() * std::mem::size_of::<f32>()) as u64;
+        let index_byte_size = (mesh.indices.len() * std::mem::size_of::<u32>()) as u64;
+
+        // Recreate buffers if sizes changed
+        if vertex_byte_size > self.vertex_buffer.size()
+            || index_byte_size > self.index_buffer.size()
+        {
+            *self = Self::new(device, mesh);
+            return;
+        }
+
+        // Write to existing buffers
+        if !vertex_data.is_empty() {
+            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertex_data));
+        }
+        if !mesh.indices.is_empty() {
+            queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&mesh.indices));
+        }
         self.num_indices = mesh.indices.len() as u32;
         self.is_dirty = false;
     }

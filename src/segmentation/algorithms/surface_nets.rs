@@ -153,3 +153,105 @@ impl SurfaceNets {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::segmentation::ChunkedTSDF;
+
+    #[test]
+    fn test_surface_nets_valid_mesh() {
+        let mut tsdf = ChunkedTSDF::new(4.0);
+        tsdf.apply_brush([16, 16, 16], 8.0);
+
+        let sn = SurfaceNets::new(0.0);
+        let (verts, normals, indices) = sn.extract(&tsdf, [32, 32, 32]);
+
+        // Should have geometry
+        assert!(!verts.is_empty(), "Mesh should have vertices");
+        assert_eq!(
+            verts.len(),
+            normals.len(),
+            "Vertices and normals count must match"
+        );
+        assert!(
+            indices.len() % 3 == 0,
+            "Indices should form valid triangles"
+        );
+
+        // All indices should be valid
+        for (i, idx) in indices.iter().enumerate() {
+            assert!(
+                (*idx as usize) < verts.len(),
+                "Index {} at position {} is out of bounds (max {})",
+                idx,
+                i,
+                verts.len()
+            );
+        }
+    }
+
+    #[test]
+    fn test_surface_nets_empty_tsdf() {
+        let tsdf = ChunkedTSDF::new(4.0);
+
+        let sn = SurfaceNets::new(0.0);
+        let (verts, normals, indices) = sn.extract(&tsdf, [32, 32, 32]);
+
+        assert!(verts.is_empty(), "Empty TSDF should produce no vertices");
+        assert!(normals.is_empty(), "Empty TSDF should produce no normals");
+        assert!(indices.is_empty(), "Empty TSDF should produce no indices");
+    }
+
+    #[test]
+    fn test_surface_nets_normalized_vertices() {
+        let mut tsdf = ChunkedTSDF::new(4.0);
+        tsdf.apply_brush([16, 16, 16], 5.0);
+
+        let sn = SurfaceNets::new(0.0);
+        let dims = [32, 32, 32];
+        let (verts, _, _) = sn.extract(&tsdf, dims);
+
+        // All vertices should be in 0..1 range (normalized)
+        for (i, v) in verts.iter().enumerate() {
+            assert!(
+                v.x >= 0.0 && v.x <= 1.0,
+                "Vertex {} has x={} outside 0..1 range",
+                i,
+                v.x
+            );
+            assert!(
+                v.y >= 0.0 && v.y <= 1.0,
+                "Vertex {} has y={} outside 0..1 range",
+                i,
+                v.y
+            );
+            assert!(
+                v.z >= 0.0 && v.z <= 1.0,
+                "Vertex {} has z={} outside 0..1 range",
+                i,
+                v.z
+            );
+        }
+    }
+
+    #[test]
+    fn test_surface_nets_normals_are_normalized() {
+        let mut tsdf = ChunkedTSDF::new(4.0);
+        tsdf.apply_brush([16, 16, 16], 8.0);
+
+        let sn = SurfaceNets::new(0.0);
+        let (_, normals, _) = sn.extract(&tsdf, [32, 32, 32]);
+
+        for (i, n) in normals.iter().enumerate() {
+            let len = n.length();
+            // Allow for zero normals (degenerate cases) or unit normals
+            assert!(
+                len < 0.01 || (len - 1.0).abs() < 0.01,
+                "Normal {} has length {} (expected 0 or 1)",
+                i,
+                len
+            );
+        }
+    }
+}

@@ -210,4 +210,68 @@ mod tests {
         let contours = ms.extract(&values, (3, 3), 1);
         assert_eq!(contours.len(), 0); // No boundaries in a full grid
     }
+
+    #[test]
+    fn test_marching_squares_contours_are_closed() {
+        let ms = MarchingSquares::new(0.5);
+        // A filled square completely surrounded by empty space should produce a closed contour
+        let mut values = vec![0.0f32; 100]; // 10x10 grid
+        for y in 3..7 {
+            for x in 3..7 {
+                values[y * 10 + x] = 1.0;
+            }
+        }
+
+        let contours = ms.extract(&values, (10, 10), 1);
+
+        assert!(!contours.is_empty(), "Should produce at least one contour");
+        for c in &contours {
+            assert!(c.is_closed, "Interior shape should produce closed contour");
+        }
+    }
+
+    #[test]
+    fn test_marching_squares_normalized_coordinates() {
+        let ms = MarchingSquares::new(0.5);
+        let mut values = vec![0.0f32; 100]; // 10x10 grid
+        for y in 3..7 {
+            for x in 3..7 {
+                values[y * 10 + x] = 1.0;
+            }
+        }
+
+        let contours = ms.extract(&values, (10, 10), 1);
+
+        // All contour points should be in 0..1 range (normalized UV)
+        for c in &contours {
+            for p in &c.points {
+                assert!(
+                    p.x >= 0.0 && p.x <= 1.0,
+                    "Contour point x={} should be in 0..1 range",
+                    p.x
+                );
+                assert!(
+                    p.y >= 0.0 && p.y <= 1.0,
+                    "Contour point y={} should be in 0..1 range",
+                    p.y
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_marching_squares_edge_touching() {
+        let ms = MarchingSquares::new(0.5);
+        // Shape that touches the edge - should NOT be closed
+        let mut values = vec![0.0f32; 16]; // 4x4 grid
+                                           // Fill bottom row
+        for x in 0..4 {
+            values[0 * 4 + x] = 1.0;
+        }
+
+        let contours = ms.extract(&values, (4, 4), 1);
+
+        // Edge-touching shapes may produce open contours
+        assert!(!contours.is_empty(), "Should produce contour(s)");
+    }
 }

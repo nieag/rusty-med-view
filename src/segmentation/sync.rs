@@ -165,7 +165,7 @@ pub fn sync_tsdf_to_contours(seg: &mut Segmentation, dims: [u32; 3]) {
 }
 
 /// System to synchronize Labelmap voxel data to 3D mesh
-pub fn sys_sync_labelmap_to_mesh(device: &wgpu::Device, world: &mut World) {
+pub fn sys_sync_labelmap_to_mesh(device: &wgpu::Device, queue: &wgpu::Queue, world: &mut World) {
     let mut to_update = Vec::new();
     for (entity, seg) in world.query_mut::<&mut Segmentation>() {
         // Switch to TSDF-based sync if available
@@ -193,7 +193,7 @@ pub fn sys_sync_labelmap_to_mesh(device: &wgpu::Device, world: &mut World) {
                     if seg.gpu_mesh.is_none() {
                         seg.gpu_mesh = Some(GpuMeshResources::new(device, &seg.mesh));
                     } else if let Some(ref mut gpu) = seg.gpu_mesh {
-                        gpu.is_dirty = true;
+                        gpu.update(device, queue, &seg.mesh);
                     }
                 }
             }

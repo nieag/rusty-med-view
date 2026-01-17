@@ -301,7 +301,7 @@ pub fn render_frame(
     systems::sys_handle_mouse_drag(world, entities);
     systems::sys_paint(world, entities, queue);
     crate::segmentation::sys_sync_labelmap_to_contours(world);
-    crate::segmentation::sys_sync_labelmap_to_mesh(device, world);
+    crate::segmentation::sys_sync_labelmap_to_mesh(device, queue, world);
 
     // 1. Run GUI first so it can process interactions and update ECS state for THIS frame
     gui.prepare(window, world, entities, event_proxy);
@@ -334,9 +334,6 @@ pub fn render_frame(
         let offset = *u_idx as u64 * 256;
         queue.write_buffer(uniform_buffer, offset, bytemuck::cast_slice(&[u]));
     }
-
-    // Sync mesh resources once per frame
-    crate::segmentation::sys_sync_labelmap_to_mesh(device, world);
 
     // Prepare mesh rendering data for 3D views - Collect to release world borrow
     let mesh_render_data: Vec<_> = world
