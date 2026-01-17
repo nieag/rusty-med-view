@@ -5,6 +5,7 @@
 
 use crate::components::*;
 use crate::nifti_loader::LoadedVolume;
+use crate::segmentation::algorithms::{handoff, tsdf_import};
 use crate::volume;
 use hecs::World;
 
@@ -78,7 +79,20 @@ pub fn handle_label_load(
         raw_data: loaded_label.data.clone(),
     };
 
-    let tsdf = crate::segmentation::ChunkedTSDF::from_labelmap(&labelmap, 4.0);
+    // Promotion Pipeline: Voxel -> TSDF -> Vector Foundation
+    // 1. Voxel to TSDF (physical space spacing)
+    let spacing = world
+        .query::<&VolumeData>()
+        .with::<&MainVolumeTag>()
+        .iter()
+        .next()
+        .map(|(_, v)| v.spacing)
+        .unwrap_or([1.0, 1.0, 1.0]);
+
+    let tsdf = tsdf_import::voxel_to_tsdf(&labelmap, spacing, 4.0);
+
+    // 2. TSDF to Vector Foundation (Authority Handoff)
+    let vector_contours = handoff::tsdf_to_spatial_contours(&tsdf, spacing);
 
     // Spawn a new layer entity with CPU data for painting support
     let entity = world.spawn((
@@ -86,6 +100,7 @@ pub fn handle_label_load(
             name: loaded_label.filename.clone(),
             is_visible: true,
             contour_set: crate::segmentation::ContourSet::new(),
+            vector_contours,
             mesh: crate::segmentation::mesh::SegmentationMesh::default(),
             gpu_mesh: None,
             tsdf: Some(tsdf),

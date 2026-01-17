@@ -310,6 +310,7 @@ impl ApplicationHandler<AppEvent> for App {
                         name,
                         is_visible: true,
                         contour_set: crate::segmentation::ContourSet::new(),
+                        vector_contours: crate::segmentation::VectorContourSet::new(),
                         mesh: crate::segmentation::mesh::SegmentationMesh::default(),
                         gpu_mesh: None,
                         tsdf: Some(tsdf),

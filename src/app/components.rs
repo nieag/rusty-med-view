@@ -195,6 +195,7 @@ pub struct Segmentation {
     pub name: String,
     pub is_visible: bool,
     pub contour_set: crate::segmentation::ContourSet,
+    pub vector_contours: crate::segmentation::VectorContourSet,
     pub mesh: crate::segmentation::mesh::SegmentationMesh,
     pub gpu_mesh: Option<crate::segmentation::mesh::GpuMeshResources>,
     pub tsdf: Option<crate::segmentation::ChunkedTSDF>,
