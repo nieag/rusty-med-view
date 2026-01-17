@@ -62,9 +62,6 @@
 - `IncrementalMesher` in `src/segmentation/algorithms/incremental_mesher.rs`
 - Per-chunk meshing with `mesh_chunk()`, only dirty chunks updated via `update_dirty()`
 - `flatten()` combines all chunk meshes into single GPU buffer
-- Boundary stitching: vertices extended to -1 offset for seamless chunk edges
-- Throttle: Mesh sync capped at ~20fps during brushing (50ms interval)
-- WASM optimizations: SIMD128 enabled, FxHashMap for faster lookups
 - Performance: O(dirty_chunks × 32³) vs O(volume³) — ~50-500x speedup
 
 ---
@@ -80,55 +77,82 @@
 
 ---
 
-## Milestone 6: Advanced Contour Tools
-**Goal**: Resolution-independent vector tools  
-**Deliverable**: Spline/Polygon tools that commit to TSDF
+## Milestone 5.5: Legacy Import Pipeline (Promote to Vector)
+**Goal**: Convert voxel labelmaps into the vector-authoritative system  
+**Deliverable**: Importing a .nii.gz labelmap generates initial 3D Vector Contours
 
-- [ ] Tool selection UI (toolbar)
-- [ ] Freehand draw tool
-- [ ] Polygon/Spline tool
-- [ ] Rasterize contour → TSDF commit logic
-
----
-
-## Milestone 7: TSDF Sculpture (3D)
-**Goal**: 3D sculpting on the mesh  
-**Deliverable**: Push/pull tools in 3D view
-
-- [ ] 3D sphere brush logic
-- [ ] Push/Pull TSDF field in 3D
-- [ ] Live re-mesh during sculpting
+- [ ] Voxel-to-TSDF promotion (Physical space distance transform)
+- [ ] TSDF smoothing to remove staircase artifacts
+- [ ] Slice TSDF to generate initial `SpatialContour` set (Authority Handoff)
+- [ ] Multi-label handling (Separate TSDFs/Contour sets per label)
 
 ---
 
-## Milestone 8: Polish & Advanced Tools
-**Goal**: Production-ready with undo/export
+## Milestone 6: Vector-Authoritative Layer
+**Goal**: Transition from slice-based to 3D-spatial contours  
+**Deliverable**: 3D vector contours rendered dynamically in all views
 
-- [ ] Undo/Redo (chunk deltas)
-- [ ] Spline tool
-- [ ] Threshold tool
-- [ ] Island removal / fill holes
-- [ ] NIfTI export
+- [ ] `SpatialContour` struct (3D plane, 3D polyline, influence radius)
+- [ ] `VectorContourSet` storage in `Segmentation` component
+- [ ] Dynamic 2D projection: Project 3D contours onto active axial/coronal/sagittal planes
+- [ ] Render projected vectors directly (bypass Marching Squares for these)
+
+---
+
+## Milestone 7: Constraint-Driven TSDF Baking
+**Goal**: Generate TSDF from vector constraints  
+**Deliverable**: Vector contours influence the volumetric segmentation
+
+- [ ] Implement TSDF Baking: Project 3D vector contours into `ChunkedTSDF`
+- [ ] Sparse baking: Update only chunks intersecting contour influence AABBs
+- [ ] Conservative distance aggregation for overlapping constraints
+- [ ] Integrate with Brush tools (Brush modifies Vector layer, triggers Bake)
+
+---
+
+## Milestone 8: Hybrid Reconstruction (Snapping)
+**Goal**: Exact agreement between 3D mesh and vector contours  
+**Deliverable**: Mesh vertices "snap" to authoritative vector boundaries
+
+- [ ] Update `IncrementalMesher` with vertex snapping logic
+- [ ] Snap mesh vertices to nearest vector constraint within influence radius
+- [ ] SDF-gradient based normals for non-snapped regions
+- [ ] Smooth interpolation between sparse vector constraints
+
+---
+
+## Milestone 9: Advanced Contour Tools
+**Goal**: Production-grade vector editing  
+**Deliverable**: Spline/Polygon tools with multi-view editing
+
+- [ ] Spline/Bezier contour support
+- [ ] Multi-view editing (edit contour in one view, see update in others)
+- [ ] 3D Sculpting (Push/Pull) integrated with vector constraints
+- [ ] Toolbar UI for tool selection
+
+---
+
+## Milestone 10: Production Polish
+**Goal**: Workflow completeness and reliability
+
+- [ ] Undo/Redo for `VectorContourSet` (Geometry-based deltas)
+- [ ] NIfTI export (Rasterize TSDF to Labelmap)
 - [ ] STL/OBJ mesh export
-- [ ] Worker thread for WASM
+- [ ] Performance: Move TSDF baking and snapping to Compute Shaders (GPU)
 
 ---
 
 ## Recommended Order
 
 ```
-M1 (Contour) → M3 (TSDF) → M2 (Mesh) → M4 (Sync)
-                                          ↓
-                                    M5 (Basic Tools)
-                                          ↓
-                                    M6 (Contour Drag)
-                                          ↓
-                                    M7 (Contour Brush)
-                                          ↓
-                                    M8 (Polish)
+M0-M5 (Foundation) → M5.5 (Import) → M6 (Vector Layer) → M7 (TSDF Bake) → M8 (Snapping)
+                                                              ↓
+                                                      M9 (Advanced Tools)
+                                                              ↓
+                                                        M10 (Polish & GPU)
 ```
 
 ## Related Documents
 
 - [Architecture](./segmentation_architecture.md) — System design overview
-- [PolySeg Original](./polyseg.md) — Initial WASM-first concept
+- [PolySeg Original](./polyseg.md) — Initial project context
