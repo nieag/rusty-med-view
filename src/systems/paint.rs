@@ -58,10 +58,10 @@ pub fn sys_paint(world: &mut World, entities: &AppEntities, queue: &wgpu::Queue)
         let cur_target_opt = get_voxel_at_mouse(world, entities, viewport_entity, mouse_uv);
 
         if let Some(pos) = cur_target_opt {
-            if let Ok(mut query) =
-                world.query_one::<(&mut LabelmapData, &Representation)>(layer_ent)
+            if let Ok(mut query) = world
+                .query_one::<(&mut Segmentation, &mut LabelmapData, &Representation)>(layer_ent)
             {
-                if let Some((label_data, repr)) = query.get() {
+                if let Some((seg, label_data, repr)) = query.get() {
                     let res = if let Representation::Voxel(res) = repr {
                         res
                     } else {
@@ -83,41 +83,78 @@ pub fn sys_paint(world: &mut World, entities: &AppEntities, queue: &wgpu::Queue)
 
                     let points_to_paint = get_stroke_points(current_voxel, last_voxel_opt, mode);
 
-                    let val_to_write = if tool == EditorTool::Eraser {
-                        0
-                    } else {
-                        label_idx
-                    };
-
-                    let mut min_bound = [width as i32, height as i32, depth as i32];
-                    let mut max_bound = [-1, -1, -1];
                     let mut modified = false;
 
-                    for pt in points_to_paint {
-                        if apply_brush_step(
-                            pt,
-                            mode,
-                            brush_size,
-                            val_to_write,
-                            label_data,
-                            &mut modified,
-                            &mut min_bound,
-                            &mut max_bound,
-                        ) {
-                            // modified updated in call
+                    for pt in &points_to_paint {
+                        if let Some(ref mut tsdf) = seg.tsdf {
+                            if tool == EditorTool::Eraser {
+                                tsdf.apply_eraser(*pt, brush_size);
+                            } else {
+                                tsdf.apply_brush(*pt, brush_size);
+                            }
+                            modified = true;
                         }
                     }
 
                     if modified {
-                        update_gpu_texture(
-                            queue,
-                            &res.texture,
-                            label_data,
-                            min_bound,
-                            max_bound,
-                            width,
-                            height,
-                        );
+                        if let Some(ref tsdf) = seg.tsdf {
+                            // 1. Calculate the AABB of the entire stroke segment
+                            let r_int = (brush_size + 1.5) as i32;
+                            let mut aabb_min = [width as i32, height as i32, depth as i32];
+                            let mut aabb_max = [-1, -1, -1];
+
+                            for pt in &points_to_paint {
+                                aabb_min[0] = aabb_min[0].min(pt[0] - r_int);
+                                aabb_min[1] = aabb_min[1].min(pt[1] - r_int);
+                                aabb_min[2] = aabb_min[2].min(pt[2] - r_int);
+                                aabb_max[0] = aabb_max[0].max(pt[0] + r_int);
+                                aabb_max[1] = aabb_max[1].max(pt[1] + r_int);
+                                aabb_max[2] = aabb_max[2].max(pt[2] + r_int);
+                            }
+
+                            // Clamp to volume bounds
+                            aabb_min[0] = aabb_min[0].max(0);
+                            aabb_min[1] = aabb_min[1].max(0);
+                            aabb_min[2] = aabb_min[2].max(0);
+                            aabb_max[0] = aabb_max[0].min(width as i32 - 1);
+                            aabb_max[1] = aabb_max[1].min(height as i32 - 1);
+                            aabb_max[2] = aabb_max[2].min(depth as i32 - 1);
+
+                            let mut min_bound = [width as i32, height as i32, depth as i32];
+                            let mut max_bound = [-1, -1, -1];
+
+                            // 2. Perform a single pass over the AABB to sync Labelmap from TSDF
+                            for z in aabb_min[2]..=aabb_max[2] {
+                                let z_off = z as u32 * width * height;
+                                for y in aabb_min[1]..=aabb_max[1] {
+                                    let y_off = y as u32 * width;
+                                    for x in aabb_min[0]..=aabb_max[0] {
+                                        let dist = tsdf.get_distance(x, y, z);
+                                        let idx = (z_off + y_off + x as u32) as usize;
+
+                                        // Simple binary threshold for labelmap display
+                                        let new_val = if dist <= 0.0 { label_idx } else { 0 };
+
+                                        if label_data.raw_data[idx] != new_val {
+                                            label_data.raw_data[idx] = new_val;
+                                            update_bounds(&mut min_bound, &mut max_bound, x, y, z);
+                                        }
+                                    }
+                                }
+                            }
+
+                            if max_bound[0] != -1 {
+                                update_gpu_texture(
+                                    queue,
+                                    &res.texture,
+                                    label_data,
+                                    min_bound,
+                                    max_bound,
+                                    width,
+                                    height,
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -183,95 +220,6 @@ fn get_stroke_points(
         points.push(current);
     }
     points
-}
-
-/// Applies a single brush step to the labelmap data.
-fn apply_brush_step(
-    pt: [i32; 3],
-    mode: ViewMode,
-    brush_size: f32,
-    val: u8,
-    label_data: &mut LabelmapData,
-    modified: &mut bool,
-    min_bound: &mut [i32; 3],
-    max_bound: &mut [i32; 3],
-) -> bool {
-    let px = pt[0];
-    let py = pt[1];
-    let pz = pt[2];
-    let r = brush_size as i32;
-    let r2 = (brush_size * brush_size) as i32;
-    let width = label_data.dimensions[0];
-    let height = label_data.dimensions[1];
-    let depth = label_data.dimensions[2];
-
-    match mode {
-        ViewMode::Axial => {
-            let start_x = (px - r).max(0);
-            let end_x = (px + r).min(width as i32 - 1);
-            let start_y = (py - r).max(0);
-            let end_y = (py + r).min(height as i32 - 1);
-            if pz >= 0 && pz < depth as i32 {
-                for y in start_y..=end_y {
-                    for x in start_x..=end_x {
-                        if (x - px).pow(2) + (y - py).pow(2) <= r2 {
-                            let idx =
-                                (pz as u32 * width * height + y as u32 * width + x as u32) as usize;
-                            if label_data.raw_data[idx] != val {
-                                label_data.raw_data[idx] = val;
-                                *modified = true;
-                                update_bounds(min_bound, max_bound, x, y, pz);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        ViewMode::Coronal => {
-            let start_x = (px - r).max(0);
-            let end_x = (px + r).min(width as i32 - 1);
-            let start_z = (pz - r).max(0);
-            let end_z = (pz + r).min(depth as i32 - 1);
-            if py >= 0 && py < height as i32 {
-                for z in start_z..=end_z {
-                    for x in start_x..=end_x {
-                        if (x - px).pow(2) + (z - pz).pow(2) <= r2 {
-                            let idx =
-                                (z as u32 * width * height + py as u32 * width + x as u32) as usize;
-                            if label_data.raw_data[idx] != val {
-                                label_data.raw_data[idx] = val;
-                                *modified = true;
-                                update_bounds(min_bound, max_bound, x, py, z);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        ViewMode::Sagittal => {
-            let start_y = (py - r).max(0);
-            let end_y = (py + r).min(height as i32 - 1);
-            let start_z = (pz - r).max(0);
-            let end_z = (pz + r).min(depth as i32 - 1);
-            if px >= 0 && px < width as i32 {
-                for z in start_z..=end_z {
-                    for y in start_y..=end_y {
-                        if (y - py).pow(2) + (z - pz).pow(2) <= r2 {
-                            let idx =
-                                (z as u32 * width * height + y as u32 * width + px as u32) as usize;
-                            if label_data.raw_data[idx] != val {
-                                label_data.raw_data[idx] = val;
-                                *modified = true;
-                                update_bounds(min_bound, max_bound, px, y, z);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        _ => {}
-    }
-    *modified
 }
 
 fn update_bounds(min_bound: &mut [i32; 3], max_bound: &mut [i32; 3], x: i32, y: i32, z: i32) {
@@ -351,32 +299,14 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_brush_step() {
-        let mut data = LabelmapData {
-            dimensions: [100, 100, 100],
-            raw_data: vec![0; 100 * 100 * 100],
-        };
-        let mut modified = false;
-        let mut min = [100, 100, 100];
-        let mut max = [-1, -1, -1];
+    fn test_tsdf_brush_painting() {
+        let mut tsdf = crate::segmentation::ChunkedTSDF::new(4.0);
+        tsdf.apply_brush([50, 50, 50], 2.0);
 
-        apply_brush_step(
-            [50, 50, 50],
-            ViewMode::Axial,
-            2.0,
-            1,
-            &mut data,
-            &mut modified,
-            &mut min,
-            &mut max,
-        );
+        // Check center is now inside (negative)
+        assert!(tsdf.get_distance(50, 50, 50) < 0.0);
 
-        assert!(modified);
-        // Check center
-        let idx = (50 * 100 * 100 + 50 * 100 + 50) as usize;
-        assert_eq!(data.raw_data[idx], 1);
-        // Check bounds
-        assert!(min[0] <= 50);
-        assert!(max[0] >= 50);
+        // Check point far away is still outside (truncation)
+        assert_eq!(tsdf.get_distance(0, 0, 0), 4.0);
     }
 }

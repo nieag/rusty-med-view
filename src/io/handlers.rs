@@ -73,6 +73,13 @@ pub fn handle_label_load(
         .map(|(_, res)| res.bind_group.clone())
         .expect("Main volume should exist");
 
+    let labelmap = LabelmapData {
+        dimensions: loaded_label.dimensions,
+        raw_data: loaded_label.data.clone(),
+    };
+
+    let tsdf = crate::segmentation::ChunkedTSDF::from_labelmap(&labelmap, 4.0);
+
     // Spawn a new layer entity with CPU data for painting support
     let entity = world.spawn((
         Segmentation {
@@ -81,12 +88,10 @@ pub fn handle_label_load(
             contour_set: crate::segmentation::ContourSet::new(),
             mesh: crate::segmentation::mesh::SegmentationMesh::default(),
             gpu_mesh: None,
+            tsdf: Some(tsdf),
         },
         LayerSettings { opacity: 0.5 },
-        LabelmapData {
-            dimensions: loaded_label.dimensions,
-            raw_data: loaded_label.data.clone(),
-        },
+        labelmap,
         Representation::Voxel(GpuVolumeResources {
             texture: new_texture,
             view: new_view,

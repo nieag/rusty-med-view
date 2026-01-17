@@ -36,64 +36,59 @@
 
 ---
 
-## Milestone 3: TSDF Infrastructure
+## Milestone 3: TSDF Infrastructure [COMPLETE]
 **Goal**: Chunked TSDF for sync operations  
 **Deliverable**: Convert labelmap ↔ TSDF
 
-- [ ] `Chunk` struct (32³ i8 values)
-- [ ] `ChunkedTSDF` with HashMap storage
-- [ ] Labelmap → TSDF conversion (distance transform)
-- [ ] TSDF → Labelmap export (threshold)
-- [ ] Unit tests for round-trip
+- [x] `Chunk` struct (32³ i8 values)
+- [x] `ChunkedTSDF` with HashMap storage
+- [x] Labelmap → TSDF conversion (distance transform)
+- [x] TSDF → Labelmap export (threshold)
+- [x] Unit tests for round-trip
 
 ---
 
-## Milestone 4: Sync Pipeline
-**Goal**: 2D edits update 3D mesh  
-**Deliverable**: Modify contour → mesh updates
+## Milestone 4: TSDF Sync Pipeline [COMPLETE]
+**Goal**: Sync TSDF to display representations  
+**Deliverable**: 2D/3D views update reactively from TSDF
 
-- [ ] Contour → rasterize → TSDF
-- [ ] TSDF → Surface Nets → Mesh (dirty chunks only)
-- [ ] Mesh → plane intersection → Contour
-- [ ] Dirty region tracking
-- [ ] Integration test: contour edit → mesh update
+- [ ] Add `ChunkedTSDF` to `Segmentation` component
+- [ ] Implement `TSDF → Surface Nets (Dirty Only)`
+- [ ] Implement `TSDF → Slice → Contours`
+- [ ] Reactive dirty tracking for chunks
+- [ ] Sync system: watch TSDF for changes
 
 ---
 
-## Milestone 5: Basic Contour Edit Tools
-**Goal**: Draw new contours in 2D  
-**Deliverable**: Freehand and polygon tools work
+## Milestone 5: TSDF Brush Tools [COMPLETE]
+**Goal**: Modify TSDF directly via Brush  
+**Deliverable**: 2D Brush and Eraser update TSDF chunks
+
+- [ ] Port `paint.rs` to use TSDF instead of Labelmap
+- [ ] Multi-label support in TSDF (optional/next)
+- [ ] Sub-voxel brush falloff (soft edges)
+- [ ] Live Mesh/Contour update during brush stroke
+
+---
+
+## Milestone 6: Advanced Contour Tools
+**Goal**: Resolution-independent vector tools  
+**Deliverable**: Spline/Polygon tools that commit to TSDF
 
 - [ ] Tool selection UI (toolbar)
 - [ ] Freehand draw tool
-- [ ] Polygon tool
-- [ ] Fill/rasterize on commit
-- [ ] Contour hover/select feedback
+- [ ] Polygon/Spline tool
+- [ ] Rasterize contour → TSDF commit logic
 
 ---
 
-## Milestone 6: Contour Drag Tool
-**Goal**: Grab and drag contour boundaries  
-**Deliverable**: Drag contour with 3D falloff visible in mesh
+## Milestone 7: TSDF Sculpture (3D)
+**Goal**: 3D sculpting on the mesh  
+**Deliverable**: Push/pull tools in 3D view
 
-- [ ] Contour hit-testing (detect grab)
-- [ ] Drag state tracking
-- [ ] Update contour on drag
-- [ ] 3D gaussian falloff via TSDF
-- [ ] Re-mesh + re-slice adjacent contours
-- [ ] Live update during drag
-
----
-
-## Milestone 7: Contour Brush
-**Goal**: Push/pull contour like sculpting  
-**Deliverable**: Expand/contract/smooth modes
-
-- [ ] Brush cursor preview
-- [ ] Expand mode (push outward)
-- [ ] Contract mode (push inward)
-- [ ] Smooth mode (blur boundary)
-- [ ] Brush size slider
+- [ ] 3D sphere brush logic
+- [ ] Push/Pull TSDF field in 3D
+- [ ] Live re-mesh during sculpting
 
 ---
 

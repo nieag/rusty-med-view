@@ -12,22 +12,22 @@ A professional segmentation system with **Contour** as 2D source of truth and **
 │   (Resolution-Independent)  │   (Resolution-Independent)        │
 │   Primary for: Draw, Fill   │   Primary for: Sculpt, Deform     │
 ├─────────────────────────────┴───────────────────────────────────┤
-│                    Synchronization Layer                         │
-│   • Contour → TSDF → Mesh (when 2D edits)                       │
-│   • Mesh → Slice → Contour (when 3D edits, no TSDF)             │
-├─────────────────────────────────────────────────────────────────┤
-│                    Hidden Intermediary: TSDF                     │
-│                    (Chunked, one-way for meshing only)           │
-├─────────────────────────────────────────────────────────────────┤
-│                    Export: Labelmap (NIfTI) / Mesh (STL)        │
+│                    Core Source of Truth: TSDF                    │
+│                    (Chunked, sparse i8 field)                   │
+├─────────────────────────────┬───────────────────────────────────┤
+│   Sync: TSDF → Slicing      │   Sync: TSDF → Surface Nets       │
+│   Result: 2D Contours       │   Result: 3D Mesh                 │
+└─────────────────────────────┴───────────────────────────────────┤
+│             Export: Labelmap (NIfTI) / Mesh (STL)               │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Key Design Decisions
 
-1. **TSDF is one-way** — Contours never round-trip through TSDF to avoid resolution loss
-2. **Mesh→Contour via plane intersection** — Direct slicing, no grid degradation
-3. **Resolution-independent storage** — Both contours (float polylines) and mesh (float vertices) are exact
+1. **TSDF is the volumetric source of truth** — Both 2D Brush tools and 3D sculpting modify TSDF chunks.
+2. **Resolution-independent 2D fallback** — Higher-fidelity Bezier/Spline tools can still exist as overlay Contours, which rasterize *into* the TSDF on commit.
+3. **Reactive Re-meshing** — Surface Nets only re-calculates triangles for TSDF chunks marked as dirty.
+4. **Zero-Lag Slicing** — 2D views "slice" the TSDF at the current crosshair plane to generate visual contours.
 
 ## Data Representations
 
@@ -64,9 +64,11 @@ pub struct ChunkedTSDF {
 
 | Direction | Path | Notes |
 |-----------|------|-------|
-| 2D → 3D | Contour → TSDF → Mesh | TSDF handles topology |
-| 3D → 2D | Mesh → Plane Intersection → Contour | Exact, no grid |
-| Export | Contours → Rasterize → NIfTI | Skip TSDF |
+| 2D Edit | Brush → TSDF → (Sync All) | Fast, sparse chunk updates |
+| 3D Edit | Sculpt → TSDF → (Sync All) | Consistent with 2D |
+| Sync Mesh | TSDF → Surface Nets | Only dirty chunks |
+| Sync Contours | TSDF → 2D Slicing | Generated on-the-fly |
+| Export | TSDF → Threshold → NIfTI | Standard grid export |
 
 ## Tool Categories
 

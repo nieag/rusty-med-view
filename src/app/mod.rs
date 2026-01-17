@@ -296,6 +296,13 @@ impl ApplicationHandler<AppEvent> for App {
                     placeholder_bg = Some(res.bind_group.clone());
                 }
                 let placeholder_bg = placeholder_bg.expect("Main volume should exist");
+
+                let labelmap = LabelmapData {
+                    dimensions: dims,
+                    raw_data: data,
+                };
+                let tsdf = crate::segmentation::ChunkedTSDF::new(4.0);
+
                 let entity = ctx.world.spawn((
                     Segmentation {
                         name,
@@ -303,12 +310,10 @@ impl ApplicationHandler<AppEvent> for App {
                         contour_set: crate::segmentation::ContourSet::new(),
                         mesh: crate::segmentation::mesh::SegmentationMesh::default(),
                         gpu_mesh: None,
+                        tsdf: Some(tsdf),
                     },
                     LayerSettings { opacity: 0.7 },
-                    LabelmapData {
-                        dimensions: dims,
-                        raw_data: data,
-                    },
+                    labelmap,
                     Representation::Voxel(GpuVolumeResources {
                         texture: tex,
                         view,

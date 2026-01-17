@@ -6,11 +6,11 @@ This document provides a technical overview of the **Rust Medical Imaging Viewer
 A high-performance 2D/3D medical volume viewer built with **Rust** and **WGPU**. It supports orthogonal slicing, volumetric X-ray rendering, and interactive crosshair picking.
 
 ### 📈 Recent Progress
-- **Dynamic Orientation Consolidation**: Centralized all 3D transforms in `src/util/orientation.rs`. The system now dynamically calculates anatomical flips and axis mappings from the NIfTI quaternion, supporting non-RAS volumes (LAS, LPS, etc.) natively in both 2D and 3D.
-- **Unified Coordinate Pipeline**: Propagated orientation-aware logic to `picking.rs`, `geometry.rs`, and `shader.wgsl` via centralized `SlicePlane` API. The shader now uses dynamic axis mapping for zero-lag 2D projection.
-- **Radiological Convention**: Enforced "Right-on-Left" convention across all viewports with dynamic anatomical markers (R, L, A, P, S, I).
-- **3D Mesh Rendering**: Implemented a dedicated rendering pipeline for segmentation meshes. This includes a Surface Nets algorithm for dual-mesh extraction from labelmaps and a Phong-shaded WGSL pipeline with proper depth-stencil integration.
-- **Parity Testing**: Expanded test suite with "Shader Parity" tests that verify Rust math exactly matches WGSL logic for raymarching and projection.
+- **TSDF-Centric Architecture**: Transitioned the segmentation system to use **Truncated Signed Distance Fields (TSDF)** as the primary source of truth. This enables smooth, sub-voxel editing and unified reactive synchronization across all views.
+- **Reactive Sync Pipeline**: High-performance 3D mesh and 2D contours are now derived from the chunked TSDF field. Implemented sparse dirty-tracking to ensure only modified regions of the volume are re-re-sliced or re-meshed.
+- **Dynamic Orientation Consolidation**: Centralized all 3D transforms in `src/util/orientation.rs`. The system now dynamically calculates anatomical flips and axis mappings from the NIfTI quaternion, supporting non-RAS volumes natively.
+- **Radiological Convention**: Enforced "Right-on-Left" convention across all viewports with dynamic anatomical markers.
+- **Parity Testing**: Expanded test suite with "Shader Parity" tests and TSDF math validation.
 
 ## 🛠 Tech Stack
 - **Graphics**: [wgpu](https://github.com/gfx-rs/wgpu) (using Metal, WebGPU/WebGL2)
@@ -27,8 +27,9 @@ A high-performance 2D/3D medical volume viewer built with **Rust** and **WGPU**.
 - `src/systems/`: Modularized core logic:
     - `input.rs`: Mouse, trackpad, and navigation gestures.
     - `picking.rs`: 3D raymarching and viewport projection.
-    - `paint.rs`: Discrete voxel labelmap editing.
+    - `paint.rs`: TSDF-native brush and eraser tools with batched AABB syncing.
     - `render_prep.rs`: Uniform preparation and overlay synchronization.
+    - `segmentation/sync.rs`: Sparse, dirty-slice-aware synchronization to 2D/3D representations.
 - `src/overlay/`: High-performance UI primitives (markers, crosshairs) managed outside standard ECS queries.
 - `src/render.rs`: Rendering infrastructure (pipeline setup, bind group creation, frame rendering).
 - `src/load_handlers.rs`: Handlers for async volume/labelmap loading and bind group recreation.
@@ -84,12 +85,14 @@ Implements high-intensity raymarching to accurately place the crosshair.
 - **Continuous Update**: Navigation mode supports live crosshair updates during Left-click drags.
 - **Safety**: Tools (Brush/Eraser) are automatically inhibited during Zoom/Pan/Rotate operations.
 
-### 3D Mesh Representation
-Implemented as a secondary, high-performance representation for 3D visualization:
-- **Algorithm**: Uses **Surface Nets** for smooth dual-mesh generation directly from voxel labelmaps. This provides superior visual quality compared to Marching Cubes for semantic segmentation.
-- **GPU Integration**: Managed via `GpuMeshResources`, which handles indexed vertex buffers (Position + Normal).
-- **Shader Projection**: The `mesh.wgsl` vertex shader replicates the volume's physical aspect ratio and radiological projection logic, ensuring the teal mesh perfectly overlays the 3D X-ray volume.
-- **Depth Composition**: Uses a dedicated depth-stencil pass to correctly interleave the mesh with the volume rendering and annotations.
+### TSDF-Centric Representation
+The system uses a **Chunked TSDF** (32x32x32 `i8` chunks) as its primary volumetric data source:
+- **Sub-voxel Precision**: Brush tools modify a signed distance field rather than discrete voxels, enabling smooth, resolution-independent boundaries.
+- **Sparse Synchronization**:
+    - **AABB Voxel Sync**: `paint.rs` calculates the bounding box of each brush stroke to update the 2D labelmap overlay in a single efficient pass.
+    - **Dirty-Slice Tracking**: `sync.rs` tracks which chunks were modified to re-slice only the affected 2D axial/coronal/sagittal planes. 
+- **Meshing**: Uses **Surface Nets** for dual-mesh generation directly from the TSDF. Vertices are normalized to the `0..1` range to ensure pixel-perfect alignment with the volume data in the WGSL shader.
+- **Composite Rendering**: Uses a dedicated depth-stencil pass to correctly interleave the mesh with the volume rendering and annotations.
 
 ### Labelmap Overlays
 The system supports raw **Hounsfield Unit (HU)** based windowing and translucent overlays.

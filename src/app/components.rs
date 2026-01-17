@@ -197,6 +197,7 @@ pub struct Segmentation {
     pub contour_set: crate::segmentation::ContourSet,
     pub mesh: crate::segmentation::mesh::SegmentationMesh,
     pub gpu_mesh: Option<crate::segmentation::mesh::GpuMeshResources>,
+    pub tsdf: Option<crate::segmentation::ChunkedTSDF>,
 }
 
 pub struct LayerSettings {

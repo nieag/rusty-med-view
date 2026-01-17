@@ -1,4 +1,5 @@
 use crate::app::components::{LabelmapData, Segmentation, ViewMode};
+use crate::segmentation::algorithms::surface_nets::DistanceSampler;
 use crate::segmentation::algorithms::{MarchingSquares, SurfaceNets};
 use crate::segmentation::mesh::GpuMeshResources;
 use hecs::World;
@@ -6,45 +7,194 @@ use hecs::World;
 /// System to synchronize Labelmap voxel data to 2D contours
 pub fn sys_sync_labelmap_to_contours(world: &mut World) {
     let mut to_update = Vec::new();
-    for (entity, (seg, _labelmap)) in world.query_mut::<(&mut Segmentation, &LabelmapData)>() {
-        if seg.contour_set.slices.is_empty() {
+    for (entity, seg) in world.query_mut::<&mut Segmentation>() {
+        if let Some(ref tsdf) = seg.tsdf {
+            if !tsdf.dirty_chunks.is_empty() || seg.contour_set.slices.is_empty() {
+                to_update.push(entity);
+            }
+        } else if seg.contour_set.slices.is_empty() {
+            // Fallback for old labelmap-only segmentations
             to_update.push(entity);
         }
     }
     for entity in to_update {
-        if let Ok(mut seg) = world.get::<&mut Segmentation>(entity) {
-            if let Ok(labelmap) = world.get::<&LabelmapData>(entity) {
-                sync_full_labelmap(&mut seg, &*labelmap);
+        if let Ok(mut query) = world.query_one::<(&mut Segmentation, &LabelmapData)>(entity) {
+            if let Some((seg, labelmap)) = query.get() {
+                if seg.tsdf.is_some() {
+                    sync_tsdf_to_contours(seg, labelmap.dimensions);
+                } else {
+                    sync_full_labelmap(seg, labelmap);
+                }
             }
         }
     }
 }
 
+pub fn sync_tsdf_to_contours(seg: &mut Segmentation, dims: [u32; 3]) {
+    let tsdf = if let Some(t) = seg.tsdf.take() {
+        t
+    } else {
+        return;
+    };
+
+    let ms = MarchingSquares::new(0.0);
+
+    // Determine which slices are dirty
+    let mut axial_dirty = std::collections::HashSet::new();
+    let mut coronal_dirty = std::collections::HashSet::new();
+    let mut sagittal_dirty = std::collections::HashSet::new();
+
+    // If contour set is empty, we must do a full sync of all occupied chunks
+    if seg.contour_set.slices.is_empty() {
+        for &(cx, cy, cz) in tsdf.chunks.keys() {
+            for dz in 0..32 {
+                axial_dirty.insert(cz as i32 * 32 + dz);
+            }
+            for dy in 0..32 {
+                coronal_dirty.insert(cy as i32 * 32 + dy);
+            }
+            for dx in 0..32 {
+                sagittal_dirty.insert(cx as i32 * 32 + dx);
+            }
+        }
+    } else {
+        for &(cx, cy, cz) in &tsdf.dirty_chunks {
+            for dz in 0..32 {
+                axial_dirty.insert(cz as i32 * 32 + dz);
+            }
+            for dy in 0..32 {
+                coronal_dirty.insert(cy as i32 * 32 + dy);
+            }
+            for dx in 0..32 {
+                sagittal_dirty.insert(cx as i32 * 32 + dx);
+            }
+        }
+    }
+
+    let (min, max) = tsdf.bounds();
+
+    // Axial (XY)
+    for z in axial_dirty {
+        if z < min[2] || z >= max[2] {
+            continue;
+        }
+        let w = (max[0] - min[0]) as u32;
+        let h = (max[1] - min[1]) as u32;
+        if w < 2 || h < 2 {
+            continue;
+        }
+
+        let mut slice_data = vec![0.0f32; (w * h) as usize];
+        for ly in 0..h {
+            for lx in 0..w {
+                slice_data[(ly * w + lx) as usize] =
+                    tsdf.get_distance(min[0] + lx as i32, min[1] + ly as i32, z);
+            }
+        }
+
+        let mut contours = ms.extract(&slice_data, (w, h), 1);
+        for c in &mut contours {
+            for p in &mut c.points {
+                p.x = (min[0] as f32 + p.x * (w as f32 - 1.0)) / (dims[0] as f32 - 1.0);
+                p.y = (min[1] as f32 + p.y * (h as f32 - 1.0)) / (dims[1] as f32 - 1.0);
+            }
+        }
+        seg.contour_set.update_slice(ViewMode::Axial, z, contours);
+    }
+
+    // Coronal (XZ)
+    for y in coronal_dirty {
+        if y < min[1] || y >= max[1] {
+            continue;
+        }
+        let w = (max[0] - min[0]) as u32;
+        let h = (max[2] - min[2]) as u32;
+        if w < 2 || h < 2 {
+            continue;
+        }
+
+        let mut slice_data = vec![0.0f32; (w * h) as usize];
+        for lz in 0..h {
+            for lx in 0..w {
+                slice_data[(lz * w + lx) as usize] =
+                    tsdf.get_distance(min[0] + lx as i32, y, min[2] + lz as i32);
+            }
+        }
+
+        let mut contours = ms.extract(&slice_data, (w, h), 1);
+        for c in &mut contours {
+            for p in &mut c.points {
+                p.x = (min[0] as f32 + p.x * (w as f32 - 1.0)) / (dims[0] as f32 - 1.0);
+                p.y = (min[2] as f32 + p.y * (h as f32 - 1.0)) / (dims[2] as f32 - 1.0);
+            }
+        }
+        seg.contour_set.update_slice(ViewMode::Coronal, y, contours);
+    }
+
+    // Sagittal (YZ)
+    for x in sagittal_dirty {
+        if x < min[0] || x >= max[0] {
+            continue;
+        }
+        let w = (max[1] - min[1]) as u32;
+        let h = (max[2] - min[2]) as u32;
+        if w < 2 || h < 2 {
+            continue;
+        }
+
+        let mut slice_data = vec![0.0f32; (w * h) as usize];
+        for lz in 0..h {
+            for ly in 0..w {
+                slice_data[(lz * w + ly) as usize] =
+                    tsdf.get_distance(x, min[1] + ly as i32, min[2] + lz as i32);
+            }
+        }
+
+        let mut contours = ms.extract(&slice_data, (w, h), 1);
+        for c in &mut contours {
+            for p in &mut c.points {
+                p.x = (min[1] as f32 + p.x * (w as f32 - 1.0)) / (dims[1] as f32 - 1.0);
+                p.y = (min[2] as f32 + p.y * (h as f32 - 1.0)) / (dims[2] as f32 - 1.0);
+            }
+        }
+        seg.contour_set
+            .update_slice(ViewMode::Sagittal, x, contours);
+    }
+
+    seg.tsdf = Some(tsdf);
+}
+
 /// System to synchronize Labelmap voxel data to 3D mesh
 pub fn sys_sync_labelmap_to_mesh(device: &wgpu::Device, world: &mut World) {
     let mut to_update = Vec::new();
-    for (entity, (seg, _labelmap)) in world.query_mut::<(&mut Segmentation, &LabelmapData)>() {
-        // For M2, we sync if the mesh is empty.
-        // In M4 we'll add dirty tracking.
-        if seg.mesh.vertices.is_empty() && !_labelmap.raw_data.is_empty() {
-            to_update.push(entity);
+    for (entity, seg) in world.query_mut::<&mut Segmentation>() {
+        // Switch to TSDF-based sync if available
+        if let Some(ref mut tsdf) = seg.tsdf {
+            if !tsdf.dirty_chunks.is_empty() || seg.mesh.vertices.is_empty() {
+                to_update.push(entity);
+            }
         }
     }
 
     for entity in to_update {
-        if let Ok(mut seg) = world.get::<&mut Segmentation>(entity) {
-            if let Ok(labelmap) = world.get::<&LabelmapData>(entity) {
-                let sn = SurfaceNets::new(0.5);
-                let (v, n, i) = sn.extract(&labelmap.raw_data, labelmap.dimensions);
-                seg.mesh.vertices = v;
-                seg.mesh.normals = n;
-                seg.mesh.indices = i;
+        if let Ok(mut query) = world.query_one::<(&mut Segmentation, &LabelmapData)>(entity) {
+            if let Some((seg, labelmap)) = query.get() {
+                let sn = SurfaceNets::new(0.0);
 
-                // Initialize/Update GPU resources
-                if seg.gpu_mesh.is_none() {
-                    seg.gpu_mesh = Some(GpuMeshResources::new(device, &seg.mesh));
-                } else if let Some(ref mut gpu) = seg.gpu_mesh {
-                    gpu.is_dirty = true; // Signal for update in render pipeline
+                if let Some(mut tsdf) = seg.tsdf.take() {
+                    let (v, n, i) = sn.extract(&tsdf, labelmap.dimensions);
+
+                    seg.mesh.vertices = v;
+                    seg.mesh.normals = n;
+                    seg.mesh.indices = i;
+                    tsdf.dirty_chunks.clear();
+                    seg.tsdf = Some(tsdf);
+
+                    if seg.gpu_mesh.is_none() {
+                        seg.gpu_mesh = Some(GpuMeshResources::new(device, &seg.mesh));
+                    } else if let Some(ref mut gpu) = seg.gpu_mesh {
+                        gpu.is_dirty = true;
+                    }
                 }
             }
         }

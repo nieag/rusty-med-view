@@ -1,6 +1,11 @@
 use glam::Vec3;
 use std::collections::HashMap;
 
+pub trait DistanceSampler {
+    fn get_distance(&self, x: i32, y: i32, z: i32) -> f32;
+    fn bounds(&self) -> ([i32; 3], [i32; 3]); // min, max
+}
+
 pub struct SurfaceNets {
     pub isovalue: f32,
 }
@@ -10,71 +15,63 @@ impl SurfaceNets {
         Self { isovalue }
     }
 
-    pub fn extract(&self, data: &[u8], dims: [u32; 3]) -> (Vec<Vec3>, Vec<Vec3>, Vec<u32>) {
+    pub fn extract<S: DistanceSampler>(
+        &self,
+        sampler: &S,
+        dims: [u32; 3],
+    ) -> (Vec<Vec3>, Vec<Vec3>, Vec<u32>) {
+        let (min, max) = sampler.bounds();
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
         let mut grid_to_vertex = HashMap::new();
 
-        let dx = dims[0] as usize;
-        let dy = dims[1] as usize;
-
-        // Helper for indexing
-        let get_val = |x: usize, y: usize, z: usize| -> f32 {
-            if x >= dims[0] as usize || y >= dims[1] as usize || z >= dims[2] as usize {
-                return 0.0;
-            }
-            if data[z * dx * dy + y * dx + x] > 0 {
-                1.0
-            } else {
-                0.0
-            }
-        };
-
         // 1. Generate vertices
-        for z in 0..dims[2] as usize {
-            for y in 0..dims[1] as usize {
-                for x in 0..dims[0] as usize {
+        for z in min[2]..max[2] {
+            for y in min[1]..max[1] {
+                for x in min[0]..max[0] {
                     let mut mask = 0u8;
                     for i in 0..8 {
-                        let cx = x + (i & 1);
-                        let cy = y + ((i >> 1) & 1);
-                        let cz = z + ((i >> 2) & 1);
-                        if get_val(cx, cy, cz) > self.isovalue {
+                        let cx = x + (i & 1) as i32;
+                        let cy = y + ((i >> 1) & 1) as i32;
+                        let cz = z + ((i >> 2) & 1) as i32;
+                        if sampler.get_distance(cx, cy, cz) < self.isovalue {
                             mask |= 1 << i;
                         }
                     }
 
                     if mask != 0 && mask != 0xFF {
-                        let v = Vec3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5);
+                        let v = Vec3::new(
+                            (x as f32 + 0.5) / dims[0] as f32,
+                            (y as f32 + 0.5) / dims[1] as f32,
+                            (z as f32 + 0.5) / dims[2] as f32,
+                        );
                         grid_to_vertex.insert((x, y, z), vertices.len() as u32);
-                        // Normalize to 0..1 range
-                        vertices
-                            .push(v / Vec3::new(dims[0] as f32, dims[1] as f32, dims[2] as f32));
+                        vertices.push(v);
                     }
                 }
             }
         }
 
         // 2. Generate faces
-        for z in 0..dims[2] as usize {
-            for y in 0..dims[1] as usize {
-                for x in 0..dims[0] as usize {
-                    let v0 = get_val(x, y, z) > self.isovalue;
+        for z in min[2]..max[2] {
+            for y in min[1]..max[1] {
+                for x in min[0]..max[0] {
+                    let v0 = sampler.get_distance(x, y, z) < self.isovalue;
 
-                    if x + 1 < dims[0] as usize {
-                        let v1 = get_val(x + 1, y, z) > self.isovalue;
+                    if x + 1 < max[0] {
+                        let v1 = sampler.get_distance(x + 1, y, z) < self.isovalue;
                         if v0 != v1 {
                             self.append_quad(&mut indices, &grid_to_vertex, x, y, z, 0, v0);
                         }
                     }
-                    if y + 1 < dims[1] as usize {
-                        let v1 = get_val(x, y + 1, z) > self.isovalue;
+                    if y + 1 < max[1] {
+                        let v1 = sampler.get_distance(x, y + 1, z) < self.isovalue;
                         if v0 != v1 {
                             self.append_quad(&mut indices, &grid_to_vertex, x, y, z, 1, v0);
                         }
                     }
-                    if z + 1 < dims[2] as usize {
-                        let v1 = get_val(x, y, z + 1) > self.isovalue;
+                    if z + 1 < max[2] {
+                        let v1 = sampler.get_distance(x, y, z + 1) < self.isovalue;
                         if v0 != v1 {
                             self.append_quad(&mut indices, &grid_to_vertex, x, y, z, 2, v0);
                         }
@@ -110,10 +107,10 @@ impl SurfaceNets {
     fn append_quad(
         &self,
         indices: &mut Vec<u32>,
-        grid: &HashMap<(usize, usize, usize), u32>,
-        x: usize,
-        y: usize,
-        z: usize,
+        grid: &HashMap<(i32, i32, i32), u32>,
+        x: i32,
+        y: i32,
+        z: i32,
         axis: u8,
         v0_inside: bool,
     ) {
@@ -128,10 +125,10 @@ impl SurfaceNets {
         };
 
         for (i, off) in offsets.iter().enumerate() {
-            let px = x as i32 + off.0;
-            let py = y as i32 + off.1;
-            let pz = z as i32 + off.2;
-            if let Some(&idx) = grid.get(&(px as usize, py as usize, pz as usize)) {
+            let px = x + off.0;
+            let py = y + off.1;
+            let pz = z + off.2;
+            if let Some(&idx) = grid.get(&(px, py, pz)) {
                 quads[i] = idx;
             } else {
                 return; // Missing cube vertex (boundary)
