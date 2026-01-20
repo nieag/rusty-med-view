@@ -8,11 +8,12 @@ A high-performance 2D/3D medical volume viewer built with **Rust** and **WGPU**.
 ### 📈 Recent Progress
 - **Vector-Authoritative Segmentation**: Transitioned from a voxel-centric model to a **Vector-Authoritative Architecture**. Primary storage now resides in 3D `SpatialContour` objects.
 - **Constraint-Driven TSDF Baking**: Implemented `src/segmentation/algorithms/baking.rs` to bake authoritative vector contours into the 3D TSDF, closing the loop for 3D reconstruction from vector edits.
+- **Vertex Snapping (M8)**: Implemented `src/segmentation/algorithms/snapping.rs` to snap mesh vertices to authoritative vector boundaries for pixel-perfect 2D/3D alignment.
 - **Dynamic Contour Projection**: Implemented a real-time projection engine that calculates intersections between 3D vector contours and the active 2D viewing plane.
 - **Sub-Voxel Precision**: Refined contour extraction to use a 0.0001 RDP tolerance.
-- **Incremental Surface Nets**: Implemented `IncrementalMesher` for chunk-based meshing.
+- **Incremental Surface Nets**: Implemented `IncrementalMesher` for chunk-based meshing with optional snapping pass.
 - **Orientation-Aware Projection**: Centralized all projection and slicing logic in `src/util/orientation.rs` and `src/segmentation/algorithms/projection.rs`, supporting radiological conventions and arbitrary anatomical orientations.
-- **Parity Testing**: Expanded test suite to 19+ algorithm-level tests, covering TSDF math, RDP simplification, and 3D-to-2D projection accuracy.
+- **Parity Testing**: Expanded test suite to 67+ tests covering TSDF math, RDP simplification, projection accuracy, and mesh-vector alignment.
 
 ## 🛠 Tech Stack
 - **Graphics**: [wgpu](https://github.com/gfx-rs/wgpu) (using Metal, WebGPU/WebGL2)

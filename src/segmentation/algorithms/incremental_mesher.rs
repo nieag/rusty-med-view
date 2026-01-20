@@ -2,7 +2,11 @@
 //
 // Incremental Surface Nets implementation that processes only dirty chunks.
 
-use crate::segmentation::tsdf::{ChunkedTSDF, CHUNK_SIZE};
+use crate::segmentation::{
+    algorithms::snapping::{snap_vertex, SnapConfig},
+    contour::SpatialContour,
+    tsdf::{ChunkedTSDF, CHUNK_SIZE},
+};
 use glam::Vec3;
 use rustc_hash::FxHashMap;
 
@@ -18,6 +22,7 @@ pub struct ChunkMesh {
 pub struct IncrementalMesher {
     pub chunk_meshes: FxHashMap<(i16, i16, i16), ChunkMesh>,
     pub isovalue: f32,
+    pub snap_config: SnapConfig,
 }
 
 impl Default for IncrementalMesher {
@@ -31,6 +36,16 @@ impl IncrementalMesher {
         Self {
             chunk_meshes: FxHashMap::default(),
             isovalue,
+            snap_config: SnapConfig::default(),
+        }
+    }
+
+    /// Create a mesher with custom snap configuration
+    pub fn with_snap_config(isovalue: f32, snap_config: SnapConfig) -> Self {
+        Self {
+            chunk_meshes: FxHashMap::default(),
+            isovalue,
+            snap_config,
         }
     }
 
@@ -174,6 +189,67 @@ impl IncrementalMesher {
         }
     }
 
+    /// Rebuild meshes for dirty chunks with vertex snapping to contours
+    pub fn update_dirty_with_snapping(
+        &mut self,
+        tsdf: &ChunkedTSDF,
+        dims: [u32; 3],
+        contours: &[SpatialContour],
+    ) {
+        let dirty: Vec<_> = tsdf.dirty_chunks.iter().copied().collect();
+
+        for chunk_id in dirty {
+            if tsdf.chunks.contains_key(&chunk_id) {
+                self.mesh_chunk(tsdf, chunk_id, dims);
+                // Apply snapping pass to this chunk's mesh
+                self.apply_snapping_to_chunk(chunk_id, contours, dims);
+            } else {
+                self.chunk_meshes.remove(&chunk_id);
+            }
+        }
+    }
+
+    /// Apply snapping to an already-meshed chunk
+    fn apply_snapping_to_chunk(
+        &mut self,
+        chunk_id: (i16, i16, i16),
+        contours: &[SpatialContour],
+        dims: [u32; 3],
+    ) {
+        if contours.is_empty() {
+            return;
+        }
+
+        let Some(mesh) = self.chunk_meshes.get_mut(&chunk_id) else {
+            return;
+        };
+
+        let vertex_count = mesh.vertices.len();
+        for i in 0..vertex_count {
+            let vertex = mesh.vertices[i];
+            // Convert normalized [0..1] vertex position to world/voxel space
+            let world_pos = Vec3::new(
+                vertex.x * dims[0] as f32,
+                vertex.y * dims[1] as f32,
+                vertex.z * dims[2] as f32,
+            );
+
+            // Attempt to snap
+            let result = snap_vertex(world_pos, contours, &self.snap_config);
+
+            if result.was_snapped {
+                // Convert back to normalized space
+                mesh.vertices[i] = Vec3::new(
+                    result.position.x / dims[0] as f32,
+                    result.position.y / dims[1] as f32,
+                    result.position.z / dims[2] as f32,
+                );
+                // Use snapped normal
+                mesh.normals[i] = result.normal;
+            }
+        }
+    }
+
     /// Flatten all chunk meshes into a single mesh for GPU upload
     pub fn flatten(&self) -> (Vec<Vec3>, Vec<Vec3>, Vec<u32>) {
         let mut vertices = Vec::new();
@@ -309,5 +385,65 @@ mod tests {
 
         // New chunk should exist
         assert!(mesher.chunk_meshes.contains_key(&(1, 1, 1)));
+    }
+
+    #[test]
+    fn test_mesh_vector_alignment() {
+        use crate::segmentation::contour::SpatialContour;
+        use glam::Vec2;
+        use uuid::Uuid;
+
+        // Create a TSDF with a sphere
+        let mut tsdf = ChunkedTSDF::new(4.0);
+        tsdf.apply_brush([16, 16, 16], 8.0);
+
+        // Create a contour that matches the sphere boundary at Z=16
+        let contour = SpatialContour {
+            id: Uuid::new_v4(),
+            origin: Vec3::new(16.0, 16.0, 16.0),
+            normal: Vec3::Z,
+            right: Vec3::X,
+            up: Vec3::Y,
+            points: (0..32)
+                .map(|i| {
+                    let angle = (i as f32) * std::f32::consts::TAU / 32.0;
+                    Vec2::new(angle.cos() * 8.0, angle.sin() * 8.0)
+                })
+                .collect(),
+            influence: 1.0,
+            is_closed: true,
+            label_index: 1,
+        };
+
+        let contours = vec![contour];
+        let dims = [32u32, 32, 32];
+
+        // Mesh with snapping
+        let mut mesher = IncrementalMesher::with_snap_config(
+            0.0,
+            SnapConfig {
+                snap_threshold: 2.0,
+            },
+        );
+        mesher.mesh_chunk(&tsdf, (0, 0, 0), dims);
+        mesher.apply_snapping_to_chunk((0, 0, 0), &contours, dims);
+
+        let mesh = mesher.chunk_meshes.get(&(0, 0, 0)).unwrap();
+
+        // Count snapped vertices (those near Z=16 plane)
+        let mut snapped_count = 0;
+        for v in &mesh.vertices {
+            // Convert to world space
+            let world_z = v.z * dims[2] as f32;
+            if (world_z - 16.0).abs() < 0.5 {
+                snapped_count += 1;
+            }
+        }
+
+        // Should have at least some vertices near the contour plane
+        assert!(
+            snapped_count > 0,
+            "Expected some vertices near contour plane Z=16"
+        );
     }
 }

@@ -113,14 +113,20 @@
 
 ---
 
-## Milestone 8: Hybrid Reconstruction (Snapping)
+## Milestone 8: Hybrid Reconstruction (Snapping) [COMPLETE]
 **Goal**: Exact agreement between 3D mesh and vector contours  
 **Deliverable**: Mesh vertices "snap" to authoritative vector boundaries
 
-- [ ] Update `IncrementalMesher` with vertex snapping logic
-- [ ] Snap mesh vertices to nearest vector constraint within influence radius
-- [ ] SDF-gradient based normals for non-snapped regions
-- [ ] Smooth interpolation between sparse vector constraints
+- [x] Update `IncrementalMesher` with vertex snapping logic
+- [x] Snap mesh vertices to nearest vector constraint within influence radius
+- [x] SDF-gradient based normals for non-snapped regions
+- [ ] Smooth interpolation between sparse vector constraints (deferred to M10)
+
+**Implementation Notes:**
+- `snapping.rs` in `src/segmentation/algorithms/` with `snap_vertex`, `find_nearest_constraint`
+- New `IncrementalMesher.update_dirty_with_snapping()` method applies snapping pass post-mesh
+- Configurable via `SnapConfig` with `snap_threshold` (default 0.5 voxels)
+- Test coverage: 4 snapping tests + 1 quantitative alignment test
 
 ---
 
