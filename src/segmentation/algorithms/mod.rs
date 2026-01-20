@@ -1,3 +1,4 @@
+pub mod baking;
 pub mod handoff;
 pub mod incremental_mesher;
 pub mod marching_squares;

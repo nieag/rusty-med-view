@@ -70,14 +70,6 @@ fn extract_and_add(
     let ms = MarchingSquares::new(0.0); // Surface is at distance 0.0
     let raw_contours = ms.extract(&slice_values, (width as u32, height as u32), 1);
 
-    if !raw_contours.is_empty() {
-        println!(
-            "HANDOFF: Extracted {} contours for slice {}",
-            raw_contours.len(),
-            slice_idx
-        );
-    }
-
     for contour in raw_contours {
         if contour.points.len() < 3 {
             continue;

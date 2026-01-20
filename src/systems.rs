@@ -8,3 +8,6 @@ pub use input::*;
 pub use paint::*;
 pub use picking::*;
 pub use render_prep::*;
+
+use crate::app::components::*;
+

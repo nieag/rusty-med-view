@@ -266,7 +266,7 @@ impl ChunkedTSDF {
         }
     }
 
-    fn world_to_local(&self, x: i32, y: i32, z: i32) -> (i16, i16, i16, i32, i32, i32) {
+    pub fn world_to_local(&self, x: i32, y: i32, z: i32) -> (i16, i16, i16, i32, i32, i32) {
         let cx = (x >> 5) as i16; // x / 32
         let cy = (y >> 5) as i16;
         let cz = (z >> 5) as i16;

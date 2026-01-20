@@ -300,7 +300,9 @@ pub fn render_frame(
     // 0. Process interaction and updates once per frame, right before rendering
     systems::sys_handle_mouse_drag(world, entities);
     systems::sys_paint(world, entities, queue);
+
     crate::segmentation::sys_sync_labelmap_to_contours(world);
+    crate::segmentation::sys_sync_vector_to_tsdf(world);
     crate::segmentation::sys_sync_vector_to_contours(world);
     crate::segmentation::sys_sync_labelmap_to_mesh(device, queue, world);
 

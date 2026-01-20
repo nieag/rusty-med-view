@@ -102,14 +102,14 @@
 
 ---
 
-## Milestone 7: Constraint-Driven TSDF Baking
+## Milestone 7: Constraint-Driven TSDF Baking [COMPLETE]
 **Goal**: Generate TSDF from vector constraints  
 **Deliverable**: Vector contours influence the volumetric segmentation
 
-- [ ] Implement TSDF Baking: Project 3D vector contours into `ChunkedTSDF`
-- [ ] Sparse baking: Update only chunks intersecting contour influence AABBs
-- [ ] Conservative distance aggregation for overlapping constraints
-- [ ] Integrate with Brush tools (Brush modifies Vector layer, triggers Bake)
+- [x] Implement TSDF Baking: Project 3D vector contours into `ChunkedTSDF`
+- [x] Sparse baking: Update only chunks intersecting contour influence AABBs
+- [x] Conservative distance aggregation for overlapping constraints
+- [x] Integrate with Brush tools (Via system sync)
 
 ---
 

@@ -1,10 +1,32 @@
 use crate::app::components::{LabelmapData, Segmentation, ViewMode, VolumeData};
 use crate::segmentation::algorithms::surface_nets::DistanceSampler;
-use crate::segmentation::algorithms::{projection, MarchingSquares};
+use crate::segmentation::algorithms::{baking, projection, MarchingSquares};
 use crate::segmentation::contour::Contour;
 use crate::segmentation::mesh::GpuMeshResources;
+use crate::segmentation::ChunkedTSDF;
 use glam::Vec3;
 use hecs::World;
+
+/// System to synchronize Authoritative Vectors to TSDF (Baking)
+pub fn sys_sync_vector_to_tsdf(world: &mut World) {
+    for (_, seg) in world.query_mut::<&mut Segmentation>() {
+        if seg.vector_contours.dirty {
+            // println!("SYNC: Baking vectors to TSDF...");
+            // If TSDF is missing, create it
+            if seg.tsdf.is_none() {
+                 // We need a default truncation. 
+                 // Ideally this comes from config or is inferred. 
+                 // Using 4.0 (voxels) as a standard safe value.
+                 seg.tsdf = Some(ChunkedTSDF::new(4.0));
+            }
+
+            if let Some(ref mut tsdf) = seg.tsdf {
+                baking::bake_contours_to_tsdf(tsdf, &seg.vector_contours.contours);
+                seg.vector_contours.dirty = false;
+            }
+        }
+    }
+}
 
 /// System to synchronize Labelmap voxel data to 2D contours
 pub fn sys_sync_labelmap_to_contours(world: &mut World) {

@@ -52,9 +52,20 @@ pub struct ContourSet {
 }
 
 /// The authoritative vector layer for segmentation
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VectorContourSet {
     pub contours: Vec<SpatialContour>,
+    #[serde(skip)]
+    pub dirty: bool,
+}
+
+impl Default for VectorContourSet {
+    fn default() -> Self {
+        Self {
+            contours: Vec::new(),
+            dirty: false, // Default false, but usually set to true on load
+        }
+    }
 }
 
 impl VectorContourSet {
@@ -62,8 +73,13 @@ impl VectorContourSet {
         Self::default()
     }
 
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
     pub fn clear(&mut self) {
         self.contours.clear();
+        self.dirty = true;
     }
 }
 

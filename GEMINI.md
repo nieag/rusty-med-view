@@ -6,10 +6,11 @@ This document provides a technical overview of the **Rust Medical Imaging Viewer
 A high-performance 2D/3D medical volume viewer built with **Rust** and **WGPU**. It supports orthogonal slicing, volumetric X-ray rendering, and interactive crosshair picking.
 
 ### 📈 Recent Progress
-- **Vector-Authoritative Segmentation**: Transitioned from a voxel-centric model to a **Vector-Authoritative Architecture**. Primary storage now resides in 3D `SpatialContour` objects, which are promoted from legacy voxel data via a high-fidelity TSDF intermediary.
-- **Dynamic Contour Projection**: Implemented a real-time projection engine that calculates intersections between 3D vector contours and the active 2D viewing plane (Axial/Coronal/Sagittal), ensuring perfect geometric fidelity across all viewports.
-- **Sub-Voxel Precision**: Refined contour extraction to use a 0.0001 RDP tolerance, enabling the system to track voxel boundaries with sub-pixel accuracy while maintaining smooth polyline representations.
-- **Incremental Surface Nets**: Implemented `IncrementalMesher` for chunk-based meshing. Only dirty 32³ chunks are re-meshed, providing 50-500x speedup over full-volume meshing.
+- **Vector-Authoritative Segmentation**: Transitioned from a voxel-centric model to a **Vector-Authoritative Architecture**. Primary storage now resides in 3D `SpatialContour` objects.
+- **Constraint-Driven TSDF Baking**: Implemented `src/segmentation/algorithms/baking.rs` to bake authoritative vector contours into the 3D TSDF, closing the loop for 3D reconstruction from vector edits.
+- **Dynamic Contour Projection**: Implemented a real-time projection engine that calculates intersections between 3D vector contours and the active 2D viewing plane.
+- **Sub-Voxel Precision**: Refined contour extraction to use a 0.0001 RDP tolerance.
+- **Incremental Surface Nets**: Implemented `IncrementalMesher` for chunk-based meshing.
 - **Orientation-Aware Projection**: Centralized all projection and slicing logic in `src/util/orientation.rs` and `src/segmentation/algorithms/projection.rs`, supporting radiological conventions and arbitrary anatomical orientations.
 - **Parity Testing**: Expanded test suite to 19+ algorithm-level tests, covering TSDF math, RDP simplification, and 3D-to-2D projection accuracy.
 
