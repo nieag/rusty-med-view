@@ -169,6 +169,7 @@ pub enum EditorTool {
     Navigation,
     Brush,
     Eraser,
+    Polygon,
 }
 
 pub struct EditorState {
@@ -177,6 +178,7 @@ pub struct EditorState {
     pub brush_size: f32,
     pub active_label_index: u8,
     pub last_paint_voxel: Option<[u32; 3]>,
+    pub polygon_tool: crate::segmentation::PolygonTool,
 }
 
 impl Default for EditorState {
@@ -187,6 +189,7 @@ impl Default for EditorState {
             brush_size: 5.0,
             active_label_index: 1,
             last_paint_voxel: None,
+            polygon_tool: crate::segmentation::PolygonTool::new(),
         }
     }
 }

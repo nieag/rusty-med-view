@@ -62,6 +62,7 @@ pub fn draw_toolbar(
             ui.radio_value(&mut editor.active_tool, EditorTool::Navigation, "🖱 Nav");
             ui.radio_value(&mut editor.active_tool, EditorTool::Brush, "🖌 Brush");
             ui.radio_value(&mut editor.active_tool, EditorTool::Eraser, "⌫ Erase");
+            ui.radio_value(&mut editor.active_tool, EditorTool::Polygon, "⬡ Poly");
 
             if editor.active_layer.is_none() && editor.active_tool != EditorTool::Navigation {
                 editor.active_tool = EditorTool::Navigation;

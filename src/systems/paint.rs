@@ -1,5 +1,6 @@
 // src/systems/paint.rs
 use crate::components::*;
+use crate::segmentation::algorithms::{update_contours_in_region, PromotionConfig};
 use crate::systems::picking::get_voxel_at_mouse;
 use hecs::World;
 
@@ -154,6 +155,19 @@ pub fn sys_paint(world: &mut World, entities: &AppEntities, queue: &wgpu::Queue)
                                     height,
                                 );
                             }
+
+                            // 3. Live contour promotion: extract smooth contours from modified region
+                            let config = PromotionConfig::default();
+                            let spacing = [1.0, 1.0, 1.0]; // TODO: Get from VolumeData
+                            update_contours_in_region(
+                                &mut seg.vector_contours,
+                                tsdf,
+                                mode,
+                                aabb_min,
+                                aabb_max,
+                                spacing,
+                                &config,
+                            );
                         }
                     }
                 }
