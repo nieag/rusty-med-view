@@ -165,6 +165,7 @@ pub enum EditorTool {
     Navigation,
     Brush,
     Eraser,
+    ContourDraw,
 }
 
 pub struct EditorState {
