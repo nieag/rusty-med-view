@@ -1,6 +1,7 @@
 pub mod components;
 pub mod context;
 pub mod events;
+pub mod segment;
 
 use crate::app::components::*;
 use crate::app::context::RenderingContext;

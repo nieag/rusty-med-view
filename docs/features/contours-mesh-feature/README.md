@@ -1,31 +1,56 @@
-# Polymorph Segmentation Feature
+# Contour-Based Segmentation Feature
 
-Multi-representation segmentation system based on [PolySeg](https://github.com/PerkLab/PolySeg).
+**Status:** Planned
 
-## Design Documents
+## Overview
 
-| # | Doc | Focus |
-|---|-----|-------|
-| 00 | [polymorph-architecture](00-polymorph-architecture.md) | Core design: conversion graph, source switching |
-| 01 | [segment-model](01-segment-model.md) | `Segment` struct with lazy representations |
-| 02 | [labelmap-contour-convert](02-labelmap-contour-convert.md) | Marching Squares, rasterization |
-| 03 | [contour-rendering](03-contour-rendering.md) | SDF polyline shader |
-| 04 | [mesh-generation](04-mesh-generation.md) | Marching Cubes, slice extrusion |
-| 05 | [mesh-rendering](05-mesh-rendering.md) | WGPU mesh pipeline |
-| 06 | [contour-editing](06-contour-editing.md) | Interactive tools, source switching |
+This feature implements contour-based segmentation with sub-voxel precision, multi-axis editing, and high-quality 3D mesh rendering.
 
-## Conversion Graph
-
-```mermaid
-graph LR
-    L[Labelmap] <-->|02| C[Contours]
-    C <-->|04| M[Mesh]
-    L <-->|04| M
+**Architecture:**
 ```
+Contours (ground truth) → SDF (intermediate) → Mesh (3D display)
+                       ↘ Contour outlines (2D display)
+```
+
+## Key Design Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Ground truth | Contours | Sub-voxel precision, natural drawing interface |
+| Intermediate | SDF | Enables smooth mesh generation, handles multi-axis blending |
+| 3D Display | Triangle mesh | Proper lighting, industry standard |
+| 2D Display | Contour outlines | Lightweight, precision preserved |
+
+## Document Index
+
+| Document | Description |
+|----------|-------------|
+| [01-data-model.md](01-data-model.md) | Core data structures and APIs |
+| [02-contour-drawing.md](02-contour-drawing.md) | Freehand contour drawing tool |
+| [03-contour-rendering.md](03-contour-rendering.md) | 2D contour outline display |
+| [04-contour-to-sdf.md](04-contour-to-sdf.md) | SDF conversion with multi-axis support |
+| [05-marching-cubes.md](05-marching-cubes.md) | Mesh generation from SDF |
+| [06-mesh-rendering.md](06-mesh-rendering.md) | 3D mesh rendering pipeline |
+| [07-integration.md](07-integration.md) | End-to-end wiring and GUI |
 
 ## Implementation Order
 
 ```
-01 → 02 → 03 → 06  (contour path)
-   ↘ 04 → 05       (mesh path)
+Phase 1 (Data Model) → Phase 2 (Drawing) → Phase 3 (2D Render)
+                    ↘ Phase 4 (SDF) → Phase 5 (Mesh Gen) → Phase 6 (3D Render)
+                                                                    ↓
+                                                           Phase 7 (Integration)
 ```
+
+## Estimated Effort
+
+| Phase | Days |
+|-------|------|
+| 1. Data Model | 2 |
+| 2. Contour Drawing | 3 |
+| 3. 2D Rendering | 2 |
+| 4. Contour → SDF | 3 |
+| 5. Marching Cubes | 2 |
+| 6. Mesh Pipeline | 3 |
+| 7. Integration | 2 |
+| **Total** | **~17 days** |
