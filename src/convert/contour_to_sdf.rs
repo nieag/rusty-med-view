@@ -283,6 +283,8 @@ pub fn build_sdf_from_contours_fast(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::orientation::SlicePlane;
+
 
     // --- 2D Geometry Tests ---
 
