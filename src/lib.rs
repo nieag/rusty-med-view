@@ -1,6 +1,7 @@
 // src/lib.rs
 
 pub mod app;
+pub mod convert;
 pub mod gui;
 pub mod io;
 pub mod render;
