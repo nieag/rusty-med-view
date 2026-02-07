@@ -380,6 +380,11 @@ impl Segment {
         self.mesh_dirty = true;
     }
 
+    /// Alias for invalidate_caches
+    pub fn mark_dirty(&mut self) {
+        self.invalidate_caches();
+    }
+
     /// Check if segment has any contours
     pub fn has_contours(&self) -> bool {
         !self.contours.is_empty()
