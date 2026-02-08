@@ -4,8 +4,10 @@ use crate::gui::Gui;
 use crate::io::handlers;
 use crate::io::volume;
 use crate::overlay::OverlayManager;
+use crate::render::contour_pipeline::ContourPipeline;
 use crate::render::pipeline;
 use crate::render::protocols;
+use crate::systems::SegmentManager;
 use hecs::World;
 use std::sync::Arc;
 use winit::event_loop::EventLoopProxy;
@@ -36,6 +38,9 @@ pub struct RenderingContext {
     pub dummy_r8: (wgpu::Texture, wgpu::TextureView, wgpu::Sampler),
     pub default_lut: (wgpu::Texture, wgpu::TextureView),
     pub overlay_buffer: wgpu::Buffer,
+    
+    // Contour rendering pipeline
+    pub contour_pipeline: ContourPipeline,
 
     // Proxy for waking up the event loop from async tasks
     pub event_proxy: EventLoopProxy<AppEvent>,
@@ -151,6 +156,7 @@ impl RenderingContext {
         let windowing = world.spawn((VolumeWindowing::default(),));
         let annotations = world.spawn((AnnotationState::default(),));
         let overlay = world.spawn((OverlayManager::default(),));
+        let segments = world.spawn((SegmentManager::new(),));
 
         let entities = AppEntities {
             input,
@@ -162,6 +168,7 @@ impl RenderingContext {
             protocol,
             cursor,
             window_settings: settings_entity,
+            segments,
         };
 
         protocols::apply_protocol(&mut world, &entities, "Standard 2x2");
@@ -184,6 +191,9 @@ impl RenderingContext {
             None,
         );
 
+        // Create contour rendering pipeline
+        let contour_pipeline = ContourPipeline::new(&device, config.format);
+
         RenderingContext {
             window,
             surface,
@@ -203,6 +213,7 @@ impl RenderingContext {
             dummy_r8,
             default_lut,
             overlay_buffer,
+            contour_pipeline,
             event_proxy,
         }
     }

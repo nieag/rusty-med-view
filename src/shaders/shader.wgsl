@@ -60,7 +60,6 @@ struct Uniforms {
 const MAX_OVERLAY_PRIMITIVES: u32 = 64u;
 const PRIMITIVE_CIRCLE: u32 = 0u;
 const PRIMITIVE_RING: u32 = 1u;
-const PRIMITIVE_LINE: u32 = 2u;
 
 struct OverlayPrimitive {
     world_pos: vec4<f32>,     // xyz = position, w = unused
@@ -691,7 +690,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 final_color = vec4<f32>(mix(final_color.rgb, prim_color.rgb, alpha_ring * prim_color.a), 1.0);
             }
         }
-        // Line rendering would go here for PRIMITIVE_LINE
     }
     return final_color;
 }

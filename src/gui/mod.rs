@@ -1,6 +1,7 @@
 pub mod annotations;
 pub mod gizmo;
 pub mod overlays;
+pub mod segments;
 pub mod sidebar;
 pub mod toolbar;
 

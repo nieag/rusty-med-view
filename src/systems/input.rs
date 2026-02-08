@@ -1,6 +1,10 @@
 // src/systems/input.rs
 use crate::components::*;
 use crate::systems::picking::get_voxel_at_mouse;
+use crate::systems::segment_system::{
+    add_drawing_point, cancel_drawing, finish_drawing, is_drawing, start_drawing, SegmentManager,
+};
+use crate::util::orientation::SlicePlane;
 use glam::{Quat, Vec3};
 use hecs::World;
 use winit::event::{ElementState, MouseButton};
@@ -346,3 +350,160 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
         }
     }
 }
+
+// ============================================================================
+// Contour Drawing Input Handlers
+// ============================================================================
+
+/// Handle mouse button for contour drawing tool.
+/// Call this from sys_handle_mouse_button when ContourDraw tool is active.
+pub fn sys_handle_contour_mouse_button(
+    world: &mut World,
+    entities: &AppEntities,
+    button: MouseButton,
+    state: ElementState,
+) {
+    // Check if ContourDraw tool is active
+    let is_contour_tool = if let Ok(editor) = world.get::<&EditorState>(entities.editor) {
+        editor.active_tool == EditorTool::ContourDraw
+    } else {
+        false
+    };
+
+    if !is_contour_tool {
+        return;
+    }
+
+    // Get viewport and mouse info
+    let (active_vp, mouse_uv, egui_wants) = if let Ok(input) = world.get::<&InputState>(entities.input) {
+        (input.active_viewport, input.mouse_uv, input.egui_wants_input)
+    } else {
+        return;
+    };
+
+    if egui_wants {
+        return;
+    }
+
+    let avp = match active_vp {
+        Some(e) => e,
+        None => return,
+    };
+
+    // Only handle left button in 2D views
+    if button != MouseButton::Left {
+        return;
+    }
+
+    // Get viewport mode and volume info
+    let (view_mode, slice_index) = {
+        let vp = match world.get::<&Viewport>(avp) {
+            Ok(vp) => vp,
+            Err(_) => return,
+        };
+        
+        // Only work in 2D views
+        if vp.mode == ViewMode::ThreeD {
+            return;
+        }
+
+        let cursor_pos = if let Ok(t) = world.get::<&Transform>(entities.cursor) {
+            t.position
+        } else {
+            [0.5, 0.5, 0.5]
+        };
+
+        let dims = {
+            let mut d = [1u32, 1, 1];
+            for (_, vol) in world.query::<&VolumeData>().iter() {
+                d = vol.dimensions;
+            }
+            d
+        };
+
+        // Calculate slice index from cursor position
+        let (slice_plane, slice_idx) = match vp.mode {
+            ViewMode::Axial => (SlicePlane::Axial, (cursor_pos[2] * dims[2] as f32) as i32),
+            ViewMode::Coronal => (SlicePlane::Coronal, (cursor_pos[1] * dims[1] as f32) as i32),
+            ViewMode::Sagittal => (SlicePlane::Sagittal, (cursor_pos[0] * dims[0] as f32) as i32),
+            ViewMode::ThreeD => return,
+        };
+
+        (slice_plane, slice_idx)
+    };
+
+    if state == ElementState::Pressed {
+        // Start drawing
+        if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments) {
+            eprintln!("[CONTOUR DEBUG] Starting contour draw on {:?} slice {} at UV {:?}", view_mode, slice_index, mouse_uv);
+            start_drawing(&mut mgr, view_mode, slice_index, mouse_uv);
+        }
+    } else {
+        // Finish drawing
+        let (dims, spacing) = {
+            let mut d = [1u32, 1, 1];
+            let mut s = [1.0f32, 1.0, 1.0];
+            for (_, vol) in world.query::<&VolumeData>().iter() {
+                d = vol.dimensions;
+                s = vol.spacing;
+            }
+            (d, s)
+        };
+
+        if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments) {
+            let before_count = mgr.active_segment().map(|s| s.contours.count()).unwrap_or(0);
+            finish_drawing(&mut mgr, dims, spacing);
+            let after_count = mgr.active_segment().map(|s| s.contours.count()).unwrap_or(0);
+            eprintln!("[CONTOUR DEBUG] Finished drawing. Contour count: {} -> {}", before_count, after_count);
+        }
+    }
+}
+
+/// Handle mouse drag for contour drawing tool.
+/// Call this from sys_handle_mouse_drag when ContourDraw tool is active.
+pub fn sys_handle_contour_mouse_drag(world: &mut World, entities: &AppEntities) {
+    // Check if ContourDraw tool is active and drawing
+    let is_contour_tool = if let Ok(editor) = world.get::<&EditorState>(entities.editor) {
+        editor.active_tool == EditorTool::ContourDraw
+    } else {
+        false
+    };
+
+    if !is_contour_tool {
+        return;
+    }
+
+    // Check if we're actively drawing
+    let currently_drawing = if let Ok(mgr) = world.get::<&SegmentManager>(entities.segments) {
+        is_drawing(&mgr)
+    } else {
+        false
+    };
+
+    if !currently_drawing {
+        return;
+    }
+
+    // Get current mouse position
+    let mouse_uv = if let Ok(input) = world.get::<&InputState>(entities.input) {
+        if !input.is_dragging {
+            return;
+        }
+        input.mouse_uv
+    } else {
+        return;
+    };
+
+    // Add point
+    if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments) {
+        add_drawing_point(&mut mgr, mouse_uv);
+    }
+}
+
+/// Cancel current contour drawing (e.g., on Escape key).
+pub fn sys_cancel_contour_drawing(world: &mut World, entities: &AppEntities) {
+    if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments) {
+        cancel_drawing(&mut mgr);
+    }
+}
+

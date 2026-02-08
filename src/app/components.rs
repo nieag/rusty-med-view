@@ -270,6 +270,7 @@ pub struct AppEntities {
     pub protocol: hecs::Entity,
     pub cursor: hecs::Entity,
     pub window_settings: hecs::Entity,
+    pub segments: hecs::Entity,
 }
 
 #[cfg(test)]

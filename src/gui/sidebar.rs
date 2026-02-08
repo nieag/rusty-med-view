@@ -155,6 +155,13 @@ pub fn draw_sidebar(
 
     ui.separator();
 
+    // --- Contour Segments ---
+    ui.collapsing("📐 Contour Segments", |ui| {
+        super::segments::draw_segment_panel(ui, world, entities);
+    });
+
+    ui.separator();
+
     // --- Annotations ---
     ui.collapsing("📍 Annotations", |ui| {
         if ui.button("➕ Add at Cursor").clicked() {

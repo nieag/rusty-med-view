@@ -62,8 +62,12 @@ pub fn draw_toolbar(
             ui.radio_value(&mut editor.active_tool, EditorTool::Navigation, "🖱 Nav");
             ui.radio_value(&mut editor.active_tool, EditorTool::Brush, "🖌 Brush");
             ui.radio_value(&mut editor.active_tool, EditorTool::Eraser, "⌫ Erase");
+            ui.radio_value(&mut editor.active_tool, EditorTool::ContourDraw, "✏ Contour");
 
-            if editor.active_layer.is_none() && editor.active_tool != EditorTool::Navigation {
+            // Brush/Eraser require active layer, ContourDraw doesn't
+            if editor.active_layer.is_none() 
+                && (editor.active_tool == EditorTool::Brush || editor.active_tool == EditorTool::Eraser)
+            {
                 editor.active_tool = EditorTool::Navigation;
             }
         }

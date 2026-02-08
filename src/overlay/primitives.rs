@@ -20,13 +20,11 @@ pub struct OverlayPrimitive {
     pub color: [f32; 4],
     /// Parameters: [radius, thickness, viewport_mask, kind]
     /// - radius: size in world units (0.0-1.0 range)
-    /// - thickness: for rings/lines (in world units)
+    /// - thickness: for rings (in world units)
     /// - viewport_mask: bitfield (1=3D, 2=Axial, 4=Coronal, 8=Sagittal, 15=all)
     /// - kind: OverlayPrimitiveKind as f32
     pub params: [f32; 4],
-    /// Secondary position for lines: [x, y, z, flags]
-    /// - For Line: end point
-    /// - flags: reserved
+    /// Secondary position (reserved for future use)
     pub secondary_pos: [f32; 4],
 }
 
@@ -67,3 +65,5 @@ impl OverlayPrimitive {
         }
     }
 }
+
+

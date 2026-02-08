@@ -5,8 +5,10 @@
 use crate::components::*;
 use crate::gui;
 use crate::overlay::OverlayPrimitive;
+use crate::render::contour_pipeline::{ContourLineGpu, ContourPipeline, ContourUniforms};
 use crate::render::geometry;
 use crate::systems;
+use crate::systems::segment_system::SegmentManager;
 use hecs::World;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -278,6 +280,7 @@ pub fn render_frame(
     index_buffer: &wgpu::Buffer,
     num_indices: u32,
     overlay_buffer: &wgpu::Buffer,
+    contour_pipeline: &mut ContourPipeline,
     world: &mut World,
     entities: &AppEntities,
     gui: &mut gui::Gui,
@@ -297,6 +300,12 @@ pub fn render_frame(
 
     // 2. Sync annotations to overlay primitives (using the potentially updated ECS state)
     systems::sys_sync_annotations_to_overlay(world, entities);
+
+
+    // 2c. Rebuild overlay primitives after all syncs
+    if let Ok(mut overlay) = world.get::<&mut crate::overlay::OverlayManager>(entities.overlay) {
+        overlay.rebuild_primitives();
+    }
 
     // 3. Get overlay data for GPU buffer
     let (overlay_bytes, overlay_count, dragging_idx, overlay_mouse_uv) =
@@ -370,6 +379,167 @@ pub fn render_frame(
                     render_pass.set_bind_group(0, bg, &[*u_idx * 256]);
                     render_pass.draw_indexed(0..num_indices, 0, 0..1);
                 }
+            }
+        }
+    }
+
+    // --- Contour Rendering Pass ---
+    // Collect contour segments from SegmentManager and render for each 2D viewport
+    {
+        // Gather cursor position and volume info for slice calculation
+        let cursor_pos = world
+            .get::<&Transform>(entities.cursor)
+            .map(|t| t.position)
+            .unwrap_or([0.5, 0.5, 0.5]);
+        
+        let mut volume_dims = [0u32; 3];
+        let mut volume_spacing = [1.0f32; 3];
+        for (_, vol) in world.query::<&VolumeData>().iter() {
+            volume_dims = vol.dimensions;
+            volume_spacing = vol.spacing;
+        }
+        
+        if volume_dims != [0, 0, 0] {
+            // Collect contour lines from SegmentManager
+            let mut gpu_lines: Vec<ContourLineGpu> = Vec::new();
+            
+            if let Ok(seg_mgr) = world.get::<&SegmentManager>(entities.segments) {
+                for segment in seg_mgr.segments.iter() {
+                    if !segment.visible {
+                        continue;
+                    }
+                    let color = segment.color;
+                    
+                    // Helper to normalize voxel coords to 0-1 UV
+                    let normalize = |p: [f32; 3]| -> [f32; 3] {
+                        [
+                            p[0] / volume_dims[0] as f32,
+                            p[1] / volume_dims[1] as f32,
+                            p[2] / volume_dims[2] as f32,
+                        ]
+                    };
+                    
+                    // Helper to add contours from a slice plane HashMap
+                    let mut add_contours_from_map = |map: &std::collections::HashMap<i32, Vec<crate::app::segment::PlaneContour>>, view_mode: u32| {
+                        for (slice_idx, contours) in map.iter() {
+                            for contour in contours {
+                                // Create line segments from consecutive points
+                                for i in 0..contour.points.len().saturating_sub(1) {
+                                    let p0 = normalize(contour.points[i]);
+                                    let p1 = normalize(contour.points[i + 1]);
+                                    gpu_lines.push(ContourLineGpu::new(
+                                        p0,
+                                        p1,
+                                        color,
+                                        view_mode,
+                                        *slice_idx,
+                                    ));
+                                }
+                                
+                                // Close the contour if needed
+                                if contour.points.len() >= 3 && contour.is_closed {
+                                    let p0 = normalize(contour.points[contour.points.len() - 1]);
+                                    let p1 = normalize(contour.points[0]);
+                                    gpu_lines.push(ContourLineGpu::new(
+                                        p0,
+                                        p1,
+                                        color,
+                                        view_mode,
+                                        *slice_idx,
+                                    ));
+                                }
+                            }
+                        }
+                    };
+                    
+                    // Add contours from all three axis-aligned slice planes
+                    add_contours_from_map(&segment.contours.axial, 1);   // Axial
+                    add_contours_from_map(&segment.contours.coronal, 2); // Coronal
+                    add_contours_from_map(&segment.contours.sagittal, 3); // Sagittal
+                }
+            }
+            
+            // DEBUG: Log contour collection stats
+            if !gpu_lines.is_empty() {
+                eprintln!("[CONTOUR DEBUG] Collected {} GPU lines for rendering", gpu_lines.len());
+                // Print first few lines for debugging
+                for (i, line) in gpu_lines.iter().take(3).enumerate() {
+                    eprintln!("[CONTOUR DEBUG]   Line {}: view_mode={}, slice={}, p0={:?}, p1={:?}", 
+                        i, line.plane_info[0] as u32, line.plane_info[1] as i32, line.p0, line.p1);
+                }
+            }
+            
+            // Update contour pipeline with collected lines
+            contour_pipeline.update_lines(queue, &gpu_lines);
+            
+            // Render contours for each 2D viewport
+            for (_e, rect, u_idx) in &viewports {
+                // Skip 3D viewport (view_mode 0)
+                let view_mode = match u_idx {
+                    0 => continue, // 3D - skip for now
+                    1 => 1u32, // Axial
+                    2 => 2u32, // Coronal
+                    3 => 3u32, // Sagittal
+                    _ => continue,
+                };
+                
+                // Calculate current slice index for this view
+                let current_slice = match view_mode {
+                    1 => (cursor_pos[2] * volume_dims[2] as f32) as i32, // Axial: Z slice
+                    2 => (cursor_pos[1] * volume_dims[1] as f32) as i32, // Coronal: Y slice
+                    3 => (cursor_pos[0] * volume_dims[0] as f32) as i32, // Sagittal: X slice
+                    _ => 0,
+                };
+                
+                // Get view state for zoom/pan
+                let (zoom, pan, pivot) = world
+                    .get::<&ViewportState>(*_e)
+                    .map(|vs| (vs.zoom, vs.pan, vs.pivot))
+                    .unwrap_or((1.0, [0.0, 0.0], [0.5, 0.5]));
+                
+                let uniforms = ContourUniforms {
+                    zoom,
+                    pan,
+                    _pad0: 0.0,
+                    pivot,
+                    view_mode,
+                    _pad1: 0,
+                    resolution: [rect[2], rect[3]],
+                    _pad2: [0.0; 2],
+                    volume_dims,
+                    _pad3: 0,
+                    volume_spacing,
+                    current_slice,
+                    _padding: [0.0; 4],
+                };
+                
+                // DEBUG: Log rendering info
+                if contour_pipeline.line_count > 0 {
+                    eprintln!("[CONTOUR RENDER] view_mode={}, current_slice={}, line_count={}, rect={:?}",
+                        view_mode, current_slice, contour_pipeline.line_count, rect);
+                }
+                
+                contour_pipeline.update_uniforms(queue, &uniforms);
+                
+                // Create a separate render pass for contours
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Contour Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load, // Preserve existing content
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                
+                pass.set_viewport(rect[0], rect[1], rect[2], rect[3], 0.0, 1.0);
+                contour_pipeline.render(&mut pass);
             }
         }
     }

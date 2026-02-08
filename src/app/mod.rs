@@ -98,10 +98,13 @@ impl ApplicationHandler<AppEvent> for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::CursorMoved { position, .. } => {
                 systems::sys_update_mouse(&mut ctx.world, &ctx.entities, position.x, position.y);
+                systems::sys_handle_mouse_drag(&mut ctx.world, &ctx.entities);
+                systems::sys_handle_contour_mouse_drag(&mut ctx.world, &ctx.entities);
                 ctx.window.request_redraw();
             }
             WindowEvent::MouseInput { button, state, .. } => {
                 systems::sys_handle_mouse_button(&mut ctx.world, &ctx.entities, button, state);
+                systems::sys_handle_contour_mouse_button(&mut ctx.world, &ctx.entities, button, state);
                 ctx.window.request_redraw();
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -144,6 +147,7 @@ impl ApplicationHandler<AppEvent> for App {
                     &ctx.index_buffer,
                     ctx.num_indices,
                     &ctx.overlay_buffer,
+                    &mut ctx.contour_pipeline,
                     &mut ctx.world,
                     &ctx.entities,
                     &mut ctx.gui,
