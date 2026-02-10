@@ -375,11 +375,16 @@ pub fn sys_handle_contour_mouse_button(
     }
 
     // Get viewport and mouse info
-    let (active_vp, mouse_uv, egui_wants) = if let Ok(input) = world.get::<&InputState>(entities.input) {
-        (input.active_viewport, input.mouse_uv, input.egui_wants_input)
-    } else {
-        return;
-    };
+    let (active_vp, mouse_uv, egui_wants) =
+        if let Ok(input) = world.get::<&InputState>(entities.input) {
+            (
+                input.active_viewport,
+                input.mouse_uv,
+                input.egui_wants_input,
+            )
+        } else {
+            return;
+        };
 
     if egui_wants {
         return;
@@ -395,13 +400,16 @@ pub fn sys_handle_contour_mouse_button(
         return;
     }
 
-    // Get viewport mode and volume info
-    let (view_mode, slice_index) = {
-        let vp = match world.get::<&Viewport>(avp) {
-            Ok(vp) => vp,
-            Err(_) => return,
+    // Get viewport mode, volume info, and viewport state for projection (Fix zoom/pan offset)
+    let (view_mode, slice_index, compensated_uv) = {
+        let (vp, vs) = match (
+            world.get::<&Viewport>(avp),
+            world.get::<&ViewportState>(avp),
+        ) {
+            (Ok(vp), Ok(vs)) => (vp, vs),
+            _ => return,
         };
-        
+
         // Only work in 2D views
         if vp.mode == ViewMode::ThreeD {
             return;
@@ -413,32 +421,53 @@ pub fn sys_handle_contour_mouse_button(
             [0.5, 0.5, 0.5]
         };
 
-        let dims = {
+        let (vol_aspects, dims) = {
             let mut d = [1u32, 1, 1];
+            let mut a = [1.0f32, 1.0, 1.0];
             for (_, vol) in world.query::<&VolumeData>().iter() {
                 d = vol.dimensions;
+                a = vol.aspect_ratios();
             }
-            d
+            (a, d)
         };
 
-        // Calculate slice index from cursor position
-        let (slice_plane, slice_idx) = match vp.mode {
-            ViewMode::Axial => (SlicePlane::Axial, (cursor_pos[2] * dims[2] as f32) as i32),
-            ViewMode::Coronal => (SlicePlane::Coronal, (cursor_pos[1] * dims[1] as f32) as i32),
-            ViewMode::Sagittal => (SlicePlane::Sagittal, (cursor_pos[0] * dims[0] as f32) as i32),
+        // Aspect and zoom/pan compensation math (mirrors picking.rs)
+        let screen_aspect = if vp.rect[3] > 0.0 {
+            vp.rect[2] / vp.rect[3]
+        } else {
+            1.0
+        };
+        let slice_plane = match vp.mode {
+            ViewMode::Axial => SlicePlane::Axial,
+            ViewMode::Coronal => SlicePlane::Coronal,
+            ViewMode::Sagittal => SlicePlane::Sagittal,
+            ViewMode::ThreeD => return,
+        };
+        let slice_aspect = slice_plane.slice_aspect(vol_aspects);
+        let k = screen_aspect / slice_aspect;
+
+        let comp_uv = [
+            ((mouse_uv[0] - 0.5) * k) / vs.zoom + 0.5 + vs.pan[0],
+            (mouse_uv[1] - 0.5) / vs.zoom + 0.5 + vs.pan[1],
+        ];
+
+        let slice_idx = match vp.mode {
+            ViewMode::Axial => (cursor_pos[2] * dims[2] as f32) as i32,
+            ViewMode::Coronal => (cursor_pos[1] * dims[1] as f32) as i32,
+            ViewMode::Sagittal => (cursor_pos[0] * dims[0] as f32) as i32,
             ViewMode::ThreeD => return,
         };
 
-        (slice_plane, slice_idx)
+        (slice_plane, slice_idx, comp_uv)
     };
 
     if state == ElementState::Pressed {
         // Start drawing
         if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments) {
-            eprintln!("[CONTOUR DEBUG] Starting contour draw on {:?} slice {} at UV {:?}", view_mode, slice_index, mouse_uv);
-            start_drawing(&mut mgr, view_mode, slice_index, mouse_uv);
+            start_drawing(&mut mgr, view_mode, slice_index, compensated_uv);
         }
     } else {
+        // ... (rest of the function remains the same)
         // Finish drawing
         let (dims, spacing) = {
             let mut d = [1u32, 1, 1];
@@ -451,10 +480,7 @@ pub fn sys_handle_contour_mouse_button(
         };
 
         if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments) {
-            let before_count = mgr.active_segment().map(|s| s.contours.count()).unwrap_or(0);
             finish_drawing(&mut mgr, dims, spacing);
-            let after_count = mgr.active_segment().map(|s| s.contours.count()).unwrap_or(0);
-            eprintln!("[CONTOUR DEBUG] Finished drawing. Contour count: {} -> {}", before_count, after_count);
         }
     }
 }
@@ -484,19 +510,55 @@ pub fn sys_handle_contour_mouse_drag(world: &mut World, entities: &AppEntities) 
         return;
     }
 
-    // Get current mouse position
-    let mouse_uv = if let Ok(input) = world.get::<&InputState>(entities.input) {
+    // Get current mouse position and viewport state for compensation
+    let compensated_uv = if let Ok(input) = world.get::<&InputState>(entities.input) {
         if !input.is_dragging {
             return;
         }
-        input.mouse_uv
+
+        // Compute compensation if possible
+        if let Some(avp) = input.active_viewport {
+            if let (Ok(vp), Ok(vs)) = (
+                world.get::<&Viewport>(avp),
+                world.get::<&ViewportState>(avp),
+            ) {
+                let vol_aspects = {
+                    let mut a = [1.0f32, 1.0, 1.0];
+                    for (_, vol) in world.query::<&VolumeData>().iter() {
+                        a = vol.aspect_ratios();
+                    }
+                    a
+                };
+                let screen_aspect = if vp.rect[3] > 0.0 {
+                    vp.rect[2] / vp.rect[3]
+                } else {
+                    1.0
+                };
+                let slice_plane = SlicePlane::from_mode(vp.mode);
+
+                if let Some(plane) = slice_plane {
+                    let slice_aspect = plane.slice_aspect(vol_aspects);
+                    let k = screen_aspect / slice_aspect;
+                    [
+                        ((input.mouse_uv[0] - 0.5) * k) / vs.zoom + 0.5 + vs.pan[0],
+                        (input.mouse_uv[1] - 0.5) / vs.zoom + 0.5 + vs.pan[1],
+                    ]
+                } else {
+                    input.mouse_uv
+                }
+            } else {
+                input.mouse_uv
+            }
+        } else {
+            input.mouse_uv
+        }
     } else {
         return;
     };
 
     // Add point
     if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments) {
-        add_drawing_point(&mut mgr, mouse_uv);
+        add_drawing_point(&mut mgr, compensated_uv);
     }
 }
 
@@ -506,4 +568,3 @@ pub fn sys_cancel_contour_drawing(world: &mut World, entities: &AppEntities) {
         cancel_drawing(&mut mgr);
     }
 }
-

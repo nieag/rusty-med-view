@@ -35,16 +35,17 @@ impl ContourLineGpu {
 }
 
 /// GPU-compatible uniform buffer for contour rendering.
-/// MUST match the layout in contour.wgsl exactly!
+/// Layout MUST match contour.wgsl exactly!
+/// WGSL vec2 has 8-byte alignment, vec3 has 16-byte alignment.
 /// Total size: 96 bytes
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct ContourUniforms {
     /// Zoom level (offset 0)
     pub zoom: f32,
-    /// Pan offset (offset 4) - packed with zoom
+    pub _pad0: f32, // offset 4: pad so pan starts at offset 8 (vec2 alignment)
+    /// Pan offset (offset 8)
     pub pan: [f32; 2],
-    pub _pad0: f32, // align to 16 bytes
     /// Zoom pivot (offset 16)
     pub pivot: [f32; 2],
     /// View mode (0=3D, 1=Axial, 2=Coronal, 3=Sagittal) (offset 24)
@@ -64,15 +65,18 @@ pub struct ContourUniforms {
     pub _padding: [f32; 4], // 16 bytes to reach 96 total
 }
 
-
 const MAX_CONTOUR_LINES: usize = 4096;
 
 /// Resources for contour rendering.
+/// Supports up to 4 separate view modes (3D, Axial, Coronal, Sagittal)
+/// each with its own uniform buffer to avoid collisions.
 pub struct ContourPipeline {
     pub pipeline: wgpu::RenderPipeline,
     pub bind_group_layout: wgpu::BindGroupLayout,
-    pub bind_group: wgpu::BindGroup,
-    pub uniform_buffer: wgpu::Buffer,
+    /// One bind group per view mode
+    pub bind_groups: [wgpu::BindGroup; 4],
+    /// One uniform buffer per view mode
+    pub uniform_buffers: [wgpu::Buffer; 4],
     pub line_buffer: wgpu::Buffer,
     pub line_count: u32,
 }
@@ -87,13 +91,17 @@ impl ContourPipeline {
             ))),
         });
 
-        // Create uniform buffer
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Contour Uniforms"),
-            size: std::mem::size_of::<ContourUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        // Create 4 uniform buffers, one for each potential view_mode (0..4)
+        let mut uniform_buffers = Vec::with_capacity(4);
+        for i in 0..4 {
+            let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&format!("Contour Uniforms {}", i)),
+                size: std::mem::size_of::<ContourUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            uniform_buffers.push(uniform_buffer);
+        }
 
         // Create line storage buffer
         let line_buffer_size = (std::mem::size_of::<ContourLineGpu>() * MAX_CONTOUR_LINES) as u64;
@@ -133,21 +141,32 @@ impl ContourPipeline {
             ],
         });
 
-        // Create bind group
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Contour Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: line_buffer.as_entire_binding(),
-                },
-            ],
-        });
+        // Create 4 bind groups
+        let mut bind_groups = Vec::with_capacity(4);
+        for i in 0..4 {
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&format!("Contour Bind Group {}", i)),
+                layout: &bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform_buffers[i].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: line_buffer.as_entire_binding(),
+                    },
+                ],
+            });
+            bind_groups.push(bind_group);
+        }
+
+        let uniform_buffers: [wgpu::Buffer; 4] = uniform_buffers
+            .try_into()
+            .unwrap_or_else(|_| panic!("Failed to create 4 uniform buffers"));
+        let bind_groups: [wgpu::BindGroup; 4] = bind_groups
+            .try_into()
+            .unwrap_or_else(|_| panic!("Failed to create 4 bind groups"));
 
         // Create pipeline layout
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -194,8 +213,8 @@ impl ContourPipeline {
         Self {
             pipeline,
             bind_group_layout,
-            bind_group,
-            uniform_buffer,
+            bind_groups,
+            uniform_buffers,
             line_buffer,
             line_count: 0,
         }
@@ -210,18 +229,30 @@ impl ContourPipeline {
     }
 
     /// Update uniforms for a specific viewport.
-    pub fn update_uniforms(&self, queue: &wgpu::Queue, uniforms: &ContourUniforms) {
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[*uniforms]));
+    pub fn update_uniforms(&self, queue: &wgpu::Queue, uniforms: &ContourUniforms, view_mode: u32) {
+        let index = view_mode as usize;
+        if index < self.uniform_buffers.len() {
+            queue.write_buffer(
+                &self.uniform_buffers[index],
+                0,
+                bytemuck::cast_slice(&[*uniforms]),
+            );
+        }
     }
 
     /// Render contour lines for the given viewport.
-    pub fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>) {
+    pub fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>, view_mode: u32) {
         if self.line_count == 0 {
             return;
         }
-        
+
+        let index = view_mode as usize;
+        if index >= self.bind_groups.len() {
+            return;
+        }
+
         render_pass.set_pipeline(&self.pipeline);
-        render_pass.set_bind_group(0, &self.bind_group, &[]);
+        render_pass.set_bind_group(0, &self.bind_groups[index], &[]);
         // 4 vertices per line (triangle strip quad), line_count instances
         render_pass.draw(0..4, 0..self.line_count);
     }

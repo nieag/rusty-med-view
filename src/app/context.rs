@@ -38,7 +38,7 @@ pub struct RenderingContext {
     pub dummy_r8: (wgpu::Texture, wgpu::TextureView, wgpu::Sampler),
     pub default_lut: (wgpu::Texture, wgpu::TextureView),
     pub overlay_buffer: wgpu::Buffer,
-    
+
     // Contour rendering pipeline
     pub contour_pipeline: ContourPipeline,
 
@@ -156,7 +156,9 @@ impl RenderingContext {
         let windowing = world.spawn((VolumeWindowing::default(),));
         let annotations = world.spawn((AnnotationState::default(),));
         let overlay = world.spawn((OverlayManager::default(),));
-        let segments = world.spawn((SegmentManager::new(),));
+        let mut segment_manager = SegmentManager::new();
+        segment_manager.add_segment("Segment 1", [1.0, 0.0, 0.0, 1.0]); // Red
+        let segments = world.spawn((segment_manager,));
 
         let entities = AppEntities {
             input,

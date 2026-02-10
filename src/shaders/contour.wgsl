@@ -1,134 +1,133 @@
-// Contour Line Shader
-// Renders 2D line segments for contour visualization
-// Uses instancing - each instance is a line segment
+// contour.wgsl — BASELINE: exact copy of Step 1 that worked
+// Raw UV → clip space. No projection. No filtering.
 
 struct Uniforms {
-    // View transform
     zoom: f32,
-    pan: vec2<f32>,
-    pivot: vec2<f32>,
-    
-    // Viewport info
-    view_mode: u32,     // 0=3D, 1=Axial, 2=Coronal, 3=Sagittal
-    resolution: vec2<f32>,
-    
-    // Volume info
-    volume_dims: vec3<u32>,
-    volume_spacing: vec3<f32>,
-    
-    // Slice info
-    current_slice: i32,  // Current slice index for this view mode
-    
-    _padding: vec3<f32>,
+    _pad0: f32,
+    pan_x: f32,
+    pan_y: f32,
+    pivot_x: f32,
+    pivot_y: f32,
+    view_mode: u32,
+    _pad1: u32,
+    res_x: f32,
+    res_y: f32,
+    _pad2a: f32,
+    _pad2b: f32,
+    dim_x: u32,
+    dim_y: u32,
+    dim_z: u32,
+    _pad3: u32,
+    sp_x: f32,
+    sp_y: f32,
+    sp_z: f32,
+    current_slice: i32,
 }
 
 struct ContourLine {
-    // Start point (in volume UV coordinates 0-1)
     p0: vec3<f32>,
     _pad0: f32,
-    // End point (in volume UV coordinates 0-1)
     p1: vec3<f32>,
     _pad1: f32,
-    // Color RGBA
     color: vec4<f32>,
-    // Plane info: x=view_mode (1=axial,2=coronal,3=sagittal), y=slice_index, z=_pad, w=_pad
-    plane_info: vec4<f32>,
+    plane_info: vec4<f32>, // x: view_mode, y: slice, z/w: unused
 }
 
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var<storage, read> lines: array<ContourLine>;
-
-struct VertexInput {
-    @builtin(vertex_index) vertex_index: u32,
-    @builtin(instance_index) instance_index: u32,
-}
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
 }
 
-// Transform volume UV to screen UV for 2D views
-// This is the INVERSE of the main shader's screen-to-volume transform
-fn volume_to_screen(pos: vec3<f32>, view_mode: u32) -> vec2<f32> {
-    var volume_uv: vec2<f32>;
-    
-    if view_mode == 1u { // Axial
-        // Radiological: flip X for right-on-left
-        volume_uv = vec2<f32>(1.0 - pos.x, 1.0 - pos.y);
-    } else if view_mode == 2u { // Coronal
-        volume_uv = vec2<f32>(1.0 - pos.x, 1.0 - pos.z);
-    } else { // Sagittal
-        volume_uv = vec2<f32>(1.0 - pos.y, 1.0 - pos.z);
+// Project volume UV (0-1) to screen UV (0-1).
+// Inverse of main shader's screen→volume transform.
+fn volume_to_screen(vol: vec3<f32>) -> vec2<f32> {
+    // Step 1: Radiological flip — volume UV → "zoomed" UV
+    var zoomed: vec2<f32>;
+    if u.view_mode == 1u {        // Axial (XY)
+        zoomed = vec2<f32>(1.0 - vol.x, 1.0 - vol.y);
+    } else if u.view_mode == 2u { // Coronal (XZ)
+        zoomed = vec2<f32>(1.0 - vol.x, 1.0 - vol.z);
+    } else {                       // Sagittal (YZ)
+        zoomed = vec2<f32>(1.0 - vol.y, 1.0 - vol.z);
     }
-    
-    // Calculate aspect correction K (same as main shader)
-    let dims = vec3<f32>(uniforms.volume_dims);
-    let spacing = uniforms.volume_spacing;
+
+    // Step 2: Aspect correction K
+    let dx = max(f32(u.dim_x), 1.0) * max(u.sp_x, 0.001);
+    let dy = max(f32(u.dim_y), 1.0) * max(u.sp_y, 0.001);
+    let dz = max(f32(u.dim_z), 1.0) * max(u.sp_z, 0.001);
+
     var slice_aspect = 1.0;
-    if view_mode == 1u {
-        slice_aspect = (dims.x * spacing.x) / (dims.y * spacing.y);
-    } else if view_mode == 2u {
-        slice_aspect = (dims.x * spacing.x) / (dims.z * spacing.z);
+    if u.view_mode == 1u {
+        slice_aspect = dx / dy;
+    } else if u.view_mode == 2u {
+        slice_aspect = dx / dz;
     } else {
-        slice_aspect = (dims.y * spacing.y) / (dims.z * spacing.z);
+        slice_aspect = dy / dz;
     }
-    
-    let screen_aspect = uniforms.resolution.x / uniforms.resolution.y;
+    let screen_aspect = u.res_x / max(u.res_y, 1.0);
     let k = screen_aspect / slice_aspect;
-    
-    let zoom = uniforms.zoom;
-    let pan = uniforms.pan;
-    let pivot = vec2<f32>(0.5, 0.5); // Match main shader's forced center pivot
-    
-    // Main shader: screen_uv -> volume_uv
-    //   centered_uv = (screen_uv - pivot) * vec2(k, 1.0)
-    //   volume_uv = centered_uv / zoom + pivot + pan
-    //
-    // Inverse: volume_uv -> screen_uv
-    //   centered_uv = (volume_uv - pivot - pan) * zoom
-    //   screen_uv = centered_uv / vec2(k, 1.0) + pivot
-    
-    let centered = (volume_uv - pivot - pan) * zoom;
-    let screen_uv = centered / vec2<f32>(k, 1.0) + pivot;
-    
+
+    // Step 3: Apply inverse zoom+pan
+    let pivot = vec2<f32>(0.5, 0.5);
+    let pan = vec2<f32>(u.pan_x, u.pan_y);
+    let rel = (zoomed - pivot - pan) * u.zoom;
+    let screen_uv = rel / vec2<f32>(k, 1.0) + pivot;
     return screen_uv;
 }
 
 @vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
+fn vs_main(
+    @builtin(vertex_index) vid: u32,
+    @builtin(instance_index) iid: u32,
+) -> VertexOutput {
     var out: VertexOutput;
-    
-    let line = lines[in.instance_index];
-    
-    // Select endpoint based on vertex index (0,1 = p0, 2,3 = p1)
-    var pos: vec3<f32>;
-    if in.vertex_index < 2u {
-        pos = line.p0;
-    } else {
-        pos = line.p1;
+    let line = lines[iid];
+
+    // Step 1: Slice & View Mode Filtering
+    // plane_info.x = view_mode, plane_info.y = slice
+    if u32(line.plane_info.x) != u.view_mode || i32(line.plane_info.y) != u.current_slice {
+        out.clip_position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return out;
     }
-    
-    // Apply radiological flip: volume UV (0-1) -> screen UV with flip
-    // Radiological: patient right on screen left
-    let flipped_pos = vec2<f32>(1.0 - pos.x, 1.0 - pos.y);
-    
-    // Convert to clip space (-1 to 1)
-    let clip = flipped_pos * 2.0 - 1.0;
-    
-    // Calculate line direction for thickness
-    let p0_flip = vec2<f32>(1.0 - line.p0.x, 1.0 - line.p0.y);
-    let p1_flip = vec2<f32>(1.0 - line.p1.x, 1.0 - line.p1.y);
-    let line_dir = normalize(p1_flip - p0_flip);
-    let perp = vec2<f32>(-line_dir.y, line_dir.x);
-    
-    // Offset for line thickness (in clip space units)
-    let offset_dir = select(-1.0, 1.0, in.vertex_index % 2u == 0u);
-    let thickness = 0.004; // ~2 pixels
-    
-    out.clip_position = vec4<f32>(clip + perp * thickness * offset_dir, 0.0, 1.0);
-    out.color = vec4<f32>(1.0, 0.0, 1.0, 1.0); // MAGENTA for now
-    
+
+    // Select endpoint: 0,1 = p0; 2,3 = p1
+    var uv: vec2<f32>;
+    // Select endpoint (0,1 → p0; 2,3 → p1)
+    var vol_pos: vec3<f32>;
+    if vid < 2u {
+        vol_pos = line.p0;
+    } else {
+        vol_pos = line.p1;
+    }
+
+    // Step 2b: Apply full volume-to-screen projection
+    let screen_uv = volume_to_screen(vol_pos);
+    let screen_p0 = volume_to_screen(line.p0);
+    let screen_p1 = volume_to_screen(line.p1);
+
+    // Screen UV (0-1) → clip space (-1, +1), Y flipped
+    let clip = vec2<f32>(screen_uv.x * 2.0 - 1.0, 1.0 - screen_uv.y * 2.0);
+
+    // Perpendicular offset for line thickness
+    let p0c = vec2<f32>(screen_p0.x * 2.0 - 1.0, 1.0 - screen_p0.y * 2.0);
+    let p1c = vec2<f32>(screen_p1.x * 2.0 - 1.0, 1.0 - screen_p1.y * 2.0);
+    let dir = p1c - p0c;
+    let len = length(dir);
+
+    var perp = vec2<f32>(0.0, 1.0);
+    if len > 0.0001 {
+        let n = dir / len;
+        perp = vec2<f32>(-n.y, n.x);
+    }
+
+    let thickness = 3.0 / min(u.res_x, u.res_y);
+    let side = select(-1.0, 1.0, vid % 2u == 0u);
+
+    out.clip_position = vec4<f32>(clip + perp * thickness * side, 0.0, 1.0);
+    out.color = line.color;
     return out;
 }
 

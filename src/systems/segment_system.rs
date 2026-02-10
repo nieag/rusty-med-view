@@ -40,7 +40,8 @@ impl SegmentManager {
 
     /// Get the active segment mutably.
     pub fn active_segment_mut(&mut self) -> Option<&mut Segment> {
-        self.active_segment.and_then(|idx| self.segments.get_mut(idx))
+        self.active_segment
+            .and_then(|idx| self.segments.get_mut(idx))
     }
 
     /// Get the active segment.
@@ -188,7 +189,9 @@ pub fn finish_drawing(
     volume_dims: [u32; 3],
     volume_spacing: [f32; 3],
 ) -> bool {
-    use crate::systems::contour_draw::{maybe_close_contour, screen_points_to_plane_contour, smooth_contour};
+    use crate::systems::contour_draw::{
+        maybe_close_contour, screen_points_to_plane_contour, smooth_contour,
+    };
 
     let draw_state = std::mem::take(&mut manager.draw_state);
 
@@ -211,16 +214,26 @@ pub fn finish_drawing(
             volume_spacing,
         );
 
-        // Smooth the contour
-        let smoothed = smooth_contour(&contour.points, 4);
+        // 1. Detect if this is a "natural" closure (close enough to start)
+        // or a "forced" closure (user released far from start)
+        let natural_close_threshold = 10.0; // 10mm
+        let is_natural_closure = maybe_close_contour(&mut contour.points, natural_close_threshold);
+
+        // 2. Smooth the contour
+        // If it's a natural closure, we smooth it as a loop for a perfect seal.
+        // If it's a forced closure, we smooth it as an OPEN path first to keep the user's
+        // stroke clean, then simply connect the ends with a straight line in the renderer.
+        let smoothed = smooth_contour(&contour.points, 4, is_natural_closure);
         contour.points = smoothed;
 
-        // Try to close the contour
-        contour.is_closed = maybe_close_contour(&mut contour.points, 2.0);
+        // 3. Always enforce closed state for the renderer (fulfilled user request)
+        contour.is_closed = true;
 
         // Add to active segment
         if let Some(segment) = manager.active_segment_mut() {
-            segment.contours.add_contour(slice_plane, slice_index, contour);
+            segment
+                .contours
+                .add_contour(slice_plane, slice_index, contour);
             segment.mark_dirty();
             return true;
         }
@@ -288,7 +301,7 @@ mod tests {
     fn test_add_segment() {
         let mut manager = SegmentManager::new();
         let idx = manager.add_segment("Kidney", [1.0, 0.0, 0.0, 1.0]);
-        
+
         assert_eq!(idx, 0);
         assert_eq!(manager.len(), 1);
         assert_eq!(manager.active_segment, Some(0));
@@ -331,7 +344,7 @@ mod tests {
     fn test_start_drawing_with_active() {
         let mut manager = SegmentManager::new();
         manager.add_segment("Test", [1.0, 0.0, 0.0, 1.0]);
-        
+
         let result = start_drawing(&mut manager, SlicePlane::Axial, 50, [0.5, 0.5]);
         assert!(result);
         assert!(is_drawing(&manager));
@@ -358,7 +371,7 @@ mod tests {
         let mut manager = SegmentManager::new();
         manager.add_segment("Test", [1.0, 0.0, 0.0, 1.0]);
         start_drawing(&mut manager, SlicePlane::Axial, 50, [0.5, 0.5]);
-        
+
         cancel_drawing(&mut manager);
         assert!(!is_drawing(&manager));
     }

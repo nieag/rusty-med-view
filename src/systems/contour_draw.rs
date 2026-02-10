@@ -80,8 +80,7 @@ pub fn screen_points_to_plane_contour(
 ) -> PlaneContour {
     // Compute the plane position in world space
     let depth_axis = slice_plane.depth_axis();
-    let plane_position =
-        (slice_index as f32 + 0.5) * volume_spacing[depth_axis];
+    let plane_position = (slice_index as f32 + 0.5) * volume_spacing[depth_axis];
 
     let plane = Plane3D::from_slice_plane(slice_plane, plane_position);
 
@@ -106,7 +105,11 @@ pub fn screen_points_to_plane_contour(
 ///
 /// # Returns
 /// Smoothed contour with more points
-pub fn smooth_contour(points: &[[f32; 3]], segments_per_edge: u32) -> Vec<[f32; 3]> {
+pub fn smooth_contour(
+    points: &[[f32; 3]],
+    segments_per_edge: u32,
+    is_closed: bool,
+) -> Vec<[f32; 3]> {
     if points.len() < 3 {
         return points.to_vec();
     }
@@ -114,15 +117,42 @@ pub fn smooth_contour(points: &[[f32; 3]], segments_per_edge: u32) -> Vec<[f32; 
     let mut result = Vec::with_capacity(points.len() * segments_per_edge as usize);
     let n = points.len();
 
-    for i in 0..n {
-        let p0 = points[(i + n - 1) % n];
-        let p1 = points[i];
-        let p2 = points[(i + 1) % n];
-        let p3 = points[(i + 2) % n];
+    // Loop through each edge
+    // If closed: n edges (0->1, ..., n-1 -> 0)
+    // If open: n-1 edges (0->1, ..., n-2 -> n-1)
+    let edge_count = if is_closed { n } else { n - 1 };
+
+    for i in 0..edge_count {
+        let (p0, p1, p2, p3) = if is_closed {
+            (
+                points[(i + n - 1) % n],
+                points[i],
+                points[(i + 1) % n],
+                points[(i + 2) % n],
+            )
+        } else {
+            (
+                if i == 0 { points[0] } else { points[i - 1] },
+                points[i],
+                points[i + 1],
+                if i + 2 < n {
+                    points[i + 2]
+                } else {
+                    points[n - 1]
+                },
+            )
+        };
 
         for j in 0..segments_per_edge {
             let t = j as f32 / segments_per_edge as f32;
             result.push(catmull_rom(p0, p1, p2, p3, t));
+        }
+    }
+
+    // For open paths, add the final point
+    if !is_closed {
+        if let Some(&last) = points.last() {
+            result.push(last);
         }
     }
 
@@ -160,11 +190,16 @@ pub fn maybe_close_contour(points: &mut Vec<[f32; 3]>, threshold: f32) -> bool {
         + (first[2] - last[2]).powi(2))
     .sqrt();
 
-    if dist < threshold {
-        points.pop(); // Remove last point (will connect to first implicitly)
+    // Only pop if it's REALLY close (redundant point)
+    // We used to pop based on threshold, but if threshold is MAX, we pop everything!
+    if dist < 1.0 {
+        // 1mm threshold for redundancy
+        points.pop();
         true
     } else {
-        false
+        // If it's far, we don't pop, we just return true if the caller
+        // wants us to consider it closed (connecting last to first).
+        dist < threshold
     }
 }
 
@@ -250,8 +285,7 @@ mod tests {
         let dims = [100, 100, 50];
         let spacing = [1.0, 1.0, 1.0];
 
-        let contour =
-            screen_points_to_plane_contour(&points, SlicePlane::Axial, 25, dims, spacing);
+        let contour = screen_points_to_plane_contour(&points, SlicePlane::Axial, 25, dims, spacing);
 
         assert_eq!(contour.points.len(), 4);
         assert!(contour.is_closed);
@@ -266,7 +300,7 @@ mod tests {
             [1.0, 1.0, 0.0],
             [0.0, 1.0, 0.0],
         ];
-        let smoothed = smooth_contour(&square, 4);
+        let smoothed = smooth_contour(&square, 4, true);
 
         // 4 edges * 4 segments = 16 points
         assert_eq!(smoothed.len(), 16);
@@ -275,7 +309,7 @@ mod tests {
     #[test]
     fn test_smooth_contour_too_few_points() {
         let points = vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]];
-        let smoothed = smooth_contour(&points, 4);
+        let smoothed = smooth_contour(&points, 4, false);
 
         // Should return original points
         assert_eq!(smoothed.len(), 2);
