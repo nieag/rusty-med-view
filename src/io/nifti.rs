@@ -283,11 +283,24 @@ pub fn load_label_from_bytes(
     let dims = header
         .dim()
         .map_err(|e| LoadError::DimensionError(e.to_string()))?;
+    if dims.len() < 3 {
+        return Err(LoadError::DimensionError(format!(
+            "Expected 3D labelmap, got {}D",
+            dims.len()
+        )));
+    }
     let width = dims[0] as u32;
     let height = dims[1] as u32;
     let depth = dims[2] as u32;
 
     let vox_offset = header.vox_offset as usize;
+    if vox_offset > raw_data.len() {
+        return Err(LoadError::VolumeParseFailed(format!(
+            "vox_offset {} exceeds file size {}",
+            vox_offset,
+            raw_data.len()
+        )));
+    }
     let volume_data = &raw_data[vox_offset..];
     let volume_cursor = Cursor::new(volume_data);
     let volume = InMemNiftiVolume::from_reader(volume_cursor, &header)

@@ -1,6 +1,6 @@
 # Contour-Based Segmentation Feature
 
-**Status:** Planned
+**Status:** In Progress (Phases 1-3 implemented, P2/P3 stabilization pass active)
 
 ## Overview
 
@@ -32,6 +32,11 @@ Contours (ground truth) → SDF (intermediate) → Mesh (3D display)
 | [05-marching-cubes.md](05-marching-cubes.md) | Mesh generation from SDF |
 | [06-mesh-rendering.md](06-mesh-rendering.md) | 3D mesh rendering pipeline |
 | [07-integration.md](07-integration.md) | End-to-end wiring and GUI |
+
+## Current Scope Notes
+
+- Phase 3 contour rendering is currently axis-aligned (axial/coronal/sagittal) in 2D.
+- Oblique contour overlay rendering in 2D is intentionally deferred.
 
 ## Implementation Order
 

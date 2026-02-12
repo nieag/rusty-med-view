@@ -332,7 +332,38 @@ pub fn render_frame(
         queue.write_buffer(uniform_buffer, offset, bytemuck::cast_slice(&[u]));
     }
 
-    let frame = surface.get_current_texture().unwrap();
+    let frame = match surface.get_current_texture() {
+        Ok(frame) => frame,
+        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+            log::warn!("Surface lost/outdated; reconfiguring surface");
+            surface.configure(device, config);
+            match surface.get_current_texture() {
+                Ok(frame) => frame,
+                Err(wgpu::SurfaceError::Timeout) => {
+                    log::warn!("Surface timeout after reconfigure; skipping frame");
+                    return std::time::Duration::from_millis(16);
+                }
+                Err(wgpu::SurfaceError::OutOfMemory) => {
+                    panic!("Surface out of memory after reconfigure");
+                }
+                Err(err) => {
+                    log::warn!("Surface error after reconfigure: {err:?}; skipping frame");
+                    return std::time::Duration::from_millis(16);
+                }
+            }
+        }
+        Err(wgpu::SurfaceError::Timeout) => {
+            log::warn!("Surface timeout; skipping frame");
+            return std::time::Duration::from_millis(16);
+        }
+        Err(wgpu::SurfaceError::OutOfMemory) => {
+            panic!("Surface out of memory");
+        }
+        Err(err) => {
+            log::warn!("Surface error: {err:?}; skipping frame");
+            return std::time::Duration::from_millis(16);
+        }
+    };
     let view = frame
         .texture
         .create_view(&wgpu::TextureViewDescriptor::default());

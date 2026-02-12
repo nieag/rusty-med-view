@@ -182,6 +182,101 @@ pub fn add_drawing_point(manager: &mut SegmentManager, point: [f32; 2]) {
     }
 }
 
+fn project_point_for_slice(slice_plane: SlicePlane, p: [f32; 3]) -> [f32; 2] {
+    match slice_plane {
+        SlicePlane::Axial => [p[0], p[1]],
+        SlicePlane::Coronal => [p[0], p[2]],
+        SlicePlane::Sagittal => [p[1], p[2]],
+    }
+}
+
+fn orient2d(a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> f32 {
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+}
+
+fn on_segment2d(a: [f32; 2], b: [f32; 2], p: [f32; 2]) -> bool {
+    let min_x = a[0].min(b[0]) - 1e-5;
+    let max_x = a[0].max(b[0]) + 1e-5;
+    let min_y = a[1].min(b[1]) - 1e-5;
+    let max_y = a[1].max(b[1]) + 1e-5;
+    p[0] >= min_x && p[0] <= max_x && p[1] >= min_y && p[1] <= max_y
+}
+
+fn segments_intersect_2d(a1: [f32; 2], a2: [f32; 2], b1: [f32; 2], b2: [f32; 2]) -> bool {
+    let o1 = orient2d(a1, a2, b1);
+    let o2 = orient2d(a1, a2, b2);
+    let o3 = orient2d(b1, b2, a1);
+    let o4 = orient2d(b1, b2, a2);
+
+    if o1.abs() < 1e-6 && on_segment2d(a1, a2, b1) {
+        return true;
+    }
+    if o2.abs() < 1e-6 && on_segment2d(a1, a2, b2) {
+        return true;
+    }
+    if o3.abs() < 1e-6 && on_segment2d(b1, b2, a1) {
+        return true;
+    }
+    if o4.abs() < 1e-6 && on_segment2d(b1, b2, a2) {
+        return true;
+    }
+
+    (o1 > 0.0) != (o2 > 0.0) && (o3 > 0.0) != (o4 > 0.0)
+}
+
+fn point_in_polygon_2d(point: [f32; 2], poly: &[[f32; 2]]) -> bool {
+    if poly.len() < 3 {
+        return false;
+    }
+    let mut crossings = 0;
+    for i in 0..poly.len() {
+        let a = poly[i];
+        let b = poly[(i + 1) % poly.len()];
+        let y_in_range =
+            (a[1] <= point[1] && b[1] > point[1]) || (b[1] <= point[1] && a[1] > point[1]);
+        if y_in_range {
+            let t = (point[1] - a[1]) / (b[1] - a[1]);
+            let x_intersect = a[0] + t * (b[0] - a[0]);
+            if point[0] < x_intersect {
+                crossings += 1;
+            }
+        }
+    }
+    crossings % 2 == 1
+}
+
+fn contours_overlap_or_intersect_on_slice(
+    a: &[[f32; 3]],
+    b: &[[f32; 3]],
+    slice_plane: SlicePlane,
+) -> bool {
+    if a.len() < 3 || b.len() < 3 {
+        return false;
+    }
+    let a2: Vec<[f32; 2]> = a
+        .iter()
+        .map(|&p| project_point_for_slice(slice_plane, p))
+        .collect();
+    let b2: Vec<[f32; 2]> = b
+        .iter()
+        .map(|&p| project_point_for_slice(slice_plane, p))
+        .collect();
+
+    for i in 0..a2.len() {
+        let a1 = a2[i];
+        let a2n = a2[(i + 1) % a2.len()];
+        for j in 0..b2.len() {
+            let b1 = b2[j];
+            let b2n = b2[(j + 1) % b2.len()];
+            if segments_intersect_2d(a1, a2n, b1, b2n) {
+                return true;
+            }
+        }
+    }
+
+    point_in_polygon_2d(a2[0], &b2) || point_in_polygon_2d(b2[0], &a2)
+}
+
 /// Finish drawing and add contour to the active segment.
 ///
 /// Returns true if a contour was successfully added.
@@ -191,7 +286,8 @@ pub fn finish_drawing(
     volume_spacing: [f32; 3],
 ) -> bool {
     use crate::systems::contour_draw::{
-        maybe_close_contour, restabilize_contour, screen_points_to_plane_contour,
+        maybe_close_contour, restabilize_contour, restabilize_contour_for_sculpt,
+        screen_points_to_plane_contour,
     };
 
     let draw_state = std::mem::take(&mut manager.draw_state);
@@ -263,7 +359,7 @@ pub fn finish_drawing(
                         15.0,
                     ) {
                         existing_list[first].points =
-                            restabilize_contour(&existing_list[first].points, true);
+                            restabilize_contour_for_sculpt(&existing_list[first].points, true);
                         existing_list.remove(second);
                         processed = true;
                     }
@@ -278,7 +374,7 @@ pub fn finish_drawing(
                             15.0,
                         ) {
                             existing_contour.points =
-                                restabilize_contour(&existing_contour.points, true);
+                                restabilize_contour_for_sculpt(&existing_contour.points, true);
                             existing_contour.is_closed = true;
                             processed = true;
                             break;
@@ -312,12 +408,19 @@ pub fn finish_drawing(
         contour.is_closed = true;
 
         if let Some(segment) = manager.active_segment_mut() {
-            // Duplicate Suppression: If this new loop is very near an existing one, ignore it
+            // Suppress creating overlapping/intersecting loops on the same slice.
             if let Some(existing_list) =
                 segment.contours.contours_at_slice(slice_plane, slice_index)
             {
                 for existing in existing_list {
                     if !existing.points.is_empty() && !contour.points.is_empty() {
+                        if contours_overlap_or_intersect_on_slice(
+                            &existing.points,
+                            &contour.points,
+                            slice_plane,
+                        ) {
+                            return true;
+                        }
                         let (_, d) = crate::systems::contour_draw::find_nearest_point_on_contour(
                             &existing.points,
                             contour.points[0],
@@ -471,5 +574,47 @@ mod tests {
 
         cancel_drawing(&mut manager);
         assert!(!is_drawing(&manager));
+    }
+
+    #[test]
+    fn test_contours_overlap_or_intersect_on_slice_intersection() {
+        let a = vec![
+            [0.0, 0.0, 10.0],
+            [2.0, 0.0, 10.0],
+            [2.0, 2.0, 10.0],
+            [0.0, 2.0, 10.0],
+        ];
+        let b = vec![
+            [1.0, -1.0, 10.0],
+            [3.0, 1.0, 10.0],
+            [1.0, 3.0, 10.0],
+            [-1.0, 1.0, 10.0],
+        ];
+        assert!(contours_overlap_or_intersect_on_slice(
+            &a,
+            &b,
+            SlicePlane::Axial
+        ));
+    }
+
+    #[test]
+    fn test_contours_overlap_or_intersect_on_slice_separate() {
+        let a = vec![
+            [0.0, 0.0, 10.0],
+            [1.0, 0.0, 10.0],
+            [1.0, 1.0, 10.0],
+            [0.0, 1.0, 10.0],
+        ];
+        let b = vec![
+            [3.0, 3.0, 10.0],
+            [4.0, 3.0, 10.0],
+            [4.0, 4.0, 10.0],
+            [3.0, 4.0, 10.0],
+        ];
+        assert!(!contours_overlap_or_intersect_on_slice(
+            &a,
+            &b,
+            SlicePlane::Axial
+        ));
     }
 }

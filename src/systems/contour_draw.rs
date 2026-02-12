@@ -190,16 +190,11 @@ pub fn maybe_close_contour(points: &mut Vec<[f32; 3]>, threshold: f32) -> bool {
         + (first[2] - last[2]).powi(2))
     .sqrt();
 
-    // Only pop if it's REALLY close (redundant point)
-    // We used to pop based on threshold, but if threshold is MAX, we pop everything!
-    if dist < 1.0 {
-        // 1mm threshold for redundancy
+    if dist < threshold {
         points.pop();
         true
     } else {
-        // If it's far, we don't pop, we just return true if the caller
-        // wants us to consider it closed (connecting last to first).
-        dist < threshold
+        false
     }
 }
 
@@ -347,6 +342,14 @@ pub fn restabilize_contour(points: &[[f32; 3]], is_closed: bool) -> Vec<[f32; 3]
     resample_contour(&smoothed, 0.5, is_closed)
 }
 
+/// Less aggressive stabilization for sculpted contours to reduce spline overshoot spikes.
+pub fn restabilize_contour_for_sculpt(points: &[[f32; 3]], is_closed: bool) -> Vec<[f32; 3]> {
+    let dedup = remove_duplicates(points);
+    let simplified = simplify_rdp(&dedup, 0.1);
+    // Sculpt edits are spike-prone around welds; avoid spline overshoot here.
+    resample_contour(&simplified, 0.75, is_closed)
+}
+
 /// Remove adjacent points that are extremely close to each other (<0.01mm)
 pub fn remove_duplicates(points: &[[f32; 3]]) -> Vec<[f32; 3]> {
     if points.len() < 2 {
@@ -367,6 +370,198 @@ pub fn remove_duplicates(points: &[[f32; 3]]) -> Vec<[f32; 3]> {
         }
     }
     result
+}
+
+#[inline]
+fn dist3(a: [f32; 3], b: [f32; 3]) -> f32 {
+    let dx = a[0] - b[0];
+    let dy = a[1] - b[1];
+    let dz = a[2] - b[2];
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
+fn turn_angle_deg(prev: [f32; 3], curr: [f32; 3], next: [f32; 3]) -> Option<f32> {
+    let v1 = [prev[0] - curr[0], prev[1] - curr[1], prev[2] - curr[2]];
+    let v2 = [next[0] - curr[0], next[1] - curr[1], next[2] - curr[2]];
+    let len1 = (v1[0] * v1[0] + v1[1] * v1[1] + v1[2] * v1[2]).sqrt();
+    let len2 = (v2[0] * v2[0] + v2[1] * v2[1] + v2[2] * v2[2]).sqrt();
+    if len1 < 1e-6 || len2 < 1e-6 {
+        return None;
+    }
+    let dot = (v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2]) / (len1 * len2);
+    Some(dot.clamp(-1.0, 1.0).acos().to_degrees())
+}
+
+fn has_sharp_turn(points: &[[f32; 3]], min_turn_angle_deg: f32) -> bool {
+    if points.len() < 3 {
+        return true;
+    }
+    let n = points.len();
+    for i in 0..n {
+        let prev = points[(i + n - 1) % n];
+        let curr = points[i];
+        let next = points[(i + 1) % n];
+        if let Some(angle) = turn_angle_deg(prev, curr, next) {
+            if angle < min_turn_angle_deg {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn sanitize_closed_contour(
+    points: &[[f32; 3]],
+    min_segment_len: f32,
+    min_turn_angle_deg: f32,
+) -> Vec<[f32; 3]> {
+    if points.len() < 3 {
+        return points.to_vec();
+    }
+
+    let mut out = points.to_vec();
+    for _ in 0..3 {
+        if out.len() < 3 {
+            break;
+        }
+        let n = out.len();
+        let mut keep = vec![true; n];
+        let mut removed_any = false;
+        for i in 0..n {
+            let prev = out[(i + n - 1) % n];
+            let curr = out[i];
+            let next = out[(i + 1) % n];
+            if dist3(prev, curr) < min_segment_len || dist3(curr, next) < min_segment_len {
+                keep[i] = false;
+                removed_any = true;
+                continue;
+            }
+            if let Some(angle) = turn_angle_deg(prev, curr, next) {
+                if angle < min_turn_angle_deg {
+                    keep[i] = false;
+                    removed_any = true;
+                }
+            }
+        }
+        if !removed_any {
+            break;
+        }
+        let filtered: Vec<[f32; 3]> = out
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &p)| keep[i].then_some(p))
+            .collect();
+        if filtered.len() < 3 {
+            break;
+        }
+        out = filtered;
+    }
+    out
+}
+
+fn preprocess_stroke_for_sculpt(stroke: &[[f32; 3]]) -> Vec<[f32; 3]> {
+    let dedup = remove_duplicates(stroke);
+    if dedup.len() < 3 {
+        return dedup;
+    }
+    simplify_rdp(&dedup, 0.25)
+}
+
+fn project_to_2d_by_normal(point: [f32; 3], normal: [f32; 3]) -> [f32; 2] {
+    let ax = normal[0].abs();
+    let ay = normal[1].abs();
+    let az = normal[2].abs();
+    if ax >= ay && ax >= az {
+        [point[1], point[2]]
+    } else if ay >= az {
+        [point[0], point[2]]
+    } else {
+        [point[0], point[1]]
+    }
+}
+
+fn orient2d(a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> f32 {
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+}
+
+fn on_segment2d(a: [f32; 2], b: [f32; 2], p: [f32; 2]) -> bool {
+    let min_x = a[0].min(b[0]) - 1e-6;
+    let max_x = a[0].max(b[0]) + 1e-6;
+    let min_y = a[1].min(b[1]) - 1e-6;
+    let max_y = a[1].max(b[1]) + 1e-6;
+    p[0] >= min_x && p[0] <= max_x && p[1] >= min_y && p[1] <= max_y
+}
+
+fn segments_intersect_2d(a1: [f32; 2], a2: [f32; 2], b1: [f32; 2], b2: [f32; 2]) -> bool {
+    let o1 = orient2d(a1, a2, b1);
+    let o2 = orient2d(a1, a2, b2);
+    let o3 = orient2d(b1, b2, a1);
+    let o4 = orient2d(b1, b2, a2);
+
+    if o1.abs() < 1e-6 && on_segment2d(a1, a2, b1) {
+        return true;
+    }
+    if o2.abs() < 1e-6 && on_segment2d(a1, a2, b2) {
+        return true;
+    }
+    if o3.abs() < 1e-6 && on_segment2d(b1, b2, a1) {
+        return true;
+    }
+    if o4.abs() < 1e-6 && on_segment2d(b1, b2, a2) {
+        return true;
+    }
+
+    (o1 > 0.0) != (o2 > 0.0) && (o3 > 0.0) != (o4 > 0.0)
+}
+
+fn has_self_intersection_closed(points: &[[f32; 3]], normal: [f32; 3]) -> bool {
+    if points.len() < 4 {
+        return false;
+    }
+    let n = points.len();
+    let p2d: Vec<[f32; 2]> = points
+        .iter()
+        .map(|&p| project_to_2d_by_normal(p, normal))
+        .collect();
+    for i in 0..n {
+        let i2 = (i + 1) % n;
+        for j in (i + 1)..n {
+            let j2 = (j + 1) % n;
+            if i == j || i == j2 || i2 == j || i2 == j2 {
+                continue;
+            }
+            if i == 0 && j2 == 0 {
+                continue;
+            }
+            if segments_intersect_2d(p2d[i], p2d[i2], p2d[j], p2d[j2]) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn estimate_contour_normal(points: &[[f32; 3]]) -> [f32; 3] {
+    if points.len() < 3 {
+        return [0.0, 0.0, 1.0];
+    }
+    for i in 0..(points.len() - 2) {
+        let a = points[i];
+        let b = points[i + 1];
+        let c = points[i + 2];
+        let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let v = [c[0] - b[0], c[1] - b[1], c[2] - b[2]];
+        let n = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if len > 1e-6 {
+            return [n[0] / len, n[1] / len, n[2] / len];
+        }
+    }
+    [0.0, 0.0, 1.0]
 }
 
 /// Check if a 2D screen point should be added to the current contour.
@@ -406,6 +601,7 @@ pub fn sculpt_contour(
     stroke: &[[f32; 3]],
     snap_threshold: f32,
 ) -> bool {
+    let stroke = preprocess_stroke_for_sculpt(stroke);
     let n = existing.len();
     if n < 3 || stroke.len() < 2 {
         return false;
@@ -448,6 +644,9 @@ pub fn sculpt_contour(
         (n - idx_start) + idx_end
     };
     let path2_len = n - path1_len;
+    if path1_len.min(path2_len) < 2 {
+        return false;
+    }
 
     let (start, end) = if path1_len <= path2_len {
         (idx_start, idx_end)
@@ -470,6 +669,13 @@ pub fn sculpt_contour(
 
     // Insert the internal stroke points (excluding the ends to avoid double-overlap)
     let sub_stroke = &stroke[s_i..=s_j];
+    let start_snap_dist = dist3(existing[start], sub_stroke[0])
+        .min(dist3(existing[start], sub_stroke[sub_stroke.len() - 1]));
+    let end_snap_dist =
+        dist3(existing[end], sub_stroke[0]).min(dist3(existing[end], sub_stroke[sub_stroke.len() - 1]));
+    if start_snap_dist > snap_threshold * 1.5 || end_snap_dist > snap_threshold * 1.5 {
+        return false;
+    }
 
     // Check winding/direction
     let d_start = {
@@ -497,7 +703,15 @@ pub fn sculpt_contour(
         }
     }
 
-    *existing = new_points;
+    let sanitized = sanitize_closed_contour(&new_points, 0.2, 12.0);
+    let normal = estimate_contour_normal(&sanitized);
+    if sanitized.len() < 3
+        || has_sharp_turn(&sanitized, 8.0)
+        || has_self_intersection_closed(&sanitized, normal)
+    {
+        return false;
+    }
+    *existing = sanitized;
     true
 }
 
@@ -510,6 +724,7 @@ pub fn bridge_contours(
     stroke: &[[f32; 3]],
     snap_threshold: f32,
 ) -> bool {
+    let stroke = preprocess_stroke_for_sculpt(stroke);
     let n_a = contour_a.len();
     let n_b = contour_b.len();
     if n_a < 3 || n_b < 3 || stroke.len() < 2 {
@@ -574,7 +789,15 @@ pub fn bridge_contours(
         }
     }
 
-    *contour_a = new_points;
+    let sanitized = sanitize_closed_contour(&new_points, 0.2, 12.0);
+    let normal = estimate_contour_normal(&sanitized);
+    if sanitized.len() < 3
+        || has_sharp_turn(&sanitized, 8.0)
+        || has_self_intersection_closed(&sanitized, normal)
+    {
+        return false;
+    }
+    *contour_a = sanitized;
     true
 }
 
@@ -706,6 +929,32 @@ mod tests {
         let closed = maybe_close_contour(&mut points, 0.05);
         assert!(!closed);
         assert_eq!(points.len(), 4);
+    }
+
+    #[test]
+    fn test_maybe_close_contour_threshold_edge_not_closed() {
+        let mut points = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.05, 0.0, 0.0], // Exactly threshold away from first point
+        ];
+        let closed = maybe_close_contour(&mut points, 0.05);
+        assert!(!closed);
+        assert_eq!(points.len(), 4);
+    }
+
+    #[test]
+    fn test_sanitize_closed_contour_removes_spike() {
+        let points = vec![
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [2.001, 0.001, 0.0], // tiny near-duplicate spike
+            [2.0, 2.0, 0.0],
+            [0.0, 2.0, 0.0],
+        ];
+        let sanitized = sanitize_closed_contour(&points, 0.2, 12.0);
+        assert!(sanitized.len() < points.len());
     }
 
     #[test]
