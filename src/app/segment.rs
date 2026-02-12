@@ -365,6 +365,14 @@ pub struct Segment {
     pub mesh_dirty: bool,
     /// Monotonic revision for SDF updates (used by preview cache)
     pub sdf_revision: u64,
+    /// Revision for live/interactive SDF updates.
+    pub live_sdf_revision: u64,
+    /// Revision for finalized full-resolution SDF updates.
+    pub final_sdf_revision: u64,
+    /// Whether preview is stale relative to latest contour edits.
+    pub is_live_preview_stale: bool,
+    /// Dirty region in world coordinates [minx,miny,minz,maxx,maxy,maxz].
+    pub dirty_roi_world: Option<[f32; 6]>,
 
     // === Configuration ===
     /// SDF resolution relative to volume (1.0 = same, 2.0 = 2x)
@@ -385,6 +393,10 @@ impl Segment {
             sdf_dirty: true,
             mesh_dirty: true,
             sdf_revision: 0,
+            live_sdf_revision: 0,
+            final_sdf_revision: 0,
+            is_live_preview_stale: true,
+            dirty_roi_world: None,
             // Slightly denser default SDF improves extracted mesh smoothness.
             sdf_resolution_multiplier: 1.5,
         }
@@ -394,6 +406,7 @@ impl Segment {
     pub fn invalidate_caches(&mut self) {
         self.sdf_dirty = true;
         self.mesh_dirty = true;
+        self.is_live_preview_stale = true;
     }
 
     /// Alias for invalidate_caches

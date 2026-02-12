@@ -695,7 +695,7 @@ pub fn render_frame(
             .map(|s| *s)
             .unwrap_or_default();
 
-        if preview_state.enabled && preview_state.show_3d_surface {
+        if preview_state.show_3d_surface {
             let mut volume_dims = [0u32; 3];
             let mut volume_spacing = [1.0f32; 3];
             let mut data_orientation = [0.0f32; 4];
@@ -748,8 +748,11 @@ pub fn render_frame(
                                     glam::Vec3::ZERO,
                                     glam::Vec3::Y,
                                 );
+                                // Match volume ray shader camera model:
+                                // ray_dir = normalize(forward + right*x + up*y) where y spans [-0.5, 0.5].
+                                // Equivalent vertical FOV = 2 * atan(0.5) ~= 53.13 deg.
                                 let proj = glam::Mat4::perspective_rh_gl(
-                                    45.0_f32.to_radians(),
+                                    2.0_f32 * 0.5_f32.atan(),
                                     aspect,
                                     0.01,
                                     20.0,

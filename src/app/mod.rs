@@ -198,7 +198,7 @@ impl ApplicationHandler<AppEvent> for App {
                                 dims
                             }
                             LoadResult::Label(ref loaded_label) => {
-                                let (new_entity, dims) = handlers::handle_label_load(
+                                let (_new_entity, dims) = handlers::handle_label_load(
                                     &ctx.device,
                                     &ctx.queue,
                                     &mut ctx.world,
@@ -222,9 +222,6 @@ impl ApplicationHandler<AppEvent> for App {
                                     },
                                 );
 
-                                for (_, editor) in ctx.world.query_mut::<&mut EditorState>() {
-                                    editor.active_layer = Some(new_entity);
-                                }
                                 dims
                             }
                         };

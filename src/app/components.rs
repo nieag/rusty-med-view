@@ -1,6 +1,7 @@
 use glam::Vec3;
 
 use winit::keyboard::ModifiersState;
+use web_time::Instant;
 
 // --- Basic Tags ---
 pub struct CursorTag;
@@ -223,6 +224,49 @@ impl Default for SdfPreviewState {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct SegPerfConfig {
+    pub live_enabled: bool,
+    pub live_mesh_enabled: bool,
+    pub webgpu_required: bool,
+    pub fallback_active: bool,
+    pub live_resolution_scale: f32,
+    pub full_resolution_scale: f32,
+    pub frame_budget_ms: f32,
+    pub live_interval_ms: f32,
+    pub live_mesh_interval_ms: f32,
+    pub max_roi_margin_mm: f32,
+    pub next_finalize_index: usize,
+    pub last_live_update_at: Option<Instant>,
+    pub last_live_mesh_at: Option<Instant>,
+    pub last_sdf_ms: f32,
+    pub last_mesh_ms: f32,
+    pub queue_depth: u32,
+}
+
+impl Default for SegPerfConfig {
+    fn default() -> Self {
+        Self {
+            live_enabled: true,
+            live_mesh_enabled: false,
+            webgpu_required: true,
+            fallback_active: false,
+            live_resolution_scale: 0.5,
+            full_resolution_scale: 1.5,
+            frame_budget_ms: 6.0,
+            live_interval_ms: 80.0,
+            live_mesh_interval_ms: 220.0,
+            max_roi_margin_mm: 12.0,
+            next_finalize_index: 0,
+            last_live_update_at: None,
+            last_live_mesh_at: None,
+            last_sdf_ms: 0.0,
+            last_mesh_ms: 0.0,
+            queue_depth: 0,
+        }
+    }
+}
+
 pub enum Representation {
     Voxel(GpuVolumeResources),
 }
@@ -293,6 +337,7 @@ pub struct AppEntities {
     pub window_settings: hecs::Entity,
     pub segments: hecs::Entity,
     pub sdf_preview: hecs::Entity,
+    pub seg_perf: hecs::Entity,
 }
 
 #[cfg(test)]

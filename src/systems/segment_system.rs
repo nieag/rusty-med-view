@@ -3,13 +3,17 @@
 //! Manages the full pipeline: contour drawing → SDF generation → mesh rendering.
 
 use crate::app::segment::{Plane3D, PlaneContour, Segment};
-use crate::components::{AppEntities, VolumeData};
-use crate::convert::{build_sdf_from_contours, marching_cubes};
+use crate::components::{AppEntities, SegPerfConfig, VolumeData};
+use crate::convert::{
+    build_sdf_from_contours, marching_cubes, marching_cubes_with_options, MarchingCubesOptions,
+    MeshNormalMode,
+};
 use crate::render::mesh_pipeline::MeshResources;
 use crate::systems::contour_draw::ContourDrawState;
 use crate::util::orientation::SlicePlane;
 use hecs::World;
 use std::collections::HashSet;
+use web_time::Instant;
 
 // ============================================================================
 // Segmentation Manager Component
@@ -98,33 +102,80 @@ pub fn regenerate_segment_if_dirty(
     volume_dims: [u32; 3],
     volume_spacing: [f32; 3],
 ) -> bool {
+    regenerate_segment_if_dirty_with_resolution(
+        segment,
+        volume_dims,
+        volume_spacing,
+        segment.sdf_resolution_multiplier,
+        false,
+        true,
+    )
+    .0
+}
+
+fn regenerate_segment_if_dirty_with_resolution(
+    segment: &mut Segment,
+    volume_dims: [u32; 3],
+    volume_spacing: [f32; 3],
+    resolution_multiplier: f32,
+    is_live: bool,
+    allow_mesh_rebuild: bool,
+) -> (bool, f32, f32) {
     let mut mesh_changed = false;
+    let mut sdf_ms = 0.0f32;
+    let mut mesh_ms = 0.0f32;
 
     // Regenerate SDF if dirty
     if segment.sdf_dirty {
+        let sdf_start = Instant::now();
         let sdf = build_sdf_from_contours(
             &segment.contours,
             volume_dims,
             volume_spacing,
-            segment.sdf_resolution_multiplier,
+            resolution_multiplier,
         );
+        sdf_ms = sdf_start.elapsed().as_secs_f32() * 1000.0;
         segment.sdf = Some(sdf);
-        segment.sdf_dirty = false;
         segment.sdf_revision = segment.sdf_revision.wrapping_add(1);
+        if is_live {
+            segment.live_sdf_revision = segment.sdf_revision;
+            // Keep dirty true so a full-resolution finalize rebuild still occurs.
+            segment.sdf_dirty = true;
+        } else {
+            segment.final_sdf_revision = segment.sdf_revision;
+            segment.sdf_dirty = false;
+        }
         segment.mesh_dirty = true; // SDF changed, mesh needs update
     }
 
     // Regenerate mesh if dirty
-    if segment.mesh_dirty {
+    if segment.mesh_dirty && allow_mesh_rebuild {
         if let Some(sdf) = &segment.sdf {
-            let mesh = marching_cubes(sdf, 0.0);
+            let mesh_start = Instant::now();
+            let mesh = if is_live {
+                marching_cubes_with_options(
+                    sdf,
+                    0.0,
+                    MarchingCubesOptions {
+                        enforce_outward_winding: false,
+                        normal_mode: MeshNormalMode::Flat,
+                    },
+                )
+            } else {
+                marching_cubes(sdf, 0.0)
+            };
+            mesh_ms = mesh_start.elapsed().as_secs_f32() * 1000.0;
             segment.mesh = Some(mesh);
             mesh_changed = true;
         }
         segment.mesh_dirty = false;
     }
 
-    mesh_changed
+    if mesh_changed {
+        segment.is_live_preview_stale = false;
+    }
+
+    (mesh_changed, sdf_ms, mesh_ms)
 }
 
 /// Regenerate all dirty segments.
@@ -158,8 +209,136 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
         return;
     }
 
+    let now = Instant::now();
+
+    let (
+        live_enabled,
+        live_mesh_enabled,
+        fallback_active,
+        live_resolution_scale,
+        full_resolution_scale,
+        live_interval_ms,
+        live_mesh_interval_ms,
+        mut next_finalize_index,
+        mut last_live_update_at,
+        mut last_live_mesh_at,
+    ) = if let Ok(perf) = world.get::<&SegPerfConfig>(entities.seg_perf) {
+        (
+            perf.live_enabled,
+            perf.live_mesh_enabled,
+            perf.fallback_active,
+            perf.live_resolution_scale,
+            perf.full_resolution_scale,
+            perf.live_interval_ms,
+            perf.live_mesh_interval_ms,
+            perf.next_finalize_index,
+            perf.last_live_update_at,
+            perf.last_live_mesh_at,
+        )
+    } else {
+        (true, false, false, 0.5, 1.5, 80.0, 220.0, 0usize, None, None)
+    };
+
+    let mut last_sdf_ms = 0.0f32;
+    let mut last_mesh_ms = 0.0f32;
+    let mut queue_depth = 0u32;
+
     if let Ok(mut manager) = world.get::<&mut SegmentManager>(entities.segments) {
-        regenerate_all_dirty(&mut manager, volume_dims, volume_spacing);
+        let is_drawing_now = matches!(manager.draw_state, ContourDrawState::Drawing { .. });
+
+        // Live mode: update active dirty segment at reduced resolution with a throttle.
+        if live_enabled && !fallback_active && is_drawing_now {
+            if let Some(active_idx) = manager.active_segment {
+                if let Some(segment) = manager.segments.get_mut(active_idx) {
+                    if segment.sdf_dirty {
+                        let due = match last_live_update_at {
+                            Some(t) => (now - t).as_secs_f32() * 1000.0 >= live_interval_ms,
+                            None => true,
+                        };
+                        if due {
+                            let mesh_due = if live_mesh_enabled {
+                                match last_live_mesh_at {
+                                    Some(t) => {
+                                        (now - t).as_secs_f32() * 1000.0 >= live_mesh_interval_ms
+                                    }
+                                    None => true,
+                                }
+                            } else {
+                                false
+                            };
+                            let (mesh_changed, sdf_ms, mesh_ms) =
+                                regenerate_segment_if_dirty_with_resolution(
+                                segment,
+                                volume_dims,
+                                volume_spacing,
+                                live_resolution_scale.max(0.2),
+                                true,
+                                mesh_due,
+                            );
+                            last_sdf_ms = sdf_ms;
+                            last_mesh_ms = mesh_ms;
+                            last_live_update_at = Some(now);
+                            if mesh_changed {
+                                last_live_mesh_at = Some(now);
+                            }
+                        }
+                        queue_depth = 1;
+                    }
+                }
+            }
+        } else {
+            // Finalize mode: process one dirty segment per frame to avoid long stalls.
+            let mut dirty_indices: Vec<usize> = manager
+                .segments
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| if s.sdf_dirty { Some(i) } else { None })
+                .collect();
+
+            if let Some(active_idx) = manager.active_segment {
+                if manager
+                    .segments
+                    .get(active_idx)
+                    .map(|s| s.sdf_dirty)
+                    .unwrap_or(false)
+                {
+                    dirty_indices.retain(|&i| i != active_idx);
+                    dirty_indices.insert(0, active_idx);
+                }
+            }
+
+            queue_depth = dirty_indices.len() as u32;
+            if !dirty_indices.is_empty() {
+                let mut chosen = dirty_indices[0];
+                if dirty_indices.len() > 1 {
+                    if let Some(next) = dirty_indices.iter().copied().find(|&i| i >= next_finalize_index) {
+                        chosen = next;
+                    }
+                }
+                if let Some(segment) = manager.segments.get_mut(chosen) {
+                    let (_changed, sdf_ms, mesh_ms) = regenerate_segment_if_dirty_with_resolution(
+                        segment,
+                        volume_dims,
+                        volume_spacing,
+                        full_resolution_scale.max(0.5),
+                        false,
+                        true,
+                    );
+                    last_sdf_ms = sdf_ms;
+                    last_mesh_ms = mesh_ms;
+                    next_finalize_index = chosen.saturating_add(1);
+                }
+            }
+        }
+    }
+
+    if let Ok(mut perf) = world.get::<&mut SegPerfConfig>(entities.seg_perf) {
+        perf.last_sdf_ms = last_sdf_ms;
+        perf.last_mesh_ms = last_mesh_ms;
+        perf.queue_depth = queue_depth;
+        perf.last_live_update_at = last_live_update_at;
+        perf.last_live_mesh_at = last_live_mesh_at;
+        perf.next_finalize_index = next_finalize_index;
     }
 }
 

@@ -325,12 +325,38 @@ const EDGE_VERTICES: [[usize; 2]; 12] = [
 // Marching Cubes Algorithm
 // ============================================================================
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeshNormalMode {
+    Gradient,
+    Flat,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MarchingCubesOptions {
+    pub enforce_outward_winding: bool,
+    pub normal_mode: MeshNormalMode,
+}
+
+impl Default for MarchingCubesOptions {
+    fn default() -> Self {
+        Self {
+            enforce_outward_winding: true,
+            normal_mode: MeshNormalMode::Gradient,
+        }
+    }
+}
+
 /// Generate a mesh from an SDF using Marching Cubes.
 ///
 /// # Arguments
 /// * `sdf` - The signed distance field
 /// * `iso_level` - Isosurface level (usually 0.0 for SDF)
-pub fn marching_cubes(sdf: &SdfVolume, iso_level: f32) -> MeshData {
+/// * `options` - Quality/performance options for winding and normals
+pub fn marching_cubes_with_options(
+    sdf: &SdfVolume,
+    iso_level: f32,
+    options: MarchingCubesOptions,
+) -> MeshData {
     let mut mesh = MeshData::new();
     let dims = sdf.dimensions;
     
@@ -347,10 +373,61 @@ pub fn marching_cubes(sdf: &SdfVolume, iso_level: f32) -> MeshData {
         }
     }
 
-    // Compute normals from SDF gradient
-    compute_normals_from_sdf(sdf, &mut mesh);
+    if options.enforce_outward_winding {
+        // Ensure triangle winding is coherent with SDF outward gradient so
+        // backface culling does not incorrectly reveal interior faces.
+        enforce_outward_winding(sdf, &mut mesh);
+    }
+
+    match options.normal_mode {
+        MeshNormalMode::Gradient => compute_normals_from_sdf(sdf, &mut mesh),
+        MeshNormalMode::Flat => compute_flat_normals_from_faces(&mut mesh),
+    }
 
     mesh
+}
+
+/// Default high-quality mesh extraction path.
+pub fn marching_cubes(sdf: &SdfVolume, iso_level: f32) -> MeshData {
+    marching_cubes_with_options(sdf, iso_level, MarchingCubesOptions::default())
+}
+
+fn enforce_outward_winding(sdf: &SdfVolume, mesh: &mut MeshData) {
+    for tri in mesh.indices.chunks_exact_mut(3) {
+        let i0 = tri[0] as usize;
+        let i1 = tri[1] as usize;
+        let i2 = tri[2] as usize;
+        if i0 >= mesh.vertices.len() || i1 >= mesh.vertices.len() || i2 >= mesh.vertices.len() {
+            continue;
+        }
+
+        let v0 = mesh.vertices[i0];
+        let v1 = mesh.vertices[i1];
+        let v2 = mesh.vertices[i2];
+
+        let e1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+        let e2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+        let face = [
+            e1[1] * e2[2] - e1[2] * e2[1],
+            e1[2] * e2[0] - e1[0] * e2[2],
+            e1[0] * e2[1] - e1[1] * e2[0],
+        ];
+        let face_len2 = face[0] * face[0] + face[1] * face[1] + face[2] * face[2];
+        if face_len2 <= 1e-16 {
+            continue;
+        }
+
+        let centroid = [
+            (v0[0] + v1[0] + v2[0]) / 3.0,
+            (v0[1] + v1[1] + v2[1]) / 3.0,
+            (v0[2] + v1[2] + v2[2]) / 3.0,
+        ];
+        let grad = compute_gradient_at(sdf, centroid);
+        let dot = face[0] * grad[0] + face[1] * grad[1] + face[2] * grad[2];
+        if dot < 0.0 {
+            tri.swap(1, 2);
+        }
+    }
 }
 
 /// Process a single cube and add triangles to the mesh.
@@ -460,6 +537,41 @@ pub fn compute_normals_from_sdf(sdf: &SdfVolume, mesh: &mut MeshData) {
     for vertex in &mesh.vertices {
         let normal = compute_gradient_at(sdf, *vertex);
         mesh.normals.push(normal);
+    }
+}
+
+/// Compute per-vertex flat normals from face orientation.
+fn compute_flat_normals_from_faces(mesh: &mut MeshData) {
+    mesh.normals.clear();
+    mesh.normals.resize(mesh.vertices.len(), [0.0, 0.0, 1.0]);
+
+    for tri in mesh.indices.chunks_exact(3) {
+        let i0 = tri[0] as usize;
+        let i1 = tri[1] as usize;
+        let i2 = tri[2] as usize;
+        if i0 >= mesh.vertices.len() || i1 >= mesh.vertices.len() || i2 >= mesh.vertices.len() {
+            continue;
+        }
+
+        let v0 = mesh.vertices[i0];
+        let v1 = mesh.vertices[i1];
+        let v2 = mesh.vertices[i2];
+
+        let e1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
+        let e2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
+        let nx = e1[1] * e2[2] - e1[2] * e2[1];
+        let ny = e1[2] * e2[0] - e1[0] * e2[2];
+        let nz = e1[0] * e2[1] - e1[1] * e2[0];
+        let len = (nx * nx + ny * ny + nz * nz).sqrt();
+        let n = if len > 1e-10 {
+            [nx / len, ny / len, nz / len]
+        } else {
+            [0.0, 0.0, 1.0]
+        };
+
+        mesh.normals[i0] = n;
+        mesh.normals[i1] = n;
+        mesh.normals[i2] = n;
     }
 }
 

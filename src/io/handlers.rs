@@ -79,7 +79,8 @@ pub fn handle_label_load(
     let entity = world.spawn((
         Segmentation {
             name: loaded_label.filename.clone(),
-            is_visible: true,
+            // Keep imported labelmap hidden by default; contour/mesh workflow is primary.
+            is_visible: false,
         },
         LayerSettings { opacity: 0.5 },
         LabelmapData {
@@ -177,16 +178,24 @@ pub fn recreate_bind_groups(
     {
         // 1. Prioritize active layer if it exists and is a voxel representation
         if let Some(active) = active_layer {
-            if let Ok(repr) = world.get::<&Representation>(active) {
-                let Representation::Voxel(res) = &*repr;
-                overlay_views.push(res.view.clone());
+            if let (Ok(seg), Ok(repr)) = (
+                world.get::<&Segmentation>(active),
+                world.get::<&Representation>(active),
+            ) {
+                if seg.is_visible {
+                    let Representation::Voxel(res) = &*repr;
+                    overlay_views.push(res.view.clone());
+                }
             }
         }
 
         // 2. Add other visible layers that aren't the active one
         let mut query = world.query::<(&Segmentation, &Representation)>();
-        for (e, (_seg, repr)) in query.iter() {
+        for (e, (seg, repr)) in query.iter() {
             if Some(e) == active_layer {
+                continue;
+            }
+            if !seg.is_visible {
                 continue;
             }
             let Representation::Voxel(res) = repr;

@@ -136,16 +136,49 @@ pub fn draw_segment_panel(
     ui.label(format!("Total contours: {}", contour_count));
     ui.label(format!("SDF: {}", active_sdf_status));
 
+    if let Ok(mut perf) = world.get::<&mut SegPerfConfig>(entities.seg_perf) {
+        ui.separator();
+        ui.label("Realtime Perf");
+        ui.checkbox(&mut perf.live_enabled, "Live Update (while drawing)");
+        ui.checkbox(&mut perf.live_mesh_enabled, "Live Mesh (while drawing)");
+        ui.checkbox(&mut perf.webgpu_required, "WebGPU Required");
+        if perf.webgpu_required {
+            ui.checkbox(&mut perf.fallback_active, "Force CPU Fallback");
+        }
+        ui.add(
+            egui::Slider::new(&mut perf.live_resolution_scale, 0.2..=1.5)
+                .text("Live Resolution"),
+        );
+        ui.add(
+            egui::Slider::new(&mut perf.full_resolution_scale, 0.5..=2.5)
+                .text("Final Resolution"),
+        );
+        ui.add(
+            egui::Slider::new(&mut perf.live_interval_ms, 16.0..=250.0)
+                .text("Live Interval ms"),
+        );
+        ui.add(
+            egui::Slider::new(&mut perf.live_mesh_interval_ms, 100.0..=600.0)
+                .text("Live Mesh Interval ms"),
+        );
+        ui.label(format!(
+            "Last update: SDF {:.1} ms, Mesh {:.1} ms, Queue {}",
+            perf.last_sdf_ms, perf.last_mesh_ms, perf.queue_depth
+        ));
+    }
+
     ui.separator();
     ui.label("SDF Preview");
     if let Ok(mut preview) = world.get::<&mut SdfPreviewState>(entities.sdf_preview) {
+        // Keep 3D surface preview always enabled for continuous mesh inspection.
+        preview.show_3d_surface = true;
         ui.checkbox(&mut preview.enabled, "Show SDF Preview");
         ui.add(egui::Slider::new(&mut preview.opacity, 0.0..=1.0).text("Opacity"));
         ui.add(
             egui::Slider::new(&mut preview.value_window_mm, 0.5..=32.0).text("Window (mm)"),
         );
         ui.checkbox(&mut preview.show_zero_isoline, "Zero Isoline");
-        ui.checkbox(&mut preview.show_3d_surface, "3D Surface Preview");
+        ui.label("3D Surface Preview: always on");
     }
 
     // Instructions

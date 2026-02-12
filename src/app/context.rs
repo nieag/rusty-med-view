@@ -76,6 +76,11 @@ impl RenderingContext {
             .await
             .expect("Failed to create device");
 
+        let mut seg_perf_cfg = SegPerfConfig::default();
+        if matches!(adapter.get_info().backend, wgpu::Backend::Gl) {
+            seg_perf_cfg.fallback_active = true;
+        }
+
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps.formats[0];
 
@@ -161,6 +166,7 @@ impl RenderingContext {
         let annotations = world.spawn((AnnotationState::default(),));
         let overlay = world.spawn((OverlayManager::default(),));
         let sdf_preview = world.spawn((SdfPreviewState::default(),));
+        let seg_perf = world.spawn((seg_perf_cfg,));
         let mut segment_manager = SegmentManager::new();
         segment_manager.add_segment("Segment 1", [1.0, 0.0, 0.0, 1.0]); // Red
         let segments = world.spawn((segment_manager,));
@@ -177,6 +183,7 @@ impl RenderingContext {
             window_settings: settings_entity,
             segments,
             sdf_preview,
+            seg_perf,
         };
 
         protocols::apply_protocol(&mut world, &entities, "Standard 2x2");
