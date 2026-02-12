@@ -54,9 +54,7 @@ impl Plane3D {
 
     /// Signed distance from point to plane (positive = same side as normal)
     pub fn distance_to_point(&self, point: [f32; 3]) -> f32 {
-        let dot = self.normal[0] * point[0]
-            + self.normal[1] * point[1]
-            + self.normal[2] * point[2];
+        let dot = self.normal[0] * point[0] + self.normal[1] * point[1] + self.normal[2] * point[2];
         dot - self.distance
     }
 
@@ -157,6 +155,20 @@ impl ContourSet {
             SlicePlane::Sagittal => &self.sagittal,
         };
         map.get(&index)
+    }
+
+    /// Get mutable contours at a specific slice
+    pub fn contours_at_slice_mut(
+        &mut self,
+        plane: SlicePlane,
+        index: i32,
+    ) -> Option<&mut Vec<PlaneContour>> {
+        let map = match plane {
+            SlicePlane::Axial => &mut self.axial,
+            SlicePlane::Coronal => &mut self.coronal,
+            SlicePlane::Sagittal => &mut self.sagittal,
+        };
+        map.get_mut(&index)
     }
 
     /// Iterate over all contours

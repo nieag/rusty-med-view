@@ -2,11 +2,12 @@
 //!
 //! Manages the full pipeline: contour drawing → SDF generation → mesh rendering.
 
-use crate::app::segment::Segment;
+use crate::app::segment::{Plane3D, PlaneContour, Segment};
 use crate::convert::{build_sdf_from_contours, marching_cubes};
 use crate::render::mesh_pipeline::MeshResources;
 use crate::systems::contour_draw::ContourDrawState;
 use crate::util::orientation::SlicePlane;
+use std::collections::HashSet;
 
 // ============================================================================
 // Segmentation Manager Component
@@ -190,7 +191,7 @@ pub fn finish_drawing(
     volume_spacing: [f32; 3],
 ) -> bool {
     use crate::systems::contour_draw::{
-        maybe_close_contour, screen_points_to_plane_contour, smooth_contour,
+        maybe_close_contour, restabilize_contour, screen_points_to_plane_contour,
     };
 
     let draw_state = std::mem::take(&mut manager.draw_state);
@@ -205,32 +206,128 @@ pub fn finish_drawing(
             return false; // Not enough points
         }
 
-        // Convert screen points to 3D contour
-        let mut contour = screen_points_to_plane_contour(
+        // 1. Convert to world points
+        let stroke_points = screen_points_to_plane_contour(
             &points,
             slice_plane,
             slice_index,
             volume_dims,
             volume_spacing,
+        )
+        .points;
+
+        // 2. Try to BRIDGE or SCULPT existing contours
+        let mut processed = false;
+        if let Some(segment) = manager.active_segment_mut() {
+            if let Some(existing_list) = segment
+                .contours
+                .contours_at_slice_mut(slice_plane, slice_index)
+            {
+                // A. Check for BRIDGE (start/end on different contours)
+                let mut bridge_candidates = Vec::new();
+                for (i, contour) in existing_list.iter().enumerate() {
+                    let (_, d_start) = crate::systems::contour_draw::find_nearest_point_on_contour(
+                        &contour.points,
+                        stroke_points[0],
+                    );
+                    let (_, d_end) = crate::systems::contour_draw::find_nearest_point_on_contour(
+                        &contour.points,
+                        stroke_points[stroke_points.len() - 1],
+                    );
+
+                    if d_start <= 15.0 {
+                        bridge_candidates.push((i, true));
+                    }
+                    if d_end <= 15.0 {
+                        bridge_candidates.push((i, false));
+                    }
+                }
+
+                // If we found two different contours to bridge
+                let unique_ids: HashSet<_> = bridge_candidates.iter().map(|(id, _)| *id).collect();
+                if unique_ids.len() >= 2 {
+                    let ids: Vec<_> = unique_ids.into_iter().collect();
+                    let id_a = ids[0];
+                    let id_b = ids[1];
+                    let (first, second) = if id_a < id_b {
+                        (id_a, id_b)
+                    } else {
+                        (id_b, id_a)
+                    };
+
+                    let contour_b_points = existing_list[second].points.clone();
+                    if crate::systems::contour_draw::bridge_contours(
+                        &mut existing_list[first].points,
+                        &contour_b_points,
+                        &stroke_points,
+                        15.0,
+                    ) {
+                        existing_list[first].points =
+                            restabilize_contour(&existing_list[first].points, true);
+                        existing_list.remove(second);
+                        processed = true;
+                    }
+                }
+
+                // B. Fallback to SCULPT (start/end on same contour)
+                if !processed {
+                    for existing_contour in existing_list.iter_mut() {
+                        if crate::systems::contour_draw::sculpt_contour(
+                            &mut existing_contour.points,
+                            &stroke_points,
+                            15.0,
+                        ) {
+                            existing_contour.points =
+                                restabilize_contour(&existing_contour.points, true);
+                            existing_contour.is_closed = true;
+                            processed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if processed {
+            if let Some(segment) = manager.active_segment_mut() {
+                segment.mark_dirty();
+                return true;
+            }
+        }
+
+        // 3. Fallback: Create a new closed contour
+        let mut contour = PlaneContour::with_points(
+            Plane3D::from_slice_plane(
+                slice_plane,
+                (slice_index as f32 + 0.5) * volume_spacing[slice_plane.depth_axis()],
+            ),
+            stroke_points,
+            false,
         );
 
-        // 1. Detect if this is a "natural" closure (close enough to start)
-        // or a "forced" closure (user released far from start)
-        let natural_close_threshold = 10.0; // 10mm
+        let natural_close_threshold = 10.0;
         let is_natural_closure = maybe_close_contour(&mut contour.points, natural_close_threshold);
 
-        // 2. Smooth the contour
-        // If it's a natural closure, we smooth it as a loop for a perfect seal.
-        // If it's a forced closure, we smooth it as an OPEN path first to keep the user's
-        // stroke clean, then simply connect the ends with a straight line in the renderer.
-        let smoothed = smooth_contour(&contour.points, 4, is_natural_closure);
-        contour.points = smoothed;
-
-        // 3. Always enforce closed state for the renderer (fulfilled user request)
+        contour.points = restabilize_contour(&contour.points, is_natural_closure);
         contour.is_closed = true;
 
-        // Add to active segment
         if let Some(segment) = manager.active_segment_mut() {
+            // Duplicate Suppression: If this new loop is very near an existing one, ignore it
+            if let Some(existing_list) =
+                segment.contours.contours_at_slice(slice_plane, slice_index)
+            {
+                for existing in existing_list {
+                    if !existing.points.is_empty() && !contour.points.is_empty() {
+                        let (_, d) = crate::systems::contour_draw::find_nearest_point_on_contour(
+                            &existing.points,
+                            contour.points[0],
+                        );
+                        if d < 10.0 {
+                            return true;
+                        } // suppress redundant loop
+                    }
+                }
+            }
             segment
                 .contours
                 .add_contour(slice_plane, slice_index, contour);

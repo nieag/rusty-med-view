@@ -203,28 +203,169 @@ pub fn maybe_close_contour(points: &mut Vec<[f32; 3]>, threshold: f32) -> bool {
     }
 }
 
-/// Simplify contour by removing points that are too close together.
-///
-/// Returns a new contour with fewer points.
-pub fn simplify_contour(points: &[[f32; 3]], min_distance: f32) -> Vec<[f32; 3]> {
-    if points.is_empty() {
-        return Vec::new();
+/// Simplify a contour using the Ramer-Douglas-Peucker algorithm.
+pub fn simplify_rdp(points: &[[f32; 3]], epsilon: f32) -> Vec<[f32; 3]> {
+    if points.len() < 3 {
+        return points.to_vec();
     }
 
-    let mut result = vec![points[0]];
-    let min_dist_sq = min_distance * min_distance;
+    let mut keep = vec![false; points.len()];
+    keep[0] = true;
+    keep[points.len() - 1] = true;
 
-    for &point in &points[1..] {
-        let last = result.last().unwrap();
-        let dist_sq = (point[0] - last[0]).powi(2)
-            + (point[1] - last[1]).powi(2)
-            + (point[2] - last[2]).powi(2);
+    fn find_furthest(points: &[[f32; 3]], start: usize, end: usize, epsilon: f32) -> Option<usize> {
+        let p0 = points[start];
+        let p1 = points[end];
+        let mut max_dist = 0.0;
+        let mut index = None;
 
-        if dist_sq >= min_dist_sq {
-            result.push(point);
+        let line_vec = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+        let line_len_sq =
+            line_vec[0] * line_vec[0] + line_vec[1] * line_vec[1] + line_vec[2] * line_vec[2];
+
+        for i in (start + 1)..end {
+            let p = points[i];
+            let dist = if line_len_sq < 1e-6 {
+                // Points coincide, use distance to start
+                let dx = p[0] - p0[0];
+                let dy = p[1] - p0[1];
+                let dz = p[2] - p0[2];
+                (dx * dx + dy * dy + dz * dz).sqrt()
+            } else {
+                // Perpendicular distance to line
+                let t = ((p[0] - p0[0]) * line_vec[0]
+                    + (p[1] - p0[1]) * line_vec[1]
+                    + (p[2] - p0[2]) * line_vec[2])
+                    / line_len_sq;
+                let t = t.clamp(0.0, 1.0);
+                let proj = [
+                    p0[0] + t * line_vec[0],
+                    p0[1] + t * line_vec[1],
+                    p0[2] + t * line_vec[2],
+                ];
+                let dx = p[0] - proj[0];
+                let dy = p[1] - proj[1];
+                let dz = p[2] - proj[2];
+                (dx * dx + dy * dy + dz * dz).sqrt()
+            };
+
+            if dist > max_dist {
+                max_dist = dist;
+                index = Some(i);
+            }
+        }
+
+        if max_dist > epsilon {
+            index
+        } else {
+            None
         }
     }
 
+    fn rdp_recursive(
+        points: &[[f32; 3]],
+        start: usize,
+        end: usize,
+        epsilon: f32,
+        keep: &mut [bool],
+    ) {
+        if end <= start + 1 {
+            return;
+        }
+        if let Some(furthest) = find_furthest(points, start, end, epsilon) {
+            keep[furthest] = true;
+            rdp_recursive(points, start, furthest, epsilon, keep);
+            rdp_recursive(points, furthest, end, epsilon, keep);
+        }
+    }
+
+    rdp_recursive(points, 0, points.len() - 1, epsilon, &mut keep);
+
+    let mut result = Vec::with_capacity(points.len());
+    for (i, &k) in keep.iter().enumerate() {
+        if k {
+            result.push(points[i]);
+        }
+    }
+    result
+}
+
+/// Resample a contour to a fixed spatial interval.
+pub fn resample_contour(points: &[[f32; 3]], interval: f32, is_closed: bool) -> Vec<[f32; 3]> {
+    if points.len() < 2 || interval <= 0.0 {
+        return points.to_vec();
+    }
+
+    let mut result = vec![points[0]];
+    let mut current_pos = points[0];
+    let mut next_point_idx = 1;
+    let n = points.len();
+    let count = if is_closed { n + 1 } else { n };
+
+    while next_point_idx < count {
+        let p_next = points[next_point_idx % n];
+        let dx = p_next[0] - current_pos[0];
+        let dy = p_next[1] - current_pos[1];
+        let dz = p_next[2] - current_pos[2];
+        let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+
+        if dist >= interval {
+            // Place a point at 'interval' distance along this segment
+            let t = interval / dist;
+            current_pos = [
+                current_pos[0] + dx * t,
+                current_pos[1] + dy * t,
+                current_pos[2] + dz * t,
+            ];
+            result.push(current_pos);
+            // Don't increment next_point_idx yet, might need another point on this same segment
+        } else {
+            // Skip to next segment
+            current_pos = p_next;
+            next_point_idx += 1;
+        }
+    }
+
+    // Ensure the last point is exactly the original end point if it's not closed
+    if !is_closed && result.len() > 1 {
+        *result.last_mut().unwrap() = *points.last().unwrap();
+    }
+
+    result
+}
+
+/// Perform a full optimization pass to keep point counts stable and smooth.
+/// Deduplicate -> Simplify(0.05mm) -> Smooth(4x) -> Resample(0.5mm)
+pub fn restabilize_contour(points: &[[f32; 3]], is_closed: bool) -> Vec<[f32; 3]> {
+    // 1. Remove micro-duplicates (<0.01mm)
+    let dedup = remove_duplicates(points);
+    // 2. Prune redundant points very close to the line (0.05mm tolerance)
+    let simplified = simplify_rdp(&dedup, 0.05);
+    // 3. Add curvature (4x interpolation)
+    let smoothed = smooth_contour(&simplified, 4, is_closed);
+    // 4. Resample to a fixed density (0.5mm points)
+    resample_contour(&smoothed, 0.5, is_closed)
+}
+
+/// Remove adjacent points that are extremely close to each other (<0.01mm)
+pub fn remove_duplicates(points: &[[f32; 3]]) -> Vec<[f32; 3]> {
+    if points.len() < 2 {
+        return points.to_vec();
+    }
+    let mut result = Vec::with_capacity(points.len());
+    result.push(points[0]);
+    for i in 1..points.len() {
+        let p1 = points[i - 1];
+        let p2 = points[i];
+        let dx = p2[0] - p1[0];
+        let dy = p2[1] - p1[1];
+        let dz = p2[2] - p1[2];
+        let d_sq = dx * dx + dy * dy + dz * dz;
+        // 0.01mm threshold (1e-4 distance)
+        if d_sq > 1e-6 {
+            result.push(p2);
+        }
+    }
     result
 }
 
@@ -235,6 +376,206 @@ pub fn should_add_point(last_point: [f32; 2], new_point: [f32; 2], min_distance:
     let dx = new_point[0] - last_point[0];
     let dy = new_point[1] - last_point[1];
     (dx * dx + dy * dy).sqrt() >= min_distance
+}
+
+/// Find the nearest point index on a contour to a target point.
+pub fn find_nearest_point_on_contour(points: &[[f32; 3]], target: [f32; 3]) -> (usize, f32) {
+    let mut min_dist_sq = f32::MAX;
+    let mut best_idx = 0;
+    for (i, &p) in points.iter().enumerate() {
+        let dx = p[0] - target[0];
+        let dy = p[1] - target[1];
+        let dz = p[2] - target[2];
+        let d_sq = dx * dx + dy * dy + dz * dz;
+        if d_sq < min_dist_sq {
+            min_dist_sq = d_sq;
+            best_idx = i;
+        }
+    }
+    (best_idx, min_dist_sq.sqrt())
+}
+
+/// Merge a new stroke with an existing closed contour.
+///
+/// If both endpoints of the stroke are within `snap_threshold` of the existing contour,
+/// it will replace the shorter path between the snap points with the new stroke.
+///
+/// Returns true if sculpting was successful.
+pub fn sculpt_contour(
+    existing: &mut Vec<[f32; 3]>,
+    stroke: &[[f32; 3]],
+    snap_threshold: f32,
+) -> bool {
+    let n = existing.len();
+    if n < 3 || stroke.len() < 2 {
+        return false;
+    }
+
+    // 1. Find the sub-stroke that enters and leaves proximity
+    let mut stroke_start_idx = None;
+    let mut stroke_end_idx = None;
+    let mut loop_snap_start = 0;
+    let mut loop_snap_end = 0;
+
+    for (i, &s_point) in stroke.iter().enumerate() {
+        let (best_idx, dist) = find_nearest_point_on_contour(existing, s_point);
+        if dist <= snap_threshold {
+            stroke_start_idx = Some(i);
+            loop_snap_start = best_idx;
+            break;
+        }
+    }
+
+    for (i, &s_point) in stroke.iter().enumerate().rev() {
+        let (best_idx, dist) = find_nearest_point_on_contour(existing, s_point);
+        if dist <= snap_threshold {
+            stroke_end_idx = Some(i);
+            loop_snap_end = best_idx;
+            break;
+        }
+    }
+
+    let (s_i, s_j) = match (stroke_start_idx, stroke_end_idx) {
+        (Some(i), Some(j)) if i < j => (i, j),
+        _ => return false,
+    };
+
+    // 2. Determine which loop path to replace
+    let (idx_start, idx_end) = (loop_snap_start, loop_snap_end);
+    let path1_len = if idx_end >= idx_start {
+        idx_end - idx_start
+    } else {
+        (n - idx_start) + idx_end
+    };
+    let path2_len = n - path1_len;
+
+    let (start, end) = if path1_len <= path2_len {
+        (idx_start, idx_end)
+    } else {
+        (idx_end, idx_start)
+    };
+
+    // 3. Reconstruct the contour with exact weld at loop vertices
+    // We replace existing[start..end] with stroke[s_i..s_j]
+    let mut new_points = Vec::with_capacity(n + (s_j - s_i + 1));
+
+    // Add the "long" part of the existing loop
+    let mut curr = end;
+    while curr != start {
+        new_points.push(existing[curr]);
+        curr = (curr + 1) % n;
+    }
+    // EXACT WELD: Start the new segment exactly at the loop vertex
+    new_points.push(existing[start]);
+
+    // Insert the internal stroke points (excluding the ends to avoid double-overlap)
+    let sub_stroke = &stroke[s_i..=s_j];
+
+    // Check winding/direction
+    let d_start = {
+        let p = new_points[new_points.len() - 1];
+        let s = sub_stroke[0];
+        (p[0] - s[0]).powi(2) + (p[1] - s[1]).powi(2) + (p[2] - s[2]).powi(2)
+    };
+    let d_end = {
+        let p = new_points[new_points.len() - 1];
+        let s = sub_stroke[sub_stroke.len() - 1];
+        (p[0] - s[0]).powi(2) + (p[1] - s[1]).powi(2) + (p[2] - s[2]).powi(2)
+    };
+
+    if d_start <= d_end {
+        if sub_stroke.len() > 2 {
+            for &p in &sub_stroke[1..sub_stroke.len() - 1] {
+                new_points.push(p);
+            }
+        }
+    } else {
+        if sub_stroke.len() > 2 {
+            for &p in sub_stroke[1..sub_stroke.len() - 1].iter().rev() {
+                new_points.push(p);
+            }
+        }
+    }
+
+    *existing = new_points;
+    true
+}
+
+/// Bridge two separate contours using a connecting stroke.
+///
+/// Reconstructs a single loop: A[start..start] -> Stroke -> B[end..end] -> Stroke(rev)
+pub fn bridge_contours(
+    contour_a: &mut Vec<[f32; 3]>,
+    contour_b: &[[f32; 3]],
+    stroke: &[[f32; 3]],
+    snap_threshold: f32,
+) -> bool {
+    let n_a = contour_a.len();
+    let n_b = contour_b.len();
+    if n_a < 3 || n_b < 3 || stroke.len() < 2 {
+        return false;
+    }
+
+    // 1. Find best sub-stroke and loop snap indices
+    let mut stroke_start_idx = None;
+    let mut loop_a_idx = 0;
+    for (i, &s_point) in stroke.iter().enumerate() {
+        let (best_idx, dist) = find_nearest_point_on_contour(contour_a, s_point);
+        if dist <= snap_threshold {
+            stroke_start_idx = Some(i);
+            loop_a_idx = best_idx;
+            break;
+        }
+    }
+
+    let mut stroke_end_idx = None;
+    let mut loop_b_idx = 0;
+    for (i, &s_point) in stroke.iter().enumerate().rev() {
+        let (best_idx, dist) = find_nearest_point_on_contour(contour_b, s_point);
+        if dist <= snap_threshold {
+            stroke_end_idx = Some(i);
+            loop_b_idx = best_idx;
+            break;
+        }
+    }
+
+    let (s_i, s_j) = match (stroke_start_idx, stroke_end_idx) {
+        (Some(i), Some(j)) if i < j => (i, j),
+        _ => return false,
+    };
+
+    // 2. Reconstruct: A(loop) -> Stroke -> B(loop) -> Stroke(rev)
+    let sub_stroke = &stroke[s_i..=s_j];
+    let mut new_points = Vec::with_capacity(n_a + n_b + sub_stroke.len() * 2);
+
+    // Full loop A (starting/ending at snap)
+    // The loop 0..n_a already includes loop_a_idx
+    for i in 0..n_a {
+        new_points.push(contour_a[(loop_a_idx + i) % n_a]);
+    }
+
+    // Forward stroke to B
+    // Weld A[loop_a_idx] to B[loop_b_idx]
+    if sub_stroke.len() > 2 {
+        for &p in &sub_stroke[1..sub_stroke.len() - 1] {
+            new_points.push(p);
+        }
+    }
+
+    // Full loop B (starting/ending at snap)
+    for i in 0..n_b {
+        new_points.push(contour_b[(loop_b_idx + i) % n_b]);
+    }
+
+    // Backward stroke back to A
+    if sub_stroke.len() > 2 {
+        for &p in sub_stroke[1..sub_stroke.len() - 1].iter().rev() {
+            new_points.push(p);
+        }
+    }
+
+    *contour_a = new_points;
+    true
 }
 
 // ============================================================================
@@ -368,20 +709,20 @@ mod tests {
     }
 
     #[test]
-    fn test_simplify_contour() {
+    fn test_simplify_rdp() {
         let points = vec![
             [0.0, 0.0, 0.0],
-            [0.001, 0.0, 0.0], // Too close, should be removed
+            [0.5, 0.001, 0.0], // Nearly on the line, should be removed
             [1.0, 0.0, 0.0],
-            [1.001, 0.0, 0.0], // Too close, should be removed
+            [1.5, 0.5, 0.0], // Peak
             [2.0, 0.0, 0.0],
         ];
-        let simplified = simplify_contour(&points, 0.1);
+        let simplified = simplify_rdp(&points, 0.1);
 
-        assert_eq!(simplified.len(), 3);
+        // Should keep 0, 2, 3, 4 (p1 is removed because it's only 0.001 away from the line p0-p1)
+        assert_eq!(simplified.len(), 4);
         assert_eq!(simplified[0], [0.0, 0.0, 0.0]);
         assert_eq!(simplified[1], [1.0, 0.0, 0.0]);
-        assert_eq!(simplified[2], [2.0, 0.0, 0.0]);
     }
 
     #[test]

@@ -65,7 +65,7 @@ pub struct ContourUniforms {
     pub _padding: [f32; 4], // 16 bytes to reach 96 total
 }
 
-const MAX_CONTOUR_LINES: usize = 4096;
+const MAX_CONTOUR_LINES: usize = 131072; // Increased to 8MB to handle complex multi-viewport segmentations
 
 /// Resources for contour rendering.
 /// Supports up to 4 separate view modes (3D, Axial, Coronal, Sagittal)
