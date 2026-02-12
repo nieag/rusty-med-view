@@ -11,6 +11,7 @@ use crate::render::protocols;
 use crate::render::sdf_preview_pipeline::SdfPreviewPipeline;
 use crate::systems::SegmentManager;
 use hecs::World;
+use std::collections::HashMap;
 use std::sync::Arc;
 use winit::event_loop::EventLoopProxy;
 use winit::window::Window;
@@ -45,6 +46,8 @@ pub struct RenderingContext {
     pub contour_pipeline: ContourPipeline,
     pub sdf_preview_pipeline: SdfPreviewPipeline,
     pub mesh_pipeline: MeshPipeline,
+    pub segment_mesh_gpu_cache:
+        HashMap<uuid::Uuid, (u64, crate::render::mesh_pipeline::MeshResources)>,
 
     // Proxy for waking up the event loop from async tasks
     pub event_proxy: EventLoopProxy<AppEvent>,
@@ -233,6 +236,7 @@ impl RenderingContext {
             contour_pipeline,
             sdf_preview_pipeline,
             mesh_pipeline,
+            segment_mesh_gpu_cache: HashMap::new(),
             event_proxy,
         }
     }

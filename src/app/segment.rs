@@ -361,6 +361,8 @@ pub struct Segment {
     pub sdf: Option<SdfVolume>,
     /// Triangle mesh (regenerated when SDF changes)
     pub mesh: Option<MeshData>,
+    /// Monotonic mesh revision used to gate GPU buffer rebuilds.
+    pub mesh_revision: u64,
 
     // === Dirty Flags ===
     /// True if SDF needs regeneration
@@ -394,6 +396,7 @@ impl Segment {
             contours: ContourSet::new(),
             sdf: None,
             mesh: None,
+            mesh_revision: 0,
             sdf_dirty: true,
             mesh_dirty: true,
             sdf_revision: 0,
@@ -416,6 +419,30 @@ impl Segment {
     /// Alias for invalidate_caches
     pub fn mark_dirty(&mut self) {
         self.invalidate_caches();
+    }
+
+    /// Mark caches dirty and merge a world-space dirty ROI.
+    pub fn mark_dirty_with_world_roi(&mut self, roi_world: [f32; 6]) {
+        self.invalidate_caches();
+        self.extend_dirty_roi_world(roi_world);
+    }
+
+    /// Merge a world-space dirty ROI into the segment's pending dirty region.
+    pub fn extend_dirty_roi_world(&mut self, roi_world: [f32; 6]) {
+        if roi_world[0] > roi_world[3] || roi_world[1] > roi_world[4] || roi_world[2] > roi_world[5] {
+            return;
+        }
+        self.dirty_roi_world = Some(match self.dirty_roi_world {
+            Some(prev) => [
+                prev[0].min(roi_world[0]),
+                prev[1].min(roi_world[1]),
+                prev[2].min(roi_world[2]),
+                prev[3].max(roi_world[3]),
+                prev[4].max(roi_world[4]),
+                prev[5].max(roi_world[5]),
+            ],
+            None => roi_world,
+        });
     }
 
     /// Check if segment has any contours

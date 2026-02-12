@@ -154,6 +154,7 @@ impl ApplicationHandler<AppEvent> for App {
                     &mut ctx.contour_pipeline,
                     &mut ctx.sdf_preview_pipeline,
                     &ctx.mesh_pipeline,
+                    &mut ctx.segment_mesh_gpu_cache,
                     &mut ctx.world,
                     &ctx.entities,
                     &mut ctx.gui,

@@ -12,6 +12,7 @@ use crate::render::sdf_preview_pipeline::{SdfPreviewPipeline, SdfPreviewUniforms
 use crate::systems::{self, ContourDrawState, SegmentManager};
 use crate::util::orientation::SlicePlane;
 use hecs::World;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
@@ -285,6 +286,7 @@ pub fn render_frame(
     contour_pipeline: &mut ContourPipeline,
     sdf_preview_pipeline: &mut SdfPreviewPipeline,
     mesh_pipeline: &MeshPipeline,
+    segment_mesh_gpu_cache: &mut HashMap<uuid::Uuid, (u64, MeshResources)>,
     world: &mut World,
     entities: &AppEntities,
     gui: &mut gui::Gui,
@@ -707,24 +709,45 @@ pub fn render_frame(
             }
 
             if let Ok(manager) = world.get::<&SegmentManager>(entities.segments) {
+                let live_ids: HashSet<uuid::Uuid> =
+                    manager.segments.iter().map(|s| s.id).collect();
+                segment_mesh_gpu_cache.retain(|id, _| live_ids.contains(id));
+
                 if let Some(segment) = manager.active_segment() {
                     if let Some(mesh_data) = segment.mesh.as_ref() {
                         let segment_color = segment.color;
-                        if let Some(mesh_res) = MeshResources::from_mesh_data(device, mesh_data) {
-                            for (e, rect, u_idx) in &viewports {
-                                if *u_idx != 0 {
-                                    continue;
-                                }
+                        let mut mesh_ready = false;
+                        if let Some((rev, _)) = segment_mesh_gpu_cache.get(&segment.id) {
+                            if *rev == segment.mesh_revision {
+                                mesh_ready = true;
+                            }
+                        }
+                        if !mesh_ready {
+                            if let Some(mesh_res) = MeshResources::from_mesh_data(device, mesh_data) {
+                                segment_mesh_gpu_cache
+                                    .insert(segment.id, (segment.mesh_revision, mesh_res));
+                                mesh_ready = true;
+                            } else {
+                                segment_mesh_gpu_cache.remove(&segment.id);
+                            }
+                        }
 
-                                let vs = world
-                                    .get::<&ViewportState>(*e)
-                                    .ok()
-                                    .map(|r| *r)
-                                    .unwrap_or_default();
-                                let composed_rotation = crate::util::orientation::compose_view_rotation(
-                                    data_orientation,
-                                    vs.user_rotation,
-                                );
+                        if mesh_ready {
+                            if let Some((_, mesh_res)) = segment_mesh_gpu_cache.get(&segment.id) {
+                                for (e, rect, u_idx) in &viewports {
+                                    if *u_idx != 0 {
+                                        continue;
+                                    }
+
+                                    let vs = world
+                                        .get::<&ViewportState>(*e)
+                                        .ok()
+                                        .map(|r| *r)
+                                        .unwrap_or_default();
+                                    let composed_rotation = crate::util::orientation::compose_view_rotation(
+                                        data_orientation,
+                                        vs.user_rotation,
+                                    );
 
                                 let phys = [
                                     (volume_dims[0].saturating_sub(1) as f32 * volume_spacing[0]).max(1e-3),
@@ -788,32 +811,33 @@ pub fn render_frame(
                                 };
                                 mesh_pipeline.update_uniforms(queue, &mesh_uniforms);
 
-                                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                    label: Some("SDF 3D Surface Pass"),
-                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                        view: &view,
-                                        resolve_target: None,
-                                        ops: wgpu::Operations {
-                                            load: wgpu::LoadOp::Load,
-                                            store: wgpu::StoreOp::Store,
-                                        },
-                                        depth_slice: None,
-                                    })],
-                                    depth_stencil_attachment: Some(
-                                        wgpu::RenderPassDepthStencilAttachment {
-                                            view: &mesh_pipeline.depth_texture,
-                                            depth_ops: Some(wgpu::Operations {
-                                                load: wgpu::LoadOp::Clear(1.0),
+                                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                        label: Some("SDF 3D Surface Pass"),
+                                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                            view: &view,
+                                            resolve_target: None,
+                                            ops: wgpu::Operations {
+                                                load: wgpu::LoadOp::Load,
                                                 store: wgpu::StoreOp::Store,
-                                            }),
-                                            stencil_ops: None,
-                                        },
-                                    ),
-                                    timestamp_writes: None,
-                                    occlusion_query_set: None,
-                                });
-                                pass.set_viewport(rect[0], rect[1], rect[2], rect[3], 0.0, 1.0);
-                                mesh_pipeline.render(&mut pass, &mesh_res);
+                                            },
+                                            depth_slice: None,
+                                        })],
+                                        depth_stencil_attachment: Some(
+                                            wgpu::RenderPassDepthStencilAttachment {
+                                                view: &mesh_pipeline.depth_texture,
+                                                depth_ops: Some(wgpu::Operations {
+                                                    load: wgpu::LoadOp::Clear(1.0),
+                                                    store: wgpu::StoreOp::Store,
+                                                }),
+                                                stencil_ops: None,
+                                            },
+                                        ),
+                                        timestamp_writes: None,
+                                        occlusion_query_set: None,
+                                    });
+                                    pass.set_viewport(rect[0], rect[1], rect[2], rect[3], 0.0, 1.0);
+                                    mesh_pipeline.render(&mut pass, mesh_res);
+                                }
                             }
                         }
                     }

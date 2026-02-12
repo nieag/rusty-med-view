@@ -5,8 +5,9 @@
 use crate::app::segment::{Plane3D, PlaneContour, Segment};
 use crate::components::{AppEntities, SegPerfConfig, VolumeData};
 use crate::convert::{
-    build_sdf_from_contours_with_config, marching_cubes_with_options, MarchingCubesOptions,
-    MeshNormalMode, SdfBuildConfig,
+    build_sdf_from_contours_with_config, marching_cubes_with_options,
+    update_sdf_region_from_contours_with_config, MarchingCubesOptions, MeshNormalMode,
+    SdfBuildConfig,
 };
 use crate::render::mesh_pipeline::MeshResources;
 use crate::systems::contour_draw::ContourDrawState;
@@ -132,18 +133,39 @@ fn regenerate_segment_if_dirty_with_resolution(
     // Regenerate SDF if dirty
     if segment.sdf_dirty {
         let sdf_start = Instant::now();
-        let sdf = build_sdf_from_contours_with_config(
-            &segment.contours,
-            volume_dims,
-            volume_spacing,
-            SdfBuildConfig {
-                resolution_multiplier,
-                clamp_distance_mm: sdf_band_mm.max(0.5),
-                ..SdfBuildConfig::default()
-            },
-        );
+        let build_cfg = SdfBuildConfig {
+            resolution_multiplier,
+            clamp_distance_mm: sdf_band_mm.max(0.5),
+            ..SdfBuildConfig::default()
+        };
+        let sdf = if let (Some(existing), Some(dirty_roi_world)) =
+            (segment.sdf.as_mut(), segment.dirty_roi_world)
+        {
+            let updated =
+                update_sdf_region_from_contours_with_config(existing, &segment.contours, build_cfg, dirty_roi_world);
+            if updated.is_some() {
+                None
+            } else {
+                Some(build_sdf_from_contours_with_config(
+                    &segment.contours,
+                    volume_dims,
+                    volume_spacing,
+                    build_cfg,
+                ))
+            }
+        } else {
+            Some(build_sdf_from_contours_with_config(
+                &segment.contours,
+                volume_dims,
+                volume_spacing,
+                build_cfg,
+            ))
+        };
         sdf_ms = sdf_start.elapsed().as_secs_f32() * 1000.0;
-        segment.sdf = Some(sdf);
+        if let Some(sdf) = sdf {
+            segment.sdf = Some(sdf);
+        }
+        segment.dirty_roi_world = None;
         segment.sdf_revision = segment.sdf_revision.wrapping_add(1);
         if is_live {
             segment.live_sdf_revision = segment.sdf_revision;
@@ -185,6 +207,7 @@ fn regenerate_segment_if_dirty_with_resolution(
             };
             mesh_ms = mesh_start.elapsed().as_secs_f32() * 1000.0;
             segment.mesh = Some(mesh);
+            segment.mesh_revision = segment.mesh_revision.wrapping_add(1);
             mesh_changed = true;
         }
         segment.mesh_dirty = false;
@@ -429,6 +452,31 @@ fn project_point_for_slice(slice_plane: SlicePlane, p: [f32; 3]) -> [f32; 2] {
     }
 }
 
+fn stroke_bounds_world(points: &[[f32; 3]], margin_mm: f32) -> Option<[f32; 6]> {
+    if points.is_empty() {
+        return None;
+    }
+    let mut minp = [f32::MAX; 3];
+    let mut maxp = [f32::MIN; 3];
+    for p in points {
+        minp[0] = minp[0].min(p[0]);
+        minp[1] = minp[1].min(p[1]);
+        minp[2] = minp[2].min(p[2]);
+        maxp[0] = maxp[0].max(p[0]);
+        maxp[1] = maxp[1].max(p[1]);
+        maxp[2] = maxp[2].max(p[2]);
+    }
+    let m = margin_mm.max(0.0);
+    Some([
+        minp[0] - m,
+        minp[1] - m,
+        minp[2] - m,
+        maxp[0] + m,
+        maxp[1] + m,
+        maxp[2] + m,
+    ])
+}
+
 fn orient2d(a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> f32 {
     (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
 }
@@ -550,6 +598,7 @@ pub fn finish_drawing(
             volume_spacing,
         )
         .points;
+        let stroke_roi_world = stroke_bounds_world(&stroke_points, 8.0);
 
         // 2. Try to BRIDGE or SCULPT existing contours
         let mut processed = false;
@@ -625,7 +674,11 @@ pub fn finish_drawing(
 
         if processed {
             if let Some(segment) = manager.active_segment_mut() {
-                segment.mark_dirty();
+                if let Some(roi) = stroke_roi_world {
+                    segment.mark_dirty_with_world_roi(roi);
+                } else {
+                    segment.mark_dirty();
+                }
                 return true;
             }
         }
@@ -673,7 +726,11 @@ pub fn finish_drawing(
             segment
                 .contours
                 .add_contour(slice_plane, slice_index, contour);
-            segment.mark_dirty();
+            if let Some(roi) = stroke_roi_world {
+                segment.mark_dirty_with_world_roi(roi);
+            } else {
+                segment.mark_dirty();
+            }
             return true;
         }
     }

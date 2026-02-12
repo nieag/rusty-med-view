@@ -137,41 +137,15 @@ pub fn draw_segment_panel(
     ui.label(format!("SDF: {}", active_sdf_status));
 
     if let Ok(mut perf) = world.get::<&mut SegPerfConfig>(entities.seg_perf) {
+        // Performance mode: keep live updates and finalize behavior automatic.
+        perf.live_enabled = true;
+        perf.live_mesh_enabled = true;
+        perf.auto_finalize = true;
         ui.separator();
-        ui.label("Realtime Perf");
-        ui.checkbox(&mut perf.live_enabled, "Live Update (while drawing)");
-        ui.checkbox(&mut perf.live_mesh_enabled, "Live Mesh (while drawing)");
-        ui.checkbox(&mut perf.webgpu_required, "WebGPU Required");
-        if perf.webgpu_required {
-            ui.checkbox(&mut perf.fallback_active, "Force CPU Fallback");
-        }
-        ui.add(
-            egui::Slider::new(&mut perf.live_resolution_scale, 0.2..=1.5)
-                .text("Live Resolution"),
-        );
-        ui.add(
-            egui::Slider::new(&mut perf.full_resolution_scale, 0.5..=2.5)
-                .text("Final Resolution"),
-        );
-        ui.add(
-            egui::Slider::new(&mut perf.live_interval_ms, 16.0..=250.0)
-                .text("Live Interval ms"),
-        );
-        ui.add(
-            egui::Slider::new(&mut perf.live_mesh_interval_ms, 100.0..=600.0)
-                .text("Live Mesh Interval ms"),
-        );
-        ui.add(
-            egui::Slider::new(&mut perf.live_sdf_band_mm, 2.0..=32.0).text("Live SDF Band (mm)"),
-        );
-        ui.add(
-            egui::Slider::new(&mut perf.final_sdf_band_mm, 4.0..=64.0).text("Final SDF Band (mm)"),
-        );
-        ui.add(egui::Slider::new(&mut perf.mesh_chunk_size, 8..=96).text("Mesh Chunk Size"));
-        ui.checkbox(&mut perf.auto_finalize, "Auto Finalize (can stall)");
-        if ui.button("Finalize Dirty Segments Now").clicked() {
-            perf.finalize_requested = true;
-        }
+        ui.label("Segmentation Perf");
+        ui.label("Live updates: on (auto)");
+        ui.label("Mesh preview: on (auto)");
+        ui.label("Finalize: on (auto)");
         ui.label(format!(
             "Last update: SDF {:.1} ms, Mesh {:.1} ms, Queue {}",
             perf.last_sdf_ms, perf.last_mesh_ms, perf.queue_depth

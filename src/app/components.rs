@@ -264,7 +264,7 @@ impl Default for SegPerfConfig {
             live_sdf_band_mm: 12.0,
             final_sdf_band_mm: 24.0,
             mesh_chunk_size: 32,
-            auto_finalize: false,
+            auto_finalize: true,
             finalize_requested: false,
             max_roi_margin_mm: 12.0,
             next_finalize_index: 0,

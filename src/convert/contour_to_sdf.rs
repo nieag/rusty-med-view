@@ -357,6 +357,115 @@ fn blend_values(a: f32, b: f32, mode: SdfBlendMode) -> f32 {
     }
 }
 
+fn intersect_ranges(a: IndexRange, b: IndexRange) -> Option<IndexRange> {
+    let x0 = a.x0.max(b.x0);
+    let y0 = a.y0.max(b.y0);
+    let z0 = a.z0.max(b.z0);
+    let x1 = a.x1.min(b.x1);
+    let y1 = a.y1.min(b.y1);
+    let z1 = a.z1.min(b.z1);
+    if x0 > x1 || y0 > y1 || z0 > z1 {
+        return None;
+    }
+    Some(IndexRange { x0, x1, y0, y1, z0, z1 })
+}
+
+/// Incrementally update a world-space ROI in an existing SDF.
+///
+/// This is optimized for interactive editing: only the dirty region is reset and recomputed.
+/// Returns the index-space region that was recomputed when any work occurred.
+pub fn update_sdf_region_from_contours_with_config(
+    sdf: &mut SdfVolume,
+    contours: &ContourSet,
+    cfg: SdfBuildConfig,
+    dirty_roi_world: [f32; 6],
+) -> Option<[u32; 6]> {
+    if contours.is_empty() {
+        return None;
+    }
+
+    let e = cfg.clamp_distance_mm.max(0.0);
+    let padded_min = [
+        dirty_roi_world[0] - e,
+        dirty_roi_world[1] - e,
+        dirty_roi_world[2] - e,
+    ];
+    let padded_max = [
+        dirty_roi_world[3] + e,
+        dirty_roi_world[4] + e,
+        dirty_roi_world[5] + e,
+    ];
+    let dirty_roi = to_index_range(padded_min, padded_max, sdf)?;
+
+    let reset_value = if cfg.clamp_distance_mm.is_finite() {
+        cfg.clamp_distance_mm.max(0.5)
+    } else {
+        f32::MAX
+    };
+    for z in dirty_roi.z0..=dirty_roi.z1 {
+        for y in dirty_roi.y0..=dirty_roi.y1 {
+            for x in dirty_roi.x0..=dirty_roi.x1 {
+                sdf.set(x, y, z, reset_value);
+            }
+        }
+    }
+
+    let mut usable: Vec<_> = contours
+        .all_contours()
+        .filter_map(|c| contour_to_axis_2d(c, sdf.spacing, &cfg))
+        .collect();
+    if usable.is_empty() {
+        return None;
+    }
+    resolve_slice_slab_bounds(&mut usable, 1e-3);
+
+    let mut touched: Option<IndexRange> = None;
+    for c in &usable {
+        let Some(roi) = contour_roi(c, sdf, cfg.clamp_distance_mm) else {
+            continue;
+        };
+        let Some(intersection) = intersect_ranges(roi, dirty_roi) else {
+            continue;
+        };
+        touched = Some(merge_index_ranges(touched, intersection));
+
+        for z in intersection.z0..=intersection.z1 {
+            for y in intersection.y0..=intersection.y1 {
+                for x in intersection.x0..=intersection.x1 {
+                    let world = sdf.index_to_world([x, y, z]);
+                    let mut d = sd_extruded_polygon(world, c);
+                    if cfg.clamp_distance_mm.is_finite() {
+                        d = d.clamp(-cfg.clamp_distance_mm, cfg.clamp_distance_mm);
+                    }
+                    let current = sdf.get(x, y, z);
+                    sdf.set(x, y, z, blend_values(current, d, cfg.blend_mode));
+                }
+            }
+        }
+    }
+
+    if let Some(t) = touched {
+        sdf.active_bounds = Some(match sdf.active_bounds {
+            Some(prev) => {
+                let prev = IndexRange {
+                    x0: prev[0],
+                    y0: prev[1],
+                    z0: prev[2],
+                    x1: prev[3],
+                    y1: prev[4],
+                    z1: prev[5],
+                };
+                let merged = merge_index_ranges(Some(prev), t);
+                [merged.x0, merged.y0, merged.z0, merged.x1, merged.y1, merged.z1]
+            }
+            None => [t.x0, t.y0, t.z0, t.x1, t.y1, t.z1],
+        });
+        Some([t.x0, t.y0, t.z0, t.x1, t.y1, t.z1])
+    } else {
+        None
+    }
+}
+
 pub fn build_sdf_from_contours_with_config(
     contours: &ContourSet,
     volume_dims: [u32; 3],
@@ -564,5 +673,40 @@ mod tests {
 
         let mid = sdf.get(5, 5, 4);
         assert!(mid < 0.0, "expected connected interior between slices, got {mid}");
+    }
+
+    #[test]
+    fn test_incremental_roi_update_matches_full_rebuild_inside_roi() {
+        let mut contours = ContourSet::new();
+        let square = PlaneContour::with_points(
+            Plane3D::from_axial(5.0),
+            vec![[2.0, 2.0, 5.0], [8.0, 2.0, 5.0], [8.0, 8.0, 5.0], [2.0, 8.0, 5.0]],
+            true,
+        );
+        contours.add_contour(SlicePlane::Axial, 5, square);
+        let cfg = SdfBuildConfig {
+            clamp_distance_mm: 16.0,
+            ..SdfBuildConfig::default()
+        };
+
+        let mut sdf_inc = build_sdf_from_contours_with_config(&contours, [12, 12, 12], [1.0, 1.0, 1.0], cfg);
+        let dirty_world = [3.0, 3.0, 4.0, 7.0, 7.0, 6.0];
+        let touched = update_sdf_region_from_contours_with_config(&mut sdf_inc, &contours, cfg, dirty_world);
+        assert!(touched.is_some());
+
+        let sdf_full = build_sdf_from_contours_with_config(&contours, [12, 12, 12], [1.0, 1.0, 1.0], cfg);
+        let roi = touched.unwrap();
+        for z in roi[2]..=roi[5] {
+            for y in roi[1]..=roi[4] {
+                for x in roi[0]..=roi[3] {
+                    let a = sdf_inc.get(x, y, z);
+                    let b = sdf_full.get(x, y, z);
+                    assert!(
+                        (a - b).abs() < 1e-4,
+                        "incremental mismatch at ({x},{y},{z}): {a} vs {b}"
+                    );
+                }
+            }
+        }
     }
 }
