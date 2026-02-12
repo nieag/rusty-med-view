@@ -337,6 +337,7 @@ pub struct MarchingCubesOptions {
     pub normal_mode: MeshNormalMode,
     pub restrict_to_active_bounds: bool,
     pub chunk_size: u32,
+    pub bounds_override: Option<[u32; 6]>,
 }
 
 impl Default for MarchingCubesOptions {
@@ -346,6 +347,7 @@ impl Default for MarchingCubesOptions {
             normal_mode: MeshNormalMode::Gradient,
             restrict_to_active_bounds: true,
             chunk_size: 32,
+            bounds_override: None,
         }
     }
 }
@@ -368,7 +370,16 @@ pub fn marching_cubes_with_options(
         return mesh;
     }
 
-    let (x_start, x_end, y_start, y_end, z_start, z_end) = if options.restrict_to_active_bounds {
+    let (x_start, x_end, y_start, y_end, z_start, z_end) = if let Some(b) = options.bounds_override {
+        (
+            b[0].min(dims[0].saturating_sub(2)),
+            b[3].min(dims[0].saturating_sub(2)),
+            b[1].min(dims[1].saturating_sub(2)),
+            b[4].min(dims[1].saturating_sub(2)),
+            b[2].min(dims[2].saturating_sub(2)),
+            b[5].min(dims[2].saturating_sub(2)),
+        )
+    } else if options.restrict_to_active_bounds {
         if let Some(b) = sdf.active_bounds {
         // Expand by one cell so cubes that straddle ROI boundaries are still processed.
         (

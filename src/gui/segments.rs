@@ -140,12 +140,12 @@ pub fn draw_segment_panel(
         // Performance mode: keep live updates and finalize behavior automatic.
         perf.live_enabled = true;
         perf.live_mesh_enabled = true;
-        perf.auto_finalize = true;
+        perf.auto_finalize = false;
         ui.separator();
         ui.label("Segmentation Perf");
         ui.label("Live updates: on (auto)");
         ui.label("Mesh preview: on (auto)");
-        ui.label("Finalize: on (auto)");
+        ui.label("Finalize: deferred");
         ui.label(format!(
             "Last update: SDF {:.1} ms, Mesh {:.1} ms, Queue {}",
             perf.last_sdf_ms, perf.last_mesh_ms, perf.queue_depth
