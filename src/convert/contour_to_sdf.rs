@@ -445,21 +445,9 @@ pub fn update_sdf_region_from_contours_with_config(
     }
 
     if let Some(t) = touched {
-        sdf.active_bounds = Some(match sdf.active_bounds {
-            Some(prev) => {
-                let prev = IndexRange {
-                    x0: prev[0],
-                    y0: prev[1],
-                    z0: prev[2],
-                    x1: prev[3],
-                    y1: prev[4],
-                    z1: prev[5],
-                };
-                let merged = merge_index_ranges(Some(prev), t);
-                [merged.x0, merged.y0, merged.z0, merged.x1, merged.y1, merged.z1]
-            }
-            None => [t.x0, t.y0, t.z0, t.x1, t.y1, t.z1],
-        });
+        // For interactive edits, keep active bounds tight to the latest dirty region.
+        // This keeps downstream meshing localized instead of growing unbounded over time.
+        sdf.active_bounds = Some([t.x0, t.y0, t.z0, t.x1, t.y1, t.z1]);
         Some([t.x0, t.y0, t.z0, t.x1, t.y1, t.z1])
     } else {
         None

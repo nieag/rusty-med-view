@@ -188,7 +188,7 @@ fn regenerate_segment_if_dirty_with_resolution(
                     0.0,
                     MarchingCubesOptions {
                         enforce_outward_winding: false,
-                        normal_mode: MeshNormalMode::Gradient,
+                        normal_mode: MeshNormalMode::Flat,
                         restrict_to_active_bounds: true,
                         chunk_size: mesh_chunk_size.max(4),
                     },
@@ -239,6 +239,8 @@ pub fn regenerate_all_dirty(
 
 /// Regenerate segment derivatives (SDF + mesh) once per frame if needed.
 pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities) {
+    const FINALIZE_IDLE_COOLDOWN_MS: f32 = 600.0;
+
     let mut volume_dims = [0u32; 3];
     let mut volume_spacing = [1.0f32; 3];
     for (_, vol) in world.query::<&VolumeData>().iter() {
@@ -365,7 +367,14 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
             }
 
             queue_depth = dirty_indices.len() as u32;
-            if !dirty_indices.is_empty() && (auto_finalize || finalize_requested) {
+            let finalize_cooldown_elapsed = match last_live_update_at {
+                Some(t) => (now - t).as_secs_f32() * 1000.0 >= FINALIZE_IDLE_COOLDOWN_MS,
+                None => true,
+            };
+            if !dirty_indices.is_empty()
+                && (auto_finalize || finalize_requested)
+                && finalize_cooldown_elapsed
+            {
                 let mut chosen = dirty_indices[0];
                 if dirty_indices.len() > 1 {
                     if let Some(next) = dirty_indices.iter().copied().find(|&i| i >= next_finalize_index) {
