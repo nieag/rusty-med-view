@@ -265,9 +265,9 @@ fn regenerate_live_chunk_meshes(
             },
         );
         if mesh.is_empty() {
-            chunk_runtime.live_chunk_meshes.remove(&key);
+            chunk_runtime.mesh_chunks_cpu.remove(&key);
         } else {
-            chunk_runtime.live_chunk_meshes.insert(key, mesh);
+            chunk_runtime.mesh_chunks_cpu.insert(key, mesh);
         }
         if start.elapsed().as_secs_f32() * 1000.0 >= frame_budget_ms {
             break;
@@ -572,6 +572,41 @@ fn stroke_bounds_world(points: &[[f32; 3]], margin_mm: f32) -> Option<[f32; 6]> 
     ])
 }
 
+fn world_roi_to_index_bounds(
+    roi_world: [f32; 6],
+    volume_dims: [u32; 3],
+    volume_spacing: [f32; 3],
+) -> Option<[u32; 6]> {
+    if roi_world[0] > roi_world[3] || roi_world[1] > roi_world[4] || roi_world[2] > roi_world[5] {
+        return None;
+    }
+    if volume_dims.contains(&0) || volume_spacing.iter().any(|v| *v <= 0.0 || !v.is_finite()) {
+        return None;
+    }
+
+    let clamp_index = |v: f32, axis: usize| -> u32 {
+        let max_i = volume_dims[axis].saturating_sub(1) as f32;
+        (v / volume_spacing[axis]).floor().clamp(0.0, max_i) as u32
+    };
+    let clamp_index_max = |v: f32, axis: usize| -> u32 {
+        let max_i = volume_dims[axis].saturating_sub(1) as f32;
+        (v / volume_spacing[axis]).ceil().clamp(0.0, max_i) as u32
+    };
+
+    let bounds = [
+        clamp_index(roi_world[0], 0),
+        clamp_index(roi_world[1], 1),
+        clamp_index(roi_world[2], 2),
+        clamp_index_max(roi_world[3], 0),
+        clamp_index_max(roi_world[4], 1),
+        clamp_index_max(roi_world[5], 2),
+    ];
+    if bounds[0] > bounds[3] || bounds[1] > bounds[4] || bounds[2] > bounds[5] {
+        return None;
+    }
+    Some(bounds)
+}
+
 fn orient2d(a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> f32 {
     (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
 }
@@ -771,6 +806,14 @@ pub fn finish_drawing(
             if let Some(segment) = manager.active_segment_mut() {
                 if let Some(roi) = stroke_roi_world {
                     segment.mark_dirty_with_world_roi(roi);
+                    if let Some(index_bounds) =
+                        world_roi_to_index_bounds(roi, volume_dims, volume_spacing)
+                    {
+                        let keys =
+                            chunk_keys_for_bounds(index_bounds, segment.chunk_runtime.chunk_size);
+                        segment.chunk_runtime.enqueue_dirty_tsdf_chunks(keys.clone());
+                        segment.chunk_runtime.enqueue_dirty_mesh_chunks(keys);
+                    }
                 } else {
                     segment.mark_dirty();
                 }
@@ -823,6 +866,13 @@ pub fn finish_drawing(
                 .add_contour(slice_plane, slice_index, contour);
             if let Some(roi) = stroke_roi_world {
                 segment.mark_dirty_with_world_roi(roi);
+                if let Some(index_bounds) =
+                    world_roi_to_index_bounds(roi, volume_dims, volume_spacing)
+                {
+                    let keys = chunk_keys_for_bounds(index_bounds, segment.chunk_runtime.chunk_size);
+                    segment.chunk_runtime.enqueue_dirty_tsdf_chunks(keys.clone());
+                    segment.chunk_runtime.enqueue_dirty_mesh_chunks(keys);
+                }
             } else {
                 segment.mark_dirty();
             }

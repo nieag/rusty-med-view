@@ -4,7 +4,7 @@
 //! contour-based segmentations, including contours, SDF volumes, and meshes.
 
 use crate::util::orientation::SlicePlane;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 // ============================================================================
 // Plane3D - Arbitrary 3D plane representation
@@ -336,6 +336,58 @@ impl MeshData {
     }
 }
 
+/// Chunk key in index-space chunk grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ChunkKey {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+}
+
+/// Runtime chunk cache used by live meshing.
+#[derive(Debug, Clone)]
+pub struct SegmentRuntimeCache {
+    pub chunk_size: u32,
+    pub dirty_tsdf_chunks: VecDeque<ChunkKey>,
+    pub dirty_mesh_chunks: VecDeque<ChunkKey>,
+    pub mesh_chunks_cpu: HashMap<ChunkKey, MeshData>,
+    pub mesh_chunks_gpu_revision: HashMap<ChunkKey, u64>,
+}
+
+impl Default for SegmentRuntimeCache {
+    fn default() -> Self {
+        Self {
+            chunk_size: 32,
+            dirty_tsdf_chunks: VecDeque::new(),
+            dirty_mesh_chunks: VecDeque::new(),
+            mesh_chunks_cpu: HashMap::new(),
+            mesh_chunks_gpu_revision: HashMap::new(),
+        }
+    }
+}
+
+impl SegmentRuntimeCache {
+    fn enqueue_unique(queue: &mut VecDeque<ChunkKey>, key: ChunkKey) {
+        if !queue.iter().any(|k| *k == key) {
+            queue.push_back(key);
+        }
+    }
+
+    pub fn enqueue_dirty_tsdf_chunks(&mut self, keys: impl IntoIterator<Item = ChunkKey>) {
+        for key in keys {
+            Self::enqueue_unique(&mut self.dirty_tsdf_chunks, key);
+        }
+    }
+
+    pub fn enqueue_dirty_mesh_chunks(&mut self, keys: impl IntoIterator<Item = ChunkKey>) {
+        for key in keys {
+            Self::enqueue_unique(&mut self.dirty_mesh_chunks, key);
+        }
+    }
+}
+
+pub type SegmentChunkRuntime = SegmentRuntimeCache;
+
 // ============================================================================
 // Segment - A single segmentation with contours and derived data
 // ============================================================================
@@ -379,6 +431,8 @@ pub struct Segment {
     pub is_live_preview_stale: bool,
     /// Dirty region in world coordinates [minx,miny,minz,maxx,maxy,maxz].
     pub dirty_roi_world: Option<[f32; 6]>,
+    /// Runtime chunk caches for localized live meshing updates.
+    pub chunk_runtime: SegmentRuntimeCache,
 
     // === Configuration ===
     /// SDF resolution relative to volume (1.0 = same, 2.0 = 2x)
@@ -404,6 +458,7 @@ impl Segment {
             final_sdf_revision: 0,
             is_live_preview_stale: true,
             dirty_roi_world: None,
+            chunk_runtime: SegmentRuntimeCache::default(),
             // Slightly denser default SDF improves extracted mesh smoothness.
             sdf_resolution_multiplier: 1.5,
         }
@@ -443,6 +498,14 @@ impl Segment {
             ],
             None => roi_world,
         });
+    }
+
+    /// Clear live chunk mesh cache and pending chunk queue.
+    pub fn clear_chunk_runtime(&mut self) {
+        self.chunk_runtime.dirty_tsdf_chunks.clear();
+        self.chunk_runtime.dirty_mesh_chunks.clear();
+        self.chunk_runtime.mesh_chunks_cpu.clear();
+        self.chunk_runtime.mesh_chunks_gpu_revision.clear();
     }
 
     /// Check if segment has any contours
@@ -649,5 +712,17 @@ mod tests {
 
         assert!(segment.sdf_dirty);
         assert!(segment.mesh_dirty);
+    }
+
+    #[test]
+    fn test_runtime_cache_enqueues_unique_chunk_keys() {
+        let mut cache = SegmentRuntimeCache::default();
+        let key = ChunkKey { x: 1, y: 2, z: 3 };
+
+        cache.enqueue_dirty_tsdf_chunks([key, key]);
+        cache.enqueue_dirty_mesh_chunks([key, key]);
+
+        assert_eq!(cache.dirty_tsdf_chunks.len(), 1);
+        assert_eq!(cache.dirty_mesh_chunks.len(), 1);
     }
 }
