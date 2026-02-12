@@ -2,10 +2,11 @@
 //!
 //! Manages the full pipeline: contour drawing → SDF generation → mesh rendering.
 
-use crate::app::segment::{Plane3D, PlaneContour, Segment};
+use crate::app::segment::{ChunkKey, MeshData, Plane3D, PlaneContour, Segment, SegmentChunkRuntime};
 use crate::components::{AppEntities, SegPerfConfig, VolumeData};
 use crate::convert::{
-    build_sdf_from_contours_with_config, marching_cubes_with_options,
+    build_sdf_from_contours_with_config, chunk_bounds_for_key, chunk_keys_for_bounds,
+    marching_cubes_with_options,
     update_sdf_region_from_contours_with_config, MarchingCubesOptions, MeshNormalMode,
     SdfBuildConfig,
 };
@@ -110,6 +111,7 @@ pub fn regenerate_segment_if_dirty(
         segment.sdf_resolution_multiplier,
         24.0,
         32,
+        6.0,
         false,
         true,
     )
@@ -123,12 +125,14 @@ fn regenerate_segment_if_dirty_with_resolution(
     resolution_multiplier: f32,
     sdf_band_mm: f32,
     mesh_chunk_size: u32,
+    _frame_budget_ms: f32,
     is_live: bool,
     allow_mesh_rebuild: bool,
 ) -> (bool, f32, f32) {
     let mut mesh_changed = false;
     let mut sdf_ms = 0.0f32;
     let mut mesh_ms = 0.0f32;
+    let mut live_updated_bounds: Option<[u32; 6]> = None;
 
     // Regenerate SDF if dirty
     if segment.sdf_dirty {
@@ -144,6 +148,7 @@ fn regenerate_segment_if_dirty_with_resolution(
             let updated =
                 update_sdf_region_from_contours_with_config(existing, &segment.contours, build_cfg, dirty_roi_world);
             if updated.is_some() {
+                live_updated_bounds = updated;
                 None
             } else {
                 Some(build_sdf_from_contours_with_config(
@@ -164,13 +169,14 @@ fn regenerate_segment_if_dirty_with_resolution(
         sdf_ms = sdf_start.elapsed().as_secs_f32() * 1000.0;
         if let Some(sdf) = sdf {
             segment.sdf = Some(sdf);
+            live_updated_bounds = segment.sdf.as_ref().and_then(|s| s.active_bounds);
         }
         segment.dirty_roi_world = None;
         segment.sdf_revision = segment.sdf_revision.wrapping_add(1);
         if is_live {
             segment.live_sdf_revision = segment.sdf_revision;
-            // Keep dirty true so a full-resolution finalize rebuild still occurs.
-            segment.sdf_dirty = true;
+            // Keep live path incremental; finalize backlog is tracked by revision mismatch.
+            segment.sdf_dirty = false;
         } else {
             segment.final_sdf_revision = segment.sdf_revision;
             segment.sdf_dirty = false;
@@ -180,17 +186,24 @@ fn regenerate_segment_if_dirty_with_resolution(
 
     // Regenerate mesh if dirty
     if segment.mesh_dirty && allow_mesh_rebuild {
+        if !is_live {
+            segment.clear_chunk_runtime();
+        }
         if let Some(sdf) = &segment.sdf {
             let mesh_start = Instant::now();
             let mesh = if is_live {
+                // Temporary safety path: full active-bounds extraction avoids
+                // cropped surfaces while chunked mesh cache is being hardened.
+                let _ = live_updated_bounds;
                 marching_cubes_with_options(
                     sdf,
                     0.0,
                     MarchingCubesOptions {
-                        enforce_outward_winding: false,
-                        normal_mode: MeshNormalMode::Flat,
+                        enforce_outward_winding: true,
+                        normal_mode: MeshNormalMode::Gradient,
                         restrict_to_active_bounds: true,
                         chunk_size: mesh_chunk_size.max(4),
+                        bounds_override: None,
                     },
                 )
             } else {
@@ -202,6 +215,7 @@ fn regenerate_segment_if_dirty_with_resolution(
                         normal_mode: MeshNormalMode::Gradient,
                         restrict_to_active_bounds: true,
                         chunk_size: mesh_chunk_size.max(4),
+                        bounds_override: None,
                     },
                 )
             };
@@ -218,6 +232,65 @@ fn regenerate_segment_if_dirty_with_resolution(
     }
 
     (mesh_changed, sdf_ms, mesh_ms)
+}
+
+#[allow(dead_code)]
+fn regenerate_live_chunk_meshes(
+    chunk_runtime: &mut SegmentChunkRuntime,
+    sdf: &crate::app::segment::SdfVolume,
+    bounds: [u32; 6],
+    chunk_size: u32,
+    frame_budget_ms: f32,
+) -> bool {
+    chunk_runtime.chunk_size = chunk_size;
+    let keys = chunk_keys_for_bounds(bounds, chunk_size);
+    for key in keys {
+        chunk_runtime.dirty_mesh_chunks.push_back(key);
+    }
+
+    let start = Instant::now();
+    while let Some(key) = chunk_runtime.dirty_mesh_chunks.pop_front() {
+        let Some(chunk_bounds) = chunk_bounds_for_key(key, chunk_size, sdf.dimensions) else {
+            continue;
+        };
+        let mesh = marching_cubes_with_options(
+            sdf,
+            0.0,
+            MarchingCubesOptions {
+                enforce_outward_winding: false,
+                normal_mode: MeshNormalMode::Flat,
+                restrict_to_active_bounds: false,
+                chunk_size: chunk_size.max(4),
+                bounds_override: Some(chunk_bounds),
+            },
+        );
+        if mesh.is_empty() {
+            chunk_runtime.live_chunk_meshes.remove(&key);
+        } else {
+            chunk_runtime.live_chunk_meshes.insert(key, mesh);
+        }
+        if start.elapsed().as_secs_f32() * 1000.0 >= frame_budget_ms {
+            break;
+        }
+    }
+    chunk_runtime.dirty_mesh_chunks.is_empty()
+}
+
+#[allow(dead_code)]
+fn merge_chunk_meshes(chunks: &std::collections::HashMap<ChunkKey, MeshData>) -> MeshData {
+    let mut merged = MeshData::new();
+    for mesh in chunks.values() {
+        if mesh.is_empty() {
+            continue;
+        }
+        let base = merged.vertices.len() as u32;
+        merged.vertices.extend_from_slice(&mesh.vertices);
+        merged.normals.extend_from_slice(&mesh.normals);
+        merged
+            .indices
+            .extend(mesh.indices.iter().map(|idx| base + *idx));
+    }
+    merged
 }
 
 /// Regenerate all dirty segments.
@@ -268,6 +341,7 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
         live_sdf_band_mm,
         final_sdf_band_mm,
         mesh_chunk_size,
+        frame_budget_ms,
         mut next_finalize_index,
         mut last_live_update_at,
         mut last_live_mesh_at,
@@ -285,13 +359,14 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
             perf.live_sdf_band_mm,
             perf.final_sdf_band_mm,
             perf.mesh_chunk_size,
+            perf.frame_budget_ms,
             perf.next_finalize_index,
             perf.last_live_update_at,
             perf.last_live_mesh_at,
         )
     } else {
         (
-            true, false, false, false, false, 0.5, 1.5, 80.0, 220.0, 8.0, 24.0, 32, 0usize,
+            true, false, false, false, false, 0.5, 1.5, 80.0, 220.0, 8.0, 24.0, 32, 6.0, 0usize,
             None, None,
         )
     };
@@ -301,48 +376,48 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
     let mut queue_depth = 0u32;
 
     if let Ok(mut manager) = world.get::<&mut SegmentManager>(entities.segments) {
-        let is_drawing_now = matches!(manager.draw_state, ContourDrawState::Drawing { .. });
-
-        // Live mode: update active dirty segment at reduced resolution with a throttle.
-        if live_enabled && !fallback_active && is_drawing_now {
+        // Live mode: keep active preview fresh while edits are pending.
+        if live_enabled && !fallback_active {
             if let Some(active_idx) = manager.active_segment {
                 if let Some(segment) = manager.segments.get_mut(active_idx) {
-                    if segment.sdf_dirty {
-                        let due = match last_live_update_at {
-                            Some(t) => (now - t).as_secs_f32() * 1000.0 >= live_interval_ms,
-                            None => true,
-                        };
-                        if due {
-                            let mesh_due = if live_mesh_enabled {
-                                match last_live_mesh_at {
-                                    Some(t) => {
-                                        (now - t).as_secs_f32() * 1000.0 >= live_mesh_interval_ms
-                                    }
-                                    None => true,
-                                }
-                            } else {
-                                false
-                            };
-                            let (mesh_changed, sdf_ms, mesh_ms) =
-                                regenerate_segment_if_dirty_with_resolution(
-                                segment,
-                                volume_dims,
-                                volume_spacing,
-                                live_resolution_scale.max(0.2),
-                                live_sdf_band_mm,
-                                mesh_chunk_size,
-                                true,
-                                mesh_due,
-                            );
-                            last_sdf_ms = sdf_ms;
-                            last_mesh_ms = mesh_ms;
-                            last_live_update_at = Some(now);
-                            if mesh_changed {
-                                last_live_mesh_at = Some(now);
+                    let sdf_due = match last_live_update_at {
+                        Some(t) => (now - t).as_secs_f32() * 1000.0 >= live_interval_ms,
+                        None => true,
+                    };
+                    let mesh_due = if live_mesh_enabled {
+                        segment.is_live_preview_stale
+                            || match last_live_mesh_at {
+                                Some(t) => (now - t).as_secs_f32() * 1000.0 >= live_mesh_interval_ms,
+                                None => true,
                             }
+                    } else {
+                        false
+                    };
+                    let need_sdf = segment.sdf_dirty;
+                    let need_mesh = segment.mesh_dirty && mesh_due;
+
+                    if (need_sdf && sdf_due) || need_mesh {
+                        let (mesh_changed, sdf_ms, mesh_ms) = regenerate_segment_if_dirty_with_resolution(
+                            segment,
+                            volume_dims,
+                            volume_spacing,
+                            live_resolution_scale.max(0.2),
+                            live_sdf_band_mm,
+                            mesh_chunk_size,
+                            frame_budget_ms,
+                            true,
+                            need_mesh,
+                        );
+                        last_sdf_ms = sdf_ms;
+                        last_mesh_ms = mesh_ms;
+                        if sdf_ms > 0.0 {
+                            last_live_update_at = Some(now);
                         }
-                        queue_depth = 1;
+                        if mesh_changed {
+                            last_live_mesh_at = Some(now);
+                        }
                     }
+                    queue_depth = u32::from(segment.sdf_dirty || segment.mesh_dirty);
                 }
             }
         } else {
@@ -351,7 +426,13 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
                 .segments
                 .iter()
                 .enumerate()
-                .filter_map(|(i, s)| if s.sdf_dirty { Some(i) } else { None })
+                .filter_map(|(i, s)| {
+                    if s.sdf_dirty || s.final_sdf_revision != s.sdf_revision {
+                        Some(i)
+                    } else {
+                        None
+                    }
+                })
                 .collect();
 
             if let Some(active_idx) = manager.active_segment {
@@ -382,6 +463,10 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
                     }
                 }
                 if let Some(segment) = manager.segments.get_mut(chosen) {
+                    if segment.final_sdf_revision != segment.sdf_revision && !segment.sdf_dirty {
+                        segment.sdf_dirty = true;
+                        segment.mesh_dirty = true;
+                    }
                     let (_changed, sdf_ms, mesh_ms) = regenerate_segment_if_dirty_with_resolution(
                         segment,
                         volume_dims,
@@ -389,6 +474,7 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
                         full_resolution_scale.max(0.5),
                         final_sdf_band_mm,
                         mesh_chunk_size,
+                        frame_budget_ms,
                         false,
                         true,
                     );

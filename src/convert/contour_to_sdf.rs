@@ -445,9 +445,19 @@ pub fn update_sdf_region_from_contours_with_config(
     }
 
     if let Some(t) = touched {
-        // For interactive edits, keep active bounds tight to the latest dirty region.
-        // This keeps downstream meshing localized instead of growing unbounded over time.
-        sdf.active_bounds = Some([t.x0, t.y0, t.z0, t.x1, t.y1, t.z1]);
+        // Merge with previous bounds so live meshing doesn't clip to only the latest stroke ROI.
+        // Localized extraction still works via the mesher's own ROI controls.
+        sdf.active_bounds = Some(match sdf.active_bounds {
+            Some(prev) => [
+                prev[0].min(t.x0),
+                prev[1].min(t.y0),
+                prev[2].min(t.z0),
+                prev[3].max(t.x1),
+                prev[4].max(t.y1),
+                prev[5].max(t.z1),
+            ],
+            None => [t.x0, t.y0, t.z0, t.x1, t.y1, t.z1],
+        });
         Some([t.x0, t.y0, t.z0, t.x1, t.y1, t.z1])
     } else {
         None
@@ -696,5 +706,37 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_incremental_update_preserves_prior_active_bounds() {
+        let mut contours = ContourSet::new();
+        let square = PlaneContour::with_points(
+            Plane3D::from_axial(5.0),
+            vec![[2.0, 2.0, 5.0], [8.0, 2.0, 5.0], [8.0, 8.0, 5.0], [2.0, 8.0, 5.0]],
+            true,
+        );
+        contours.add_contour(SlicePlane::Axial, 5, square);
+
+        let cfg = SdfBuildConfig {
+            clamp_distance_mm: 16.0,
+            ..SdfBuildConfig::default()
+        };
+        let mut sdf = build_sdf_from_contours_with_config(&contours, [12, 12, 12], [1.0, 1.0, 1.0], cfg);
+        let before = sdf.active_bounds.expect("expected initial active bounds");
+
+        let touched = update_sdf_region_from_contours_with_config(
+            &mut sdf,
+            &contours,
+            cfg,
+            [3.0, 3.0, 4.0, 7.0, 7.0, 6.0],
+        )
+        .expect("expected touched ROI");
+        let after = sdf.active_bounds.expect("expected merged active bounds");
+
+        assert!(after[0] <= before[0] && after[1] <= before[1] && after[2] <= before[2]);
+        assert!(after[3] >= before[3] && after[4] >= before[4] && after[5] >= before[5]);
+        assert!(after[0] <= touched[0] && after[1] <= touched[1] && after[2] <= touched[2]);
+        assert!(after[3] >= touched[3] && after[4] >= touched[4] && after[5] >= touched[5]);
     }
 }
