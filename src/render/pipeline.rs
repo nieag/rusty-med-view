@@ -771,16 +771,17 @@ pub fn render_frame(
                                 let normal = model.inverse().transpose();
 
                                 let mut color = segment_color;
-                                color[3] = preview_state.opacity.clamp(0.05, 1.0);
+                                // Render 3D preview as a solid mesh; opacity slider is for 2D SDF heatmap.
+                                color[3] = 1.0;
                                 let mesh_uniforms = MeshUniforms {
                                     model_matrix: model.to_cols_array_2d(),
                                     view_proj_matrix: view_proj.to_cols_array_2d(),
                                     normal_matrix: normal.to_cols_array_2d(),
                                     color,
                                     camera_pos: [0.0, 0.0, -3.5, 1.0],
-                                    light_dir: [0.6, -1.0, 0.5, 0.0],
+                                    light_dir: [0.45, -1.0, 0.35, 0.0],
                                     light_color: [1.0, 1.0, 1.0, 1.0],
-                                    ambient: [0.22, 0.22, 0.22, 1.0],
+                                    ambient: [0.16, 0.16, 0.16, 1.0],
                                 };
                                 mesh_pipeline.update_uniforms(queue, &mesh_uniforms);
 

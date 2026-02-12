@@ -444,8 +444,12 @@ fn interpolate_vertex(
         p0[2] + t * (p1[2] - p0[2]),
     ];
 
-    // Convert to world space
-    sdf.index_to_world([grid_pos[0] as u32, grid_pos[1] as u32, grid_pos[2] as u32])
+    // Convert to world space without snapping back to integer indices.
+    [
+        sdf.origin[0] + grid_pos[0] * sdf.spacing[0],
+        sdf.origin[1] + grid_pos[1] * sdf.spacing[1],
+        sdf.origin[2] + grid_pos[2] * sdf.spacing[2],
+    ]
 }
 
 /// Compute vertex normals from SDF gradient.
@@ -480,11 +484,46 @@ fn compute_gradient_at(sdf: &SdfVolume, world_pos: [f32; 3]) -> [f32; 3] {
 
 /// Sample SDF at world position with clamping.
 fn sample_sdf_world(sdf: &SdfVolume, world_pos: [f32; 3]) -> f32 {
-    if let Some(idx) = sdf.world_to_index(world_pos) {
-        sdf.get(idx[0], idx[1], idx[2])
-    } else {
-        f32::MAX // Outside bounds
+    let gx = (world_pos[0] - sdf.origin[0]) / sdf.spacing[0];
+    let gy = (world_pos[1] - sdf.origin[1]) / sdf.spacing[1];
+    let gz = (world_pos[2] - sdf.origin[2]) / sdf.spacing[2];
+
+    let max_x = sdf.dimensions[0] as f32 - 1.0;
+    let max_y = sdf.dimensions[1] as f32 - 1.0;
+    let max_z = sdf.dimensions[2] as f32 - 1.0;
+    if gx < 0.0 || gy < 0.0 || gz < 0.0 || gx > max_x || gy > max_y || gz > max_z {
+        return f32::MAX;
     }
+
+    let x0 = gx.floor() as u32;
+    let y0 = gy.floor() as u32;
+    let z0 = gz.floor() as u32;
+    let x1 = (x0 + 1).min(sdf.dimensions[0] - 1);
+    let y1 = (y0 + 1).min(sdf.dimensions[1] - 1);
+    let z1 = (z0 + 1).min(sdf.dimensions[2] - 1);
+
+    let tx = gx - x0 as f32;
+    let ty = gy - y0 as f32;
+    let tz = gz - z0 as f32;
+
+    let c000 = sdf.get(x0, y0, z0);
+    let c100 = sdf.get(x1, y0, z0);
+    let c010 = sdf.get(x0, y1, z0);
+    let c110 = sdf.get(x1, y1, z0);
+    let c001 = sdf.get(x0, y0, z1);
+    let c101 = sdf.get(x1, y0, z1);
+    let c011 = sdf.get(x0, y1, z1);
+    let c111 = sdf.get(x1, y1, z1);
+
+    let c00 = c000 * (1.0 - tx) + c100 * tx;
+    let c10 = c010 * (1.0 - tx) + c110 * tx;
+    let c01 = c001 * (1.0 - tx) + c101 * tx;
+    let c11 = c011 * (1.0 - tx) + c111 * tx;
+
+    let c0 = c00 * (1.0 - ty) + c10 * ty;
+    let c1 = c01 * (1.0 - ty) + c11 * ty;
+
+    c0 * (1.0 - tz) + c1 * tz
 }
 
 // ============================================================================
@@ -570,5 +609,25 @@ mod tests {
         
         // Entry 1 should have some valid entries
         assert!(TRI_TABLE[1][0] >= 0);
+    }
+
+    #[test]
+    fn test_interpolated_vertices_not_snapped_to_grid() {
+        let mut sdf = SdfVolume::new([12, 12, 12], [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        for z in 0..12 {
+            for y in 0..12 {
+                for x in 0..12 {
+                    let wx = sdf.index_to_world([x, y, z])[0];
+                    sdf.set(x, y, z, wx - 4.3);
+                }
+            }
+        }
+        let mesh = marching_cubes(&sdf, 0.0);
+        assert!(!mesh.vertices.is_empty());
+        let has_fractional_x = mesh
+            .vertices
+            .iter()
+            .any(|v| (v[0].fract()).abs() > 1e-3 && (1.0 - v[0].fract()).abs() > 1e-3);
+        assert!(has_fractional_x, "expected interpolated (non-grid-snapped) vertices");
     }
 }

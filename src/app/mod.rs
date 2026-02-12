@@ -204,10 +204,22 @@ impl ApplicationHandler<AppEvent> for App {
                                     &mut ctx.world,
                                     loaded_label,
                                 );
+                                let imported_segment = handlers::import_labelmap_as_contours(
+                                    &mut ctx.world,
+                                    &ctx.entities,
+                                    loaded_label,
+                                );
                                 handlers::set_status_message(
                                     &mut ctx.world,
                                     &ctx.entities,
-                                    format!("Label Loaded: {}x{}", dims[0], dims[1]),
+                                    if imported_segment.is_some() {
+                                        format!(
+                                            "Label Loaded: {}x{} (contours imported)",
+                                            dims[0], dims[1]
+                                        )
+                                    } else {
+                                        format!("Label Loaded: {}x{}", dims[0], dims[1])
+                                    },
                                 );
 
                                 for (_, editor) in ctx.world.query_mut::<&mut EditorState>() {

@@ -385,7 +385,8 @@ impl Segment {
             sdf_dirty: true,
             mesh_dirty: true,
             sdf_revision: 0,
-            sdf_resolution_multiplier: 1.0,
+            // Slightly denser default SDF improves extracted mesh smoothness.
+            sdf_resolution_multiplier: 1.5,
         }
     }
 

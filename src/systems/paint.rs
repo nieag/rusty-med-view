@@ -10,7 +10,7 @@ pub fn sys_paint(world: &mut World, entities: &AppEntities, queue: &wgpu::Queue)
     if let Ok(input) = world.get::<&InputState>(entities.input) {
         if input.is_dragging && !input.egui_wants_input && !input.is_panning && !input.is_rotating {
             if let Ok(editor) = world.get::<&EditorState>(entities.editor) {
-                if editor.active_tool != EditorTool::Navigation {
+                if matches!(editor.active_tool, EditorTool::Brush | EditorTool::Eraser) {
                     interactions.push((
                         input.active_viewport,
                         input.mouse_uv,

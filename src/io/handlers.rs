@@ -4,7 +4,9 @@
 //! This module extracts the load handling logic from lib.rs to improve code organization.
 
 use crate::components::*;
+use crate::convert::extract_axial_contours_from_labelmap;
 use crate::nifti_loader::LoadedVolume;
+use crate::systems::SegmentManager;
 use crate::volume;
 use hecs::World;
 
@@ -94,6 +96,55 @@ pub fn handle_label_load(
     ));
 
     (entity, loaded_label.dimensions)
+}
+
+/// Import loaded labelmap as editable contours into a new contour segment.
+pub fn import_labelmap_as_contours(
+    world: &mut World,
+    entities: &AppEntities,
+    loaded_label: &LoadedLabel,
+) -> Option<usize> {
+    let spacing = world
+        .query::<&VolumeData>()
+        .with::<&MainVolumeTag>()
+        .iter()
+        .next()
+        .map(|(_, v)| v.spacing)
+        .unwrap_or([1.0, 1.0, 1.0]);
+
+    let contour_set = extract_axial_contours_from_labelmap(
+        &loaded_label.data,
+        loaded_label.dimensions,
+        spacing,
+        None,
+    );
+    if contour_set.is_empty() {
+        return None;
+    }
+
+    if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments) {
+        let idx = mgr.len();
+        let colors = [
+            [1.0, 0.3, 0.3, 0.8],
+            [0.3, 1.0, 0.3, 0.8],
+            [0.3, 0.3, 1.0, 0.8],
+            [1.0, 1.0, 0.3, 0.8],
+            [1.0, 0.3, 1.0, 0.8],
+            [0.3, 1.0, 1.0, 0.8],
+        ];
+        let color = colors[idx % colors.len()];
+        let seg_idx = mgr.add_segment(
+            &format!("{} (Contours)", loaded_label.filename),
+            color,
+        );
+        if let Some(seg) = mgr.segments.get_mut(seg_idx) {
+            seg.contours = contour_set;
+            seg.mark_dirty();
+        }
+        Some(seg_idx)
+    } else {
+        None
+    }
 }
 
 /// Recreate the scene bind group with current volume and overlay textures.
