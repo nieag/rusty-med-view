@@ -7,6 +7,8 @@ use crate::gui;
 use crate::overlay::OverlayPrimitive;
 use crate::render::contour_pipeline::{ContourLineGpu, ContourPipeline, ContourUniforms};
 use crate::render::geometry;
+use crate::render::mesh_pipeline::{MeshPipeline, MeshResources, MeshUniforms};
+use crate::render::sdf_preview_pipeline::{SdfPreviewPipeline, SdfPreviewUniforms};
 use crate::systems::{self, ContourDrawState, SegmentManager};
 use crate::util::orientation::SlicePlane;
 use hecs::World;
@@ -281,6 +283,8 @@ pub fn render_frame(
     num_indices: u32,
     overlay_buffer: &wgpu::Buffer,
     contour_pipeline: &mut ContourPipeline,
+    sdf_preview_pipeline: &mut SdfPreviewPipeline,
+    mesh_pipeline: &MeshPipeline,
     world: &mut World,
     entities: &AppEntities,
     gui: &mut gui::Gui,
@@ -294,6 +298,7 @@ pub fn render_frame(
     // 0. Process interaction and updates once per frame, right before rendering
     systems::sys_handle_mouse_drag(world, entities);
     systems::sys_paint(world, entities, queue);
+    systems::sys_update_segment_derivatives(world, entities);
 
     // 1. Run GUI first so it can process interactions and update ECS state for THIS frame
     gui.prepare(window, world, entities, event_proxy);
@@ -591,6 +596,225 @@ pub fn render_frame(
 
             pass.set_viewport(rect[0], rect[1], rect[2], rect[3], 0.0, 1.0);
             contour_pipeline.render(&mut pass, view_mode);
+        }
+    }
+
+    // --- SDF Preview Pass (2D viewports only, active segment only) ---
+    {
+        let mut volume_dims = [0u32; 3];
+        let mut volume_spacing = [1.0f32; 3];
+        for (_, vol) in world.query::<&VolumeData>().iter() {
+            volume_dims = vol.dimensions;
+            volume_spacing = vol.spacing;
+            break;
+        }
+
+        let preview_state = world
+            .get::<&SdfPreviewState>(entities.sdf_preview)
+            .ok()
+            .map(|s| *s)
+            .unwrap_or_default();
+
+        if let Ok(manager) = world.get::<&SegmentManager>(entities.segments) {
+            sdf_preview_pipeline.update_from_active_segment(device, queue, manager.active_segment());
+        } else {
+            sdf_preview_pipeline.update_from_active_segment(device, queue, None);
+        }
+
+        if preview_state.enabled {
+            let cursor_pos = world
+                .get::<&Transform>(entities.cursor)
+                .map(|t| t.position)
+                .unwrap_or([0.5, 0.5, 0.5]);
+
+            let sdf_dims = sdf_preview_pipeline.sdf_dims();
+            for (_e, rect, u_idx) in &viewports {
+                if *u_idx == 0 {
+                    continue;
+                }
+                let view_mode = *u_idx;
+                let current_slice = match view_mode {
+                    1 => (cursor_pos[2] * volume_dims[2] as f32) as i32,
+                    2 => (cursor_pos[1] * volume_dims[1] as f32) as i32,
+                    3 => (cursor_pos[0] * volume_dims[0] as f32) as i32,
+                    _ => 0,
+                };
+
+                let (zoom, pan) = world
+                    .get::<&ViewportState>(*_e)
+                    .map(|vs| (vs.zoom, vs.pan))
+                    .unwrap_or((1.0, [0.0, 0.0]));
+
+                let uniforms = SdfPreviewUniforms {
+                    zoom,
+                    _pad0: 0.0,
+                    pan,
+                    pivot: [0.5, 0.5],
+                    view_mode,
+                    show_zero_isoline: if preview_state.show_zero_isoline { 1 } else { 0 },
+                    resolution: [rect[2], rect[3]],
+                    _pad_align0: [0; 2],
+                    volume_dims,
+                    current_slice,
+                    volume_spacing,
+                    opacity: preview_state.opacity,
+                    sdf_dims,
+                    _pad1: 0,
+                    value_window_mm: preview_state.value_window_mm,
+                    _pad_align1: [0.0; 3],
+                    _pad2: [0.0; 4],
+                };
+                sdf_preview_pipeline.update_uniforms(queue, &uniforms, view_mode);
+
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("SDF Preview Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_viewport(rect[0], rect[1], rect[2], rect[3], 0.0, 1.0);
+                sdf_preview_pipeline.render(&mut pass, view_mode);
+            }
+        }
+    }
+
+    // --- 3D SDF Surface Preview Pass (active segment mesh in 3D viewport) ---
+    {
+        let preview_state = world
+            .get::<&SdfPreviewState>(entities.sdf_preview)
+            .ok()
+            .map(|s| *s)
+            .unwrap_or_default();
+
+        if preview_state.enabled && preview_state.show_3d_surface {
+            let mut volume_dims = [0u32; 3];
+            let mut volume_spacing = [1.0f32; 3];
+            let mut data_orientation = [0.0f32; 4];
+            for (_, vol) in world.query::<&VolumeData>().iter() {
+                volume_dims = vol.dimensions;
+                volume_spacing = vol.spacing;
+                data_orientation = vol.orientation;
+                break;
+            }
+
+            if let Ok(manager) = world.get::<&SegmentManager>(entities.segments) {
+                if let Some(segment) = manager.active_segment() {
+                    if let Some(mesh_data) = segment.mesh.as_ref() {
+                        let segment_color = segment.color;
+                        if let Some(mesh_res) = MeshResources::from_mesh_data(device, mesh_data) {
+                            for (e, rect, u_idx) in &viewports {
+                                if *u_idx != 0 {
+                                    continue;
+                                }
+
+                                let vs = world
+                                    .get::<&ViewportState>(*e)
+                                    .ok()
+                                    .map(|r| *r)
+                                    .unwrap_or_default();
+                                let composed_rotation = crate::util::orientation::compose_view_rotation(
+                                    data_orientation,
+                                    vs.user_rotation,
+                                );
+
+                                let phys = [
+                                    (volume_dims[0].saturating_sub(1) as f32 * volume_spacing[0]).max(1e-3),
+                                    (volume_dims[1].saturating_sub(1) as f32 * volume_spacing[1]).max(1e-3),
+                                    (volume_dims[2].saturating_sub(1) as f32 * volume_spacing[2]).max(1e-3),
+                                ];
+                                let max_phys = phys[0].max(phys[1]).max(phys[2]).max(1e-3);
+
+                                let t_center = glam::Mat4::from_translation(glam::Vec3::new(
+                                    -0.5 * phys[0],
+                                    -0.5 * phys[1],
+                                    -0.5 * phys[2],
+                                ));
+                                let s_norm = glam::Mat4::from_scale(glam::Vec3::splat(1.0 / max_phys));
+                                let r = glam::Mat4::from_quat(glam::Quat::from_array(composed_rotation));
+                                let model = r * s_norm * t_center;
+
+                                let aspect = (rect[2] / rect[3].max(1.0)).max(1e-3);
+                                let view_mat = glam::Mat4::look_at_rh(
+                                    glam::Vec3::new(0.0, 0.0, -3.5),
+                                    glam::Vec3::ZERO,
+                                    glam::Vec3::Y,
+                                );
+                                let proj = glam::Mat4::perspective_rh_gl(
+                                    45.0_f32.to_radians(),
+                                    aspect,
+                                    0.01,
+                                    20.0,
+                                );
+                                // Match volume viewport 3D interaction by applying the same
+                                // screen-space zoom/pan transform in clip space.
+                                let pan_zoom = glam::Mat4::from_cols(
+                                    glam::Vec4::new(vs.zoom, 0.0, 0.0, 0.0),
+                                    glam::Vec4::new(0.0, vs.zoom, 0.0, 0.0),
+                                    glam::Vec4::new(0.0, 0.0, 1.0, 0.0),
+                                    glam::Vec4::new(
+                                        -2.0 * vs.pan[0] * vs.zoom,
+                                        2.0 * vs.pan[1] * vs.zoom,
+                                        0.0,
+                                        1.0,
+                                    ),
+                                );
+                                let view_proj = pan_zoom * proj * view_mat;
+                                let normal = model.inverse().transpose();
+
+                                let mut color = segment_color;
+                                color[3] = preview_state.opacity.clamp(0.05, 1.0);
+                                let mesh_uniforms = MeshUniforms {
+                                    model_matrix: model.to_cols_array_2d(),
+                                    view_proj_matrix: view_proj.to_cols_array_2d(),
+                                    normal_matrix: normal.to_cols_array_2d(),
+                                    color,
+                                    camera_pos: [0.0, 0.0, -3.5, 1.0],
+                                    light_dir: [0.6, -1.0, 0.5, 0.0],
+                                    light_color: [1.0, 1.0, 1.0, 1.0],
+                                    ambient: [0.22, 0.22, 0.22, 1.0],
+                                };
+                                mesh_pipeline.update_uniforms(queue, &mesh_uniforms);
+
+                                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                    label: Some("SDF 3D Surface Pass"),
+                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                        view: &view,
+                                        resolve_target: None,
+                                        ops: wgpu::Operations {
+                                            load: wgpu::LoadOp::Load,
+                                            store: wgpu::StoreOp::Store,
+                                        },
+                                        depth_slice: None,
+                                    })],
+                                    depth_stencil_attachment: Some(
+                                        wgpu::RenderPassDepthStencilAttachment {
+                                            view: &mesh_pipeline.depth_texture,
+                                            depth_ops: Some(wgpu::Operations {
+                                                load: wgpu::LoadOp::Clear(1.0),
+                                                store: wgpu::StoreOp::Store,
+                                            }),
+                                            stencil_ops: None,
+                                        },
+                                    ),
+                                    timestamp_writes: None,
+                                    occlusion_query_set: None,
+                                });
+                                pass.set_viewport(rect[0], rect[1], rect[2], rect[3], 0.0, 1.0);
+                                mesh_pipeline.render(&mut pass, &mesh_res);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

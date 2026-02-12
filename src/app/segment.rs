@@ -363,6 +363,8 @@ pub struct Segment {
     pub sdf_dirty: bool,
     /// True if mesh needs regeneration
     pub mesh_dirty: bool,
+    /// Monotonic revision for SDF updates (used by preview cache)
+    pub sdf_revision: u64,
 
     // === Configuration ===
     /// SDF resolution relative to volume (1.0 = same, 2.0 = 2x)
@@ -382,6 +384,7 @@ impl Segment {
             mesh: None,
             sdf_dirty: true,
             mesh_dirty: true,
+            sdf_revision: 0,
             sdf_resolution_multiplier: 1.0,
         }
     }

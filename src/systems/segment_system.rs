@@ -3,10 +3,12 @@
 //! Manages the full pipeline: contour drawing → SDF generation → mesh rendering.
 
 use crate::app::segment::{Plane3D, PlaneContour, Segment};
+use crate::components::{AppEntities, VolumeData};
 use crate::convert::{build_sdf_from_contours, marching_cubes};
 use crate::render::mesh_pipeline::MeshResources;
 use crate::systems::contour_draw::ContourDrawState;
 use crate::util::orientation::SlicePlane;
+use hecs::World;
 use std::collections::HashSet;
 
 // ============================================================================
@@ -108,6 +110,7 @@ pub fn regenerate_segment_if_dirty(
         );
         segment.sdf = Some(sdf);
         segment.sdf_dirty = false;
+        segment.sdf_revision = segment.sdf_revision.wrapping_add(1);
         segment.mesh_dirty = true; // SDF changed, mesh needs update
     }
 
@@ -139,6 +142,25 @@ pub fn regenerate_all_dirty(
     }
 
     regenerated
+}
+
+/// Regenerate segment derivatives (SDF + mesh) once per frame if needed.
+pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities) {
+    let mut volume_dims = [0u32; 3];
+    let mut volume_spacing = [1.0f32; 3];
+    for (_, vol) in world.query::<&VolumeData>().iter() {
+        volume_dims = vol.dimensions;
+        volume_spacing = vol.spacing;
+        break;
+    }
+
+    if volume_dims.contains(&0) {
+        return;
+    }
+
+    if let Ok(mut manager) = world.get::<&mut SegmentManager>(entities.segments) {
+        regenerate_all_dirty(&mut manager, volume_dims, volume_spacing);
+    }
 }
 
 // ============================================================================
@@ -574,6 +596,14 @@ mod tests {
 
         cancel_drawing(&mut manager);
         assert!(!is_drawing(&manager));
+    }
+
+    #[test]
+    fn test_regenerate_segment_updates_sdf_revision() {
+        let mut segment = Segment::new("Test", [1.0, 0.0, 0.0, 1.0]);
+        let rev0 = segment.sdf_revision;
+        let _ = regenerate_segment_if_dirty(&mut segment, [8, 8, 8], [1.0, 1.0, 1.0]);
+        assert!(segment.sdf_revision > rev0);
     }
 
     #[test]

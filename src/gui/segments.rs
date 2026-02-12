@@ -20,6 +20,7 @@ pub fn draw_segment_panel(
     let mut active_idx = None;
     let mut segment_names: Vec<(usize, String, [f32; 4], bool)> = Vec::new();
     let mut contour_count = 0;
+    let mut active_sdf_status = "No active segment".to_string();
 
     if let Ok(mgr) = world.get::<&SegmentManager>(entities.segments) {
         segment_count = mgr.len();
@@ -27,6 +28,17 @@ pub fn draw_segment_panel(
         for (i, seg) in mgr.segments.iter().enumerate() {
             segment_names.push((i, seg.name.clone(), seg.color, seg.visible));
             contour_count += seg.contours.count();
+        }
+        if let Some(active) = mgr.active_segment.and_then(|idx| mgr.segments.get(idx)) {
+            active_sdf_status = if active.sdf_dirty {
+                "Rebuilding".to_string()
+            } else if active.sdf.is_some() {
+                "Up-to-date".to_string()
+            } else if active.has_contours() {
+                "Stale".to_string()
+            } else {
+                "No contours".to_string()
+            };
         }
     }
 
@@ -122,6 +134,19 @@ pub fn draw_segment_panel(
 
     // Stats
     ui.label(format!("Total contours: {}", contour_count));
+    ui.label(format!("SDF: {}", active_sdf_status));
+
+    ui.separator();
+    ui.label("SDF Preview");
+    if let Ok(mut preview) = world.get::<&mut SdfPreviewState>(entities.sdf_preview) {
+        ui.checkbox(&mut preview.enabled, "Show SDF Preview");
+        ui.add(egui::Slider::new(&mut preview.opacity, 0.0..=1.0).text("Opacity"));
+        ui.add(
+            egui::Slider::new(&mut preview.value_window_mm, 0.5..=32.0).text("Window (mm)"),
+        );
+        ui.checkbox(&mut preview.show_zero_isoline, "Zero Isoline");
+        ui.checkbox(&mut preview.show_3d_surface, "3D Surface Preview");
+    }
 
     // Instructions
     if active_idx.is_some() {

@@ -11,6 +11,8 @@ use crate::render::pipeline;
 use crate::render::protocols;
 use crate::systems;
 use std::sync::Arc;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
 use winit::{
     application::ApplicationHandler,
     event::*,
@@ -125,6 +127,8 @@ impl ApplicationHandler<AppEvent> for App {
                 ctx.config.width = size.width;
                 ctx.config.height = size.height;
                 ctx.surface.configure(&ctx.device, &ctx.config);
+                ctx.mesh_pipeline
+                    .resize(&ctx.device, ctx.config.width, ctx.config.height);
                 let mut query = ctx
                     .world
                     .query_one::<&mut WindowSettings>(ctx.settings_entity)
@@ -148,6 +152,8 @@ impl ApplicationHandler<AppEvent> for App {
                     ctx.num_indices,
                     &ctx.overlay_buffer,
                     &mut ctx.contour_pipeline,
+                    &mut ctx.sdf_preview_pipeline,
+                    &ctx.mesh_pipeline,
                     &mut ctx.world,
                     &ctx.entities,
                     &mut ctx.gui,

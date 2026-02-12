@@ -202,6 +202,27 @@ pub struct LabelmapData {
     pub raw_data: Vec<u8>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct SdfPreviewState {
+    pub enabled: bool,
+    pub opacity: f32,
+    pub show_zero_isoline: bool,
+    pub value_window_mm: f32,
+    pub show_3d_surface: bool,
+}
+
+impl Default for SdfPreviewState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            opacity: 0.35,
+            show_zero_isoline: true,
+            value_window_mm: 8.0,
+            show_3d_surface: true,
+        }
+    }
+}
+
 pub enum Representation {
     Voxel(GpuVolumeResources),
 }
@@ -271,6 +292,7 @@ pub struct AppEntities {
     pub cursor: hecs::Entity,
     pub window_settings: hecs::Entity,
     pub segments: hecs::Entity,
+    pub sdf_preview: hecs::Entity,
 }
 
 #[cfg(test)]

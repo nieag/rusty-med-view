@@ -5,8 +5,10 @@ use crate::io::handlers;
 use crate::io::volume;
 use crate::overlay::OverlayManager;
 use crate::render::contour_pipeline::ContourPipeline;
+use crate::render::mesh_pipeline::MeshPipeline;
 use crate::render::pipeline;
 use crate::render::protocols;
+use crate::render::sdf_preview_pipeline::SdfPreviewPipeline;
 use crate::systems::SegmentManager;
 use hecs::World;
 use std::sync::Arc;
@@ -41,6 +43,8 @@ pub struct RenderingContext {
 
     // Contour rendering pipeline
     pub contour_pipeline: ContourPipeline,
+    pub sdf_preview_pipeline: SdfPreviewPipeline,
+    pub mesh_pipeline: MeshPipeline,
 
     // Proxy for waking up the event loop from async tasks
     pub event_proxy: EventLoopProxy<AppEvent>,
@@ -156,6 +160,7 @@ impl RenderingContext {
         let windowing = world.spawn((VolumeWindowing::default(),));
         let annotations = world.spawn((AnnotationState::default(),));
         let overlay = world.spawn((OverlayManager::default(),));
+        let sdf_preview = world.spawn((SdfPreviewState::default(),));
         let mut segment_manager = SegmentManager::new();
         segment_manager.add_segment("Segment 1", [1.0, 0.0, 0.0, 1.0]); // Red
         let segments = world.spawn((segment_manager,));
@@ -171,6 +176,7 @@ impl RenderingContext {
             cursor,
             window_settings: settings_entity,
             segments,
+            sdf_preview,
         };
 
         protocols::apply_protocol(&mut world, &entities, "Standard 2x2");
@@ -195,6 +201,8 @@ impl RenderingContext {
 
         // Create contour rendering pipeline
         let contour_pipeline = ContourPipeline::new(&device, config.format);
+        let sdf_preview_pipeline = SdfPreviewPipeline::new(&device, config.format);
+        let mesh_pipeline = MeshPipeline::new(&device, config.format, config.width, config.height);
 
         RenderingContext {
             window,
@@ -216,6 +224,8 @@ impl RenderingContext {
             default_lut,
             overlay_buffer,
             contour_pipeline,
+            sdf_preview_pipeline,
+            mesh_pipeline,
             event_proxy,
         }
     }
