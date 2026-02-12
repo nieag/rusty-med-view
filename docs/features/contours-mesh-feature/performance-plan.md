@@ -22,6 +22,26 @@ Chosen continuation path:
 
 - Chunked CPU first, then GPU compute offload.
 
+## Implementation Status (February 12, 2026)
+
+- Latest plan commits:
+  - `fb2e8dd` Phase A chunk runtime dirty-queue wiring from contour edits.
+  - `d8603f5` deferred finalize defaults + chunk meshing hooks retained.
+
+- Phase A status: mostly complete.
+  - [x] Chunk primitives module added (`src/convert/chunk_grid.rs`).
+  - [x] `ChunkKey` and `ChunkBounds` available.
+  - [x] Segment runtime cache added (`SegmentRuntimeCache` in `src/app/segment.rs`).
+  - [x] Dirty TSDF + dirty mesh chunk queues added.
+  - [x] Dirty marking wired in `finish_drawing(...)` ROI -> chunk enqueue.
+  - [ ] Queue-driven derivative execution is not yet primary (still partial wiring).
+
+- Phase B status: not started.
+- Phase C status: not started.
+- Phase D status: not started.
+- Phase E status: not started.
+- Phase F status: partial (deferred finalize behavior exists, but not chunk/final queue architecture).
+
 ## Current Baseline (facts from code)
 
 - Mesh generation method: marching_cubes_with_options(...) in src/convert/
