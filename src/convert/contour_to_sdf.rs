@@ -58,6 +58,21 @@ struct IndexRange {
     z1: u32,
 }
 
+fn merge_index_ranges(a: Option<IndexRange>, b: IndexRange) -> IndexRange {
+    if let Some(a) = a {
+        IndexRange {
+            x0: a.x0.min(b.x0),
+            x1: a.x1.max(b.x1),
+            y0: a.y0.min(b.y0),
+            y1: a.y1.max(b.y1),
+            z0: a.z0.min(b.z0),
+            z1: a.z1.max(b.z1),
+        }
+    } else {
+        b
+    }
+}
+
 pub fn signed_distance_to_segment_2d(point: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
     let ab = [b[0] - a[0], b[1] - a[1]];
     let ap = [point[0] - a[0], point[1] - a[1]];
@@ -368,10 +383,12 @@ pub fn build_sdf_from_contours_with_config(
     }
     resolve_slice_slab_bounds(&mut usable, 1e-3);
 
+    let mut active_bounds: Option<IndexRange> = None;
     for c in &usable {
         let Some(roi) = contour_roi(c, &sdf, cfg.clamp_distance_mm) else {
             continue;
         };
+        active_bounds = Some(merge_index_ranges(active_bounds, roi));
 
         for z in roi.z0..=roi.z1 {
             for y in roi.y0..=roi.y1 {
@@ -386,6 +403,10 @@ pub fn build_sdf_from_contours_with_config(
                 }
             }
         }
+    }
+
+    if let Some(b) = active_bounds {
+        sdf.active_bounds = Some([b.x0, b.y0, b.z0, b.x1, b.y1, b.z1]);
     }
 
     sdf

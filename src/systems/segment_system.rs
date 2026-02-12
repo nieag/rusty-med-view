@@ -5,8 +5,8 @@
 use crate::app::segment::{Plane3D, PlaneContour, Segment};
 use crate::components::{AppEntities, SegPerfConfig, VolumeData};
 use crate::convert::{
-    build_sdf_from_contours, marching_cubes, marching_cubes_with_options, MarchingCubesOptions,
-    MeshNormalMode,
+    build_sdf_from_contours_with_config, marching_cubes_with_options, MarchingCubesOptions,
+    MeshNormalMode, SdfBuildConfig,
 };
 use crate::render::mesh_pipeline::MeshResources;
 use crate::systems::contour_draw::ContourDrawState;
@@ -107,6 +107,8 @@ pub fn regenerate_segment_if_dirty(
         volume_dims,
         volume_spacing,
         segment.sdf_resolution_multiplier,
+        24.0,
+        32,
         false,
         true,
     )
@@ -118,6 +120,8 @@ fn regenerate_segment_if_dirty_with_resolution(
     volume_dims: [u32; 3],
     volume_spacing: [f32; 3],
     resolution_multiplier: f32,
+    sdf_band_mm: f32,
+    mesh_chunk_size: u32,
     is_live: bool,
     allow_mesh_rebuild: bool,
 ) -> (bool, f32, f32) {
@@ -128,11 +132,15 @@ fn regenerate_segment_if_dirty_with_resolution(
     // Regenerate SDF if dirty
     if segment.sdf_dirty {
         let sdf_start = Instant::now();
-        let sdf = build_sdf_from_contours(
+        let sdf = build_sdf_from_contours_with_config(
             &segment.contours,
             volume_dims,
             volume_spacing,
-            resolution_multiplier,
+            SdfBuildConfig {
+                resolution_multiplier,
+                clamp_distance_mm: sdf_band_mm.max(0.5),
+                ..SdfBuildConfig::default()
+            },
         );
         sdf_ms = sdf_start.elapsed().as_secs_f32() * 1000.0;
         segment.sdf = Some(sdf);
@@ -158,11 +166,22 @@ fn regenerate_segment_if_dirty_with_resolution(
                     0.0,
                     MarchingCubesOptions {
                         enforce_outward_winding: false,
-                        normal_mode: MeshNormalMode::Flat,
+                        normal_mode: MeshNormalMode::Gradient,
+                        restrict_to_active_bounds: true,
+                        chunk_size: mesh_chunk_size.max(4),
                     },
                 )
             } else {
-                marching_cubes(sdf, 0.0)
+                marching_cubes_with_options(
+                    sdf,
+                    0.0,
+                    MarchingCubesOptions {
+                        enforce_outward_winding: true,
+                        normal_mode: MeshNormalMode::Gradient,
+                        restrict_to_active_bounds: true,
+                        chunk_size: mesh_chunk_size.max(4),
+                    },
+                )
             };
             mesh_ms = mesh_start.elapsed().as_secs_f32() * 1000.0;
             segment.mesh = Some(mesh);
@@ -215,10 +234,15 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
         live_enabled,
         live_mesh_enabled,
         fallback_active,
+        auto_finalize,
+        mut finalize_requested,
         live_resolution_scale,
         full_resolution_scale,
         live_interval_ms,
         live_mesh_interval_ms,
+        live_sdf_band_mm,
+        final_sdf_band_mm,
+        mesh_chunk_size,
         mut next_finalize_index,
         mut last_live_update_at,
         mut last_live_mesh_at,
@@ -227,16 +251,24 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
             perf.live_enabled,
             perf.live_mesh_enabled,
             perf.fallback_active,
+            perf.auto_finalize,
+            perf.finalize_requested,
             perf.live_resolution_scale,
             perf.full_resolution_scale,
             perf.live_interval_ms,
             perf.live_mesh_interval_ms,
+            perf.live_sdf_band_mm,
+            perf.final_sdf_band_mm,
+            perf.mesh_chunk_size,
             perf.next_finalize_index,
             perf.last_live_update_at,
             perf.last_live_mesh_at,
         )
     } else {
-        (true, false, false, 0.5, 1.5, 80.0, 220.0, 0usize, None, None)
+        (
+            true, false, false, false, false, 0.5, 1.5, 80.0, 220.0, 8.0, 24.0, 32, 0usize,
+            None, None,
+        )
     };
 
     let mut last_sdf_ms = 0.0f32;
@@ -272,6 +304,8 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
                                 volume_dims,
                                 volume_spacing,
                                 live_resolution_scale.max(0.2),
+                                live_sdf_band_mm,
+                                mesh_chunk_size,
                                 true,
                                 mesh_due,
                             );
@@ -308,7 +342,7 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
             }
 
             queue_depth = dirty_indices.len() as u32;
-            if !dirty_indices.is_empty() {
+            if !dirty_indices.is_empty() && (auto_finalize || finalize_requested) {
                 let mut chosen = dirty_indices[0];
                 if dirty_indices.len() > 1 {
                     if let Some(next) = dirty_indices.iter().copied().find(|&i| i >= next_finalize_index) {
@@ -321,12 +355,15 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
                         volume_dims,
                         volume_spacing,
                         full_resolution_scale.max(0.5),
+                        final_sdf_band_mm,
+                        mesh_chunk_size,
                         false,
                         true,
                     );
                     last_sdf_ms = sdf_ms;
                     last_mesh_ms = mesh_ms;
                     next_finalize_index = chosen.saturating_add(1);
+                    finalize_requested = false;
                 }
             }
         }
@@ -339,6 +376,7 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
         perf.last_live_update_at = last_live_update_at;
         perf.last_live_mesh_at = last_live_mesh_at;
         perf.next_finalize_index = next_finalize_index;
+        perf.finalize_requested = finalize_requested;
     }
 }
 

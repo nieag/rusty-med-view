@@ -335,6 +335,8 @@ pub enum MeshNormalMode {
 pub struct MarchingCubesOptions {
     pub enforce_outward_winding: bool,
     pub normal_mode: MeshNormalMode,
+    pub restrict_to_active_bounds: bool,
+    pub chunk_size: u32,
 }
 
 impl Default for MarchingCubesOptions {
@@ -342,6 +344,8 @@ impl Default for MarchingCubesOptions {
         Self {
             enforce_outward_winding: true,
             normal_mode: MeshNormalMode::Gradient,
+            restrict_to_active_bounds: true,
+            chunk_size: 32,
         }
     }
 }
@@ -364,13 +368,86 @@ pub fn marching_cubes_with_options(
         return mesh;
     }
 
-    // Process each cube in the grid
-    for z in 0..dims[2] - 1 {
-        for y in 0..dims[1] - 1 {
-            for x in 0..dims[0] - 1 {
-                process_cube(sdf, [x, y, z], iso_level, &mut mesh);
-            }
+    let (x_start, x_end, y_start, y_end, z_start, z_end) = if options.restrict_to_active_bounds {
+        if let Some(b) = sdf.active_bounds {
+        // Expand by one cell so cubes that straddle ROI boundaries are still processed.
+        (
+            b[0].saturating_sub(1),
+            b[3].min(dims[0].saturating_sub(2)),
+            b[1].saturating_sub(1),
+            b[4].min(dims[1].saturating_sub(2)),
+            b[2].saturating_sub(1),
+            b[5].min(dims[2].saturating_sub(2)),
+        )
+        } else {
+            (
+                0,
+                dims[0].saturating_sub(2),
+                0,
+                dims[1].saturating_sub(2),
+                0,
+                dims[2].saturating_sub(2),
+            )
         }
+    } else {
+        (
+            0,
+            dims[0].saturating_sub(2),
+            0,
+            dims[1].saturating_sub(2),
+            0,
+            dims[2].saturating_sub(2),
+        )
+    };
+
+    if x_start > x_end || y_start > y_end || z_start > z_end {
+        return mesh;
+    }
+
+    let chunk = options.chunk_size.max(1);
+    let x_chunk_start = (x_start / chunk) * chunk;
+    let y_chunk_start = (y_start / chunk) * chunk;
+    let z_chunk_start = (z_start / chunk) * chunk;
+
+    let mut cz = z_chunk_start;
+    while cz <= z_end {
+        let zc_end = cz.saturating_add(chunk - 1).min(z_end);
+        let z0 = cz.max(z_start);
+
+        let mut cy = y_chunk_start;
+        while cy <= y_end {
+            let yc_end = cy.saturating_add(chunk - 1).min(y_end);
+            let y0 = cy.max(y_start);
+
+            let mut cx = x_chunk_start;
+            while cx <= x_end {
+                let xc_end = cx.saturating_add(chunk - 1).min(x_end);
+                let x0 = cx.max(x_start);
+
+                for z in z0..=zc_end {
+                    for y in y0..=yc_end {
+                        for x in x0..=xc_end {
+                            process_cube(sdf, [x, y, z], iso_level, &mut mesh);
+                        }
+                    }
+                }
+
+                if x_end - cx < chunk {
+                    break;
+                }
+                cx += chunk;
+            }
+
+            if y_end - cy < chunk {
+                break;
+            }
+            cy += chunk;
+        }
+
+        if z_end - cz < chunk {
+            break;
+        }
+        cz += chunk;
     }
 
     if options.enforce_outward_winding {
@@ -741,5 +818,28 @@ mod tests {
             .iter()
             .any(|v| (v[0].fract()).abs() > 1e-3 && (1.0 - v[0].fract()).abs() > 1e-3);
         assert!(has_fractional_x, "expected interpolated (non-grid-snapped) vertices");
+    }
+
+    #[test]
+    fn test_active_bounds_matches_full_scan_result() {
+        let mut sdf_full = SdfVolume::new([20, 20, 20], [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        for z in 0..20 {
+            for y in 0..20 {
+                for x in 0..20 {
+                    let wx = x as f32 - 10.0;
+                    let wy = y as f32 - 10.0;
+                    let wz = z as f32 - 10.0;
+                    let dist = (wx * wx + wy * wy + wz * wz).sqrt() - 5.0;
+                    sdf_full.set(x, y, z, dist);
+                }
+            }
+        }
+
+        let mut sdf_roi = sdf_full.clone();
+        sdf_roi.active_bounds = Some([4, 4, 4, 16, 16, 16]);
+
+        let mesh_full = marching_cubes(&sdf_full, 0.0);
+        let mesh_roi = marching_cubes(&sdf_roi, 0.0);
+        assert_eq!(mesh_full.triangle_count(), mesh_roi.triangle_count());
     }
 }

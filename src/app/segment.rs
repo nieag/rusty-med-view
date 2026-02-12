@@ -221,6 +221,9 @@ pub struct SdfVolume {
     pub origin: [f32; 3],
     /// Signed distance values (row-major: x + y*dim_x + z*dim_x*dim_y)
     pub data: Vec<f32>,
+    /// Optional index-space bounds where meaningful SDF updates occurred: [x0, y0, z0, x1, y1, z1].
+    /// Used to accelerate downstream meshing by avoiding full-volume scans.
+    pub active_bounds: Option<[u32; 6]>,
 }
 
 impl SdfVolume {
@@ -232,6 +235,7 @@ impl SdfVolume {
             spacing,
             origin,
             data: vec![f32::MAX; size],
+            active_bounds: None,
         }
     }
 

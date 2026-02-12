@@ -161,6 +161,17 @@ pub fn draw_segment_panel(
             egui::Slider::new(&mut perf.live_mesh_interval_ms, 100.0..=600.0)
                 .text("Live Mesh Interval ms"),
         );
+        ui.add(
+            egui::Slider::new(&mut perf.live_sdf_band_mm, 2.0..=32.0).text("Live SDF Band (mm)"),
+        );
+        ui.add(
+            egui::Slider::new(&mut perf.final_sdf_band_mm, 4.0..=64.0).text("Final SDF Band (mm)"),
+        );
+        ui.add(egui::Slider::new(&mut perf.mesh_chunk_size, 8..=96).text("Mesh Chunk Size"));
+        ui.checkbox(&mut perf.auto_finalize, "Auto Finalize (can stall)");
+        if ui.button("Finalize Dirty Segments Now").clicked() {
+            perf.finalize_requested = true;
+        }
         ui.label(format!(
             "Last update: SDF {:.1} ms, Mesh {:.1} ms, Queue {}",
             perf.last_sdf_ms, perf.last_mesh_ms, perf.queue_depth
