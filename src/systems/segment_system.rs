@@ -380,6 +380,8 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
         if live_enabled && !fallback_active {
             if let Some(active_idx) = manager.active_segment {
                 if let Some(segment) = manager.segments.get_mut(active_idx) {
+                    let has_tsdf_queue = !segment.chunk_runtime.dirty_tsdf_chunks.is_empty();
+                    let has_mesh_queue = !segment.chunk_runtime.dirty_mesh_chunks.is_empty();
                     let sdf_due = match last_live_update_at {
                         Some(t) => (now - t).as_secs_f32() * 1000.0 >= live_interval_ms,
                         None => true,
@@ -393,10 +395,19 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
                     } else {
                         false
                     };
-                    let need_sdf = segment.sdf_dirty;
-                    let need_mesh = segment.mesh_dirty && mesh_due;
+                    let need_sdf = segment.sdf_dirty || has_tsdf_queue;
+                    let need_mesh = (segment.mesh_dirty || has_mesh_queue) && mesh_due;
 
                     if (need_sdf && sdf_due) || need_mesh {
+                        if has_tsdf_queue {
+                            segment.chunk_runtime.dirty_tsdf_chunks.clear();
+                            segment.sdf_dirty = true;
+                        }
+                        if has_mesh_queue {
+                            segment.chunk_runtime.dirty_mesh_chunks.clear();
+                            segment.mesh_dirty = true;
+                        }
+
                         let (mesh_changed, sdf_ms, mesh_ms) = regenerate_segment_if_dirty_with_resolution(
                             segment,
                             volume_dims,
@@ -417,7 +428,9 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
                             last_live_mesh_at = Some(now);
                         }
                     }
-                    queue_depth = u32::from(segment.sdf_dirty || segment.mesh_dirty);
+                    queue_depth = segment.chunk_runtime.dirty_tsdf_chunks.len() as u32
+                        + segment.chunk_runtime.dirty_mesh_chunks.len() as u32
+                        + u32::from(segment.sdf_dirty || segment.mesh_dirty);
                 }
             }
         } else {
@@ -427,7 +440,11 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
                 .iter()
                 .enumerate()
                 .filter_map(|(i, s)| {
-                    if s.sdf_dirty || s.final_sdf_revision != s.sdf_revision {
+                    if s.sdf_dirty
+                        || s.final_sdf_revision != s.sdf_revision
+                        || !s.chunk_runtime.dirty_tsdf_chunks.is_empty()
+                        || !s.chunk_runtime.dirty_mesh_chunks.is_empty()
+                    {
                         Some(i)
                     } else {
                         None
@@ -447,7 +464,15 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
                 }
             }
 
-            queue_depth = dirty_indices.len() as u32;
+            queue_depth = manager
+                .segments
+                .iter()
+                .map(|s| {
+                    s.chunk_runtime.dirty_tsdf_chunks.len() as u32
+                        + s.chunk_runtime.dirty_mesh_chunks.len() as u32
+                        + u32::from(s.sdf_dirty || s.mesh_dirty || s.final_sdf_revision != s.sdf_revision)
+                })
+                .sum();
             let finalize_cooldown_elapsed = match last_live_update_at {
                 Some(t) => (now - t).as_secs_f32() * 1000.0 >= FINALIZE_IDLE_COOLDOWN_MS,
                 None => true,
@@ -465,6 +490,14 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
                 if let Some(segment) = manager.segments.get_mut(chosen) {
                     if segment.final_sdf_revision != segment.sdf_revision && !segment.sdf_dirty {
                         segment.sdf_dirty = true;
+                        segment.mesh_dirty = true;
+                    }
+                    if !segment.chunk_runtime.dirty_tsdf_chunks.is_empty() {
+                        segment.chunk_runtime.dirty_tsdf_chunks.clear();
+                        segment.sdf_dirty = true;
+                    }
+                    if !segment.chunk_runtime.dirty_mesh_chunks.is_empty() {
+                        segment.chunk_runtime.dirty_mesh_chunks.clear();
                         segment.mesh_dirty = true;
                     }
                     let (_changed, sdf_ms, mesh_ms) = regenerate_segment_if_dirty_with_resolution(
@@ -1065,5 +1098,16 @@ mod tests {
             &b,
             SlicePlane::Axial
         ));
+    }
+
+    #[test]
+    fn test_world_roi_to_index_bounds_clamps() {
+        let b = world_roi_to_index_bounds(
+            [-5.0, 1.2, 2.0, 100.0, 3.1, 4.9],
+            [10, 10, 10],
+            [1.0, 1.0, 1.0],
+        )
+        .unwrap();
+        assert_eq!(b, [0, 1, 2, 9, 4, 5]);
     }
 }
