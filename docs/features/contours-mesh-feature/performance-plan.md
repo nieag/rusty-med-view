@@ -27,16 +27,19 @@ Chosen continuation path:
 - Latest plan commits:
   - `fb2e8dd` Phase A chunk runtime dirty-queue wiring from contour edits.
   - `d8603f5` deferred finalize defaults + chunk meshing hooks retained.
+  - `3436f43` Phase A queue-driven derivative updates + Phase B TSDF chunk foundation.
 
-- Phase A status: mostly complete.
+- Phase A status: complete.
   - [x] Chunk primitives module added (`src/convert/chunk_grid.rs`).
   - [x] `ChunkKey` and `ChunkBounds` available.
   - [x] Segment runtime cache added (`SegmentRuntimeCache` in `src/app/segment.rs`).
   - [x] Dirty TSDF + dirty mesh chunk queues added.
   - [x] Dirty marking wired in `finish_drawing(...)` ROI -> chunk enqueue.
-  - [ ] Queue-driven derivative execution is not yet primary (still partial wiring).
+  - [x] Queue-driven derivative execution is now wired as primary trigger path.
 
-- Phase B status: not started.
+- Phase B status: started.
+  - [x] TSDF chunk data model and quantization helpers added (`src/convert/contour_to_tsdf_chunks.rs`).
+  - [ ] Chunk recompute/invalidation pipeline not yet integrated.
 - Phase C status: not started.
 - Phase D status: not started.
 - Phase E status: not started.

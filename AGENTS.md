@@ -48,3 +48,11 @@
   - approach summary,
   - validation steps/commands run,
   - screenshots or short clips for UI/visual rendering changes.
+
+## Plan Tracking Discipline
+- If an active plan document exists (for example `docs/features/.../performance-plan.md`), update it as implementation progresses.
+- Maintain an **Implementation Status** log with:
+  - current phase/state,
+  - concise completed/pending checklist items,
+  - commit hashes for each plan-relevant checkpoint.
+- When a code change advances the plan, include the plan-doc update in the same commit whenever practical; do not leave status tracking behind code changes.
