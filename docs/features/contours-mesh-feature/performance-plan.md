@@ -1,8 +1,10 @@
 # Performance Plan Re-Evaluation + Continuation (P4-next)
 
+**Target**: 60+ fps in WASM on web (~16ms frame budget, single-threaded).
+
 ## Summary
 
-Current state is improved but still not at “snappy” target because the core live
+Current state is improved but still not at "snappy" target because the core live
 pipeline is still contours -> SDF -> Marching Cubes on whole active ROI per edit.
 What is done:
 
@@ -15,14 +17,15 @@ Main gap:
 
 - No chunked TSDF store.
 - No per-chunk mesh cache/invalidation.
-- No Surface Nets live extractor.
+- No Surface Nets extractor (replacing Marching Cubes).
 - No compute-shader acceleration yet.
 
 Chosen continuation path:
 
 - Chunked CPU first, then GPU compute offload.
+- Surface Nets replaces Marching Cubes everywhere (see Algorithm Decision below).
 
-## Implementation Status (February 12, 2026)
+## Implementation Status (February 14, 2026)
 
 - Latest plan commits:
   - `fb2e8dd` Phase A chunk runtime dirty-queue wiring from contour edits.
@@ -39,19 +42,38 @@ Chosen continuation path:
 
 - Phase B status: started.
   - [x] TSDF chunk data model and quantization helpers added (`src/convert/contour_to_tsdf_chunks.rs`).
-  - [ ] Chunk recompute/invalidation pipeline not yet integrated.
-- Phase C status: not started.
+  - [x] `regenerate_live_chunk_meshes` + `merge_chunk_meshes` implemented (dead code, needs activation).
+  - [ ] Chunk recompute/invalidation pipeline not yet integrated (queues cleared without processing).
+- Phase C status: not started (Surface Nets implementation pending).
 - Phase D status: not started.
 - Phase E status: not started.
 - Phase F status: partial (deferred finalize behavior exists, but not chunk/final queue architecture).
 
+## Algorithm Decision: Surface Nets Everywhere
+
+Medical segmentation produces organic shapes (organs, tumors) — no sharp features.
+Compared three isosurface extractors for the 16ms WASM budget:
+
+| | Marching Cubes | Surface Nets | Dual Contouring |
+|---|---|---|---|
+| Triangle count | High (staircase) | ~40-60% fewer | Fewest |
+| Quality | Staircase artifacts | Smooth | Sharp feature preservation |
+| Per-cell cost | Low | Low | 3-5× (QEF solve) |
+| Best for | General | Organic shapes ✅ | CAD/hard edges |
+
+**Decision**: Surface Nets everywhere. MC stays in codebase but is removed from the
+active pipeline. DC is overkill for organic medical shapes.
+
 ## Current Baseline (facts from code)
 
-- Mesh generation method: marching_cubes_with_options(...) in src/convert/
-  marching_cubes.rs.
+- Mesh generation method (being replaced): marching_cubes_with_options(...) in
+  src/convert/marching_cubes.rs.
+- SDF store (being replaced): monolithic SdfVolume (Vec<f32>, full volume) in
+  src/app/segment.rs. Will be superseded by chunked TsdfChunk (Vec<i16>) as the
+  persistent authoritative store.
 - Incremental SDF function exists:
   update_sdf_region_from_contours_with_config(...) in src/convert/
-  contour_to_sdf.rs.
+  contour_to_sdf.rs. Will be scoped to chunk-sized temp buffers.
 - Live/final orchestration in src/systems/segment_system.rs.
 - Render-side mesh caching exists in src/render/pipeline.rs + src/app/context.rs.
 - Perf settings still exist in SegPerfConfig, though UI now hard-forces live
@@ -61,7 +83,7 @@ Chosen continuation path:
 
 1. Add chunk primitives:
 
-- New module: src/seg/chunk_grid.rs
+- New module: src/convert/chunk_grid.rs
 - Types:
   - ChunkKey { x: i32, y: i32, z: i32 }
   - ChunkBounds { min: [u32;3], max: [u32;3] }
@@ -82,43 +104,53 @@ Chosen continuation path:
 - In finish_drawing flow (src/systems/segment_system.rs), convert stroke world
   AABB to chunk keys and enqueue only intersected chunks.
 
-## Phase B — Chunked TSDF Cache (CPU)
+## Phase B — TSDF-Authoritative Chunk Store (CPU)
 
-1. New module: src/convert/contour_to_tsdf_chunks.rs.
-2. Data type:
+TsdfChunk replaces the monolithic SdfVolume as the persistent authoritative
+representation. SdfVolume becomes a transient per-chunk compute buffer.
+
+1. Existing module: src/convert/contour_to_tsdf_chunks.rs.
+2. Data type (already implemented):
 
 - TsdfChunk { dims:[u32;3], voxel_size:[f32;3], values: Vec<i16>, weight:
   Vec<u8>, revision:u64 }.
 
-3. Behavior:
+3. Architecture change:
 
-- Recompute only dirty chunks from contours (banded TSDF, truncated).
-- Use overlap halo (1 voxel) at chunk borders for seam continuity.
-- Keep compact quantized storage (i16 TSDF normalized by truncation distance).
+- Remove Segment.sdf: Option<SdfVolume> as persistent field.
+- Add tsdf_chunks: HashMap<ChunkKey, TsdfChunk> to SegmentRuntimeCache.
+- Per dirty chunk: allocate small temp SdfVolume (32³ = 128KB), compute contour
+  distances into it, quantize via build_tsdf_chunk_from_sdf, drop temp buffer.
+- GPU-forward: i16 maps directly to R16Sint textures for compute offload.
 
 4. Integration:
 
 - sys_update_segment_derivatives becomes queue-driven:
-  - per frame: limited TSDF chunks processed under budget.
+  - per frame: limited TSDF chunks processed under budget (≤3ms).
   - enqueue corresponding mesh chunks when TSDF chunk changed.
 
-## Phase C — Surface Nets Live Meshing (CPU)
+## Phase C — Surface Nets Meshing (CPU, replaces Marching Cubes)
 
 1. New module: src/convert/surface_nets.rs.
-2. Implement per-chunk extraction:
+2. Implement full Surface Nets extractor:
 
-- surface_nets_chunk(tsdf_chunk, neighbors_halo) -> MeshData.
+- surface_nets_chunk(tsdf_chunk) -> MeshData.
+- surface_nets_from_sdf(sdf, iso_level) -> MeshData (full-volume convenience wrapper).
 - Deterministic boundary ownership rule to prevent cracks.
+- Dual vertex at weighted average; central-difference gradient normals.
+- Primary path reads from TsdfChunk (dequantize i16 → f32 on the fly).
 
 3. Mesh assembly:
 
 - Do not rebuild monolithic mesh every update.
 - Keep per-chunk mesh cache and only rebuild touched chunks.
+- merge_chunk_meshes assembles per-chunk caches into segment.mesh.
 
-4. Render path:
+4. Pipeline swap:
 
-- Add chunk mesh draw submission path in src/render/pipeline.rs.
-- Keep existing monolithic path temporarily for fallback/finalize.
+- Replace marching_cubes_with_options calls in segment_system.rs.
+- Both live and finalize use Surface Nets (differ by resolution/budget, not algorithm).
+- MC code retained in codebase but removed from active pipeline.
 
 ## Phase D — GPU Resource Model for Chunk Meshes
 
@@ -152,10 +184,8 @@ Chosen continuation path:
 
 ## Phase F — Finalize/Export Path
 
-1. Keep finalize distinct:
-
-- Option A (default): higher-quality Marching Cubes from converged TSDF.
-- Option B: high-res Surface Nets.
+1. Finalize uses high-resolution Surface Nets from converged TSDF.
+   (Same algorithm as live path, higher resolution multiplier.)
 
 2. Finalize runs as background queue slices under frame budget; never blocks
    interaction loop.
