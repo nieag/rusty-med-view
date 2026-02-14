@@ -3,6 +3,7 @@
 //! This module defines the core types for storing and manipulating
 //! contour-based segmentations, including contours, SDF volumes, and meshes.
 
+use crate::convert::contour_to_tsdf_chunks::TsdfChunk;
 use crate::util::orientation::SlicePlane;
 use std::collections::{HashMap, VecDeque};
 
@@ -348,6 +349,8 @@ pub struct ChunkKey {
 #[derive(Debug, Clone)]
 pub struct SegmentRuntimeCache {
     pub chunk_size: u32,
+    /// Persistent TSDF store: the authoritative volumetric representation.
+    pub tsdf_chunks: HashMap<ChunkKey, TsdfChunk>,
     pub dirty_tsdf_chunks: VecDeque<ChunkKey>,
     pub dirty_mesh_chunks: VecDeque<ChunkKey>,
     pub mesh_chunks_cpu: HashMap<ChunkKey, MeshData>,
@@ -358,6 +361,7 @@ impl Default for SegmentRuntimeCache {
     fn default() -> Self {
         Self {
             chunk_size: 32,
+            tsdf_chunks: HashMap::new(),
             dirty_tsdf_chunks: VecDeque::new(),
             dirty_mesh_chunks: VecDeque::new(),
             mesh_chunks_cpu: HashMap::new(),
@@ -484,7 +488,8 @@ impl Segment {
 
     /// Merge a world-space dirty ROI into the segment's pending dirty region.
     pub fn extend_dirty_roi_world(&mut self, roi_world: [f32; 6]) {
-        if roi_world[0] > roi_world[3] || roi_world[1] > roi_world[4] || roi_world[2] > roi_world[5] {
+        if roi_world[0] > roi_world[3] || roi_world[1] > roi_world[4] || roi_world[2] > roi_world[5]
+        {
             return;
         }
         self.dirty_roi_world = Some(match self.dirty_roi_world {
@@ -502,6 +507,7 @@ impl Segment {
 
     /// Clear live chunk mesh cache and pending chunk queue.
     pub fn clear_chunk_runtime(&mut self) {
+        self.chunk_runtime.tsdf_chunks.clear();
         self.chunk_runtime.dirty_tsdf_chunks.clear();
         self.chunk_runtime.dirty_mesh_chunks.clear();
         self.chunk_runtime.mesh_chunks_cpu.clear();

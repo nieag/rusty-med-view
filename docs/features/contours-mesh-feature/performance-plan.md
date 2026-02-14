@@ -4,50 +4,67 @@
 
 ## Summary
 
-Current state is improved but still not at "snappy" target because the core live
-pipeline is still contours -> SDF -> Marching Cubes on whole active ROI per edit.
+The core CPU pipeline is now chunked and running. The live edit path uses:
+contours → SDF (incremental ROI) → TSDF chunk bake → Surface Nets → merge.
+
 What is done:
 
-- Incremental SDF ROI updates landed.
-- Persistent mesh GPU cache landed (no per-frame reupload when mesh unchanged).
-- Live mesh always-on, live path uses cheaper normals.
-- Finalize defers briefly after edits to reduce immediate stalls.
+- Incremental SDF ROI updates.
+- Persistent mesh GPU cache (no per-frame reupload when mesh unchanged).
+- Chunked TSDF store (`tsdf_chunks` in `SegmentRuntimeCache`).
+- Surface Nets replaces Marching Cubes in live and finalize paths.
+- Per-chunk mesh cache with frame-budget-limited processing.
+- TSDF chunks baked with +1 voxel overlap for seamless Surface Nets meshing.
 
-Main gap:
+Remaining gaps:
 
-- No chunked TSDF store.
-- No per-chunk mesh cache/invalidation.
-- No Surface Nets extractor (replacing Marching Cubes).
-- No compute-shader acceleration yet.
+- Per-chunk GPU mesh resources (currently merged + re-uploaded).
+- Compute-shader acceleration.
+- Chunk-aware finalize queue.
 
 Chosen continuation path:
 
-- Chunked CPU first, then GPU compute offload.
-- Surface Nets replaces Marching Cubes everywhere (see Algorithm Decision below).
+- Chunked CPU first (✅ done), then GPU resource model, then compute offload.
 
 ## Implementation Status (February 14, 2026)
 
-- Latest plan commits:
-  - `fb2e8dd` Phase A chunk runtime dirty-queue wiring from contour edits.
-  - `d8603f5` deferred finalize defaults + chunk meshing hooks retained.
-  - `3436f43` Phase A queue-driven derivative updates + Phase B TSDF chunk foundation.
+### Commit Log
 
-- Phase A status: complete.
-  - [x] Chunk primitives module added (`src/convert/chunk_grid.rs`).
-  - [x] `ChunkKey` and `ChunkBounds` available.
-  - [x] Segment runtime cache added (`SegmentRuntimeCache` in `src/app/segment.rs`).
-  - [x] Dirty TSDF + dirty mesh chunk queues added.
-  - [x] Dirty marking wired in `finish_drawing(...)` ROI -> chunk enqueue.
-  - [x] Queue-driven derivative execution is now wired as primary trigger path.
+| Commit | Phase | Description |
+|--------|-------|-------------|
+| `fb2e8dd` | A | Chunk runtime dirty-queue wiring from contour edits |
+| `d8603f5` | A | Deferred finalize defaults + chunk meshing hooks |
+| `3436f43` | A+B | Queue-driven derivative updates + TSDF chunk foundation |
+| `faa8653` | C | Surface Nets isosurface extractor |
+| `a4cd3a2` | B-2 | TSDF-authoritative chunked pipeline with Surface Nets |
 
-- Phase B status: started.
-  - [x] TSDF chunk data model and quantization helpers added (`src/convert/contour_to_tsdf_chunks.rs`).
-  - [x] `regenerate_live_chunk_meshes` + `merge_chunk_meshes` implemented (dead code, needs activation).
-  - [ ] Chunk recompute/invalidation pipeline not yet integrated (queues cleared without processing).
-- Phase C status: not started (Surface Nets implementation pending).
-- Phase D status: not started.
-- Phase E status: not started.
-- Phase F status: partial (deferred finalize behavior exists, but not chunk/final queue architecture).
+### Phase A — Chunk Runtime Model: ✅ Complete
+
+- [x] Chunk primitives module (`src/convert/chunk_grid.rs`)
+- [x] `SegmentRuntimeCache` with dirty queues (`src/app/segment.rs`)
+- [x] Dirty marking wired in `finish_drawing` ROI → chunk enqueue
+- [x] Queue-driven derivative execution as primary trigger path
+
+### Phase B — TSDF-Authoritative Chunk Store: ✅ Complete
+
+- [x] TSDF chunk data model and quantization (`src/convert/contour_to_tsdf_chunks.rs`)
+- [x] `tsdf_chunks: HashMap<ChunkKey, TsdfChunk>` added to `SegmentRuntimeCache`
+- [x] TSDF baking from SDF with +1 voxel overlap padding
+- [x] Chunk recompute/invalidation pipeline integrated
+- [ ] `Segment.sdf` retained for SDF preview pipeline (deferred removal)
+
+### Phase C — Surface Nets Meshing: ✅ Complete
+
+- [x] `surface_nets_chunk(tsdf_chunk)` reads quantized i16 directly
+- [x] `surface_nets_from_sdf(sdf, iso_level, bounds)` full-volume wrapper
+- [x] 5 unit tests (empty, all-inside, sphere, boundary ownership, parity)
+- [x] Live path: Surface Nets on chunks with frame budget + merge
+- [x] Finalize path: `surface_nets_from_sdf` full-volume extraction
+- [x] MC removed from active pipeline (retained in codebase)
+
+### Phase D — GPU Resource Model: Not started
+### Phase E — Compute Offload: Not started
+### Phase F — Finalize/Export Path: Partial (deferred finalize exists, not yet chunk-aware)
 
 ## Algorithm Decision: Surface Nets Everywhere
 

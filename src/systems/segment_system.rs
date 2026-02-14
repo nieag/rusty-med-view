@@ -2,13 +2,14 @@
 //!
 //! Manages the full pipeline: contour drawing → SDF generation → mesh rendering.
 
-use crate::app::segment::{ChunkKey, MeshData, Plane3D, PlaneContour, Segment, SegmentChunkRuntime};
+use crate::app::segment::{
+    ChunkKey, MeshData, Plane3D, PlaneContour, Segment, SegmentChunkRuntime,
+};
 use crate::components::{AppEntities, SegPerfConfig, VolumeData};
 use crate::convert::{
-    build_sdf_from_contours_with_config, chunk_bounds_for_key, chunk_keys_for_bounds,
-    marching_cubes_with_options,
-    update_sdf_region_from_contours_with_config, MarchingCubesOptions, MeshNormalMode,
-    SdfBuildConfig,
+    build_sdf_from_contours_with_config, build_tsdf_chunk_from_sdf, chunk_bounds_for_key,
+    chunk_keys_for_bounds, surface_nets_chunk, surface_nets_from_sdf,
+    update_sdf_region_from_contours_with_config, SdfBuildConfig,
 };
 use crate::render::mesh_pipeline::MeshResources;
 use crate::systems::contour_draw::ContourDrawState;
@@ -125,7 +126,7 @@ fn regenerate_segment_if_dirty_with_resolution(
     resolution_multiplier: f32,
     sdf_band_mm: f32,
     mesh_chunk_size: u32,
-    _frame_budget_ms: f32,
+    frame_budget_ms: f32,
     is_live: bool,
     allow_mesh_rebuild: bool,
 ) -> (bool, f32, f32) {
@@ -145,8 +146,12 @@ fn regenerate_segment_if_dirty_with_resolution(
         let sdf = if let (Some(existing), Some(dirty_roi_world)) =
             (segment.sdf.as_mut(), segment.dirty_roi_world)
         {
-            let updated =
-                update_sdf_region_from_contours_with_config(existing, &segment.contours, build_cfg, dirty_roi_world);
+            let updated = update_sdf_region_from_contours_with_config(
+                existing,
+                &segment.contours,
+                build_cfg,
+                dirty_roi_world,
+            );
             if updated.is_some() {
                 live_updated_bounds = updated;
                 None
@@ -175,55 +180,74 @@ fn regenerate_segment_if_dirty_with_resolution(
         segment.sdf_revision = segment.sdf_revision.wrapping_add(1);
         if is_live {
             segment.live_sdf_revision = segment.sdf_revision;
-            // Keep live path incremental; finalize backlog is tracked by revision mismatch.
             segment.sdf_dirty = false;
         } else {
             segment.final_sdf_revision = segment.sdf_revision;
             segment.sdf_dirty = false;
         }
+
+        // Bake dirty TSDF chunks from the updated SDF.
+        // Pad each chunk by +1 voxel on all edges so Surface Nets can
+        // connect vertices across chunk boundaries (eliminates seam lines).
+        if let Some(sdf) = &segment.sdf {
+            let bounds = live_updated_bounds.unwrap_or([
+                0,
+                0,
+                0,
+                sdf.dimensions[0].saturating_sub(1),
+                sdf.dimensions[1].saturating_sub(1),
+                sdf.dimensions[2].saturating_sub(1),
+            ]);
+            let keys = chunk_keys_for_bounds(bounds, mesh_chunk_size);
+            let trunc = sdf_band_mm.max(1.0);
+            for key in &keys {
+                if let Some(cb) = chunk_bounds_for_key(*key, mesh_chunk_size, sdf.dimensions) {
+                    // Pad bounds by 1 voxel in each direction for overlap.
+                    let padded = [
+                        cb[0].saturating_sub(1),
+                        cb[1].saturating_sub(1),
+                        cb[2].saturating_sub(1),
+                        (cb[3] + 1).min(sdf.dimensions[0].saturating_sub(1)),
+                        (cb[4] + 1).min(sdf.dimensions[1].saturating_sub(1)),
+                        (cb[5] + 1).min(sdf.dimensions[2].saturating_sub(1)),
+                    ];
+                    if let Some(tsdf) =
+                        build_tsdf_chunk_from_sdf(sdf, padded, trunc, segment.sdf_revision)
+                    {
+                        segment.chunk_runtime.tsdf_chunks.insert(*key, tsdf);
+                    }
+                }
+            }
+            // Enqueue mesh rebuild for the baked chunks.
+            segment.chunk_runtime.enqueue_dirty_mesh_chunks(keys);
+        }
+
         segment.mesh_dirty = true; // SDF changed, mesh needs update
     }
 
     // Regenerate mesh if dirty
     if segment.mesh_dirty && allow_mesh_rebuild {
-        if !is_live {
+        let mesh_start = Instant::now();
+        if is_live {
+            // Live path: process dirty chunk meshes within frame budget.
+            let _done = regenerate_live_chunk_meshes(&mut segment.chunk_runtime, frame_budget_ms);
+            let merged = merge_chunk_meshes(&segment.chunk_runtime.mesh_chunks_cpu);
+            if !merged.is_empty() {
+                segment.mesh = Some(merged);
+                segment.mesh_revision = segment.mesh_revision.wrapping_add(1);
+                mesh_changed = true;
+            }
+        } else {
+            // Finalize path: full-volume Surface Nets extraction.
             segment.clear_chunk_runtime();
+            if let Some(sdf) = &segment.sdf {
+                let mesh = surface_nets_from_sdf(sdf, 0.0, sdf.active_bounds);
+                segment.mesh = Some(mesh);
+                segment.mesh_revision = segment.mesh_revision.wrapping_add(1);
+                mesh_changed = true;
+            }
         }
-        if let Some(sdf) = &segment.sdf {
-            let mesh_start = Instant::now();
-            let mesh = if is_live {
-                // Temporary safety path: full active-bounds extraction avoids
-                // cropped surfaces while chunked mesh cache is being hardened.
-                let _ = live_updated_bounds;
-                marching_cubes_with_options(
-                    sdf,
-                    0.0,
-                    MarchingCubesOptions {
-                        enforce_outward_winding: true,
-                        normal_mode: MeshNormalMode::Gradient,
-                        restrict_to_active_bounds: true,
-                        chunk_size: mesh_chunk_size.max(4),
-                        bounds_override: None,
-                    },
-                )
-            } else {
-                marching_cubes_with_options(
-                    sdf,
-                    0.0,
-                    MarchingCubesOptions {
-                        enforce_outward_winding: true,
-                        normal_mode: MeshNormalMode::Gradient,
-                        restrict_to_active_bounds: true,
-                        chunk_size: mesh_chunk_size.max(4),
-                        bounds_override: None,
-                    },
-                )
-            };
-            mesh_ms = mesh_start.elapsed().as_secs_f32() * 1000.0;
-            segment.mesh = Some(mesh);
-            segment.mesh_revision = segment.mesh_revision.wrapping_add(1);
-            mesh_changed = true;
-        }
+        mesh_ms = mesh_start.elapsed().as_secs_f32() * 1000.0;
         segment.mesh_dirty = false;
     }
 
@@ -234,40 +258,25 @@ fn regenerate_segment_if_dirty_with_resolution(
     (mesh_changed, sdf_ms, mesh_ms)
 }
 
-#[allow(dead_code)]
+/// Process dirty mesh chunks from TSDF using Surface Nets, respecting a frame budget.
+///
+/// Pops chunks from `dirty_mesh_chunks`, extracts mesh via [`surface_nets_chunk`],
+/// and stores results in `mesh_chunks_cpu`.  Returns `true` when the queue is drained.
 fn regenerate_live_chunk_meshes(
     chunk_runtime: &mut SegmentChunkRuntime,
-    sdf: &crate::app::segment::SdfVolume,
-    bounds: [u32; 6],
-    chunk_size: u32,
     frame_budget_ms: f32,
 ) -> bool {
-    chunk_runtime.chunk_size = chunk_size;
-    let keys = chunk_keys_for_bounds(bounds, chunk_size);
-    for key in keys {
-        chunk_runtime.dirty_mesh_chunks.push_back(key);
-    }
-
     let start = Instant::now();
     while let Some(key) = chunk_runtime.dirty_mesh_chunks.pop_front() {
-        let Some(chunk_bounds) = chunk_bounds_for_key(key, chunk_size, sdf.dimensions) else {
-            continue;
-        };
-        let mesh = marching_cubes_with_options(
-            sdf,
-            0.0,
-            MarchingCubesOptions {
-                enforce_outward_winding: false,
-                normal_mode: MeshNormalMode::Flat,
-                restrict_to_active_bounds: false,
-                chunk_size: chunk_size.max(4),
-                bounds_override: Some(chunk_bounds),
-            },
-        );
-        if mesh.is_empty() {
-            chunk_runtime.mesh_chunks_cpu.remove(&key);
+        if let Some(tsdf) = chunk_runtime.tsdf_chunks.get(&key) {
+            let mesh = surface_nets_chunk(tsdf);
+            if mesh.is_empty() {
+                chunk_runtime.mesh_chunks_cpu.remove(&key);
+            } else {
+                chunk_runtime.mesh_chunks_cpu.insert(key, mesh);
+            }
         } else {
-            chunk_runtime.mesh_chunks_cpu.insert(key, mesh);
+            chunk_runtime.mesh_chunks_cpu.remove(&key);
         }
         if start.elapsed().as_secs_f32() * 1000.0 >= frame_budget_ms {
             break;
@@ -276,7 +285,7 @@ fn regenerate_live_chunk_meshes(
     chunk_runtime.dirty_mesh_chunks.is_empty()
 }
 
-#[allow(dead_code)]
+/// Merge per-chunk meshes into a single `MeshData`.
 fn merge_chunk_meshes(chunks: &std::collections::HashMap<ChunkKey, MeshData>) -> MeshData {
     let mut merged = MeshData::new();
     for mesh in chunks.values() {
@@ -389,7 +398,9 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
                     let mesh_due = if live_mesh_enabled {
                         segment.is_live_preview_stale
                             || match last_live_mesh_at {
-                                Some(t) => (now - t).as_secs_f32() * 1000.0 >= live_mesh_interval_ms,
+                                Some(t) => {
+                                    (now - t).as_secs_f32() * 1000.0 >= live_mesh_interval_ms
+                                }
                                 None => true,
                             }
                     } else {
@@ -400,25 +411,26 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
 
                     if (need_sdf && sdf_due) || need_mesh {
                         if has_tsdf_queue {
+                            // Consume the queue: the SDF rebuild will cover these chunks.
                             segment.chunk_runtime.dirty_tsdf_chunks.clear();
                             segment.sdf_dirty = true;
                         }
                         if has_mesh_queue {
-                            segment.chunk_runtime.dirty_mesh_chunks.clear();
                             segment.mesh_dirty = true;
                         }
 
-                        let (mesh_changed, sdf_ms, mesh_ms) = regenerate_segment_if_dirty_with_resolution(
-                            segment,
-                            volume_dims,
-                            volume_spacing,
-                            live_resolution_scale.max(0.2),
-                            live_sdf_band_mm,
-                            mesh_chunk_size,
-                            frame_budget_ms,
-                            true,
-                            need_mesh,
-                        );
+                        let (mesh_changed, sdf_ms, mesh_ms) =
+                            regenerate_segment_if_dirty_with_resolution(
+                                segment,
+                                volume_dims,
+                                volume_spacing,
+                                live_resolution_scale.max(0.2),
+                                live_sdf_band_mm,
+                                mesh_chunk_size,
+                                frame_budget_ms,
+                                true,
+                                need_mesh,
+                            );
                         last_sdf_ms = sdf_ms;
                         last_mesh_ms = mesh_ms;
                         if sdf_ms > 0.0 {
@@ -470,7 +482,9 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
                 .map(|s| {
                     s.chunk_runtime.dirty_tsdf_chunks.len() as u32
                         + s.chunk_runtime.dirty_mesh_chunks.len() as u32
-                        + u32::from(s.sdf_dirty || s.mesh_dirty || s.final_sdf_revision != s.sdf_revision)
+                        + u32::from(
+                            s.sdf_dirty || s.mesh_dirty || s.final_sdf_revision != s.sdf_revision,
+                        )
                 })
                 .sum();
             let finalize_cooldown_elapsed = match last_live_update_at {
@@ -483,7 +497,11 @@ pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities)
             {
                 let mut chosen = dirty_indices[0];
                 if dirty_indices.len() > 1 {
-                    if let Some(next) = dirty_indices.iter().copied().find(|&i| i >= next_finalize_index) {
+                    if let Some(next) = dirty_indices
+                        .iter()
+                        .copied()
+                        .find(|&i| i >= next_finalize_index)
+                    {
                         chosen = next;
                     }
                 }
@@ -844,7 +862,9 @@ pub fn finish_drawing(
                     {
                         let keys =
                             chunk_keys_for_bounds(index_bounds, segment.chunk_runtime.chunk_size);
-                        segment.chunk_runtime.enqueue_dirty_tsdf_chunks(keys.clone());
+                        segment
+                            .chunk_runtime
+                            .enqueue_dirty_tsdf_chunks(keys.clone());
                         segment.chunk_runtime.enqueue_dirty_mesh_chunks(keys);
                     }
                 } else {
@@ -902,8 +922,11 @@ pub fn finish_drawing(
                 if let Some(index_bounds) =
                     world_roi_to_index_bounds(roi, volume_dims, volume_spacing)
                 {
-                    let keys = chunk_keys_for_bounds(index_bounds, segment.chunk_runtime.chunk_size);
-                    segment.chunk_runtime.enqueue_dirty_tsdf_chunks(keys.clone());
+                    let keys =
+                        chunk_keys_for_bounds(index_bounds, segment.chunk_runtime.chunk_size);
+                    segment
+                        .chunk_runtime
+                        .enqueue_dirty_tsdf_chunks(keys.clone());
                     segment.chunk_runtime.enqueue_dirty_mesh_chunks(keys);
                 }
             } else {
