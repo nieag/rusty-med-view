@@ -1,7 +1,6 @@
 use glam::Vec3;
 
 use winit::keyboard::ModifiersState;
-use web_time::Instant;
 
 // --- Basic Tags ---
 pub struct CursorTag;
@@ -227,23 +226,14 @@ impl Default for SdfPreviewState {
 #[derive(Clone, Debug)]
 pub struct SegPerfConfig {
     pub live_enabled: bool,
-    pub live_mesh_enabled: bool,
     pub webgpu_required: bool,
     pub fallback_active: bool,
-    pub live_resolution_scale: f32,
-    pub full_resolution_scale: f32,
+    pub resolution_scale: f32,
     pub frame_budget_ms: f32,
-    pub live_interval_ms: f32,
-    pub live_mesh_interval_ms: f32,
-    pub live_sdf_band_mm: f32,
-    pub final_sdf_band_mm: f32,
+    pub sdf_band_mm: f32,
     pub mesh_chunk_size: u32,
-    pub auto_finalize: bool,
-    pub finalize_requested: bool,
     pub max_roi_margin_mm: f32,
     pub next_finalize_index: usize,
-    pub last_live_update_at: Option<Instant>,
-    pub last_live_mesh_at: Option<Instant>,
     pub last_sdf_ms: f32,
     pub last_mesh_ms: f32,
     pub queue_depth: u32,
@@ -253,23 +243,15 @@ impl Default for SegPerfConfig {
     fn default() -> Self {
         Self {
             live_enabled: true,
-            live_mesh_enabled: true,
             webgpu_required: true,
             fallback_active: false,
-            live_resolution_scale: 1.0,
-            full_resolution_scale: 1.5,
+            // Unified resolution: sharp enough for detail, fast enough for chunks.
+            resolution_scale: 1.25,
             frame_budget_ms: 6.0,
-            live_interval_ms: 33.0,
-            live_mesh_interval_ms: 66.0,
-            live_sdf_band_mm: 12.0,
-            final_sdf_band_mm: 24.0,
+            sdf_band_mm: 16.0,
             mesh_chunk_size: 32,
-            auto_finalize: false,
-            finalize_requested: false,
             max_roi_margin_mm: 12.0,
             next_finalize_index: 0,
-            last_live_update_at: None,
-            last_live_mesh_at: None,
             last_sdf_ms: 0.0,
             last_mesh_ms: 0.0,
             queue_depth: 0,

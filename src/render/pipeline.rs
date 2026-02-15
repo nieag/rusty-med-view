@@ -300,7 +300,7 @@ pub fn render_frame(
     // 0. Process interaction and updates once per frame, right before rendering
     systems::sys_handle_mouse_drag(world, entities);
     systems::sys_paint(world, entities, queue);
-    systems::sys_update_segment_derivatives(world, entities);
+    let segments_need_more = systems::sys_update_segment_derivatives(world, entities);
 
     // 1. Run GUI first so it can process interactions and update ECS state for THIS frame
     gui.prepare(window, world, entities, event_proxy);
@@ -618,7 +618,11 @@ pub fn render_frame(
             .unwrap_or_default();
 
         if let Ok(manager) = world.get::<&SegmentManager>(entities.segments) {
-            sdf_preview_pipeline.update_from_active_segment(device, queue, manager.active_segment());
+            sdf_preview_pipeline.update_from_active_segment(
+                device,
+                queue,
+                manager.active_segment(),
+            );
         } else {
             sdf_preview_pipeline.update_from_active_segment(device, queue, None);
         }
@@ -653,7 +657,11 @@ pub fn render_frame(
                     pan,
                     pivot: [0.5, 0.5],
                     view_mode,
-                    show_zero_isoline: if preview_state.show_zero_isoline { 1 } else { 0 },
+                    show_zero_isoline: if preview_state.show_zero_isoline {
+                        1
+                    } else {
+                        0
+                    },
                     resolution: [rect[2], rect[3]],
                     _pad_align0: [0; 2],
                     volume_dims,
@@ -709,8 +717,7 @@ pub fn render_frame(
             }
 
             if let Ok(manager) = world.get::<&SegmentManager>(entities.segments) {
-                let live_ids: HashSet<uuid::Uuid> =
-                    manager.segments.iter().map(|s| s.id).collect();
+                let live_ids: HashSet<uuid::Uuid> = manager.segments.iter().map(|s| s.id).collect();
                 segment_mesh_gpu_cache.retain(|id, _| live_ids.contains(id));
 
                 if let Some(segment) = manager.active_segment() {
@@ -723,7 +730,8 @@ pub fn render_frame(
                             }
                         }
                         if !mesh_ready {
-                            if let Some(mesh_res) = MeshResources::from_mesh_data(device, mesh_data) {
+                            if let Some(mesh_res) = MeshResources::from_mesh_data(device, mesh_data)
+                            {
                                 segment_mesh_gpu_cache
                                     .insert(segment.id, (segment.mesh_revision, mesh_res));
                                 mesh_ready = true;
@@ -744,97 +752,110 @@ pub fn render_frame(
                                         .ok()
                                         .map(|r| *r)
                                         .unwrap_or_default();
-                                    let composed_rotation = crate::util::orientation::compose_view_rotation(
-                                        data_orientation,
-                                        vs.user_rotation,
+                                    let composed_rotation =
+                                        crate::util::orientation::compose_view_rotation(
+                                            data_orientation,
+                                            vs.user_rotation,
+                                        );
+
+                                    let phys = [
+                                        (volume_dims[0].saturating_sub(1) as f32
+                                            * volume_spacing[0])
+                                            .max(1e-3),
+                                        (volume_dims[1].saturating_sub(1) as f32
+                                            * volume_spacing[1])
+                                            .max(1e-3),
+                                        (volume_dims[2].saturating_sub(1) as f32
+                                            * volume_spacing[2])
+                                            .max(1e-3),
+                                    ];
+                                    let max_phys = phys[0].max(phys[1]).max(phys[2]).max(1e-3);
+
+                                    let t_center = glam::Mat4::from_translation(glam::Vec3::new(
+                                        -0.5 * phys[0],
+                                        -0.5 * phys[1],
+                                        -0.5 * phys[2],
+                                    ));
+                                    let s_norm =
+                                        glam::Mat4::from_scale(glam::Vec3::splat(1.0 / max_phys));
+                                    let r = glam::Mat4::from_quat(glam::Quat::from_array(
+                                        composed_rotation,
+                                    ));
+                                    let model = r * s_norm * t_center;
+
+                                    let aspect = (rect[2] / rect[3].max(1.0)).max(1e-3);
+                                    let view_mat = glam::Mat4::look_at_rh(
+                                        glam::Vec3::new(0.0, 0.0, -3.5),
+                                        glam::Vec3::ZERO,
+                                        glam::Vec3::Y,
                                     );
-
-                                let phys = [
-                                    (volume_dims[0].saturating_sub(1) as f32 * volume_spacing[0]).max(1e-3),
-                                    (volume_dims[1].saturating_sub(1) as f32 * volume_spacing[1]).max(1e-3),
-                                    (volume_dims[2].saturating_sub(1) as f32 * volume_spacing[2]).max(1e-3),
-                                ];
-                                let max_phys = phys[0].max(phys[1]).max(phys[2]).max(1e-3);
-
-                                let t_center = glam::Mat4::from_translation(glam::Vec3::new(
-                                    -0.5 * phys[0],
-                                    -0.5 * phys[1],
-                                    -0.5 * phys[2],
-                                ));
-                                let s_norm = glam::Mat4::from_scale(glam::Vec3::splat(1.0 / max_phys));
-                                let r = glam::Mat4::from_quat(glam::Quat::from_array(composed_rotation));
-                                let model = r * s_norm * t_center;
-
-                                let aspect = (rect[2] / rect[3].max(1.0)).max(1e-3);
-                                let view_mat = glam::Mat4::look_at_rh(
-                                    glam::Vec3::new(0.0, 0.0, -3.5),
-                                    glam::Vec3::ZERO,
-                                    glam::Vec3::Y,
-                                );
-                                // Match volume ray shader camera model:
-                                // ray_dir = normalize(forward + right*x + up*y) where y spans [-0.5, 0.5].
-                                // Equivalent vertical FOV = 2 * atan(0.5) ~= 53.13 deg.
-                                let proj = glam::Mat4::perspective_rh_gl(
-                                    2.0_f32 * 0.5_f32.atan(),
-                                    aspect,
-                                    0.01,
-                                    20.0,
-                                );
-                                // Match volume viewport 3D interaction by applying the same
-                                // screen-space zoom/pan transform in clip space.
-                                let pan_zoom = glam::Mat4::from_cols(
-                                    glam::Vec4::new(vs.zoom, 0.0, 0.0, 0.0),
-                                    glam::Vec4::new(0.0, vs.zoom, 0.0, 0.0),
-                                    glam::Vec4::new(0.0, 0.0, 1.0, 0.0),
-                                    glam::Vec4::new(
-                                        -2.0 * vs.pan[0] * vs.zoom,
-                                        2.0 * vs.pan[1] * vs.zoom,
-                                        0.0,
-                                        1.0,
-                                    ),
-                                );
-                                let view_proj = pan_zoom * proj * view_mat;
-                                let normal = model.inverse().transpose();
-
-                                let mut color = segment_color;
-                                // Render 3D preview as a solid mesh; opacity slider is for 2D SDF heatmap.
-                                color[3] = 1.0;
-                                let mesh_uniforms = MeshUniforms {
-                                    model_matrix: model.to_cols_array_2d(),
-                                    view_proj_matrix: view_proj.to_cols_array_2d(),
-                                    normal_matrix: normal.to_cols_array_2d(),
-                                    color,
-                                    camera_pos: [0.0, 0.0, -3.5, 1.0],
-                                    light_dir: [0.45, -1.0, 0.35, 0.0],
-                                    light_color: [1.0, 1.0, 1.0, 1.0],
-                                    ambient: [0.16, 0.16, 0.16, 1.0],
-                                };
-                                mesh_pipeline.update_uniforms(queue, &mesh_uniforms);
-
-                                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                        label: Some("SDF 3D Surface Pass"),
-                                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                            view: &view,
-                                            resolve_target: None,
-                                            ops: wgpu::Operations {
-                                                load: wgpu::LoadOp::Load,
-                                                store: wgpu::StoreOp::Store,
-                                            },
-                                            depth_slice: None,
-                                        })],
-                                        depth_stencil_attachment: Some(
-                                            wgpu::RenderPassDepthStencilAttachment {
-                                                view: &mesh_pipeline.depth_texture,
-                                                depth_ops: Some(wgpu::Operations {
-                                                    load: wgpu::LoadOp::Clear(1.0),
-                                                    store: wgpu::StoreOp::Store,
-                                                }),
-                                                stencil_ops: None,
-                                            },
+                                    // Match volume ray shader camera model:
+                                    // ray_dir = normalize(forward + right*x + up*y) where y spans [-0.5, 0.5].
+                                    // Equivalent vertical FOV = 2 * atan(0.5) ~= 53.13 deg.
+                                    let proj = glam::Mat4::perspective_rh_gl(
+                                        2.0_f32 * 0.5_f32.atan(),
+                                        aspect,
+                                        0.01,
+                                        20.0,
+                                    );
+                                    // Match volume viewport 3D interaction by applying the same
+                                    // screen-space zoom/pan transform in clip space.
+                                    let pan_zoom = glam::Mat4::from_cols(
+                                        glam::Vec4::new(vs.zoom, 0.0, 0.0, 0.0),
+                                        glam::Vec4::new(0.0, vs.zoom, 0.0, 0.0),
+                                        glam::Vec4::new(0.0, 0.0, 1.0, 0.0),
+                                        glam::Vec4::new(
+                                            -2.0 * vs.pan[0] * vs.zoom,
+                                            2.0 * vs.pan[1] * vs.zoom,
+                                            0.0,
+                                            1.0,
                                         ),
-                                        timestamp_writes: None,
-                                        occlusion_query_set: None,
-                                    });
+                                    );
+                                    let view_proj = pan_zoom * proj * view_mat;
+                                    let normal = model.inverse().transpose();
+
+                                    let mut color = segment_color;
+                                    // Render 3D preview as a solid mesh; opacity slider is for 2D SDF heatmap.
+                                    color[3] = 1.0;
+                                    let mesh_uniforms = MeshUniforms {
+                                        model_matrix: model.to_cols_array_2d(),
+                                        view_proj_matrix: view_proj.to_cols_array_2d(),
+                                        normal_matrix: normal.to_cols_array_2d(),
+                                        color,
+                                        camera_pos: [0.0, 0.0, -3.5, 1.0],
+                                        light_dir: [0.45, -1.0, 0.35, 0.0],
+                                        light_color: [1.0, 1.0, 1.0, 1.0],
+                                        ambient: [0.16, 0.16, 0.16, 1.0],
+                                    };
+                                    mesh_pipeline.update_uniforms(queue, &mesh_uniforms);
+
+                                    let mut pass =
+                                        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                            label: Some("SDF 3D Surface Pass"),
+                                            color_attachments: &[Some(
+                                                wgpu::RenderPassColorAttachment {
+                                                    view: &view,
+                                                    resolve_target: None,
+                                                    ops: wgpu::Operations {
+                                                        load: wgpu::LoadOp::Load,
+                                                        store: wgpu::StoreOp::Store,
+                                                    },
+                                                    depth_slice: None,
+                                                },
+                                            )],
+                                            depth_stencil_attachment: Some(
+                                                wgpu::RenderPassDepthStencilAttachment {
+                                                    view: &mesh_pipeline.depth_texture,
+                                                    depth_ops: Some(wgpu::Operations {
+                                                        load: wgpu::LoadOp::Clear(1.0),
+                                                        store: wgpu::StoreOp::Store,
+                                                    }),
+                                                    stencil_ops: None,
+                                                },
+                                            ),
+                                            timestamp_writes: None,
+                                            occlusion_query_set: None,
+                                        });
                                     pass.set_viewport(rect[0], rect[1], rect[2], rect[3], 0.0, 1.0);
                                     mesh_pipeline.render(&mut pass, mesh_res);
                                 }
@@ -855,5 +876,11 @@ pub fn render_frame(
     queue.submit(std::iter::once(encoder.finish()));
     frame.present();
 
-    repaint_after
+    // If the segment pipeline still has chunks to process, request
+    // an immediate redraw so the queue keeps draining.
+    if segments_need_more {
+        std::time::Duration::ZERO
+    } else {
+        repaint_after
+    }
 }

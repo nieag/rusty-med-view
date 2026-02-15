@@ -7,11 +7,7 @@ use crate::systems::segment_system::SegmentManager;
 use hecs::World;
 
 /// Draw the segment management panel in a side panel or window.
-pub fn draw_segment_panel(
-    ui: &mut egui::Ui,
-    world: &mut World,
-    entities: &AppEntities,
-) {
+pub fn draw_segment_panel(ui: &mut egui::Ui, world: &mut World, entities: &AppEntities) {
     ui.heading("📐 Segments");
     ui.separator();
 
@@ -69,66 +65,78 @@ pub fn draw_segment_panel(
     }
 
     // Segment list
-    egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-        let mut to_remove = None;
-        let mut to_activate = None;
+    egui::ScrollArea::vertical()
+        .max_height(200.0)
+        .show(ui, |ui| {
+            let mut to_remove = None;
+            let mut to_activate = None;
 
-        for (idx, name, color, visible) in &segment_names {
-            let is_active = active_idx == Some(*idx);
-            
-            ui.horizontal(|ui| {
-                // Color indicator
-                let color32 = egui::Color32::from_rgba_unmultiplied(
-                    (color[0] * 255.0) as u8,
-                    (color[1] * 255.0) as u8,
-                    (color[2] * 255.0) as u8,
-                    255,
-                );
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-                ui.painter().rect_filled(rect, 2.0, color32);
+            for (idx, name, color, visible) in &segment_names {
+                let is_active = active_idx == Some(*idx);
 
-                // Name with selection
-                let label = if is_active {
-                    format!("▶ {}", name)
-                } else {
-                    name.clone()
-                };
+                ui.horizontal(|ui| {
+                    // Color indicator
+                    let color32 = egui::Color32::from_rgba_unmultiplied(
+                        (color[0] * 255.0) as u8,
+                        (color[1] * 255.0) as u8,
+                        (color[2] * 255.0) as u8,
+                        255,
+                    );
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+                    ui.painter().rect_filled(rect, 2.0, color32);
 
-                if ui.selectable_label(is_active, &label).clicked() {
-                    to_activate = Some(*idx);
-                }
+                    // Name with selection
+                    let label = if is_active {
+                        format!("▶ {}", name)
+                    } else {
+                        name.clone()
+                    };
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // Delete button
-                    if ui.small_button("🗑").on_hover_text("Delete segment").clicked() {
-                        to_remove = Some(*idx);
+                    if ui.selectable_label(is_active, &label).clicked() {
+                        to_activate = Some(*idx);
                     }
 
-                    // Visibility toggle
-                    let vis_icon = if *visible { "👁" } else { "👁‍🗨" };
-                    if ui.small_button(vis_icon).on_hover_text("Toggle visibility").clicked() {
-                        if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments) {
-                            if let Some(seg) = mgr.segments.get_mut(*idx) {
-                                seg.visible = !seg.visible;
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Delete button
+                        if ui
+                            .small_button("🗑")
+                            .on_hover_text("Delete segment")
+                            .clicked()
+                        {
+                            to_remove = Some(*idx);
+                        }
+
+                        // Visibility toggle
+                        let vis_icon = if *visible { "👁" } else { "👁‍🗨" };
+                        if ui
+                            .small_button(vis_icon)
+                            .on_hover_text("Toggle visibility")
+                            .clicked()
+                        {
+                            if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments)
+                            {
+                                if let Some(seg) = mgr.segments.get_mut(*idx) {
+                                    seg.visible = !seg.visible;
+                                }
                             }
                         }
-                    }
+                    });
                 });
-            });
-        }
+            }
 
-        // Process actions after iteration
-        if let Some(idx) = to_remove {
-            if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments) {
-                mgr.remove_segment(idx);
+            // Process actions after iteration
+            if let Some(idx) = to_remove {
+                if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments) {
+                    mgr.remove_segment(idx);
+                }
             }
-        }
-        if let Some(idx) = to_activate {
-            if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments) {
-                mgr.active_segment = Some(idx);
+            if let Some(idx) = to_activate {
+                if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments) {
+                    mgr.active_segment = Some(idx);
+                }
             }
-        }
-    });
+        });
 
     ui.separator();
 
@@ -136,16 +144,11 @@ pub fn draw_segment_panel(
     ui.label(format!("Total contours: {}", contour_count));
     ui.label(format!("SDF: {}", active_sdf_status));
 
-    if let Ok(mut perf) = world.get::<&mut SegPerfConfig>(entities.seg_perf) {
-        // Performance mode: keep live updates and finalize behavior automatic.
-        perf.live_enabled = true;
-        perf.live_mesh_enabled = true;
-        perf.auto_finalize = false;
+    if let Ok(perf) = world.get::<&SegPerfConfig>(entities.seg_perf) {
         ui.separator();
         ui.label("Segmentation Perf");
-        ui.label("Live updates: on (auto)");
-        ui.label("Mesh preview: on (auto)");
-        ui.label("Finalize: deferred");
+        ui.label("Live updates: on (immediate)");
+        ui.label(format!("Resolution Scale: {:.2}", perf.resolution_scale));
         ui.label(format!(
             "Last update: SDF {:.1} ms, Mesh {:.1} ms, Queue {}",
             perf.last_sdf_ms, perf.last_mesh_ms, perf.queue_depth
@@ -159,9 +162,7 @@ pub fn draw_segment_panel(
         preview.show_3d_surface = true;
         ui.checkbox(&mut preview.enabled, "Show SDF Preview");
         ui.add(egui::Slider::new(&mut preview.opacity, 0.0..=1.0).text("Opacity"));
-        ui.add(
-            egui::Slider::new(&mut preview.value_window_mm, 0.5..=32.0).text("Window (mm)"),
-        );
+        ui.add(egui::Slider::new(&mut preview.value_window_mm, 0.5..=32.0).text("Window (mm)"));
         ui.checkbox(&mut preview.show_zero_isoline, "Zero Isoline");
         ui.label("3D Surface Preview: always on");
     }
