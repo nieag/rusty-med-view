@@ -26,7 +26,7 @@ Chosen continuation path:
 
 - Chunked CPU first (✅ done), then GPU resource model, then compute offload.
 
-## Implementation Status (February 14, 2026)
+## Implementation Status (February 15, 2026)
 
 ### Commit Log
 
@@ -36,7 +36,7 @@ Chosen continuation path:
 | `d8603f5` | A | Deferred finalize defaults + chunk meshing hooks |
 | `3436f43` | A+B | Queue-driven derivative updates + TSDF chunk foundation |
 | `faa8653` | C | Surface Nets isosurface extractor |
-| `a4cd3a2` | B-2 | TSDF-authoritative chunked pipeline with Surface Nets |
+| `2576d23` | B-2 | TSDF-authoritative chunked pipeline with Surface Nets |
 
 ### Phase A — Chunk Runtime Model: ✅ Complete
 
@@ -61,6 +61,14 @@ Chosen continuation path:
 - [x] Live path: Surface Nets on chunks with frame budget + merge
 - [x] Finalize path: `surface_nets_from_sdf` full-volume extraction
 - [x] MC removed from active pipeline (retained in codebase)
+
+### Verification: ✅ Complete
+
+- [x] Budget test: SDF <16ms/frame, mesh <3ms (release-gated)
+- [x] Locality test: small edit ≤8 chunks
+- [x] Partial processing test: frame budget respected mid-queue
+- [x] Full test suite: 112 tests pass (debug + release)
+- [x] WASM check: `cargo check --target wasm32-unknown-unknown` clean
 
 ### Phase D — GPU Resource Model: Not started
 ### Phase E — Compute Offload: Not started

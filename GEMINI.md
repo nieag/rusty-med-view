@@ -6,10 +6,12 @@ This document provides a technical overview of the **Rust Medical Imaging Viewer
 A high-performance 2D/3D medical volume viewer built with **Rust** and **WGPU**. It supports orthogonal slicing, volumetric X-ray rendering, and interactive crosshair picking.
 
 ### 📈 Recent Progress
-- **Orientation Consolidation**: Centralized all 3D transforms in `src/orientation.rs`. Separated **Data Orientation** (from NIfTI) from **User Rotation** (interactive) to allow independent view manipulation and clean resets.
+- **Chunked TSDF + Surface Nets Pipeline**: Replaced the monolithic SDF → Marching Cubes pipeline with a chunked TSDF-authoritative architecture using Surface Nets. Live edits now bake only affected TSDF chunks and mesh them incrementally within a frame budget.
+- **Surface Nets Extractor**: Implemented `surface_nets_chunk` (reads quantized i16 TsdfChunk) and `surface_nets_from_sdf` (full-volume convenience wrapper) in `src/convert/surface_nets.rs`.
+- **Orientation Consolidation**: Centralized all 3D transforms in `src/orientation.rs`. Separated **Data Orientation** (from NIfTI) from **User Rotation** (interactive).
 - **Unified 3D API**: Implemented `screen_to_ray_3d` and `volume_to_screen_3d` as the single source of truth for picking and projection across CPU and GPU.
 - **Radiological Convention**: Native support for flipped X-axis (Right-on-Left) across picking, 2D slicing, and 3D volume rendering.
-- **Parity Testing**: Expanded test suite to 30+ tests, including "Shader Parity" tests that verify Rust math exactly matches WGSL logic for raymarching and projection.
+- **Parity Testing**: 112 tests including shader parity, Surface Nets parity, pipeline budget/locality/partial-processing verification.
 
 ## 🛠 Tech Stack
 - **Graphics**: [wgpu](https://github.com/gfx-rs/wgpu) (using Metal, WebGPU/WebGL2)
@@ -28,6 +30,13 @@ A high-performance 2D/3D medical volume viewer built with **Rust** and **WGPU**.
     - `picking.rs`: 3D raymarching and viewport projection.
     - `paint.rs`: Discrete voxel labelmap editing.
     - `render_prep.rs`: Uniform preparation and overlay synchronization.
+    - `segment_system.rs`: Contour→SDF→TSDF→Surface Nets pipeline and `SegmentManager`.
+- `src/convert/`: Conversion and meshing algorithms:
+    - `contour_to_sdf.rs`: Contour→SDF distance field computation.
+    - `contour_to_tsdf_chunks.rs`: Quantized i16 TSDF chunk baking from SDF.
+    - `surface_nets.rs`: Surface Nets isosurface extractor (chunk and full-volume).
+    - `marching_cubes.rs`: Marching Cubes (retained, no longer in active pipeline).
+    - `chunk_grid.rs`: Chunk key/bounds primitives.
 - `src/overlay/`: High-performance UI primitives (markers, crosshairs) managed outside standard ECS queries.
 - `src/render.rs`: Rendering infrastructure (pipeline setup, bind group creation, frame rendering).
 - `src/load_handlers.rs`: Handlers for async volume/labelmap loading and bind group recreation.
@@ -101,10 +110,19 @@ To prevent shader artifacts (like NaN aspect ratios) when no data is loaded:
 - **Initialization**: The app starts with a dummy 1x1x1 volume but dimensions are explicitly set to `[0, 0, 0]` in the `VolumeData` component.
 - **Overlays**: Crosshairs and primitives are inhibited until a valid volume is loaded to prevent visual clutter.
 
+### Chunked Meshing Pipeline
+The segmentation mesh pipeline uses a chunked TSDF-authoritative architecture for interactive performance:
+- **Data Flow**: Contours → SDF (incremental ROI update) → TSDF chunk bake (i16 quantized) → Surface Nets → merge.
+- **TSDF Store**: `SegmentRuntimeCache.tsdf_chunks: HashMap<ChunkKey, TsdfChunk>` is the persistent authoritative representation.
+- **Chunk Overlap**: Each chunk is padded by +1 voxel on all edges so Surface Nets can connect vertices across boundaries.
+- **Frame Budget**: Live path processes dirty mesh chunks incrementally within a configurable frame budget.
+- **Finalize Path**: Uses `surface_nets_from_sdf` for full-volume extraction at higher resolution.
+- **Algorithm**: Surface Nets replaces Marching Cubes in the active pipeline (MC retained in codebase).
+
 ### Reliability & Testing
 The codebase uses a "modular math" approach to ensure critical logic is unit-testable without GPU or ECS dependencies:
 - **Modular Refactoring**: Complex systems (like `paint.rs` and `nifti_loader.rs`) have been refactored to expose pure functions (e.g., `calculate_orientation_from_rows`, `get_stroke_points`).
-- **Test Suite**: Covers AABB intersections, quaternion ↔ matrix conversions, anatomical orientations, and voxel painting interpolation.
+- **Test Suite (112 tests)**: Covers AABB intersections, quaternion ↔ matrix conversions, anatomical orientations, voxel painting interpolation, Surface Nets parity, pipeline budget/locality/partial-processing verification.
 - **Validation**: All tests reside in `#[cfg(test)]` modules within the respective source files.
 
 ## 🛠 How to Run
