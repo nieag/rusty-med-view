@@ -316,6 +316,117 @@ pub fn extract_sdf_isolines_for_slice(
     segments
 }
 
+pub fn extract_sdf_isolines_for_slice_capped(
+    sdf: &SdfVolume,
+    plane: SlicePlane,
+    slice_index: i32,
+    max_segments: usize,
+    max_samples_per_axis: u32,
+) -> Vec<([f32; 3], [f32; 3])> {
+    if slice_index < 0 {
+        return Vec::new();
+    }
+    let dims = sdf.dimensions;
+    let (u_dim, v_dim, depth_dim) = match plane {
+        SlicePlane::Axial => (dims[0], dims[1], dims[2]),
+        SlicePlane::Coronal => (dims[0], dims[2], dims[1]),
+        SlicePlane::Sagittal => (dims[1], dims[2], dims[0]),
+    };
+    let slice = slice_index as u32;
+    if slice >= depth_dim || u_dim < 2 || v_dim < 2 {
+        return Vec::new();
+    }
+    let max_axis = max_samples_per_axis.max(2);
+    let step_u = ((u_dim - 1) / max_axis).max(1);
+    let step_v = ((v_dim - 1) / max_axis).max(1);
+    let u_cells = ((u_dim - 1) / step_u).max(1);
+    let v_cells = ((v_dim - 1) / step_v).max(1);
+
+    let mut segments = Vec::with_capacity((u_cells as usize * v_cells as usize) / 3);
+    for vc in 0..v_cells {
+        for uc in 0..u_cells {
+            if segments.len() >= max_segments {
+                return segments;
+            }
+            let u0 = uc * step_u;
+            let v0 = vc * step_v;
+            let u1 = (u0 + step_u).min(u_dim - 1);
+            let v1 = (v0 + step_v).min(v_dim - 1);
+            if u1 == u0 || v1 == v0 {
+                continue;
+            }
+
+            let idx00 = plane_corner_index(plane, slice, u0, v0);
+            let idx10 = plane_corner_index(plane, slice, u1, v0);
+            let idx11 = plane_corner_index(plane, slice, u1, v1);
+            let idx01 = plane_corner_index(plane, slice, u0, v1);
+
+            let (Some(v00), Some(v10), Some(v11), Some(v01)) = (
+                sample_sdf_at_index(sdf, idx00),
+                sample_sdf_at_index(sdf, idx10),
+                sample_sdf_at_index(sdf, idx11),
+                sample_sdf_at_index(sdf, idx01),
+            ) else {
+                continue;
+            };
+
+            let val = [v00, v10, v11, v01];
+            let pos = [
+                corner_volume_uv_for_dims(dims, plane, slice, u0, v0),
+                corner_volume_uv_for_dims(dims, plane, slice, u1, v0),
+                corner_volume_uv_for_dims(dims, plane, slice, u1, v1),
+                corner_volume_uv_for_dims(dims, plane, slice, u0, v1),
+            ];
+
+            let mut edges: [Option<[f32; 3]>; 4] = [None, None, None, None];
+            let pairs = [(0usize, 1usize), (1, 2), (2, 3), (3, 0)];
+            for (edge_idx, (a, b)) in pairs.iter().enumerate() {
+                let va = val[*a];
+                let vb = val[*b];
+                if !crosses_iso_zero(va, vb) {
+                    continue;
+                }
+                let denom = vb - va;
+                let t = if denom.abs() > 1e-6 {
+                    (-va / denom).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+                edges[edge_idx] = Some(lerp3(pos[*a], pos[*b], t));
+            }
+
+            let case = ((val[0] < 0.0) as u8)
+                | (((val[1] < 0.0) as u8) << 1)
+                | (((val[2] < 0.0) as u8) << 2)
+                | (((val[3] < 0.0) as u8) << 3);
+            let mut push_pair = |a: usize, b: usize| {
+                if let (Some(p0), Some(p1)) = (edges[a], edges[b]) {
+                    segments.push((p0, p1));
+                }
+            };
+            match case {
+                0 | 15 => {}
+                1 | 14 => push_pair(3, 0),
+                2 | 13 => push_pair(0, 1),
+                3 | 12 => push_pair(3, 1),
+                4 | 11 => push_pair(1, 2),
+                5 => {
+                    push_pair(3, 2);
+                    push_pair(0, 1);
+                }
+                6 | 9 => push_pair(0, 2),
+                7 | 8 => push_pair(3, 2),
+                10 => {
+                    push_pair(0, 3);
+                    push_pair(1, 2);
+                }
+                _ => {}
+            }
+        }
+    }
+    segments
+}
+
 pub fn extract_tsdf_isolines_for_slice(
     runtime: &SegmentRuntimeCache,
     plane: SlicePlane,
@@ -395,6 +506,116 @@ pub fn extract_tsdf_isolines_for_slice(
                 }
             };
 
+            match case {
+                0 | 15 => {}
+                1 | 14 => push_pair(3, 0),
+                2 | 13 => push_pair(0, 1),
+                3 | 12 => push_pair(3, 1),
+                4 | 11 => push_pair(1, 2),
+                5 => {
+                    push_pair(3, 2);
+                    push_pair(0, 1);
+                }
+                6 | 9 => push_pair(0, 2),
+                7 | 8 => push_pair(3, 2),
+                10 => {
+                    push_pair(0, 3);
+                    push_pair(1, 2);
+                }
+                _ => {}
+            }
+        }
+    }
+    segments
+}
+
+pub fn extract_tsdf_isolines_for_slice_capped(
+    runtime: &SegmentRuntimeCache,
+    plane: SlicePlane,
+    slice_index: i32,
+    max_segments: usize,
+    max_samples_per_axis: u32,
+) -> Vec<([f32; 3], [f32; 3])> {
+    if slice_index < 0 {
+        return Vec::new();
+    }
+    let dims = runtime.tsdf_dims;
+    let (u_dim, v_dim, depth_dim) = match plane {
+        SlicePlane::Axial => (dims[0], dims[1], dims[2]),
+        SlicePlane::Coronal => (dims[0], dims[2], dims[1]),
+        SlicePlane::Sagittal => (dims[1], dims[2], dims[0]),
+    };
+    let slice = slice_index as u32;
+    if slice >= depth_dim || u_dim < 2 || v_dim < 2 {
+        return Vec::new();
+    }
+    let max_axis = max_samples_per_axis.max(2);
+    let step_u = ((u_dim - 1) / max_axis).max(1);
+    let step_v = ((v_dim - 1) / max_axis).max(1);
+    let u_cells = ((u_dim - 1) / step_u).max(1);
+    let v_cells = ((v_dim - 1) / step_v).max(1);
+
+    let mut segments = Vec::with_capacity((u_cells as usize * v_cells as usize) / 3);
+    for vc in 0..v_cells {
+        for uc in 0..u_cells {
+            if segments.len() >= max_segments {
+                return segments;
+            }
+            let u0 = uc * step_u;
+            let v0 = vc * step_v;
+            let u1 = (u0 + step_u).min(u_dim - 1);
+            let v1 = (v0 + step_v).min(v_dim - 1);
+            if u1 == u0 || v1 == v0 {
+                continue;
+            }
+
+            let idx00 = plane_corner_index(plane, slice, u0, v0);
+            let idx10 = plane_corner_index(plane, slice, u1, v0);
+            let idx11 = plane_corner_index(plane, slice, u1, v1);
+            let idx01 = plane_corner_index(plane, slice, u0, v1);
+            let (Some(v00), Some(v10), Some(v11), Some(v01)) = (
+                sample_tsdf_at_index(runtime, idx00),
+                sample_tsdf_at_index(runtime, idx10),
+                sample_tsdf_at_index(runtime, idx11),
+                sample_tsdf_at_index(runtime, idx01),
+            ) else {
+                continue;
+            };
+
+            let val = [v00, v10, v11, v01];
+            let pos = [
+                corner_volume_uv_for_dims(dims, plane, slice, u0, v0),
+                corner_volume_uv_for_dims(dims, plane, slice, u1, v0),
+                corner_volume_uv_for_dims(dims, plane, slice, u1, v1),
+                corner_volume_uv_for_dims(dims, plane, slice, u0, v1),
+            ];
+
+            let mut edges: [Option<[f32; 3]>; 4] = [None, None, None, None];
+            let pairs = [(0usize, 1usize), (1, 2), (2, 3), (3, 0)];
+            for (edge_idx, (a, b)) in pairs.iter().enumerate() {
+                let va = val[*a];
+                let vb = val[*b];
+                if !crosses_iso_zero(va, vb) {
+                    continue;
+                }
+                let denom = vb - va;
+                let t = if denom.abs() > 1e-6 {
+                    (-va / denom).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+                edges[edge_idx] = Some(lerp3(pos[*a], pos[*b], t));
+            }
+
+            let case = ((val[0] < 0.0) as u8)
+                | (((val[1] < 0.0) as u8) << 1)
+                | (((val[2] < 0.0) as u8) << 2)
+                | (((val[3] < 0.0) as u8) << 3);
+            let mut push_pair = |a: usize, b: usize| {
+                if let (Some(p0), Some(p1)) = (edges[a], edges[b]) {
+                    segments.push((p0, p1));
+                }
+            };
             match case {
                 0 | 15 => {}
                 1 | 14 => push_pair(3, 0),

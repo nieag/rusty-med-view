@@ -5,9 +5,8 @@
 use crate::components::SdfPreviewState;
 use crate::components::*;
 use crate::convert::{
-    extract_sdf_isolines_for_slice, extract_tsdf_isolines_for_slice,
+    extract_sdf_isolines_for_slice_capped, extract_tsdf_isolines_for_slice_capped,
     extract_tsdf_isolines_for_spatial_plane, slice_center_uv, slice_index_from_cursor_uv,
-    IsolineParityStats,
 };
 use crate::gui;
 use crate::overlay::OverlayPrimitive;
@@ -20,6 +19,7 @@ use crate::util::orientation::SlicePlane;
 use hecs::World;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock};
+use web_time::Instant;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
@@ -307,6 +307,7 @@ fn field_slice_index_from_cursor_uv(
 enum DerivedContourSource {
     Tsdf,
     Sdf,
+    ObliqueTsdf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -322,6 +323,9 @@ type IsolineSeg = ([f32; 3], [f32; 3]);
 
 static DERIVED_CONTOUR_CACHE: OnceLock<
     Mutex<HashMap<DerivedContourCacheKey, Arc<Vec<IsolineSeg>>>>,
+> = OnceLock::new();
+static OBLIQUE_THROTTLE_CACHE: OnceLock<
+    Mutex<HashMap<uuid::Uuid, (i32, Arc<Vec<IsolineSeg>>, Instant)>>,
 > = OnceLock::new();
 
 fn get_or_compute_derived_isolines(
@@ -342,6 +346,38 @@ fn get_or_compute_derived_isolines(
     } else {
         Arc::new(build())
     }
+}
+
+fn get_or_compute_oblique_throttled(
+    segment_id: uuid::Uuid,
+    oblique_hash: i32,
+    interacting: bool,
+    min_interval_ms: u64,
+    build: impl FnOnce() -> Vec<IsolineSeg>,
+) -> Arc<Vec<IsolineSeg>> {
+    let now = Instant::now();
+    let throttle = OBLIQUE_THROTTLE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut map) = throttle.lock() {
+        if let Some((last_hash, last_lines, last_time)) = map.get(&segment_id) {
+            let elapsed_ms = now.duration_since(*last_time).as_millis() as u64;
+            if *last_hash == oblique_hash {
+                return Arc::clone(last_lines);
+            }
+            if interacting && elapsed_ms < min_interval_ms {
+                return Arc::clone(last_lines);
+            }
+        }
+        let built = Arc::new(build());
+        map.insert(segment_id, (oblique_hash, Arc::clone(&built), now));
+        built
+    } else {
+        Arc::new(build())
+    }
+}
+
+#[inline]
+fn hash_i32(seed: i32, v: i32) -> i32 {
+    seed.wrapping_mul(31).wrapping_add(v)
 }
 
 /// Render a complete frame with all 4 viewports.
@@ -508,6 +544,10 @@ pub fn render_frame(
             .get::<&Transform>(entities.cursor)
             .map(|t| t.position)
             .unwrap_or([0.5, 0.5, 0.5]);
+        let oblique_interacting = world
+            .get::<&InputState>(entities.input)
+            .map(|i| i.is_dragging || i.is_panning || i.is_rotating)
+            .unwrap_or(false);
 
         // Create GPU lines from SegmentManager:
         // authored contours on their own slice, derived SDF isolines elsewhere.
@@ -528,116 +568,91 @@ pub fn render_frame(
 
             // 1) Derived isolines from each visible segment TSDF in views/slices that
             // are not explicitly edited.
-            const MAX_DERIVED_SEGMENTS_PER_VIEW: usize = 32768;
+            //
+            // Performance mode: keep axis views strictly authored-only to avoid
+            // expensive per-slice derived extraction while moving crosshairs.
+            const ENABLE_AXIS_DERIVED_CONTOURS: bool = false;
+            const MAX_DERIVED_SEGMENTS_PER_VIEW: usize = 12000;
+            const MAX_DERIVED_SAMPLES_AXIS: u32 = 288;
             for segment in &manager.segments {
                 if !segment.visible {
                     continue;
                 }
-                for (view_mode, plane) in [
-                    (1u32, SlicePlane::Axial),
-                    (2u32, SlicePlane::Coronal),
-                    (3u32, SlicePlane::Sagittal),
-                ] {
-                    let slice = current_slices[view_mode as usize];
-                    if segment.contour_source_for_slice(plane, slice)
-                        == crate::app::segment::SliceContourSource::Authored
-                    {
-                        continue;
-                    }
-
-                    let tsdf_slice = field_slice_index_from_cursor_uv(
-                        view_mode,
-                        cursor_pos,
-                        segment.chunk_runtime.tsdf_dims,
-                    );
-                    let tsdf_cache_key = DerivedContourCacheKey {
-                        segment_id: segment.id,
-                        plane,
-                        slice: tsdf_slice,
-                        source: DerivedContourSource::Tsdf,
-                        revision: segment.sdf_revision,
-                    };
-                    let tsdf_segs = get_or_compute_derived_isolines(tsdf_cache_key, || {
-                        extract_tsdf_isolines_for_slice(
-                            &segment.chunk_runtime,
-                            plane,
-                            tsdf_slice,
-                            MAX_DERIVED_SEGMENTS_PER_VIEW,
-                        )
-                    });
-
-                    let segs: Arc<Vec<IsolineSeg>> = if tsdf_segs.is_empty() {
-                        if let Some(sdf) = segment.sdf.as_ref() {
-                            let sdf_slice = field_slice_index_from_cursor_uv(
-                                view_mode,
-                                cursor_pos,
-                                sdf.dimensions,
-                            );
-                            let sdf_cache_key = DerivedContourCacheKey {
-                                segment_id: segment.id,
-                                plane,
-                                slice: sdf_slice,
-                                source: DerivedContourSource::Sdf,
-                                revision: segment.sdf_revision,
-                            };
-                            get_or_compute_derived_isolines(sdf_cache_key, || {
-                                extract_sdf_isolines_for_slice(
-                                    sdf,
-                                    plane,
-                                    sdf_slice,
-                                    MAX_DERIVED_SEGMENTS_PER_VIEW,
-                                )
-                            })
-                        } else {
-                            Arc::new(Vec::new())
+                if ENABLE_AXIS_DERIVED_CONTOURS {
+                    for (view_mode, plane) in [
+                        (1u32, SlicePlane::Axial),
+                        (2u32, SlicePlane::Coronal),
+                        (3u32, SlicePlane::Sagittal),
+                    ] {
+                        let slice = current_slices[view_mode as usize];
+                        if segment.contour_source_for_slice(plane, slice)
+                            == crate::app::segment::SliceContourSource::Authored
+                        {
+                            continue;
                         }
-                    } else {
-                        if let Some(sdf) = segment.sdf.as_ref() {
-                            let sdf_slice = field_slice_index_from_cursor_uv(
-                                view_mode,
-                                cursor_pos,
-                                sdf.dimensions,
-                            );
-                            let sdf_cache_key = DerivedContourCacheKey {
-                                segment_id: segment.id,
-                                plane,
-                                slice: sdf_slice,
-                                source: DerivedContourSource::Sdf,
-                                revision: segment.sdf_revision,
-                            };
-                            let shadow_sdf = get_or_compute_derived_isolines(sdf_cache_key, || {
-                                extract_sdf_isolines_for_slice(
-                                    sdf,
-                                    plane,
-                                    sdf_slice,
-                                    MAX_DERIVED_SEGMENTS_PER_VIEW,
-                                )
-                            });
-                            let parity =
-                                IsolineParityStats::from_counts(shadow_sdf.len(), tsdf_segs.len());
-                            if parity.abs_diff >= 32 && parity.rel_diff >= 0.30 {
-                                log::warn!(
-                                    "Derived contour TSDF/SDF mismatch segment={} plane={:?} slice={} sdf={} tsdf={} rel_diff={:.2}",
-                                    segment.name,
-                                    plane,
-                                    slice,
-                                    parity.sdf_segments,
-                                    parity.tsdf_segments,
-                                    parity.rel_diff
-                                );
-                            }
-                        }
-                        tsdf_segs
-                    };
 
-                    for &(p0, p1) in segs.iter() {
-                        gpu_lines.push(ContourLineGpu::new(
-                            p0,
-                            p1,
-                            [segment.color[0], segment.color[1], segment.color[2], 0.95],
+                        let tsdf_slice = field_slice_index_from_cursor_uv(
                             view_mode,
-                            slice,
-                        ));
+                            cursor_pos,
+                            segment.chunk_runtime.tsdf_dims,
+                        );
+                        let tsdf_cache_key = DerivedContourCacheKey {
+                            segment_id: segment.id,
+                            plane,
+                            slice: tsdf_slice,
+                            source: DerivedContourSource::Tsdf,
+                            revision: segment.sdf_revision,
+                        };
+                        let tsdf_segs = get_or_compute_derived_isolines(tsdf_cache_key, || {
+                            extract_tsdf_isolines_for_slice_capped(
+                                &segment.chunk_runtime,
+                                plane,
+                                tsdf_slice,
+                                MAX_DERIVED_SEGMENTS_PER_VIEW,
+                                MAX_DERIVED_SAMPLES_AXIS,
+                            )
+                        });
+
+                        let segs: Arc<Vec<IsolineSeg>> = if tsdf_segs.is_empty() {
+                            if let Some(sdf) = segment.sdf.as_ref() {
+                                let sdf_slice = field_slice_index_from_cursor_uv(
+                                    view_mode,
+                                    cursor_pos,
+                                    sdf.dimensions,
+                                );
+                                let sdf_cache_key = DerivedContourCacheKey {
+                                    segment_id: segment.id,
+                                    plane,
+                                    slice: sdf_slice,
+                                    source: DerivedContourSource::Sdf,
+                                    revision: segment.sdf_revision,
+                                };
+                                get_or_compute_derived_isolines(sdf_cache_key, || {
+                                    extract_sdf_isolines_for_slice_capped(
+                                        sdf,
+                                        plane,
+                                        sdf_slice,
+                                        MAX_DERIVED_SEGMENTS_PER_VIEW,
+                                        MAX_DERIVED_SAMPLES_AXIS,
+                                    )
+                                })
+                            } else {
+                                Arc::new(Vec::new())
+                            }
+                        } else {
+                            // Keep expensive TSDF-vs-SDF parity extraction out of the render hot path.
+                            tsdf_segs
+                        };
+
+                        for &(p0, p1) in segs.iter() {
+                            gpu_lines.push(ContourLineGpu::new(
+                                p0,
+                                p1,
+                                [segment.color[0], segment.color[1], segment.color[2], 0.95],
+                                view_mode,
+                                slice,
+                            ));
+                        }
                     }
                 }
 
@@ -683,15 +698,60 @@ pub fn render_frame(
                             * 0.5
                             * (1.0 / zoom.max(0.5))
                             + (pan[0].abs() + pan[1].abs()) * 32.0;
-                    let segs = extract_tsdf_isolines_for_spatial_plane(
-                        &segment.chunk_runtime,
-                        &plane,
-                        extent,
-                        extent,
-                        [128, 128],
-                        MAX_DERIVED_SEGMENTS_PER_VIEW,
+                    let sample_res = if zoom >= 1.6 {
+                        [128, 128]
+                    } else if zoom >= 1.0 {
+                        [96, 96]
+                    } else {
+                        [72, 72]
+                    };
+                    let mut oblique_hash = 17i32;
+                    oblique_hash = hash_i32(
+                        oblique_hash,
+                        (center[0] / volume_spacing[0].max(1e-3)).round() as i32,
                     );
-                    for (p0, p1) in segs {
+                    oblique_hash = hash_i32(
+                        oblique_hash,
+                        (center[1] / volume_spacing[1].max(1e-3)).round() as i32,
+                    );
+                    oblique_hash = hash_i32(
+                        oblique_hash,
+                        (center[2] / volume_spacing[2].max(1e-3)).round() as i32,
+                    );
+                    oblique_hash = hash_i32(oblique_hash, (rotation[0] * 40.0).round() as i32);
+                    oblique_hash = hash_i32(oblique_hash, (rotation[1] * 40.0).round() as i32);
+                    oblique_hash = hash_i32(oblique_hash, (rotation[2] * 40.0).round() as i32);
+                    oblique_hash = hash_i32(oblique_hash, (rotation[3] * 40.0).round() as i32);
+                    oblique_hash = hash_i32(oblique_hash, sample_res[0] as i32);
+                    oblique_hash = hash_i32(oblique_hash, sample_res[1] as i32);
+                    let oblique_cache_key = DerivedContourCacheKey {
+                        segment_id: segment.id,
+                        plane: SlicePlane::Axial,
+                        slice: oblique_hash,
+                        source: DerivedContourSource::ObliqueTsdf,
+                        revision: segment.sdf_revision,
+                    };
+                    let segs = get_or_compute_oblique_throttled(
+                        segment.id,
+                        oblique_hash,
+                        oblique_interacting,
+                        40,
+                        || {
+                            get_or_compute_derived_isolines(oblique_cache_key, || {
+                                extract_tsdf_isolines_for_spatial_plane(
+                                    &segment.chunk_runtime,
+                                    &plane,
+                                    extent,
+                                    extent,
+                                    sample_res,
+                                    MAX_DERIVED_SEGMENTS_PER_VIEW,
+                                )
+                            })
+                            .as_ref()
+                            .clone()
+                        },
+                    );
+                    for &(p0, p1) in segs.iter() {
                         gpu_lines.push(ContourLineGpu::new(
                             [p0[0] / denoms[0], p0[1] / denoms[1], p0[2] / denoms[2]],
                             [p1[0] / denoms[0], p1[1] / denoms[1], p1[2] / denoms[2]],
