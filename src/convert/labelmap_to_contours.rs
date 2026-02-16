@@ -4,7 +4,7 @@
 
 use crate::app::segment::{ContourSet, Plane3D, PlaneContour};
 use crate::util::orientation::SlicePlane;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 
 type GridPoint = (i32, i32);
 
@@ -77,61 +77,6 @@ fn pop_next_edge(
     next
 }
 
-fn connected_components(
-    mask: &[u8],
-    dims: [u32; 3],
-    plane: SlicePlane,
-    slice: u32,
-    label: Option<u8>,
-) -> Vec<Vec<GridPoint>> {
-    let uv_dims = plane_uv_dims(dims, plane);
-    let w = uv_dims[0] as i32;
-    let h = uv_dims[1] as i32;
-    if w <= 0 || h <= 0 {
-        return Vec::new();
-    }
-
-    let mut visited = vec![false; (uv_dims[0] * uv_dims[1]) as usize];
-    let mut out = Vec::new();
-    let mut q = VecDeque::new();
-    let neighbors = [(-1, 0), (1, 0), (0, -1), (0, 1)];
-
-    for y in 0..h {
-        for x in 0..w {
-            let flat = (x as u32 + y as u32 * uv_dims[0]) as usize;
-            if visited[flat] || !is_foreground_plane(mask, dims, plane, slice, x, y, label) {
-                continue;
-            }
-
-            let mut comp = Vec::new();
-            visited[flat] = true;
-            q.push_back((x, y));
-
-            while let Some((cx, cy)) = q.pop_front() {
-                comp.push((cx, cy));
-                for (dx, dy) in neighbors {
-                    let nx = cx + dx;
-                    let ny = cy + dy;
-                    if nx < 0 || ny < 0 || nx >= w || ny >= h {
-                        continue;
-                    }
-                    let nflat = (nx as u32 + ny as u32 * uv_dims[0]) as usize;
-                    if visited[nflat]
-                        || !is_foreground_plane(mask, dims, plane, slice, nx, ny, label)
-                    {
-                        continue;
-                    }
-                    visited[nflat] = true;
-                    q.push_back((nx, ny));
-                }
-            }
-            out.push(comp);
-        }
-    }
-
-    out
-}
-
 fn simplify_collinear(points: &[[f32; 2]]) -> Vec<[f32; 2]> {
     if points.len() < 4 {
         return points.to_vec();
@@ -182,86 +127,82 @@ fn extract_slice_loops(
     label: Option<u8>,
 ) -> Vec<PlaneContour> {
     let mut contours = Vec::new();
-    let components = connected_components(mask, dims, plane, slice, label);
-    for comp in components {
-        let comp_set: HashSet<GridPoint> = comp.into_iter().collect();
-        let mut edges: HashMap<GridPoint, Vec<GridPoint>> = HashMap::new();
+    let uv_dims = plane_uv_dims(dims, plane);
+    let w = uv_dims[0] as i32;
+    let h = uv_dims[1] as i32;
+    if w <= 0 || h <= 0 {
+        return contours;
+    }
 
-        for &(x, y) in &comp_set {
-            if !comp_set.contains(&(x - 1, y)) {
+    // Faster than per-component BFS: scan foreground voxels once and emit directed
+    // boundary edges where a 4-neighbor transitions to background.
+    let mut edges: HashMap<GridPoint, Vec<GridPoint>> = HashMap::new();
+    for y in 0..h {
+        for x in 0..w {
+            if !is_foreground_plane(mask, dims, plane, slice, x, y, label) {
+                continue;
+            }
+            if !is_foreground_plane(mask, dims, plane, slice, x - 1, y, label) {
                 add_edge(&mut edges, (x, y), (x, y + 1));
             }
-            if !comp_set.contains(&(x + 1, y)) {
+            if !is_foreground_plane(mask, dims, plane, slice, x + 1, y, label) {
                 add_edge(&mut edges, (x + 1, y + 1), (x + 1, y));
             }
-            if !comp_set.contains(&(x, y - 1)) {
+            if !is_foreground_plane(mask, dims, plane, slice, x, y - 1, label) {
                 add_edge(&mut edges, (x + 1, y), (x, y));
             }
-            if !comp_set.contains(&(x, y + 1)) {
+            if !is_foreground_plane(mask, dims, plane, slice, x, y + 1, label) {
                 add_edge(&mut edges, (x, y + 1), (x + 1, y + 1));
             }
         }
+    }
 
-        let mut loops_2d: Vec<Vec<[f32; 2]>> = Vec::new();
-        while let Some((&start, _)) = edges.iter().next() {
-            let Some(mut cur) = pop_next_edge(&mut edges, start) else {
-                continue;
-            };
-
-            let mut loop_pts = vec![start];
-            let mut guard = 0usize;
-            while cur != start && guard < 1_000_000 {
-                loop_pts.push(cur);
-                let Some(next) = pop_next_edge(&mut edges, cur) else {
-                    break;
-                };
-                cur = next;
-                guard += 1;
-            }
-
-            if cur != start || loop_pts.len() < 3 {
-                continue;
-            }
-
-            let poly2d_raw: Vec<[f32; 2]> = loop_pts
-                .iter()
-                .map(|&p| {
-                    // 2D metric space for area/simplification in current plane.
-                    match plane {
-                        SlicePlane::Axial => [
-                            (p.0 as f32).clamp(0.0, dims[0] as f32) * spacing[0],
-                            (p.1 as f32).clamp(0.0, dims[1] as f32) * spacing[1],
-                        ],
-                        SlicePlane::Coronal => [
-                            (p.0 as f32).clamp(0.0, dims[0] as f32) * spacing[0],
-                            (p.1 as f32).clamp(0.0, dims[2] as f32) * spacing[2],
-                        ],
-                        SlicePlane::Sagittal => [
-                            (p.0 as f32).clamp(0.0, dims[1] as f32) * spacing[1],
-                            (p.1 as f32).clamp(0.0, dims[2] as f32) * spacing[2],
-                        ],
-                    }
-                })
-                .collect();
-            let poly2d = simplify_collinear(&poly2d_raw);
-            if poly2d.len() >= 3 {
-                loops_2d.push(poly2d);
-            }
-        }
-
-        // Keep a single outer boundary per connected component for faithful
-        // one-contour-per-component slice representation.
-        let Some(outer) = loops_2d
-            .into_iter()
-            .max_by(|a, b| signed_area_2d(a).abs().total_cmp(&signed_area_2d(b).abs()))
-        else {
+    while let Some((&start, _)) = edges.iter().next() {
+        let Some(mut cur) = pop_next_edge(&mut edges, start) else {
             continue;
         };
 
-        // Rebuild from chosen loop as grid-edge coordinates to preserve exact edges.
-        // We need the corresponding loop in grid coordinates; choose by area and retrace.
-        // Fallback: project metric loop back directly into 3D in plane axes.
-        let points3d: Vec<[f32; 3]> = outer
+        let mut loop_pts = vec![start];
+        let mut guard = 0usize;
+        while cur != start && guard < 1_000_000 {
+            loop_pts.push(cur);
+            let Some(next) = pop_next_edge(&mut edges, cur) else {
+                break;
+            };
+            cur = next;
+            guard += 1;
+        }
+
+        if cur != start || loop_pts.len() < 3 {
+            continue;
+        }
+
+        let poly2d_raw: Vec<[f32; 2]> = loop_pts
+            .iter()
+            .map(|&p| {
+                // 2D metric space for simplification in current plane.
+                match plane {
+                    SlicePlane::Axial => [
+                        (p.0 as f32).clamp(0.0, dims[0] as f32) * spacing[0],
+                        (p.1 as f32).clamp(0.0, dims[1] as f32) * spacing[1],
+                    ],
+                    SlicePlane::Coronal => [
+                        (p.0 as f32).clamp(0.0, dims[0] as f32) * spacing[0],
+                        (p.1 as f32).clamp(0.0, dims[2] as f32) * spacing[2],
+                    ],
+                    SlicePlane::Sagittal => [
+                        (p.0 as f32).clamp(0.0, dims[1] as f32) * spacing[1],
+                        (p.1 as f32).clamp(0.0, dims[2] as f32) * spacing[2],
+                    ],
+                }
+            })
+            .collect();
+        let poly2d = simplify_collinear(&poly2d_raw);
+        if poly2d.len() < 3 || signed_area_2d(&poly2d).abs() <= 1e-6 {
+            continue;
+        }
+
+        let points3d: Vec<[f32; 3]> = poly2d
             .iter()
             .map(|p| match plane {
                 SlicePlane::Axial => [p[0], p[1], (slice as f32 + 0.5) * spacing[2]],
@@ -374,6 +315,46 @@ mod tests {
 
         let contours = extract_axial_contours_from_labelmap(&data, dims, [1.0, 1.0, 1.0], None);
         assert!(contours.count() >= 1);
+    }
+
+    #[test]
+    fn test_extract_specific_labels_independently() {
+        let dims = [7, 7, 1];
+        let mut data = vec![0u8; (dims[0] * dims[1] * dims[2]) as usize];
+
+        // Label 1 block.
+        for y in 1..3 {
+            for x in 1..3 {
+                data[idx(dims, x, y, 0)] = 1;
+            }
+        }
+        // Label 2 block, disjoint from label 1 with a full voxel gap.
+        for y in 4..6 {
+            for x in 4..6 {
+                data[idx(dims, x, y, 0)] = 2;
+            }
+        }
+
+        let l1 = extract_axial_contours_from_labelmap(&data, dims, [1.0, 1.0, 1.0], Some(1));
+        let l2 = extract_axial_contours_from_labelmap(&data, dims, [1.0, 1.0, 1.0], Some(2));
+        let all = extract_axial_contours_from_labelmap(&data, dims, [1.0, 1.0, 1.0], None);
+
+        let c1 = l1
+            .contours_at_slice(SlicePlane::Axial, 0)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        let c2 = l2
+            .contours_at_slice(SlicePlane::Axial, 0)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        let ca = all
+            .contours_at_slice(SlicePlane::Axial, 0)
+            .map(|v| v.len())
+            .unwrap_or(0);
+
+        assert_eq!(c1, 1, "label 1 should yield one contour");
+        assert_eq!(c2, 1, "label 2 should yield one contour");
+        assert_eq!(ca, 2, "all non-zero labels should include both contours");
     }
 
     fn has_foreground_on_slice(mask: &[u8], dims: [u32; 3], z: u32) -> bool {
@@ -576,6 +557,74 @@ mod tests {
                     spacing,
                 );
             }
+        }
+    }
+
+    #[test]
+    #[ignore = "Local perf probe: /Users/nieage/Downloads/liver_0_label.nii"]
+    fn test_liver_0_label_extraction_timing_probe() {
+        use std::time::Instant;
+
+        let path = "/Users/nieage/Downloads/liver_0_label.nii";
+        if !Path::new(path).exists() {
+            panic!("local dataset not found at {path}");
+        }
+
+        let data = std::fs::read(path).expect("failed to read liver_0_label.nii");
+        let loaded = crate::io::nifti::load_label_from_bytes(&data, "liver_0_label.nii".into())
+            .expect("failed to parse liver_0_label.nii");
+
+        let mut labels = [false; 256];
+        for &v in &loaded.data {
+            if v != 0 {
+                labels[v as usize] = true;
+            }
+        }
+        let label_values: Vec<u8> = labels
+            .iter()
+            .enumerate()
+            .filter_map(|(i, present)| present.then_some(i as u8))
+            .collect();
+
+        eprintln!(
+            "perf probe dims={:?} labels={:?}",
+            loaded.dimensions, label_values
+        );
+        for label in label_values {
+            let start_axis = Instant::now();
+            let axis_set = extract_axis_aligned_contours_from_labelmap(
+                &loaded.data,
+                loaded.dimensions,
+                [1.0, 1.0, 1.0],
+                Some(label),
+            );
+            let axis_ms = start_axis.elapsed().as_secs_f64() * 1000.0;
+
+            let start_axial = Instant::now();
+            let axial_set = extract_axial_contours_from_labelmap(
+                &loaded.data,
+                loaded.dimensions,
+                [1.0, 1.0, 1.0],
+                Some(label),
+            );
+            let axial_ms = start_axial.elapsed().as_secs_f64() * 1000.0;
+
+            let axis_a: usize = axis_set.axial.values().map(|v| v.len()).sum();
+            let axis_c: usize = axis_set.coronal.values().map(|v| v.len()).sum();
+            let axis_s: usize = axis_set.sagittal.values().map(|v| v.len()).sum();
+            let axial_a: usize = axial_set.axial.values().map(|v| v.len()).sum();
+
+            eprintln!(
+                "label={} axis_aligned_ms={:.1} contours_total={} (A/C/S={}/{}/{}) axial_only_ms={:.1} contours_axial={}",
+                label,
+                axis_ms,
+                axis_set.count(),
+                axis_a,
+                axis_c,
+                axis_s,
+                axial_ms,
+                axial_a
+            );
         }
     }
 }

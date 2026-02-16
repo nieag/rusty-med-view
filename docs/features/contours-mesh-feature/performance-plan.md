@@ -169,6 +169,27 @@ Scope locked from wrap-up planning: stabilize current behavior and complete TSDF
   snapshot helpers (`ShapeAvailability`) for reconstructed-shape state checks.
 - [x] Oblique derived isolines from TSDF planes:
   extraction primitive integrated into oblique viewport render path.
+- [x] Labelmap contour import now preserves multi-class data by extracting one
+  contour segment per non-zero label (instead of collapsing all labels into a
+  single imported contour segment).
+
+#### Current Stabilization State (February 16, 2026)
+
+- [x] Derived contour isoline rendering path is temporarily disabled in
+  `src/render/pipeline.rs` (postponed) to keep contour behavior stable.
+- [x] 2D contour rendering is currently authored-only (no derived TSDF/SDF
+  overlay in the contour pass).
+- [x] Labelmap contour import parity QA scan was removed from
+  `src/io/handlers.rs` to reduce import-time CPU stalls.
+- [x] Local timing probe added for `/Users/nieage/Downloads/liver_0_label.nii`
+  in `src/convert/labelmap_to_contours.rs` (ignored test) to compare
+  axis-aligned vs axial-only extraction cost:
+  - label 1: axis-aligned `~796ms` vs axial-only `~250ms`
+  - label 2: axis-aligned `~320ms` vs axial-only `~103ms`
+
+Notes:
+- Axial-only authored import is not enabled yet in code; current import still
+  extracts axis-aligned contours for each non-zero label.
 
 ## Algorithm Decision: Surface Nets Everywhere
 
