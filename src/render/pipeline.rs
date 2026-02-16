@@ -2,8 +2,12 @@
 //
 // Rendering infrastructure: pipeline setup, bind group creation, and frame rendering.
 
+use crate::components::SdfPreviewState;
 use crate::components::*;
-use crate::convert::{slice_center_uv, slice_index_from_cursor_uv};
+use crate::convert::{
+    extract_sdf_isolines_for_slice, extract_tsdf_isolines_for_slice, slice_center_uv,
+    slice_index_from_cursor_uv, IsolineParityStats,
+};
 use crate::gui;
 use crate::overlay::OverlayPrimitive;
 use crate::render::contour_pipeline::{ContourLineGpu, ContourPipeline, ContourUniforms};
@@ -12,10 +16,9 @@ use crate::render::mesh_pipeline::{MeshPipeline, MeshResources, MeshUniforms};
 use crate::render::sdf_preview_pipeline::{SdfPreviewPipeline, SdfPreviewUniforms};
 use crate::systems::{self, ContourDrawState, SegmentManager};
 use crate::util::orientation::SlicePlane;
-use crate::{app::segment::SdfVolume, components::SdfPreviewState};
 use hecs::World;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
@@ -299,167 +302,45 @@ fn field_slice_index_from_cursor_uv(
     }
 }
 
-fn crosses_iso_zero(a: f32, b: f32) -> bool {
-    (a <= 0.0 && b > 0.0) || (a > 0.0 && b <= 0.0)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum DerivedContourSource {
+    Tsdf,
+    Sdf,
 }
 
-fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
-    [
-        a[0] + (b[0] - a[0]) * t,
-        a[1] + (b[1] - a[1]) * t,
-        a[2] + (b[2] - a[2]) * t,
-    ]
-}
-
-fn plane_corner_index(plane: SlicePlane, slice: u32, u: u32, v: u32) -> [u32; 3] {
-    match plane {
-        SlicePlane::Axial => [u, v, slice],
-        SlicePlane::Coronal => [u, slice, v],
-        SlicePlane::Sagittal => [slice, u, v],
-    }
-}
-
-fn index_to_uv(idx: u32, dim: u32) -> f32 {
-    if dim == 0 {
-        0.5
-    } else {
-        (idx as f32 + 0.5) / dim as f32
-    }
-}
-
-fn corner_volume_uv_for_dims(
-    dims: [u32; 3],
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct DerivedContourCacheKey {
+    segment_id: uuid::Uuid,
     plane: SlicePlane,
-    slice: u32,
-    u: u32,
-    v: u32,
-) -> [f32; 3] {
-    match plane {
-        SlicePlane::Axial => [
-            index_to_uv(u, dims[0]),
-            index_to_uv(v, dims[1]),
-            index_to_uv(slice, dims[2]),
-        ],
-        SlicePlane::Coronal => [
-            index_to_uv(u, dims[0]),
-            index_to_uv(slice, dims[1]),
-            index_to_uv(v, dims[2]),
-        ],
-        SlicePlane::Sagittal => [
-            index_to_uv(slice, dims[0]),
-            index_to_uv(u, dims[1]),
-            index_to_uv(v, dims[2]),
-        ],
-    }
+    slice: i32,
+    source: DerivedContourSource,
+    revision: u64,
 }
 
-fn sample_sdf_at_index(sdf: &SdfVolume, idx: [u32; 3]) -> Option<f32> {
-    if idx[0] >= sdf.dimensions[0] || idx[1] >= sdf.dimensions[1] || idx[2] >= sdf.dimensions[2] {
-        return None;
-    }
-    Some(sdf.get(idx[0], idx[1], idx[2]))
-}
+type IsolineSeg = ([f32; 3], [f32; 3]);
 
-fn extract_sdf_isolines_for_slice(
-    sdf: &SdfVolume,
-    plane: SlicePlane,
-    slice_index: i32,
-    max_segments: usize,
-) -> Vec<([f32; 3], [f32; 3])> {
-    if slice_index < 0 {
-        return Vec::new();
-    }
+static DERIVED_CONTOUR_CACHE: OnceLock<
+    Mutex<HashMap<DerivedContourCacheKey, Arc<Vec<IsolineSeg>>>>,
+> = OnceLock::new();
 
-    let dims = sdf.dimensions;
-    let (u_dim, v_dim, depth_dim) = match plane {
-        SlicePlane::Axial => (dims[0], dims[1], dims[2]),
-        SlicePlane::Coronal => (dims[0], dims[2], dims[1]),
-        SlicePlane::Sagittal => (dims[1], dims[2], dims[0]),
-    };
-
-    let slice = slice_index as u32;
-    if slice >= depth_dim || u_dim < 2 || v_dim < 2 {
-        return Vec::new();
-    }
-
-    let mut segments = Vec::with_capacity((u_dim as usize * v_dim as usize) / 4);
-    for v in 0..(v_dim - 1) {
-        for u in 0..(u_dim - 1) {
-            if segments.len() >= max_segments {
-                return segments;
-            }
-
-            let idx00 = plane_corner_index(plane, slice, u, v);
-            let idx10 = plane_corner_index(plane, slice, u + 1, v);
-            let idx11 = plane_corner_index(plane, slice, u + 1, v + 1);
-            let idx01 = plane_corner_index(plane, slice, u, v + 1);
-
-            let (Some(v00), Some(v10), Some(v11), Some(v01)) = (
-                sample_sdf_at_index(sdf, idx00),
-                sample_sdf_at_index(sdf, idx10),
-                sample_sdf_at_index(sdf, idx11),
-                sample_sdf_at_index(sdf, idx01),
-            ) else {
-                continue;
-            };
-
-            let val = [v00, v10, v11, v01];
-            let pos = [
-                corner_volume_uv_for_dims(dims, plane, slice, u, v),
-                corner_volume_uv_for_dims(dims, plane, slice, u + 1, v),
-                corner_volume_uv_for_dims(dims, plane, slice, u + 1, v + 1),
-                corner_volume_uv_for_dims(dims, plane, slice, u, v + 1),
-            ];
-
-            let mut edges: [Option<[f32; 3]>; 4] = [None, None, None, None];
-            let pairs = [(0usize, 1usize), (1, 2), (2, 3), (3, 0)];
-            for (edge_idx, (a, b)) in pairs.iter().enumerate() {
-                let va = val[*a];
-                let vb = val[*b];
-                if !crosses_iso_zero(va, vb) {
-                    continue;
-                }
-                let denom = vb - va;
-                let t = if denom.abs() > 1e-6 {
-                    (-va / denom).clamp(0.0, 1.0)
-                } else {
-                    0.5
-                };
-                edges[edge_idx] = Some(lerp3(pos[*a], pos[*b], t));
-            }
-
-            let case = ((val[0] < 0.0) as u8)
-                | (((val[1] < 0.0) as u8) << 1)
-                | (((val[2] < 0.0) as u8) << 2)
-                | (((val[3] < 0.0) as u8) << 3);
-
-            let mut push_pair = |a: usize, b: usize| {
-                if let (Some(p0), Some(p1)) = (edges[a], edges[b]) {
-                    segments.push((p0, p1));
-                }
-            };
-
-            match case {
-                0 | 15 => {}
-                1 | 14 => push_pair(3, 0),
-                2 | 13 => push_pair(0, 1),
-                3 | 12 => push_pair(3, 1),
-                4 | 11 => push_pair(1, 2),
-                5 => {
-                    push_pair(3, 2);
-                    push_pair(0, 1);
-                }
-                6 | 9 => push_pair(0, 2),
-                7 | 8 => push_pair(3, 2),
-                10 => {
-                    push_pair(0, 3);
-                    push_pair(1, 2);
-                }
-                _ => {}
-            }
+fn get_or_compute_derived_isolines(
+    key: DerivedContourCacheKey,
+    build: impl FnOnce() -> Vec<IsolineSeg>,
+) -> Arc<Vec<IsolineSeg>> {
+    let cache = DERIVED_CONTOUR_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut map) = cache.lock() {
+        if let Some(existing) = map.get(&key) {
+            return Arc::clone(existing);
         }
+        let value = Arc::new(build());
+        if map.len() >= 4096 {
+            map.clear();
+        }
+        map.insert(key, Arc::clone(&value));
+        value
+    } else {
+        Arc::new(build())
     }
-    segments
 }
 
 /// Render a complete frame with all 4 viewports.
@@ -651,34 +532,109 @@ pub fn render_frame(
                 if !segment.visible {
                     continue;
                 }
-                if let Some(sdf) = segment.sdf.as_ref() {
-                    for (view_mode, plane) in [
-                        (1u32, SlicePlane::Axial),
-                        (2u32, SlicePlane::Coronal),
-                        (3u32, SlicePlane::Sagittal),
-                    ] {
-                        let sdf_slice =
-                            field_slice_index_from_cursor_uv(view_mode, cursor_pos, sdf.dimensions);
-                        let slice = current_slices[view_mode as usize];
-                        if segment.is_slice_edited(plane, slice) {
-                            continue;
-                        }
+                for (view_mode, plane) in [
+                    (1u32, SlicePlane::Axial),
+                    (2u32, SlicePlane::Coronal),
+                    (3u32, SlicePlane::Sagittal),
+                ] {
+                    let slice = current_slices[view_mode as usize];
+                    if segment.is_slice_edited(plane, slice) {
+                        continue;
+                    }
 
-                        let segs = extract_sdf_isolines_for_slice(
-                            sdf,
+                    let tsdf_slice = field_slice_index_from_cursor_uv(
+                        view_mode,
+                        cursor_pos,
+                        segment.chunk_runtime.tsdf_dims,
+                    );
+                    let tsdf_cache_key = DerivedContourCacheKey {
+                        segment_id: segment.id,
+                        plane,
+                        slice: tsdf_slice,
+                        source: DerivedContourSource::Tsdf,
+                        revision: segment.sdf_revision,
+                    };
+                    let tsdf_segs = get_or_compute_derived_isolines(tsdf_cache_key, || {
+                        extract_tsdf_isolines_for_slice(
+                            &segment.chunk_runtime,
                             plane,
-                            sdf_slice,
+                            tsdf_slice,
                             MAX_DERIVED_SEGMENTS_PER_VIEW,
-                        );
-                        for (p0, p1) in segs {
-                            gpu_lines.push(ContourLineGpu::new(
-                                p0,
-                                p1,
-                                [segment.color[0], segment.color[1], segment.color[2], 0.95],
+                        )
+                    });
+
+                    let segs: Arc<Vec<IsolineSeg>> = if tsdf_segs.is_empty() {
+                        if let Some(sdf) = segment.sdf.as_ref() {
+                            let sdf_slice = field_slice_index_from_cursor_uv(
                                 view_mode,
-                                slice,
-                            ));
+                                cursor_pos,
+                                sdf.dimensions,
+                            );
+                            let sdf_cache_key = DerivedContourCacheKey {
+                                segment_id: segment.id,
+                                plane,
+                                slice: sdf_slice,
+                                source: DerivedContourSource::Sdf,
+                                revision: segment.sdf_revision,
+                            };
+                            get_or_compute_derived_isolines(sdf_cache_key, || {
+                                extract_sdf_isolines_for_slice(
+                                    sdf,
+                                    plane,
+                                    sdf_slice,
+                                    MAX_DERIVED_SEGMENTS_PER_VIEW,
+                                )
+                            })
+                        } else {
+                            Arc::new(Vec::new())
                         }
+                    } else {
+                        if let Some(sdf) = segment.sdf.as_ref() {
+                            let sdf_slice = field_slice_index_from_cursor_uv(
+                                view_mode,
+                                cursor_pos,
+                                sdf.dimensions,
+                            );
+                            let sdf_cache_key = DerivedContourCacheKey {
+                                segment_id: segment.id,
+                                plane,
+                                slice: sdf_slice,
+                                source: DerivedContourSource::Sdf,
+                                revision: segment.sdf_revision,
+                            };
+                            let shadow_sdf = get_or_compute_derived_isolines(sdf_cache_key, || {
+                                extract_sdf_isolines_for_slice(
+                                    sdf,
+                                    plane,
+                                    sdf_slice,
+                                    MAX_DERIVED_SEGMENTS_PER_VIEW,
+                                )
+                            });
+                            let parity =
+                                IsolineParityStats::from_counts(shadow_sdf.len(), tsdf_segs.len());
+                            if parity.abs_diff >= 32 && parity.rel_diff >= 0.30 {
+                                log::warn!(
+                                    "Derived contour TSDF/SDF mismatch segment={} plane={:?} slice={} sdf={} tsdf={} rel_diff={:.2}",
+                                    segment.name,
+                                    plane,
+                                    slice,
+                                    parity.sdf_segments,
+                                    parity.tsdf_segments,
+                                    parity.rel_diff
+                                );
+                            }
+                        }
+                        tsdf_segs
+                    };
+
+                    for &(p0, p1) in segs.iter() {
+                        gpu_lines.push(ContourLineGpu::new(
+                            p0,
+                            p1,
+                            [segment.color[0], segment.color[1], segment.color[2], 0.95],
+                            view_mode,
+                            slice,
+                        ));
                     }
                 }
             }

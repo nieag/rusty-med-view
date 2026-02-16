@@ -87,15 +87,15 @@ cross-view contour display consistency.
 - Raw authored contours render as overlays; derived isolines render as the
   anatomy-consistent contour in each slice viewport.
 
-#### Implementation Status (February 15, 2026)
+#### Implementation Status (February 16, 2026)
 
 - [x] Add `SpatialPlane` / `SpatialContour` model primitives in `src/app/segment.rs`.
 - [x] Enable oblique authored contour participation in 2D cross-plane render path
   (remove CPU skip in `src/render/pipeline.rs`).
 - [x] Add active-segment SDF marching-squares isolines per viewport slice in
   `src/render/pipeline.rs` (performance bounded by per-view segment cap).
-- [ ] Migrate derived contour extraction from monolithic `Segment.sdf` to chunked
-  TSDF sampling path.
+- [x] Migrate derived contour extraction to chunked TSDF sampling path in render,
+  with SDF shadow parity comparison + fallback for safety.
 - [ ] Add compute-shader slice extraction path (WebGPU) with CPU fallback.
 - [ ] Add oblique drawing-plane authoring path.
 
@@ -131,17 +131,32 @@ cross-view contour display consistency.
 - [x] Explicit slice override state added to `Segment` (`edited_slices`) instead
   of implicit authored-presence checks, so render behavior follows a stable
   data contract.
-- [x] 2D derived isoline extraction moved from monolithic `Segment.sdf` sampling
-  to chunked TSDF sampling (`Segment.chunk_runtime.tsdf_chunks` + TSDF grid
-  metadata), aligning display with the authoritative volumetric runtime store.
+- [x] 2D derived isoline extraction now uses chunked TSDF as primary render
+  source, with monolithic `Segment.sdf` retained as shadow comparator/fallback.
 - [x] Mapping invariants covered by new unit tests in
   `src/convert/coord_mapping.rs`.
 
 Notes:
-- Derived isolines now use TSDF chunk sampling for axis-aligned slice views.
+- Derived isolines now use TSDF chunk sampling for axis-aligned slice views, and
+  run SDF shadow parity checks to catch drift during rollout.
 - Monolithic `Segment.sdf` remains in runtime for compatibility with the SDF
   preview pipeline and CPU build/update orchestration.
 - Frame budget target remains hard gate (`<= 16.6ms p95`) for interactive mode.
+
+#### Wrap-Up Execution (February 16, 2026)
+
+Scope locked from wrap-up planning: stabilize current behavior and complete TSDF
+2D reattempt with shadow-compare safety.
+
+- [x] Shared slice isoline extractor introduced (`src/convert/slice_isolines.rs`)
+  for both SDF and TSDF sampling paths.
+- [x] Render path switched to TSDF-derived isolines first; SDF-derived isolines
+  remain as fallback when TSDF data for the queried slice is unavailable.
+- [x] TSDF-vs-SDF parity checks added in render loop with thresholded warning
+  output to surface unexpected drift during live usage.
+- [x] Regression tests added for TSDF/SDF slice-isoline parity counts and empty
+  runtime handling.
+- [ ] Oblique derived isolines from TSDF planes (non-axis-aligned) remain pending.
 
 ## Algorithm Decision: Surface Nets Everywhere
 

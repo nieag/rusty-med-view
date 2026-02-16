@@ -198,64 +198,67 @@ pub fn import_labelmap_as_contours(
         return None;
     }
 
-    // Import QA: compare axial connected components in labelmap vs extracted contour loops.
-    let mut mismatched = 0usize;
-    let mut roi_slices = 0usize;
-    let mut total_components = 0usize;
-    let mut total_loops = 0usize;
-    let mut mismatch_rows: Vec<String> = Vec::new();
-    for z in 0..loaded_label.dimensions[2] {
-        if !slice_has_foreground(&loaded_label.data, loaded_label.dimensions, z) {
-            continue;
-        }
-        roi_slices += 1;
-        let components = count_axial_components(&loaded_label.data, loaded_label.dimensions, z);
-        let slice_contours = contour_set.axial.get(&(z as i32));
-        let loops = slice_contours.map(|v| v.len()).unwrap_or(0);
-        total_components += components;
-        total_loops += loops;
-        if components != loops {
-            mismatched += 1;
-            if mismatch_rows.len() < 12 {
-                let mut pos_oriented = 0usize;
-                let mut neg_oriented = 0usize;
-                if let Some(contours) = slice_contours {
-                    for c in contours {
-                        if signed_area_xy(&c.points) >= 0.0 {
-                            pos_oriented += 1;
-                        } else {
-                            neg_oriented += 1;
+    // Import QA can be expensive on large labels; keep it in debug builds.
+    if cfg!(debug_assertions) {
+        // Compare axial connected components in labelmap vs extracted contour loops.
+        let mut mismatched = 0usize;
+        let mut roi_slices = 0usize;
+        let mut total_components = 0usize;
+        let mut total_loops = 0usize;
+        let mut mismatch_rows: Vec<String> = Vec::new();
+        for z in 0..loaded_label.dimensions[2] {
+            if !slice_has_foreground(&loaded_label.data, loaded_label.dimensions, z) {
+                continue;
+            }
+            roi_slices += 1;
+            let components = count_axial_components(&loaded_label.data, loaded_label.dimensions, z);
+            let slice_contours = contour_set.axial.get(&(z as i32));
+            let loops = slice_contours.map(|v| v.len()).unwrap_or(0);
+            total_components += components;
+            total_loops += loops;
+            if components != loops {
+                mismatched += 1;
+                if mismatch_rows.len() < 12 {
+                    let mut pos_oriented = 0usize;
+                    let mut neg_oriented = 0usize;
+                    if let Some(contours) = slice_contours {
+                        for c in contours {
+                            if signed_area_xy(&c.points) >= 0.0 {
+                                pos_oriented += 1;
+                            } else {
+                                neg_oriented += 1;
+                            }
                         }
                     }
+                    mismatch_rows.push(format!(
+                        "z={z}: components={components}, loops={loops}, loop_orientation(+/-)={pos_oriented}/{neg_oriented}"
+                    ));
                 }
-                mismatch_rows.push(format!(
-                    "z={z}: components={components}, loops={loops}, loop_orientation(+/-)={pos_oriented}/{neg_oriented}"
-                ));
             }
         }
-    }
-    if mismatched > 0 {
-        log::warn!(
-            "Labelmap->contour import mismatch on {}/{} ROI axial slices (components={}, contours={})",
-            mismatched,
-            roi_slices,
-            total_components,
-            total_loops
-        );
-        if !mismatch_rows.is_empty() {
+        if mismatched > 0 {
             log::warn!(
-                "Labelmap->contour mismatch details (first {}): {}",
-                mismatch_rows.len(),
-                mismatch_rows.join(" | ")
+                "Labelmap->contour import mismatch on {}/{} ROI axial slices (components={}, contours={})",
+                mismatched,
+                roi_slices,
+                total_components,
+                total_loops
+            );
+            if !mismatch_rows.is_empty() {
+                log::warn!(
+                    "Labelmap->contour mismatch details (first {}): {}",
+                    mismatch_rows.len(),
+                    mismatch_rows.join(" | ")
+                );
+            }
+        } else {
+            log::info!(
+                "Labelmap->contour import parity OK across {} ROI axial slices (components={}, contours={})",
+                roi_slices,
+                total_components,
+                total_loops
             );
         }
-    } else {
-        log::info!(
-            "Labelmap->contour import parity OK across {} ROI axial slices (components={}, contours={})",
-            roi_slices,
-            total_components,
-            total_loops
-        );
     }
 
     if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments) {
