@@ -34,6 +34,10 @@ pub fn get_protocol_registry() -> Vec<HangingProtocol> {
             viewports: vec![(ViewMode::Sagittal, [0.0, 0.0, 1.0, 1.0])],
         },
         HangingProtocol {
+            name: "Single Oblique".to_string(),
+            viewports: vec![(ViewMode::Oblique, [0.0, 0.0, 1.0, 1.0])],
+        },
+        HangingProtocol {
             name: "Clinical Triple".to_string(),
             viewports: vec![
                 (ViewMode::ThreeD, [0.0, 0.0, 0.5, 1.0]),
@@ -117,6 +121,7 @@ pub fn toggle_maximize(world: &mut World, entities: &AppEntities, vp_entity: Ent
             ViewMode::Axial => "Single Axial",
             ViewMode::Coronal => "Single Coronal",
             ViewMode::Sagittal => "Single Sagittal",
+            ViewMode::Oblique => "Single Oblique",
             ViewMode::ThreeD => "Single 3D", // We should probably add this to the registry
         };
 

@@ -7,7 +7,7 @@
 //! - World Space (Anatomical labels)
 
 /// Anatomical slice planes for 2D viewports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SlicePlane {
     /// XY plane, viewing from Superior (top-down)
     Axial = 1,

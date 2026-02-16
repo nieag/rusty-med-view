@@ -306,7 +306,12 @@ impl SdfPreviewPipeline {
         self.sdf_dims = dims;
     }
 
-    pub fn update_uniforms(&self, queue: &wgpu::Queue, uniforms: &SdfPreviewUniforms, view_mode: u32) {
+    pub fn update_uniforms(
+        &self,
+        queue: &wgpu::Queue,
+        uniforms: &SdfPreviewUniforms,
+        view_mode: u32,
+    ) {
         let idx = view_mode as usize;
         if idx < self.uniform_buffers.len() {
             queue.write_buffer(&self.uniform_buffers[idx], 0, bytemuck::bytes_of(uniforms));

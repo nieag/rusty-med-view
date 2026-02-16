@@ -74,6 +74,123 @@ Chosen continuation path:
 ### Phase E — Compute Offload: Not started
 ### Phase F — Finalize/Export Path: Partial (deferred finalize exists, not yet chunk-aware)
 
+### Phase G — Spatial Contours + TSDF Slice-Authoritative Rendering: In progress
+
+Goal: keep contour editing high-fidelity while using derived SDF/TSDF geometry for
+cross-view contour display consistency.
+
+#### Decision (locked)
+
+- Source-of-truth for editing remains authored contours.
+- Source-of-truth for cross-view 2D contour display is derived field slicing
+  (SDF/TSDF iso-contours), not raw contour projection.
+- Raw authored contours render as overlays; derived isolines render as the
+  anatomy-consistent contour in each slice viewport.
+
+#### Implementation Status (February 16, 2026)
+
+- [x] Add `SpatialPlane` / `SpatialContour` model primitives in `src/app/segment.rs`.
+- [x] Enable oblique authored contour participation in 2D cross-plane render path
+  (remove CPU skip in `src/render/pipeline.rs`).
+- [x] Add active-segment SDF marching-squares isolines per viewport slice in
+  `src/render/pipeline.rs` (performance bounded by per-view segment cap).
+- [x] Migrate derived contour extraction to chunked TSDF sampling path in render,
+  with SDF shadow parity comparison + fallback for safety.
+- [ ] Add compute-shader slice extraction path (WebGPU) with CPU fallback.
+- [~] Add oblique drawing-plane authoring path.
+  - TSDF spatial-plane (oblique-capable) isoline extractor API implemented in
+    `src/convert/slice_isolines.rs`.
+  - Oblique viewport protocol + shader/projection support wired for derived
+    oblique display (`ViewMode::Oblique`, `Single Oblique`, contour + volume
+    shader paths).
+  - Pending: oblique contour authoring/edit UX.
+
+#### Performance Gates for Phase G
+
+- Maintain interactive frame pacing under live edits (target <= 16.6ms p95 on
+  representative WASM scenes).
+- Avoid full-volume recompute in interactive loop; rely on bounded per-slice
+  extraction cost and existing chunked derivative updates.
+- Keep line buffer writes bounded (`MAX_CONTOUR_LINES`) and avoid invalid GPU
+  writes on overflow.
+
+#### Alignment Tightening Checkpoint (current branch)
+
+- [x] Shared coordinate mapping helpers added (`src/convert/coord_mapping.rs`)
+  and consumed by contour draw + contour render paths.
+- [x] Slice/depth conversions deduplicated through shared helpers in:
+  - `src/render/pipeline.rs`
+  - `src/systems/contour_draw.rs`
+  - `src/systems/input.rs`
+- [x] 2D contour display locked to strict slice-following with fixed behavior
+  (no toggle): authored contours on their exact source slice, derived SDF
+  isolines for views/slices without authored contours.
+- [x] Neighbor-slice SDF slab bridging is disabled by default
+  (`SdfBuildConfig.neighbor_slice_bridging = false`) to avoid keyframe-style
+  interpolation in 2D contour behavior.
+- [x] Live derivative build enables neighbor bridging for volumetric continuity
+  in mesh/cross-view derived contours (`src/systems/segment_system.rs`), while
+  authored-slice overlays remain strict.
+- [x] Derived-by-default display model wired with explicit per-slice overrides:
+  edited slices are marked override and render authored contours; untouched
+  slices render derived isolines.
+- [x] Explicit slice override state added to `Segment` (`edited_slices`) instead
+  of implicit authored-presence checks, so render behavior follows a stable
+  data contract.
+- [x] 2D derived isoline extraction now uses chunked TSDF as primary render
+  source, with monolithic `Segment.sdf` retained as shadow comparator/fallback.
+- [x] Mapping invariants covered by new unit tests in
+  `src/convert/coord_mapping.rs`.
+
+Notes:
+- Derived isolines now use TSDF chunk sampling for axis-aligned slice views, and
+  run SDF shadow parity checks to catch drift during rollout.
+- Monolithic `Segment.sdf` remains in runtime for compatibility with the SDF
+  preview pipeline and CPU build/update orchestration.
+- Frame budget target remains hard gate (`<= 16.6ms p95`) for interactive mode.
+
+#### Wrap-Up Execution (February 16, 2026)
+
+Scope locked from wrap-up planning: stabilize current behavior and complete TSDF
+2D reattempt with shadow-compare safety.
+
+- [x] Shared slice isoline extractor introduced (`src/convert/slice_isolines.rs`)
+  for both SDF and TSDF sampling paths.
+- [x] Render path switched to TSDF-derived isolines first; SDF-derived isolines
+  remain as fallback when TSDF data for the queried slice is unavailable.
+- [x] TSDF-vs-SDF parity checks added in render loop with thresholded warning
+  output to surface unexpected drift during live usage.
+- [x] Regression tests added for TSDF/SDF slice-isoline parity counts and empty
+  runtime handling.
+- [x] Data-model tightening for authored vs derived contour display source:
+  `PrimaryShapeKind` + `SliceContourSource` contract in `src/app/segment.rs`.
+- [x] Operation-driven primary-shape transitions encoded in model
+  (`RoiOperationKind` -> `PrimaryShapeKind`) with representation availability
+  snapshot helpers (`ShapeAvailability`) for reconstructed-shape state checks.
+- [x] Oblique derived isolines from TSDF planes:
+  extraction primitive integrated into oblique viewport render path.
+- [x] Labelmap contour import now preserves multi-class data by extracting one
+  contour segment per non-zero label (instead of collapsing all labels into a
+  single imported contour segment).
+
+#### Current Stabilization State (February 16, 2026)
+
+- [x] Derived contour isoline rendering path is temporarily disabled in
+  `src/render/pipeline.rs` (postponed) to keep contour behavior stable.
+- [x] 2D contour rendering is currently authored-only (no derived TSDF/SDF
+  overlay in the contour pass).
+- [x] Labelmap contour import parity QA scan was removed from
+  `src/io/handlers.rs` to reduce import-time CPU stalls.
+- [x] Local timing probe added for `/Users/nieage/Downloads/liver_0_label.nii`
+  in `src/convert/labelmap_to_contours.rs` (ignored test) to compare
+  axis-aligned vs axial-only extraction cost:
+  - label 1: axis-aligned `~796ms` vs axial-only `~250ms`
+  - label 2: axis-aligned `~320ms` vs axial-only `~103ms`
+
+Notes:
+- Axial-only authored import is not enabled yet in code; current import still
+  extracts axis-aligned contours for each non-zero label.
+
 ## Algorithm Decision: Surface Nets Everywhere
 
 Medical segmentation produces organic shapes (organs, tumors) — no sharp features.

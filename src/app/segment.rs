@@ -5,7 +5,7 @@
 
 use crate::convert::contour_to_tsdf_chunks::TsdfChunk;
 use crate::util::orientation::SlicePlane;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 // ============================================================================
 // Plane3D - Arbitrary 3D plane representation
@@ -68,6 +68,15 @@ impl Plane3D {
             point[2] - d * self.normal[2],
         ]
     }
+
+    /// Point on the plane closest to the world origin.
+    pub fn origin(&self) -> [f32; 3] {
+        [
+            self.normal[0] * self.distance,
+            self.normal[1] * self.distance,
+            self.normal[2] * self.distance,
+        ]
+    }
 }
 
 // ============================================================================
@@ -107,6 +116,72 @@ impl PlaneContour {
     /// Check if contour has enough points to be valid
     pub fn is_valid(&self) -> bool {
         self.points.len() >= 3
+    }
+}
+
+/// Plane representation used by spatial contour workflows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpatialPlane {
+    /// Unit normal of the contour plane.
+    pub normal: [f32; 3],
+    /// Plane equation distance: normal dot point = distance.
+    pub distance: f32,
+    /// In-plane U axis.
+    pub u_axis: [f32; 3],
+    /// In-plane V axis.
+    pub v_axis: [f32; 3],
+    /// A reference origin point on the plane.
+    pub origin: [f32; 3],
+}
+
+impl SpatialPlane {
+    /// Build a stable in-plane basis from an existing geometric plane.
+    pub fn from_plane3d(plane: Plane3D) -> Self {
+        let normal = normalize3(plane.normal);
+        let up = if normal[2].abs() < 0.95 {
+            [0.0, 0.0, 1.0]
+        } else {
+            [0.0, 1.0, 0.0]
+        };
+        let u_axis = normalize3(cross3(up, normal));
+        let v_axis = normalize3(cross3(normal, u_axis));
+        Self {
+            normal,
+            distance: plane.distance,
+            u_axis,
+            v_axis,
+            origin: plane.origin(),
+        }
+    }
+}
+
+/// Spatial contour with plane metadata and cached in-plane points.
+#[derive(Debug, Clone)]
+pub struct SpatialContour {
+    pub plane: SpatialPlane,
+    pub points_3d: Vec<[f32; 3]>,
+    pub points_2d: Vec<[f32; 2]>,
+    pub is_closed: bool,
+}
+
+impl SpatialContour {
+    pub fn from_plane_contour(contour: &PlaneContour) -> Self {
+        let plane = SpatialPlane::from_plane3d(contour.plane);
+        let mut points_2d = Vec::with_capacity(contour.points.len());
+        for &p in &contour.points {
+            let rel = [
+                p[0] - plane.origin[0],
+                p[1] - plane.origin[1],
+                p[2] - plane.origin[2],
+            ];
+            points_2d.push([dot3(rel, plane.u_axis), dot3(rel, plane.v_axis)]);
+        }
+        Self {
+            plane,
+            points_3d: contour.points.clone(),
+            points_2d,
+            is_closed: contour.is_closed,
+        }
     }
 }
 
@@ -158,6 +233,15 @@ impl ContourSet {
         map.get(&index)
     }
 
+    /// Check whether any authored contour exists on the requested axis-aligned plane.
+    pub fn has_any_contours_on_plane(&self, plane: SlicePlane) -> bool {
+        match plane {
+            SlicePlane::Axial => !self.axial.is_empty(),
+            SlicePlane::Coronal => !self.coronal.is_empty(),
+            SlicePlane::Sagittal => !self.sagittal.is_empty(),
+        }
+    }
+
     /// Get mutable contours at a specific slice
     pub fn contours_at_slice_mut(
         &mut self,
@@ -182,6 +266,11 @@ impl ContourSet {
             .chain(self.oblique.iter())
     }
 
+    /// Iterate all contours as spatial contours.
+    pub fn all_spatial_contours(&self) -> impl Iterator<Item = SpatialContour> + '_ {
+        self.all_contours().map(SpatialContour::from_plane_contour)
+    }
+
     /// Check if set is empty
     pub fn is_empty(&self) -> bool {
         self.axial.is_empty()
@@ -204,6 +293,31 @@ impl ContourSet {
         self.coronal.clear();
         self.sagittal.clear();
         self.oblique.clear();
+    }
+}
+
+#[inline]
+fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+#[inline]
+fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+#[inline]
+fn normalize3(v: [f32; 3]) -> [f32; 3] {
+    let len2 = dot3(v, v);
+    if len2 > 1e-12 {
+        let inv = len2.sqrt().recip();
+        [v[0] * inv, v[1] * inv, v[2] * inv]
+    } else {
+        [0.0, 0.0, 1.0]
     }
 }
 
@@ -345,12 +459,57 @@ pub struct ChunkKey {
     pub z: i32,
 }
 
+/// Key for an axis-aligned authored contour slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ContourSliceKey {
+    pub plane: SlicePlane,
+    pub index: i32,
+}
+
+/// Persisted primary ROI representation type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrimaryShapeKind {
+    Contours,
+    Voxels,
+    Mesh,
+}
+
+/// Operation classes that drive primary-shape transitions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoiOperationKind {
+    Manual2DContourEdit,
+    MarginOrAlgebra,
+    ThresholdOrVoxelEdit,
+    Manual3DMeshEdit,
+}
+
+/// Chosen source for 2D contour display at a specific axis-aligned slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SliceContourSource {
+    Authored,
+    DerivedField,
+}
+
+/// Snapshot of currently available ROI representations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShapeAvailability {
+    pub has_contours: bool,
+    pub has_voxels: bool,
+    pub has_mesh: bool,
+}
+
 /// Runtime chunk cache used by live meshing.
 #[derive(Debug, Clone)]
 pub struct SegmentRuntimeCache {
     pub chunk_size: u32,
     /// Persistent TSDF store: the authoritative volumetric representation.
     pub tsdf_chunks: HashMap<ChunkKey, TsdfChunk>,
+    /// Global TSDF grid dimensions for slice extraction.
+    pub tsdf_dims: [u32; 3],
+    /// Global TSDF voxel spacing in world units.
+    pub tsdf_spacing: [f32; 3],
+    /// Global TSDF origin in world units.
+    pub tsdf_origin: [f32; 3],
     pub dirty_tsdf_chunks: VecDeque<ChunkKey>,
     pub dirty_mesh_chunks: VecDeque<ChunkKey>,
     pub mesh_chunks_cpu: HashMap<ChunkKey, MeshData>,
@@ -362,6 +521,9 @@ impl Default for SegmentRuntimeCache {
         Self {
             chunk_size: 32,
             tsdf_chunks: HashMap::new(),
+            tsdf_dims: [0, 0, 0],
+            tsdf_spacing: [1.0, 1.0, 1.0],
+            tsdf_origin: [0.0, 0.0, 0.0],
             dirty_tsdf_chunks: VecDeque::new(),
             dirty_mesh_chunks: VecDeque::new(),
             mesh_chunks_cpu: HashMap::new(),
@@ -407,10 +569,14 @@ pub struct Segment {
     pub color: [f32; 4],
     /// Visibility flag
     pub visible: bool,
+    /// Last-authored primary shape representation.
+    pub primary_shape: PrimaryShapeKind,
 
     // === Ground Truth ===
     /// User-drawn contours (the source of truth)
     pub contours: ContourSet,
+    /// Explicit per-slice edit overrides for 2D rendering behavior.
+    pub edited_slices: HashSet<ContourSliceKey>,
 
     // === Derived Caches ===
     /// Signed distance field (regenerated when contours change)
@@ -449,7 +615,9 @@ impl Segment {
             name: name.to_string(),
             color,
             visible: true,
+            primary_shape: PrimaryShapeKind::Contours,
             contours: ContourSet::new(),
+            edited_slices: HashSet::new(),
             sdf: None,
             mesh: None,
             mesh_revision: 0,
@@ -504,10 +672,62 @@ impl Segment {
     /// Clear live chunk mesh cache and pending chunk queue.
     pub fn clear_chunk_runtime(&mut self) {
         self.chunk_runtime.tsdf_chunks.clear();
+        self.chunk_runtime.tsdf_dims = [0, 0, 0];
+        self.chunk_runtime.tsdf_spacing = [1.0, 1.0, 1.0];
+        self.chunk_runtime.tsdf_origin = [0.0, 0.0, 0.0];
         self.chunk_runtime.dirty_tsdf_chunks.clear();
         self.chunk_runtime.dirty_mesh_chunks.clear();
         self.chunk_runtime.mesh_chunks_cpu.clear();
         self.chunk_runtime.mesh_chunks_gpu_revision.clear();
+    }
+
+    /// Mark a slice as explicitly edited by the user.
+    pub fn mark_slice_edited(&mut self, plane: SlicePlane, index: i32) {
+        self.apply_operation(RoiOperationKind::Manual2DContourEdit);
+        self.edited_slices.insert(ContourSliceKey { plane, index });
+    }
+
+    /// Apply a high-level ROI operation and update primary-shape semantics.
+    pub fn apply_operation(&mut self, op: RoiOperationKind) {
+        self.primary_shape = match op {
+            RoiOperationKind::Manual2DContourEdit => PrimaryShapeKind::Contours,
+            RoiOperationKind::MarginOrAlgebra | RoiOperationKind::ThresholdOrVoxelEdit => {
+                PrimaryShapeKind::Voxels
+            }
+            RoiOperationKind::Manual3DMeshEdit => PrimaryShapeKind::Mesh,
+        };
+    }
+
+    /// True when this slice should use authored overlays instead of derived isolines.
+    pub fn is_slice_edited(&self, plane: SlicePlane, index: i32) -> bool {
+        self.edited_slices
+            .contains(&ContourSliceKey { plane, index })
+    }
+
+    /// Resolve display source for an axis-aligned slice.
+    pub fn contour_source_for_slice(&self, plane: SlicePlane, index: i32) -> SliceContourSource {
+        if self.is_slice_edited(plane, index) {
+            SliceContourSource::Authored
+        } else {
+            SliceContourSource::DerivedField
+        }
+    }
+
+    /// Rebuild explicit edited-slice overrides from the currently authored contour maps.
+    pub fn sync_edited_slices_from_contours(&mut self) {
+        self.edited_slices.clear();
+        let axial: Vec<i32> = self.contours.axial.keys().copied().collect();
+        let coronal: Vec<i32> = self.contours.coronal.keys().copied().collect();
+        let sagittal: Vec<i32> = self.contours.sagittal.keys().copied().collect();
+        for idx in axial {
+            self.mark_slice_edited(SlicePlane::Axial, idx);
+        }
+        for idx in coronal {
+            self.mark_slice_edited(SlicePlane::Coronal, idx);
+        }
+        for idx in sagittal {
+            self.mark_slice_edited(SlicePlane::Sagittal, idx);
+        }
     }
 
     /// Check if segment has any contours
@@ -518,6 +738,20 @@ impl Segment {
     /// Check if segment has a valid mesh for rendering
     pub fn has_mesh(&self) -> bool {
         self.mesh.as_ref().map_or(false, |m| !m.is_empty())
+    }
+
+    /// True when a voxel-like reconstructed representation is available.
+    pub fn has_voxels(&self) -> bool {
+        !self.chunk_runtime.tsdf_chunks.is_empty()
+    }
+
+    /// Current availability snapshot across ROI representations.
+    pub fn shape_availability(&self) -> ShapeAvailability {
+        ShapeAvailability {
+            has_contours: self.has_contours(),
+            has_voxels: self.has_voxels(),
+            has_mesh: self.has_mesh(),
+        }
     }
 }
 
@@ -578,6 +812,41 @@ mod tests {
         assert!((projected[2] - 10.0).abs() < 1e-6);
     }
 
+    #[test]
+    fn test_spatial_plane_from_plane3d_has_orthonormal_basis() {
+        let plane = Plane3D {
+            normal: [0.0, 1.0, 0.0],
+            distance: 12.5,
+        };
+        let sp = SpatialPlane::from_plane3d(plane);
+        let uu = dot3(sp.u_axis, sp.u_axis);
+        let vv = dot3(sp.v_axis, sp.v_axis);
+        let uv = dot3(sp.u_axis, sp.v_axis);
+        let un = dot3(sp.u_axis, sp.normal);
+        let vn = dot3(sp.v_axis, sp.normal);
+        assert!((uu - 1.0).abs() < 1e-5);
+        assert!((vv - 1.0).abs() < 1e-5);
+        assert!(uv.abs() < 1e-5);
+        assert!(un.abs() < 1e-5);
+        assert!(vn.abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_spatial_contour_from_plane_contour_projects_points() {
+        let contour = PlaneContour::with_points(
+            Plane3D::from_axial(5.0),
+            vec![[1.0, 1.0, 5.0], [3.0, 1.0, 5.0], [3.0, 2.0, 5.0]],
+            true,
+        );
+        let sc = SpatialContour::from_plane_contour(&contour);
+        assert_eq!(sc.points_3d.len(), 3);
+        assert_eq!(sc.points_2d.len(), 3);
+        for p in &sc.points_3d {
+            let on_plane = dot3(*p, sc.plane.normal) - sc.plane.distance;
+            assert!(on_plane.abs() < 1e-4);
+        }
+    }
+
     // --- ContourSet Tests ---
 
     #[test]
@@ -631,6 +900,23 @@ mod tests {
 
         let all: Vec<_> = set.all_contours().collect();
         assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn test_contour_set_all_spatial_contours() {
+        let mut set = ContourSet::new();
+        set.add_contour(
+            SlicePlane::Sagittal,
+            4,
+            PlaneContour::with_points(
+                Plane3D::from_sagittal(4.0),
+                vec![[4.0, 0.0, 0.0], [4.0, 1.0, 0.0], [4.0, 1.0, 1.0]],
+                true,
+            ),
+        );
+        let spatial: Vec<_> = set.all_spatial_contours().collect();
+        assert_eq!(spatial.len(), 1);
+        assert!(spatial[0].is_closed);
     }
 
     // --- SdfVolume Tests ---
@@ -702,6 +988,8 @@ mod tests {
         assert!(!segment.has_mesh());
         assert!(segment.sdf_dirty);
         assert!(segment.mesh_dirty);
+        assert!(segment.edited_slices.is_empty());
+        assert_eq!(segment.primary_shape, PrimaryShapeKind::Contours);
     }
 
     #[test]
@@ -714,6 +1002,71 @@ mod tests {
 
         assert!(segment.sdf_dirty);
         assert!(segment.mesh_dirty);
+    }
+
+    #[test]
+    fn test_segment_slice_edit_overrides() {
+        let mut segment = Segment::new("Test", [1.0, 0.0, 0.0, 1.0]);
+        assert!(!segment.is_slice_edited(SlicePlane::Axial, 12));
+        segment.mark_slice_edited(SlicePlane::Axial, 12);
+        assert!(segment.is_slice_edited(SlicePlane::Axial, 12));
+        assert!(!segment.is_slice_edited(SlicePlane::Coronal, 12));
+        assert_eq!(
+            segment.contour_source_for_slice(SlicePlane::Axial, 12),
+            SliceContourSource::Authored
+        );
+        assert_eq!(
+            segment.contour_source_for_slice(SlicePlane::Axial, 13),
+            SliceContourSource::DerivedField
+        );
+    }
+
+    #[test]
+    fn test_primary_shape_transitions_follow_operation_class() {
+        let mut segment = Segment::new("Test", [1.0, 0.0, 0.0, 1.0]);
+        segment.apply_operation(RoiOperationKind::ThresholdOrVoxelEdit);
+        assert_eq!(segment.primary_shape, PrimaryShapeKind::Voxels);
+        segment.apply_operation(RoiOperationKind::Manual3DMeshEdit);
+        assert_eq!(segment.primary_shape, PrimaryShapeKind::Mesh);
+        segment.apply_operation(RoiOperationKind::Manual2DContourEdit);
+        assert_eq!(segment.primary_shape, PrimaryShapeKind::Contours);
+    }
+
+    #[test]
+    fn test_shape_availability_reports_runtime_representations() {
+        let mut segment = Segment::new("Test", [1.0, 0.0, 0.0, 1.0]);
+        assert!(!segment.shape_availability().has_voxels);
+
+        let mut sdf = SdfVolume::new([8, 8, 8], [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        sdf.set(2, 2, 2, -1.0);
+        let tsdf = crate::convert::build_tsdf_chunk_from_sdf(&sdf, [0, 0, 0, 4, 4, 4], 8.0, 1)
+            .expect("tsdf build");
+        segment
+            .chunk_runtime
+            .tsdf_chunks
+            .insert(ChunkKey { x: 0, y: 0, z: 0 }, tsdf);
+        let avail = segment.shape_availability();
+        assert!(avail.has_voxels);
+        assert!(!avail.has_mesh);
+    }
+
+    #[test]
+    fn test_sync_edited_slices_from_contours() {
+        let mut segment = Segment::new("Test", [1.0, 0.0, 0.0, 1.0]);
+        segment.contours.add_contour(
+            SlicePlane::Axial,
+            3,
+            PlaneContour::new(Plane3D::from_axial(3.5)),
+        );
+        segment.contours.add_contour(
+            SlicePlane::Coronal,
+            7,
+            PlaneContour::new(Plane3D::from_coronal(7.5)),
+        );
+        segment.sync_edited_slices_from_contours();
+        assert!(segment.is_slice_edited(SlicePlane::Axial, 3));
+        assert!(segment.is_slice_edited(SlicePlane::Coronal, 7));
+        assert!(!segment.is_slice_edited(SlicePlane::Sagittal, 7));
     }
 
     #[test]

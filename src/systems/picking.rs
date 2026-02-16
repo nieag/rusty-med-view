@@ -3,6 +3,72 @@ use crate::components::*;
 use glam::Vec3;
 use hecs::World;
 
+fn oblique_slice_aspect(vol_aspects: [f32; 3], rotation: [f32; 4]) -> f32 {
+    let rot = crate::util::orientation::quat_to_mat3(rotation);
+    let u_axis = crate::util::orientation::normalize_vec3(crate::util::orientation::rotate_vec3(
+        rot,
+        [1.0, 0.0, 0.0],
+    ));
+    let v_axis = crate::util::orientation::normalize_vec3(crate::util::orientation::rotate_vec3(
+        rot,
+        [0.0, 1.0, 0.0],
+    ));
+    let lu = ((u_axis[0] * vol_aspects[0]).powi(2)
+        + (u_axis[1] * vol_aspects[1]).powi(2)
+        + (u_axis[2] * vol_aspects[2]).powi(2))
+    .sqrt()
+    .max(1e-3);
+    let lv = ((v_axis[0] * vol_aspects[0]).powi(2)
+        + (v_axis[1] * vol_aspects[1]).powi(2)
+        + (v_axis[2] * vol_aspects[2]).powi(2))
+    .sqrt()
+    .max(1e-3);
+    lu / lv
+}
+
+fn oblique_screen_uv_to_volume(
+    mouse_uv: [f32; 2],
+    zoom: f32,
+    pan: [f32; 2],
+    screen_aspect: f32,
+    vol_aspects: [f32; 3],
+    cursor_pos: [f32; 3],
+    rotation: [f32; 4],
+) -> [f32; 3] {
+    let slice_aspect = oblique_slice_aspect(vol_aspects, rotation);
+    let k = screen_aspect / slice_aspect;
+    let zoomed_uv = [
+        ((mouse_uv[0] - 0.5) * k) / zoom + 0.5 + pan[0],
+        (mouse_uv[1] - 0.5) / zoom + 0.5 + pan[1],
+    ];
+    let rot = crate::util::orientation::quat_to_mat3(rotation);
+    let u_axis = crate::util::orientation::normalize_vec3(crate::util::orientation::rotate_vec3(
+        rot,
+        [1.0, 0.0, 0.0],
+    ));
+    let v_axis = crate::util::orientation::normalize_vec3(crate::util::orientation::rotate_vec3(
+        rot,
+        [0.0, 1.0, 0.0],
+    ));
+    let lu = ((u_axis[0] * vol_aspects[0]).powi(2)
+        + (u_axis[1] * vol_aspects[1]).powi(2)
+        + (u_axis[2] * vol_aspects[2]).powi(2))
+    .sqrt()
+    .max(1e-3);
+    let lv = ((v_axis[0] * vol_aspects[0]).powi(2)
+        + (v_axis[1] * vol_aspects[1]).powi(2)
+        + (v_axis[2] * vol_aspects[2]).powi(2))
+    .sqrt()
+    .max(1e-3);
+    let du = (0.5 - zoomed_uv[0]) * lu;
+    let dv = (0.5 - zoomed_uv[1]) * lv;
+    [
+        cursor_pos[0] + u_axis[0] * du + v_axis[0] * dv,
+        cursor_pos[1] + u_axis[1] * du + v_axis[1] * dv,
+        cursor_pos[2] + u_axis[2] * du + v_axis[2] * dv,
+    ]
+}
+
 /// Get the HU intensity value at the current mouse position.
 pub fn get_hu_at_mouse(world: &World, entities: &AppEntities) -> Option<f32> {
     let (viewport_entity, mouse_uv) = {
@@ -77,7 +143,23 @@ pub fn get_voxel_at_mouse(
         } else {
             1.0
         };
-        if let Some(plane) = crate::util::orientation::SlicePlane::from_mode(mode) {
+        if mode == ViewMode::Oblique {
+            let pos = oblique_screen_uv_to_volume(
+                mouse_uv,
+                zoom,
+                pan,
+                screen_aspect,
+                vol_aspects,
+                cursor_pos,
+                user_rotation,
+            );
+            if (0.0..=1.0).contains(&pos[0])
+                && (0.0..=1.0).contains(&pos[1])
+                && (0.0..=1.0).contains(&pos[2])
+            {
+                return Some(pos);
+            }
+        } else if let Some(plane) = crate::util::orientation::SlicePlane::from_mode(mode) {
             let slice_aspect = plane.slice_aspect(vol_aspects);
             let k = screen_aspect / slice_aspect;
 

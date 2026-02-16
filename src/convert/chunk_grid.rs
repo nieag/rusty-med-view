@@ -46,7 +46,10 @@ pub fn chunk_bounds_for_key(key: ChunkKey, chunk_size: u32, dims: [u32; 3]) -> O
     let sx = key.x as u32 * cs;
     let sy = key.y as u32 * cs;
     let sz = key.z as u32 * cs;
-    if sx >= dims[0].saturating_sub(1) || sy >= dims[1].saturating_sub(1) || sz >= dims[2].saturating_sub(1) {
+    if sx >= dims[0].saturating_sub(1)
+        || sy >= dims[1].saturating_sub(1)
+        || sz >= dims[2].saturating_sub(1)
+    {
         return None;
     }
     let ex = sx.saturating_add(cs - 1).min(dims[0].saturating_sub(2));

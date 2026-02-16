@@ -288,11 +288,7 @@ impl MeshPipeline {
     }
 
     /// Render a mesh.
-    pub fn render<'a>(
-        &'a self,
-        render_pass: &mut wgpu::RenderPass<'a>,
-        mesh: &'a MeshResources,
-    ) {
+    pub fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>, mesh: &'a MeshResources) {
         render_pass.set_pipeline(&self.pipeline);
         render_pass.set_bind_group(0, &self.bind_group, &[]);
         render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));

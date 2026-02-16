@@ -1,5 +1,6 @@
 // src/systems/input.rs
 use crate::components::*;
+use crate::convert::slice_index_from_cursor_uv;
 use crate::systems::picking::get_voxel_at_mouse;
 use crate::systems::segment_system::{
     add_drawing_point, cancel_drawing, finish_drawing, is_drawing, start_drawing, SegmentManager,
@@ -179,6 +180,7 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
                 ViewMode::Axial => screen_aspect / (vol_aspects[0] / vol_aspects[1]),
                 ViewMode::Coronal => screen_aspect / (vol_aspects[0] / vol_aspects[2]),
                 ViewMode::Sagittal => screen_aspect / (vol_aspects[1] / vol_aspects[2]),
+                ViewMode::Oblique => screen_aspect,
             };
 
             let mx_centered = (mouse_uv[0] - 0.5) * k;
@@ -200,6 +202,7 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
                 ViewMode::Axial => (2, dims[2]),
                 ViewMode::Coronal => (1, dims[1]),
                 ViewMode::Sagittal => (0, dims[0]),
+                ViewMode::Oblique => (2, dims[2]),
                 _ => return,
             };
             if dim == 0 {
@@ -229,7 +232,7 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
 
                 if steps_to_move != 0 {
                     let current_uv = transform.position[axis];
-                    let current_voxel = (current_uv * dim as f32).floor() as i32;
+                    let current_voxel = slice_index_from_cursor_uv(current_uv, dim);
                     let new_voxel = (current_voxel + steps_to_move).clamp(0, dim as i32 - 1);
                     transform.position[axis] = (new_voxel as f32 + 0.5) / dim as f32;
                 }
@@ -311,6 +314,7 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
                     ViewMode::Axial => vol_aspects[0] / vol_aspects[1],
                     ViewMode::Coronal => vol_aspects[0] / vol_aspects[2],
                     ViewMode::Sagittal => vol_aspects[1] / vol_aspects[2],
+                    ViewMode::Oblique => 1.0,
                     _ => 1.0,
                 };
                 k = screen_aspect / slice_aspect;
@@ -441,6 +445,7 @@ pub fn sys_handle_contour_mouse_button(
             ViewMode::Axial => SlicePlane::Axial,
             ViewMode::Coronal => SlicePlane::Coronal,
             ViewMode::Sagittal => SlicePlane::Sagittal,
+            ViewMode::Oblique => return,
             ViewMode::ThreeD => return,
         };
         let slice_aspect = slice_plane.slice_aspect(vol_aspects);
@@ -452,9 +457,10 @@ pub fn sys_handle_contour_mouse_button(
         ];
 
         let slice_idx = match vp.mode {
-            ViewMode::Axial => (cursor_pos[2] * dims[2] as f32) as i32,
-            ViewMode::Coronal => (cursor_pos[1] * dims[1] as f32) as i32,
-            ViewMode::Sagittal => (cursor_pos[0] * dims[0] as f32) as i32,
+            ViewMode::Axial => slice_index_from_cursor_uv(cursor_pos[2], dims[2]),
+            ViewMode::Coronal => slice_index_from_cursor_uv(cursor_pos[1], dims[1]),
+            ViewMode::Sagittal => slice_index_from_cursor_uv(cursor_pos[0], dims[0]),
+            ViewMode::Oblique => return,
             ViewMode::ThreeD => return,
         };
 

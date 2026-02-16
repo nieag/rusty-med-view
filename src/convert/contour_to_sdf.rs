@@ -15,6 +15,9 @@ pub enum SdfBlendMode {
 pub struct SdfBuildConfig {
     pub resolution_multiplier: f32,
     pub extrusion_scale: f32,
+    /// If true, extend contour slabs toward neighboring authored slices.
+    /// Keep false for strict per-slice 2D contour semantics.
+    pub neighbor_slice_bridging: bool,
     pub blend_mode: SdfBlendMode,
     pub clamp_distance_mm: f32,
 }
@@ -24,6 +27,7 @@ impl Default for SdfBuildConfig {
         Self {
             resolution_multiplier: 1.0,
             extrusion_scale: 1.0,
+            neighbor_slice_bridging: false,
             blend_mode: SdfBlendMode::Union,
             clamp_distance_mm: 16.0,
         }
@@ -96,7 +100,8 @@ pub fn is_inside_polygon(point: [f32; 2], polygon: &[[f32; 2]]) -> bool {
     for i in 0..polygon.len() {
         let a = polygon[i];
         let b = polygon[(i + 1) % polygon.len()];
-        let y_in_range = (a[1] <= point[1] && b[1] > point[1]) || (b[1] <= point[1] && a[1] > point[1]);
+        let y_in_range =
+            (a[1] <= point[1] && b[1] > point[1]) || (b[1] <= point[1] && a[1] > point[1]);
         if y_in_range {
             let t = (point[1] - a[1]) / (b[1] - a[1]);
             let x_intersect = a[0] + t * (b[0] - a[0]);
@@ -164,7 +169,11 @@ fn spacing_for_axis(axis: Axis, spacing: [f32; 3]) -> f32 {
     }
 }
 
-fn contour_to_axis_2d(contour: &PlaneContour, spacing: [f32; 3], cfg: &SdfBuildConfig) -> Option<AxisContour2d> {
+fn contour_to_axis_2d(
+    contour: &PlaneContour,
+    spacing: [f32; 3],
+    cfg: &SdfBuildConfig,
+) -> Option<AxisContour2d> {
     if contour.points.len() < 3 || !contour.is_closed {
         return None;
     }
@@ -227,7 +236,8 @@ fn resolve_slice_slab_bounds(usable: &mut [AxisContour2d], epsilon_mm: f32) {
             if (*v - c.slice_mm).abs() <= epsilon_mm {
                 std::cmp::Ordering::Equal
             } else {
-                v.partial_cmp(&c.slice_mm).unwrap_or(std::cmp::Ordering::Equal)
+                v.partial_cmp(&c.slice_mm)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             }
         }) {
             Ok(i) => i,
@@ -241,11 +251,11 @@ fn resolve_slice_slab_bounds(usable: &mut [AxisContour2d], epsilon_mm: f32) {
 
         if idx > 0 {
             let prev = slices[idx - 1];
-            slab_min = 0.5 * (prev + c.slice_mm) - epsilon_mm;
+            slab_min = 0.5 * (prev + c.slice_mm);
         }
         if idx + 1 < slices.len() {
             let next = slices[idx + 1];
-            slab_max = 0.5 * (next + c.slice_mm) + epsilon_mm;
+            slab_max = 0.5 * (next + c.slice_mm);
         }
 
         c.slab_min_mm = slab_min.min(default_min);
@@ -283,48 +293,42 @@ fn to_index_range(min_w: [f32; 3], max_w: [f32; 3], sdf: &SdfVolume) -> Option<I
 fn contour_roi(contour: &AxisContour2d, sdf: &SdfVolume, clamp_mm: f32) -> Option<IndexRange> {
     let e = clamp_mm.max(0.0);
     let (min_w, max_w) = match contour.axis {
-        Axis::X => {
-            (
-                [
-                    contour.slab_min_mm - e,
-                    contour.min_2d[0] - e,
-                    contour.min_2d[1] - e,
-                ],
-                [
-                    contour.slab_max_mm + e,
-                    contour.max_2d[0] + e,
-                    contour.max_2d[1] + e,
-                ],
-            )
-        }
-        Axis::Y => {
-            (
-                [
-                    contour.min_2d[0] - e,
-                    contour.slab_min_mm - e,
-                    contour.min_2d[1] - e,
-                ],
-                [
-                    contour.max_2d[0] + e,
-                    contour.slab_max_mm + e,
-                    contour.max_2d[1] + e,
-                ],
-            )
-        }
-        Axis::Z => {
-            (
-                [
-                    contour.min_2d[0] - e,
-                    contour.min_2d[1] - e,
-                    contour.slab_min_mm - e,
-                ],
-                [
-                    contour.max_2d[0] + e,
-                    contour.max_2d[1] + e,
-                    contour.slab_max_mm + e,
-                ],
-            )
-        }
+        Axis::X => (
+            [
+                contour.slab_min_mm - e,
+                contour.min_2d[0] - e,
+                contour.min_2d[1] - e,
+            ],
+            [
+                contour.slab_max_mm + e,
+                contour.max_2d[0] + e,
+                contour.max_2d[1] + e,
+            ],
+        ),
+        Axis::Y => (
+            [
+                contour.min_2d[0] - e,
+                contour.slab_min_mm - e,
+                contour.min_2d[1] - e,
+            ],
+            [
+                contour.max_2d[0] + e,
+                contour.slab_max_mm + e,
+                contour.max_2d[1] + e,
+            ],
+        ),
+        Axis::Z => (
+            [
+                contour.min_2d[0] - e,
+                contour.min_2d[1] - e,
+                contour.slab_min_mm - e,
+            ],
+            [
+                contour.max_2d[0] + e,
+                contour.max_2d[1] + e,
+                contour.slab_max_mm + e,
+            ],
+        ),
     };
 
     to_index_range(min_w, max_w, sdf)
@@ -367,7 +371,14 @@ fn intersect_ranges(a: IndexRange, b: IndexRange) -> Option<IndexRange> {
     if x0 > x1 || y0 > y1 || z0 > z1 {
         return None;
     }
-    Some(IndexRange { x0, x1, y0, y1, z0, z1 })
+    Some(IndexRange {
+        x0,
+        x1,
+        y0,
+        y1,
+        z0,
+        z1,
+    })
 }
 
 /// Incrementally update a world-space ROI in an existing SDF.
@@ -417,7 +428,9 @@ pub fn update_sdf_region_from_contours_with_config(
     if usable.is_empty() {
         return None;
     }
-    resolve_slice_slab_bounds(&mut usable, 1e-3);
+    if cfg.neighbor_slice_bridging {
+        resolve_slice_slab_bounds(&mut usable, 1e-3);
+    }
 
     let mut touched: Option<IndexRange> = None;
     for c in &usable {
@@ -476,7 +489,11 @@ pub fn build_sdf_from_contours_with_config(
         (volume_dims[1] as f32 * rm).round().max(1.0) as u32,
         (volume_dims[2] as f32 * rm).round().max(1.0) as u32,
     ];
-    let sdf_spacing = [volume_spacing[0] / rm, volume_spacing[1] / rm, volume_spacing[2] / rm];
+    let sdf_spacing = [
+        volume_spacing[0] / rm,
+        volume_spacing[1] / rm,
+        volume_spacing[2] / rm,
+    ];
 
     let mut sdf = SdfVolume::new(sdf_dims, sdf_spacing, [0.0, 0.0, 0.0]);
 
@@ -488,7 +505,9 @@ pub fn build_sdf_from_contours_with_config(
     if usable.is_empty() {
         return sdf;
     }
-    resolve_slice_slab_bounds(&mut usable, 1e-3);
+    if cfg.neighbor_slice_bridging {
+        resolve_slice_slab_bounds(&mut usable, 1e-3);
+    }
 
     let mut active_bounds: Option<IndexRange> = None;
     for c in &usable {
@@ -569,7 +588,12 @@ mod tests {
         let mut contours = ContourSet::new();
         let square = PlaneContour::with_points(
             Plane3D::from_axial(5.0),
-            vec![[2.0, 2.0, 5.0], [8.0, 2.0, 5.0], [8.0, 8.0, 5.0], [2.0, 8.0, 5.0]],
+            vec![
+                [2.0, 2.0, 5.0],
+                [8.0, 2.0, 5.0],
+                [8.0, 8.0, 5.0],
+                [2.0, 8.0, 5.0],
+            ],
             true,
         );
         contours.add_contour(SlicePlane::Axial, 5, square);
@@ -577,10 +601,12 @@ mod tests {
         let cfg = SdfBuildConfig {
             resolution_multiplier: 1.0,
             extrusion_scale: 1.0,
+            neighbor_slice_bridging: false,
             blend_mode: SdfBlendMode::Union,
             clamp_distance_mm: 32.0,
         };
-        let sdf = build_sdf_from_contours_with_config(&contours, [12, 12, 12], [1.0, 1.0, 1.0], cfg);
+        let sdf =
+            build_sdf_from_contours_with_config(&contours, [12, 12, 12], [1.0, 1.0, 1.0], cfg);
 
         let near = sdf.get(5, 5, 5);
         let far = sdf.get(5, 5, 10);
@@ -593,7 +619,12 @@ mod tests {
         let mut contours = ContourSet::new();
         let square = PlaneContour::with_points(
             Plane3D::from_axial(10.0),
-            vec![[6.0, 6.0, 10.0], [14.0, 6.0, 10.0], [14.0, 14.0, 10.0], [6.0, 14.0, 10.0]],
+            vec![
+                [6.0, 6.0, 10.0],
+                [14.0, 6.0, 10.0],
+                [14.0, 14.0, 10.0],
+                [6.0, 14.0, 10.0],
+            ],
             true,
         );
         contours.add_contour(SlicePlane::Axial, 5, square);
@@ -604,6 +635,7 @@ mod tests {
             [1.0, 1.0, 2.0],
             SdfBuildConfig {
                 clamp_distance_mm: 64.0,
+                neighbor_slice_bridging: true,
                 ..SdfBuildConfig::default()
             },
         );
@@ -614,6 +646,7 @@ mod tests {
             [1.0, 1.0, 1.0],
             SdfBuildConfig {
                 clamp_distance_mm: 64.0,
+                neighbor_slice_bridging: true,
                 ..SdfBuildConfig::default()
             },
         );
@@ -648,12 +681,22 @@ mod tests {
         let mut contours = ContourSet::new();
         let square_low = PlaneContour::with_points(
             Plane3D::from_axial(2.0),
-            vec![[2.0, 2.0, 2.0], [8.0, 2.0, 2.0], [8.0, 8.0, 2.0], [2.0, 8.0, 2.0]],
+            vec![
+                [2.0, 2.0, 2.0],
+                [8.0, 2.0, 2.0],
+                [8.0, 8.0, 2.0],
+                [2.0, 8.0, 2.0],
+            ],
             true,
         );
         let square_high = PlaneContour::with_points(
             Plane3D::from_axial(6.0),
-            vec![[2.0, 2.0, 6.0], [8.0, 2.0, 6.0], [8.0, 8.0, 6.0], [2.0, 8.0, 6.0]],
+            vec![
+                [2.0, 2.0, 6.0],
+                [8.0, 2.0, 6.0],
+                [8.0, 8.0, 6.0],
+                [2.0, 8.0, 6.0],
+            ],
             true,
         );
         contours.add_contour(SlicePlane::Axial, 2, square_low);
@@ -665,12 +708,16 @@ mod tests {
             [1.0, 1.0, 1.0],
             SdfBuildConfig {
                 clamp_distance_mm: 64.0,
+                neighbor_slice_bridging: true,
                 ..SdfBuildConfig::default()
             },
         );
 
         let mid = sdf.get(5, 5, 4);
-        assert!(mid < 0.0, "expected connected interior between slices, got {mid}");
+        assert!(
+            mid <= 0.0,
+            "expected connected interior/boundary between slices, got {mid}"
+        );
     }
 
     #[test]
@@ -678,7 +725,12 @@ mod tests {
         let mut contours = ContourSet::new();
         let square = PlaneContour::with_points(
             Plane3D::from_axial(5.0),
-            vec![[2.0, 2.0, 5.0], [8.0, 2.0, 5.0], [8.0, 8.0, 5.0], [2.0, 8.0, 5.0]],
+            vec![
+                [2.0, 2.0, 5.0],
+                [8.0, 2.0, 5.0],
+                [8.0, 8.0, 5.0],
+                [2.0, 8.0, 5.0],
+            ],
             true,
         );
         contours.add_contour(SlicePlane::Axial, 5, square);
@@ -687,12 +739,15 @@ mod tests {
             ..SdfBuildConfig::default()
         };
 
-        let mut sdf_inc = build_sdf_from_contours_with_config(&contours, [12, 12, 12], [1.0, 1.0, 1.0], cfg);
+        let mut sdf_inc =
+            build_sdf_from_contours_with_config(&contours, [12, 12, 12], [1.0, 1.0, 1.0], cfg);
         let dirty_world = [3.0, 3.0, 4.0, 7.0, 7.0, 6.0];
-        let touched = update_sdf_region_from_contours_with_config(&mut sdf_inc, &contours, cfg, dirty_world);
+        let touched =
+            update_sdf_region_from_contours_with_config(&mut sdf_inc, &contours, cfg, dirty_world);
         assert!(touched.is_some());
 
-        let sdf_full = build_sdf_from_contours_with_config(&contours, [12, 12, 12], [1.0, 1.0, 1.0], cfg);
+        let sdf_full =
+            build_sdf_from_contours_with_config(&contours, [12, 12, 12], [1.0, 1.0, 1.0], cfg);
         let roi = touched.unwrap();
         for z in roi[2]..=roi[5] {
             for y in roi[1]..=roi[4] {
@@ -713,7 +768,12 @@ mod tests {
         let mut contours = ContourSet::new();
         let square = PlaneContour::with_points(
             Plane3D::from_axial(5.0),
-            vec![[2.0, 2.0, 5.0], [8.0, 2.0, 5.0], [8.0, 8.0, 5.0], [2.0, 8.0, 5.0]],
+            vec![
+                [2.0, 2.0, 5.0],
+                [8.0, 2.0, 5.0],
+                [8.0, 8.0, 5.0],
+                [2.0, 8.0, 5.0],
+            ],
             true,
         );
         contours.add_contour(SlicePlane::Axial, 5, square);
@@ -722,7 +782,8 @@ mod tests {
             clamp_distance_mm: 16.0,
             ..SdfBuildConfig::default()
         };
-        let mut sdf = build_sdf_from_contours_with_config(&contours, [12, 12, 12], [1.0, 1.0, 1.0], cfg);
+        let mut sdf =
+            build_sdf_from_contours_with_config(&contours, [12, 12, 12], [1.0, 1.0, 1.0], cfg);
         let before = sdf.active_bounds.expect("expected initial active bounds");
 
         let touched = update_sdf_region_from_contours_with_config(

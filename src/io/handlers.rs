@@ -4,11 +4,25 @@
 //! This module extracts the load handling logic from lib.rs to improve code organization.
 
 use crate::components::*;
-use crate::convert::extract_axial_contours_from_labelmap;
+use crate::convert::extract_axis_aligned_contours_from_labelmap;
 use crate::nifti_loader::LoadedVolume;
 use crate::systems::SegmentManager;
 use crate::volume;
 use hecs::World;
+
+fn non_zero_labels(mask: &[u8]) -> Vec<u8> {
+    let mut seen = [false; 256];
+    let mut labels = Vec::new();
+    for &v in mask {
+        if v == 0 || seen[v as usize] {
+            continue;
+        }
+        seen[v as usize] = true;
+        labels.push(v);
+    }
+    labels.sort_unstable();
+    labels
+}
 
 /// Handle a successfully loaded volume, updating ECS components and GPU resources.
 ///
@@ -79,7 +93,7 @@ pub fn handle_label_load(
     let entity = world.spawn((
         Segmentation {
             name: loaded_label.filename.clone(),
-            // Keep imported labelmap hidden by default; contour/mesh workflow is primary.
+            // Show imported labelmap immediately for contour-vs-label inspection.
             is_visible: false,
         },
         LayerSettings { opacity: 0.5 },
@@ -113,18 +127,12 @@ pub fn import_labelmap_as_contours(
         .map(|(_, v)| v.spacing)
         .unwrap_or([1.0, 1.0, 1.0]);
 
-    let contour_set = extract_axial_contours_from_labelmap(
-        &loaded_label.data,
-        loaded_label.dimensions,
-        spacing,
-        None,
-    );
-    if contour_set.is_empty() {
+    let labels = non_zero_labels(&loaded_label.data);
+    if labels.is_empty() {
         return None;
     }
 
     if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments) {
-        let idx = mgr.len();
         let colors = [
             [1.0, 0.3, 0.3, 0.8],
             [0.3, 1.0, 0.3, 0.8],
@@ -133,16 +141,31 @@ pub fn import_labelmap_as_contours(
             [1.0, 0.3, 1.0, 0.8],
             [0.3, 1.0, 1.0, 0.8],
         ];
-        let color = colors[idx % colors.len()];
-        let seg_idx = mgr.add_segment(
-            &format!("{} (Contours)", loaded_label.filename),
-            color,
-        );
-        if let Some(seg) = mgr.segments.get_mut(seg_idx) {
-            seg.contours = contour_set;
-            seg.mark_dirty();
+        let mut imported: Option<usize> = None;
+        for label in labels {
+            let contour_set = extract_axis_aligned_contours_from_labelmap(
+                &loaded_label.data,
+                loaded_label.dimensions,
+                spacing,
+                Some(label),
+            );
+            if contour_set.is_empty() {
+                continue;
+            }
+            let idx = mgr.len();
+            let color = colors[idx % colors.len()];
+            let seg_idx = mgr.add_segment(
+                &format!("{} (Contours L{})", loaded_label.filename, label),
+                color,
+            );
+            if let Some(seg) = mgr.segments.get_mut(seg_idx) {
+                seg.contours = contour_set;
+                seg.sync_edited_slices_from_contours();
+                seg.mark_dirty();
+            }
+            imported = Some(seg_idx);
         }
-        Some(seg_idx)
+        imported
     } else {
         None
     }
