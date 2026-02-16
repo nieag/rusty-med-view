@@ -474,11 +474,28 @@ pub enum PrimaryShapeKind {
     Mesh,
 }
 
+/// Operation classes that drive primary-shape transitions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoiOperationKind {
+    Manual2DContourEdit,
+    MarginOrAlgebra,
+    ThresholdOrVoxelEdit,
+    Manual3DMeshEdit,
+}
+
 /// Chosen source for 2D contour display at a specific axis-aligned slice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SliceContourSource {
     Authored,
     DerivedField,
+}
+
+/// Snapshot of currently available ROI representations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShapeAvailability {
+    pub has_contours: bool,
+    pub has_voxels: bool,
+    pub has_mesh: bool,
 }
 
 /// Runtime chunk cache used by live meshing.
@@ -666,8 +683,19 @@ impl Segment {
 
     /// Mark a slice as explicitly edited by the user.
     pub fn mark_slice_edited(&mut self, plane: SlicePlane, index: i32) {
-        self.primary_shape = PrimaryShapeKind::Contours;
+        self.apply_operation(RoiOperationKind::Manual2DContourEdit);
         self.edited_slices.insert(ContourSliceKey { plane, index });
+    }
+
+    /// Apply a high-level ROI operation and update primary-shape semantics.
+    pub fn apply_operation(&mut self, op: RoiOperationKind) {
+        self.primary_shape = match op {
+            RoiOperationKind::Manual2DContourEdit => PrimaryShapeKind::Contours,
+            RoiOperationKind::MarginOrAlgebra | RoiOperationKind::ThresholdOrVoxelEdit => {
+                PrimaryShapeKind::Voxels
+            }
+            RoiOperationKind::Manual3DMeshEdit => PrimaryShapeKind::Mesh,
+        };
     }
 
     /// True when this slice should use authored overlays instead of derived isolines.
@@ -710,6 +738,20 @@ impl Segment {
     /// Check if segment has a valid mesh for rendering
     pub fn has_mesh(&self) -> bool {
         self.mesh.as_ref().map_or(false, |m| !m.is_empty())
+    }
+
+    /// True when a voxel-like reconstructed representation is available.
+    pub fn has_voxels(&self) -> bool {
+        !self.chunk_runtime.tsdf_chunks.is_empty()
+    }
+
+    /// Current availability snapshot across ROI representations.
+    pub fn shape_availability(&self) -> ShapeAvailability {
+        ShapeAvailability {
+            has_contours: self.has_contours(),
+            has_voxels: self.has_voxels(),
+            has_mesh: self.has_mesh(),
+        }
     }
 }
 
@@ -977,6 +1019,35 @@ mod tests {
             segment.contour_source_for_slice(SlicePlane::Axial, 13),
             SliceContourSource::DerivedField
         );
+    }
+
+    #[test]
+    fn test_primary_shape_transitions_follow_operation_class() {
+        let mut segment = Segment::new("Test", [1.0, 0.0, 0.0, 1.0]);
+        segment.apply_operation(RoiOperationKind::ThresholdOrVoxelEdit);
+        assert_eq!(segment.primary_shape, PrimaryShapeKind::Voxels);
+        segment.apply_operation(RoiOperationKind::Manual3DMeshEdit);
+        assert_eq!(segment.primary_shape, PrimaryShapeKind::Mesh);
+        segment.apply_operation(RoiOperationKind::Manual2DContourEdit);
+        assert_eq!(segment.primary_shape, PrimaryShapeKind::Contours);
+    }
+
+    #[test]
+    fn test_shape_availability_reports_runtime_representations() {
+        let mut segment = Segment::new("Test", [1.0, 0.0, 0.0, 1.0]);
+        assert!(!segment.shape_availability().has_voxels);
+
+        let mut sdf = SdfVolume::new([8, 8, 8], [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        sdf.set(2, 2, 2, -1.0);
+        let tsdf = crate::convert::build_tsdf_chunk_from_sdf(&sdf, [0, 0, 0, 4, 4, 4], 8.0, 1)
+            .expect("tsdf build");
+        segment
+            .chunk_runtime
+            .tsdf_chunks
+            .insert(ChunkKey { x: 0, y: 0, z: 0 }, tsdf);
+        let avail = segment.shape_availability();
+        assert!(avail.has_voxels);
+        assert!(!avail.has_mesh);
     }
 
     #[test]

@@ -164,6 +164,9 @@ Scope locked from wrap-up planning: stabilize current behavior and complete TSDF
   runtime handling.
 - [x] Data-model tightening for authored vs derived contour display source:
   `PrimaryShapeKind` + `SliceContourSource` contract in `src/app/segment.rs`.
+- [x] Operation-driven primary-shape transitions encoded in model
+  (`RoiOperationKind` -> `PrimaryShapeKind`) with representation availability
+  snapshot helpers (`ShapeAvailability`) for reconstructed-shape state checks.
 - [x] Oblique derived isolines from TSDF planes:
   extraction primitive integrated into oblique viewport render path.
 
