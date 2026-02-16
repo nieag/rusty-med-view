@@ -3,7 +3,8 @@
 //! Manages the full pipeline: contour drawing → SDF generation → mesh rendering.
 
 use crate::app::segment::{
-    ChunkKey, MeshData, Plane3D, PlaneContour, SdfVolume, Segment, SegmentChunkRuntime,
+    ChunkKey, MeshData, Plane3D, PlaneContour, PrimaryShapeKind, SdfVolume, Segment,
+    SegmentChunkRuntime,
 };
 use crate::components::{AppEntities, SegPerfConfig, VolumeData};
 use crate::convert::{
@@ -247,6 +248,7 @@ fn regenerate_segment_if_dirty_with_resolution(
             }
             // Enqueue mesh rebuild for the baked chunks.
             segment.chunk_runtime.enqueue_dirty_mesh_chunks(keys);
+            segment.primary_shape = PrimaryShapeKind::Voxels;
         }
 
         segment.mesh_dirty = true; // SDF changed, mesh needs update

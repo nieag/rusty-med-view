@@ -466,6 +466,21 @@ pub struct ContourSliceKey {
     pub index: i32,
 }
 
+/// Persisted primary ROI representation type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrimaryShapeKind {
+    Contours,
+    Voxels,
+    Mesh,
+}
+
+/// Chosen source for 2D contour display at a specific axis-aligned slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SliceContourSource {
+    Authored,
+    DerivedField,
+}
+
 /// Runtime chunk cache used by live meshing.
 #[derive(Debug, Clone)]
 pub struct SegmentRuntimeCache {
@@ -537,6 +552,8 @@ pub struct Segment {
     pub color: [f32; 4],
     /// Visibility flag
     pub visible: bool,
+    /// Last-authored primary shape representation.
+    pub primary_shape: PrimaryShapeKind,
 
     // === Ground Truth ===
     /// User-drawn contours (the source of truth)
@@ -581,6 +598,7 @@ impl Segment {
             name: name.to_string(),
             color,
             visible: true,
+            primary_shape: PrimaryShapeKind::Contours,
             contours: ContourSet::new(),
             edited_slices: HashSet::new(),
             sdf: None,
@@ -648,6 +666,7 @@ impl Segment {
 
     /// Mark a slice as explicitly edited by the user.
     pub fn mark_slice_edited(&mut self, plane: SlicePlane, index: i32) {
+        self.primary_shape = PrimaryShapeKind::Contours;
         self.edited_slices.insert(ContourSliceKey { plane, index });
     }
 
@@ -655,6 +674,15 @@ impl Segment {
     pub fn is_slice_edited(&self, plane: SlicePlane, index: i32) -> bool {
         self.edited_slices
             .contains(&ContourSliceKey { plane, index })
+    }
+
+    /// Resolve display source for an axis-aligned slice.
+    pub fn contour_source_for_slice(&self, plane: SlicePlane, index: i32) -> SliceContourSource {
+        if self.is_slice_edited(plane, index) {
+            SliceContourSource::Authored
+        } else {
+            SliceContourSource::DerivedField
+        }
     }
 
     /// Rebuild explicit edited-slice overrides from the currently authored contour maps.
@@ -919,6 +947,7 @@ mod tests {
         assert!(segment.sdf_dirty);
         assert!(segment.mesh_dirty);
         assert!(segment.edited_slices.is_empty());
+        assert_eq!(segment.primary_shape, PrimaryShapeKind::Contours);
     }
 
     #[test]
@@ -940,6 +969,14 @@ mod tests {
         segment.mark_slice_edited(SlicePlane::Axial, 12);
         assert!(segment.is_slice_edited(SlicePlane::Axial, 12));
         assert!(!segment.is_slice_edited(SlicePlane::Coronal, 12));
+        assert_eq!(
+            segment.contour_source_for_slice(SlicePlane::Axial, 12),
+            SliceContourSource::Authored
+        );
+        assert_eq!(
+            segment.contour_source_for_slice(SlicePlane::Axial, 13),
+            SliceContourSource::DerivedField
+        );
     }
 
     #[test]

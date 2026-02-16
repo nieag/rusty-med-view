@@ -258,7 +258,37 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let phys_z = dims.z * spacing.z;
 
         var slice_aspect = 1.0;
-        if uniforms.view_mode == 1u { slice_aspect = phys_x / phys_y; } else if uniforms.view_mode == 2u { slice_aspect = phys_x / phys_z; } else if uniforms.view_mode == 3u { slice_aspect = phys_y / phys_z; } // Y over Z
+        if uniforms.view_mode == 1u {
+            slice_aspect = phys_x / phys_y;
+        } else if uniforms.view_mode == 2u {
+            slice_aspect = phys_x / phys_z;
+        } else if uniforms.view_mode == 3u {
+            slice_aspect = phys_y / phys_z;
+        } else if uniforms.view_mode == 4u {
+            let q = uniforms.rotation;
+            let x2 = q.x + q.x;
+            let y2 = q.y + q.y;
+            let z2 = q.z + q.z;
+            let xx = q.x * x2;
+            let xy = q.x * y2;
+            let xz = q.x * z2;
+            let yy = q.y * y2;
+            let yz = q.y * z2;
+            let zz = q.z * z2;
+            let wx = q.w * x2;
+            let wy = q.w * y2;
+            let wz = q.w * z2;
+            let rot = mat3x3<f32>(
+                vec3<f32>(1.0 - (yy + zz), xy + wz, xz - wy),
+                vec3<f32>(xy - wz, 1.0 - (xx + zz), yz + wx),
+                vec3<f32>(xz + wy, yz - wx, 1.0 - (xx + yy))
+            );
+            let u_axis = normalize(rot * vec3<f32>(1.0, 0.0, 0.0));
+            let v_axis = normalize(rot * vec3<f32>(0.0, 1.0, 0.0));
+            let lu = max(length(u_axis * vec3<f32>(phys_x, phys_y, phys_z)), 1e-3);
+            let lv = max(length(v_axis * vec3<f32>(phys_x, phys_y, phys_z)), 1e-3);
+            slice_aspect = lu / lv;
+        } // Y over Z
 
         // Correction K
         let k = screen_aspect / slice_aspect;
@@ -297,6 +327,39 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 ch_v1 = vec2<f32>(0.0, 0.0);
                 ch_v2 = vec2<f32>(-1.0, 0.0); // +Y (Green) -> Left
                 ch_v3 = vec2<f32>(0.0, -1.0); // +Z (Blue) -> Up
+            } else if uniforms.view_mode == 4u { // Oblique (rotation-driven)
+                let q = uniforms.rotation;
+                let x2 = q.x + q.x;
+                let y2 = q.y + q.y;
+                let z2 = q.z + q.z;
+                let xx = q.x * x2;
+                let xy = q.x * y2;
+                let xz = q.x * z2;
+                let yy = q.y * y2;
+                let yz = q.y * z2;
+                let zz = q.z * z2;
+                let wx = q.w * x2;
+                let wy = q.w * y2;
+                let wz = q.w * z2;
+                let rot = mat3x3<f32>(
+                    vec3<f32>(1.0 - (yy + zz), xy + wz, xz - wy),
+                    vec3<f32>(xy - wz, 1.0 - (xx + zz), yz + wx),
+                    vec3<f32>(xz + wy, yz - wx, 1.0 - (xx + yy))
+                );
+                let u_axis = normalize(rot * vec3<f32>(1.0, 0.0, 0.0));
+                let v_axis = normalize(rot * vec3<f32>(0.0, 1.0, 0.0));
+                let phys = vec3<f32>(phys_x, phys_y, phys_z);
+                let lu = max(length(u_axis * phys), 1e-3);
+                let lv = max(length(v_axis * phys), 1e-3);
+                let center_mm = (cursor - 0.5) * phys;
+                let du = (0.5 - zoomed_uv.x) * lu;
+                let dv = (0.5 - zoomed_uv.y) * lv;
+                let sample_mm = center_mm + u_axis * du + v_axis * dv;
+                sample_pos = sample_mm / phys + 0.5;
+                crosshair_screen_pos = vec2<f32>(0.5, 0.5);
+                ch_v1 = vec2<f32>(0.0, 0.0);
+                ch_v2 = vec2<f32>(0.0, 0.0);
+                ch_v3 = vec2<f32>(0.0, 0.0);
             }
 
             // 1. Sample Main Volume and apply windowing
@@ -611,6 +674,36 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 } else {
                     uv = vec2<f32>(1.0 - world_pos.y, 1.0 - world_pos.z);
                 }
+            } else if uniforms.view_mode == 4u {
+                let q = uniforms.rotation;
+                let x2 = q.x + q.x;
+                let y2 = q.y + q.y;
+                let z2 = q.z + q.z;
+                let xx = q.x * x2;
+                let xy = q.x * y2;
+                let xz = q.x * z2;
+                let yy = q.y * y2;
+                let yz = q.y * z2;
+                let zz = q.z * z2;
+                let wx = q.w * x2;
+                let wy = q.w * y2;
+                let wz = q.w * z2;
+                let rot = mat3x3<f32>(
+                    vec3<f32>(1.0 - (yy + zz), xy + wz, xz - wy),
+                    vec3<f32>(xy - wz, 1.0 - (xx + zz), yz + wx),
+                    vec3<f32>(xz + wy, yz - wx, 1.0 - (xx + yy))
+                );
+                let u_axis = normalize(rot * vec3<f32>(1.0, 0.0, 0.0));
+                let v_axis = normalize(rot * vec3<f32>(0.0, 1.0, 0.0));
+                let phys = vec3<f32>(phys_x, phys_y, phys_z);
+                let lu = max(length(u_axis * phys), 1e-3);
+                let lv = max(length(v_axis * phys), 1e-3);
+                let center_mm = (uniforms.cursor_pos.xyz - 0.5) * phys;
+                let p_mm = (world_pos - 0.5) * phys;
+                let du = dot(p_mm - center_mm, u_axis);
+                let dv = dot(p_mm - center_mm, v_axis);
+                slice_aspect = lu / lv;
+                uv = vec2<f32>(0.5 - du / lu, 0.5 - dv / lv);
             }
 
             let k = screen_aspect_ratio / slice_aspect;

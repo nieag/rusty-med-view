@@ -1,4 +1,4 @@
-use crate::app::segment::{ChunkKey, SdfVolume, SegmentRuntimeCache};
+use crate::app::segment::{ChunkKey, SdfVolume, SegmentRuntimeCache, SpatialPlane};
 use crate::convert::dequantize_tsdf;
 use crate::util::orientation::SlicePlane;
 
@@ -180,6 +180,38 @@ fn sample_tsdf_at_index(runtime: &SegmentRuntimeCache, idx: [u32; 3]) -> Option<
         }
     }
     None
+}
+
+#[inline]
+fn add_scaled3(base: [f32; 3], dir: [f32; 3], scale: f32) -> [f32; 3] {
+    [
+        base[0] + dir[0] * scale,
+        base[1] + dir[1] * scale,
+        base[2] + dir[2] * scale,
+    ]
+}
+
+fn sample_tsdf_world_nearest(runtime: &SegmentRuntimeCache, world: [f32; 3]) -> Option<f32> {
+    let dims = runtime.tsdf_dims;
+    if dims.contains(&0) {
+        return None;
+    }
+    let fx = (world[0] - runtime.tsdf_origin[0]) / runtime.tsdf_spacing[0].max(1e-6);
+    let fy = (world[1] - runtime.tsdf_origin[1]) / runtime.tsdf_spacing[1].max(1e-6);
+    let fz = (world[2] - runtime.tsdf_origin[2]) / runtime.tsdf_spacing[2].max(1e-6);
+    let xi = fx.round() as i32;
+    let yi = fy.round() as i32;
+    let zi = fz.round() as i32;
+    if xi < 0
+        || yi < 0
+        || zi < 0
+        || xi >= dims[0] as i32
+        || yi >= dims[1] as i32
+        || zi >= dims[2] as i32
+    {
+        return None;
+    }
+    sample_tsdf_at_index(runtime, [xi as u32, yi as u32, zi as u32])
 }
 
 pub fn extract_sdf_isolines_for_slice(
@@ -386,6 +418,122 @@ pub fn extract_tsdf_isolines_for_slice(
     segments
 }
 
+/// Extract TSDF iso-contours from an arbitrary spatial plane.
+///
+/// `extent_u_mm` and `extent_v_mm` are half-extents on the plane in world units.
+/// `samples` controls the marching-squares lattice along (u,v).
+pub fn extract_tsdf_isolines_for_spatial_plane(
+    runtime: &SegmentRuntimeCache,
+    plane: &SpatialPlane,
+    extent_u_mm: f32,
+    extent_v_mm: f32,
+    samples: [u32; 2],
+    max_segments: usize,
+) -> Vec<([f32; 3], [f32; 3])> {
+    let su = samples[0].max(2);
+    let sv = samples[1].max(2);
+    let du = (2.0 * extent_u_mm) / (su - 1) as f32;
+    let dv = (2.0 * extent_v_mm) / (sv - 1) as f32;
+    if !du.is_finite() || !dv.is_finite() {
+        return Vec::new();
+    }
+
+    let mut segments = Vec::with_capacity(((su * sv) as usize) / 4);
+    for v in 0..(sv - 1) {
+        for u in 0..(su - 1) {
+            if segments.len() >= max_segments {
+                return segments;
+            }
+
+            let u0 = -extent_u_mm + u as f32 * du;
+            let v0 = -extent_v_mm + v as f32 * dv;
+            let u1 = u0 + du;
+            let v1 = v0 + dv;
+
+            let p00 = add_scaled3(
+                add_scaled3(plane.origin, plane.u_axis, u0),
+                plane.v_axis,
+                v0,
+            );
+            let p10 = add_scaled3(
+                add_scaled3(plane.origin, plane.u_axis, u1),
+                plane.v_axis,
+                v0,
+            );
+            let p11 = add_scaled3(
+                add_scaled3(plane.origin, plane.u_axis, u1),
+                plane.v_axis,
+                v1,
+            );
+            let p01 = add_scaled3(
+                add_scaled3(plane.origin, plane.u_axis, u0),
+                plane.v_axis,
+                v1,
+            );
+
+            let (Some(v00), Some(v10), Some(v11), Some(v01)) = (
+                sample_tsdf_world_nearest(runtime, p00),
+                sample_tsdf_world_nearest(runtime, p10),
+                sample_tsdf_world_nearest(runtime, p11),
+                sample_tsdf_world_nearest(runtime, p01),
+            ) else {
+                continue;
+            };
+
+            let val = [v00, v10, v11, v01];
+            let pos = [p00, p10, p11, p01];
+
+            let mut edges: [Option<[f32; 3]>; 4] = [None, None, None, None];
+            let pairs = [(0usize, 1usize), (1, 2), (2, 3), (3, 0)];
+            for (edge_idx, (a, b)) in pairs.iter().enumerate() {
+                let va = val[*a];
+                let vb = val[*b];
+                if !crosses_iso_zero(va, vb) {
+                    continue;
+                }
+                let denom = vb - va;
+                let t = if denom.abs() > 1e-6 {
+                    (-va / denom).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+                edges[edge_idx] = Some(lerp3(pos[*a], pos[*b], t));
+            }
+
+            let case = ((val[0] < 0.0) as u8)
+                | (((val[1] < 0.0) as u8) << 1)
+                | (((val[2] < 0.0) as u8) << 2)
+                | (((val[3] < 0.0) as u8) << 3);
+
+            let mut push_pair = |a: usize, b: usize| {
+                if let (Some(p0), Some(p1)) = (edges[a], edges[b]) {
+                    segments.push((p0, p1));
+                }
+            };
+
+            match case {
+                0 | 15 => {}
+                1 | 14 => push_pair(3, 0),
+                2 | 13 => push_pair(0, 1),
+                3 | 12 => push_pair(3, 1),
+                4 | 11 => push_pair(1, 2),
+                5 => {
+                    push_pair(3, 2);
+                    push_pair(0, 1);
+                }
+                6 | 9 => push_pair(0, 2),
+                7 | 8 => push_pair(3, 2),
+                10 => {
+                    push_pair(0, 3);
+                    push_pair(1, 2);
+                }
+                _ => {}
+            }
+        }
+    }
+    segments
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,6 +616,37 @@ mod tests {
     fn test_tsdf_isoline_extraction_empty_without_runtime_dims() {
         let runtime = SegmentRuntimeCache::default();
         let lines = extract_tsdf_isolines_for_slice(&runtime, SlicePlane::Coronal, 10, 1000);
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn test_tsdf_spatial_plane_isolines_non_empty_on_sphere() {
+        let sdf = make_sphere_sdf([48, 48, 48], 14.0);
+        let runtime = build_runtime_from_sdf(&sdf, 16);
+        let plane = SpatialPlane {
+            normal: [0.0, 0.0, 1.0],
+            distance: 24.0,
+            u_axis: [1.0, 0.0, 0.0],
+            v_axis: [0.0, 1.0, 0.0],
+            origin: [24.0, 24.0, 24.0],
+        };
+        let lines =
+            extract_tsdf_isolines_for_spatial_plane(&runtime, &plane, 20.0, 20.0, [64, 64], 50000);
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn test_tsdf_spatial_plane_isolines_empty_for_empty_runtime() {
+        let runtime = SegmentRuntimeCache::default();
+        let plane = SpatialPlane {
+            normal: [0.0, 1.0, 0.0],
+            distance: 0.0,
+            u_axis: [1.0, 0.0, 0.0],
+            v_axis: [0.0, 0.0, 1.0],
+            origin: [0.0, 0.0, 0.0],
+        };
+        let lines =
+            extract_tsdf_isolines_for_spatial_plane(&runtime, &plane, 10.0, 10.0, [32, 32], 2000);
         assert!(lines.is_empty());
     }
 }

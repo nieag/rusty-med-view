@@ -180,6 +180,7 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
                 ViewMode::Axial => screen_aspect / (vol_aspects[0] / vol_aspects[1]),
                 ViewMode::Coronal => screen_aspect / (vol_aspects[0] / vol_aspects[2]),
                 ViewMode::Sagittal => screen_aspect / (vol_aspects[1] / vol_aspects[2]),
+                ViewMode::Oblique => screen_aspect,
             };
 
             let mx_centered = (mouse_uv[0] - 0.5) * k;
@@ -201,6 +202,7 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
                 ViewMode::Axial => (2, dims[2]),
                 ViewMode::Coronal => (1, dims[1]),
                 ViewMode::Sagittal => (0, dims[0]),
+                ViewMode::Oblique => (2, dims[2]),
                 _ => return,
             };
             if dim == 0 {
@@ -312,6 +314,7 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
                     ViewMode::Axial => vol_aspects[0] / vol_aspects[1],
                     ViewMode::Coronal => vol_aspects[0] / vol_aspects[2],
                     ViewMode::Sagittal => vol_aspects[1] / vol_aspects[2],
+                    ViewMode::Oblique => 1.0,
                     _ => 1.0,
                 };
                 k = screen_aspect / slice_aspect;
@@ -442,6 +445,7 @@ pub fn sys_handle_contour_mouse_button(
             ViewMode::Axial => SlicePlane::Axial,
             ViewMode::Coronal => SlicePlane::Coronal,
             ViewMode::Sagittal => SlicePlane::Sagittal,
+            ViewMode::Oblique => return,
             ViewMode::ThreeD => return,
         };
         let slice_aspect = slice_plane.slice_aspect(vol_aspects);
@@ -456,6 +460,7 @@ pub fn sys_handle_contour_mouse_button(
             ViewMode::Axial => slice_index_from_cursor_uv(cursor_pos[2], dims[2]),
             ViewMode::Coronal => slice_index_from_cursor_uv(cursor_pos[1], dims[1]),
             ViewMode::Sagittal => slice_index_from_cursor_uv(cursor_pos[0], dims[0]),
+            ViewMode::Oblique => return,
             ViewMode::ThreeD => return,
         };
 

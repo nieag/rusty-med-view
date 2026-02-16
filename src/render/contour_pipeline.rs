@@ -17,7 +17,7 @@ pub struct ContourLineGpu {
     pub _pad1: f32,
     /// Color RGBA
     pub color: [f32; 4],
-    /// Plane info: [view_mode (1=axial,2=coronal,3=sagittal), slice_index, _pad, _pad]
+    /// Plane info: [view_mode (1=axial,2=coronal,3=sagittal,4=oblique), slice_index, _pad, _pad]
     pub plane_info: [f32; 4],
 }
 
@@ -37,7 +37,7 @@ impl ContourLineGpu {
 /// GPU-compatible uniform buffer for contour rendering.
 /// Layout MUST match contour.wgsl exactly!
 /// WGSL vec2 has 8-byte alignment, vec3 has 16-byte alignment.
-/// Total size: 96 bytes
+/// Total size: 128 bytes
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct ContourUniforms {
@@ -61,14 +61,19 @@ pub struct ContourUniforms {
     pub volume_spacing: [f32; 3],
     /// Current slice index (offset 76)
     pub current_slice: i32,
-    /// Padding to match WGSL (offset 80, vec3<f32> = 12 bytes but aligned to 16)
-    pub _padding: [f32; 4], // 16 bytes to reach 96 total
+    /// Cursor position in volume UV.
+    pub cursor_pos: [f32; 3],
+    pub _pad4: f32,
+    /// User rotation quaternion used by oblique 2D view.
+    pub rotation: [f32; 4],
+    /// Padding to 128 bytes.
+    pub _padding: [f32; 4],
 }
 
 const MAX_CONTOUR_LINES: usize = 131072; // Increased to 8MB to handle complex multi-viewport segmentations
 
 /// Resources for contour rendering.
-/// Supports up to 4 separate view modes (3D, Axial, Coronal, Sagittal)
+/// Supports up to 4 viewport slots (matching hanging protocol viewport count),
 /// each with its own uniform buffer to avoid collisions.
 pub struct ContourPipeline {
     pub pipeline: wgpu::RenderPipeline,
@@ -91,7 +96,7 @@ impl ContourPipeline {
             ))),
         });
 
-        // Create 4 uniform buffers, one for each potential view_mode (0..4)
+        // Create 4 uniform buffers, one for each viewport slot.
         let mut uniform_buffers = Vec::with_capacity(4);
         for i in 0..4 {
             let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -233,8 +238,13 @@ impl ContourPipeline {
     }
 
     /// Update uniforms for a specific viewport.
-    pub fn update_uniforms(&self, queue: &wgpu::Queue, uniforms: &ContourUniforms, view_mode: u32) {
-        let index = view_mode as usize;
+    pub fn update_uniforms(
+        &self,
+        queue: &wgpu::Queue,
+        uniforms: &ContourUniforms,
+        slot_index: usize,
+    ) {
+        let index = slot_index;
         if index < self.uniform_buffers.len() {
             queue.write_buffer(
                 &self.uniform_buffers[index],
@@ -244,13 +254,13 @@ impl ContourPipeline {
         }
     }
 
-    /// Render contour lines for the given viewport.
-    pub fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>, view_mode: u32) {
+    /// Render contour lines for the given viewport slot.
+    pub fn render<'a>(&'a self, render_pass: &mut wgpu::RenderPass<'a>, slot_index: usize) {
         if self.line_count == 0 {
             return;
         }
 
-        let index = view_mode as usize;
+        let index = slot_index;
         if index >= self.bind_groups.len() {
             return;
         }

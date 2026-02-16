@@ -24,6 +24,7 @@ pub enum ViewMode {
     Axial = 1,
     Coronal = 2,
     Sagittal = 3,
+    Oblique = 4,
 }
 
 pub struct Viewport {

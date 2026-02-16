@@ -97,7 +97,13 @@ cross-view contour display consistency.
 - [x] Migrate derived contour extraction to chunked TSDF sampling path in render,
   with SDF shadow parity comparison + fallback for safety.
 - [ ] Add compute-shader slice extraction path (WebGPU) with CPU fallback.
-- [ ] Add oblique drawing-plane authoring path.
+- [~] Add oblique drawing-plane authoring path.
+  - TSDF spatial-plane (oblique-capable) isoline extractor API implemented in
+    `src/convert/slice_isolines.rs`.
+  - Oblique viewport protocol + shader/projection support wired for derived
+    oblique display (`ViewMode::Oblique`, `Single Oblique`, contour + volume
+    shader paths).
+  - Pending: oblique contour authoring/edit UX.
 
 #### Performance Gates for Phase G
 
@@ -156,7 +162,10 @@ Scope locked from wrap-up planning: stabilize current behavior and complete TSDF
   output to surface unexpected drift during live usage.
 - [x] Regression tests added for TSDF/SDF slice-isoline parity counts and empty
   runtime handling.
-- [ ] Oblique derived isolines from TSDF planes (non-axis-aligned) remain pending.
+- [x] Data-model tightening for authored vs derived contour display source:
+  `PrimaryShapeKind` + `SliceContourSource` contract in `src/app/segment.rs`.
+- [x] Oblique derived isolines from TSDF planes:
+  extraction primitive integrated into oblique viewport render path.
 
 ## Algorithm Decision: Surface Nets Everywhere
 

@@ -139,6 +139,13 @@ pub fn draw_viewport_overlays(
                     marker(ui, "A", egui::pos2(rx0 + 15.0, ry0 + rhh));
                     marker(ui, "P", egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh));
                 }
+                ViewMode::Oblique => {
+                    label_res = Some(draw_label(ui, "Oblique", is_active));
+                    ui.label("Slice: oblique");
+                    if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
+                        ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
+                    }
+                }
             });
 
         if let Some(res) = label_res {
@@ -286,6 +293,7 @@ fn draw_annotations(
         ViewMode::Axial => 1,
         ViewMode::Coronal => 2,
         ViewMode::Sagittal => 3,
+        ViewMode::Oblique => 4,
     };
 
     for (idx, ann) in annotations.iter_mut().enumerate() {

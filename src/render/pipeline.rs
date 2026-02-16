@@ -5,8 +5,9 @@
 use crate::components::SdfPreviewState;
 use crate::components::*;
 use crate::convert::{
-    extract_sdf_isolines_for_slice, extract_tsdf_isolines_for_slice, slice_center_uv,
-    slice_index_from_cursor_uv, IsolineParityStats,
+    extract_sdf_isolines_for_slice, extract_tsdf_isolines_for_slice,
+    extract_tsdf_isolines_for_spatial_plane, slice_center_uv, slice_index_from_cursor_uv,
+    IsolineParityStats,
 };
 use crate::gui;
 use crate::overlay::OverlayPrimitive;
@@ -397,10 +398,10 @@ pub fn render_frame(
     // 4. Prepare uniforms for all viewports
     let mut viewports = Vec::new();
     for (e, vp) in world.query::<&Viewport>().iter() {
-        viewports.push((e, vp.rect, vp.uniform_index));
+        viewports.push((e, vp.rect, vp.uniform_index, vp.mode));
     }
 
-    for (e, _, u_idx) in &viewports {
+    for (e, _, u_idx, _) in &viewports {
         let mut u = systems::sys_prepare_render_data(world, entities, *e);
         // Inject overlay data into uniforms
         u.overlay_primitive_count = overlay_count;
@@ -483,7 +484,7 @@ pub fn render_frame(
                 .with::<&MainVolumeTag>();
             if let Some((_, res)) = query.iter().next() {
                 let bg = &res.bind_group;
-                for (_, rect, u_idx) in &viewports {
+                for (_, rect, u_idx, _) in &viewports {
                     render_pass.set_viewport(rect[0], rect[1], rect[2], rect[3], 0.0, 1.0);
                     render_pass.set_bind_group(0, bg, &[*u_idx * 256]);
                     render_pass.draw_indexed(0..num_indices, 0, 0..1);
@@ -538,7 +539,9 @@ pub fn render_frame(
                     (3u32, SlicePlane::Sagittal),
                 ] {
                     let slice = current_slices[view_mode as usize];
-                    if segment.is_slice_edited(plane, slice) {
+                    if segment.contour_source_for_slice(plane, slice)
+                        == crate::app::segment::SliceContourSource::Authored
+                    {
                         continue;
                     }
 
@@ -637,6 +640,67 @@ pub fn render_frame(
                         ));
                     }
                 }
+
+                // Oblique derived isolines on oblique viewport(s).
+                for (vp_entity, _rect, _u_idx, mode) in &viewports {
+                    if *mode != ViewMode::Oblique {
+                        continue;
+                    }
+                    let (rotation, zoom, pan) = world
+                        .get::<&ViewportState>(*vp_entity)
+                        .map(|vs| (vs.user_rotation, vs.zoom, vs.pan))
+                        .unwrap_or(([0.0, 0.0, 0.0, 1.0], 1.0, [0.0, 0.0]));
+                    let rot = crate::util::orientation::quat_to_mat3(rotation);
+                    let u_axis = crate::util::orientation::normalize_vec3(
+                        crate::util::orientation::rotate_vec3(rot, [1.0, 0.0, 0.0]),
+                    );
+                    let v_axis = crate::util::orientation::normalize_vec3(
+                        crate::util::orientation::rotate_vec3(rot, [0.0, 1.0, 0.0]),
+                    );
+                    let center = [
+                        cursor_pos[0] * denoms[0],
+                        cursor_pos[1] * denoms[1],
+                        cursor_pos[2] * denoms[2],
+                    ];
+                    let plane = crate::app::segment::SpatialPlane {
+                        normal: crate::util::orientation::normalize_vec3(
+                            crate::util::orientation::rotate_vec3(rot, [0.0, 0.0, 1.0]),
+                        ),
+                        distance: 0.0,
+                        u_axis,
+                        v_axis,
+                        origin: center,
+                    };
+                    let plane = crate::app::segment::SpatialPlane {
+                        distance: plane.normal[0] * center[0]
+                            + plane.normal[1] * center[1]
+                            + plane.normal[2] * center[2],
+                        ..plane
+                    };
+                    let extent =
+                        ((denoms[0] * denoms[0] + denoms[1] * denoms[1] + denoms[2] * denoms[2])
+                            .sqrt())
+                            * 0.5
+                            * (1.0 / zoom.max(0.5))
+                            + (pan[0].abs() + pan[1].abs()) * 32.0;
+                    let segs = extract_tsdf_isolines_for_spatial_plane(
+                        &segment.chunk_runtime,
+                        &plane,
+                        extent,
+                        extent,
+                        [128, 128],
+                        MAX_DERIVED_SEGMENTS_PER_VIEW,
+                    );
+                    for (p0, p1) in segs {
+                        gpu_lines.push(ContourLineGpu::new(
+                            [p0[0] / denoms[0], p0[1] / denoms[1], p0[2] / denoms[2]],
+                            [p1[0] / denoms[0], p1[1] / denoms[1], p1[2] / denoms[2]],
+                            [segment.color[0], segment.color[1], segment.color[2], 0.95],
+                            ViewMode::Oblique as u32,
+                            0,
+                        ));
+                    }
+                }
             }
 
             // 2) Authored contour overlays (all segments).
@@ -675,7 +739,9 @@ pub fn render_frame(
                     };
 
                 for (slice, contours) in &segment.contours.axial {
-                    if !segment.is_slice_edited(SlicePlane::Axial, *slice) {
+                    if segment.contour_source_for_slice(SlicePlane::Axial, *slice)
+                        != crate::app::segment::SliceContourSource::Authored
+                    {
                         continue;
                     }
                     for contour in contours {
@@ -683,7 +749,9 @@ pub fn render_frame(
                     }
                 }
                 for (slice, contours) in &segment.contours.coronal {
-                    if !segment.is_slice_edited(SlicePlane::Coronal, *slice) {
+                    if segment.contour_source_for_slice(SlicePlane::Coronal, *slice)
+                        != crate::app::segment::SliceContourSource::Authored
+                    {
                         continue;
                     }
                     for contour in contours {
@@ -691,7 +759,9 @@ pub fn render_frame(
                     }
                 }
                 for (slice, contours) in &segment.contours.sagittal {
-                    if !segment.is_slice_edited(SlicePlane::Sagittal, *slice) {
+                    if segment.contour_source_for_slice(SlicePlane::Sagittal, *slice)
+                        != crate::app::segment::SliceContourSource::Authored
+                    {
                         continue;
                     }
                     for contour in contours {
@@ -737,21 +807,25 @@ pub fn render_frame(
 
         contour_pipeline.update_lines(queue, &gpu_lines);
 
-        for (_e, rect, u_idx) in &viewports {
-            if *u_idx == 0 {
+        for (_e, rect, u_idx, mode) in &viewports {
+            if *mode == ViewMode::ThreeD {
                 continue; // Skip 3D viewport
             }
 
-            let view_mode = *u_idx;
+            let view_mode = *mode as u32;
 
             // Calculate current slice index for this viewport
-            let current_slice = current_slice_index(view_mode, cursor_pos, volume_dims);
+            let current_slice = if *mode == ViewMode::Oblique {
+                0
+            } else {
+                current_slice_index(view_mode, cursor_pos, volume_dims)
+            };
 
             // Read real zoom/pan from ViewportState
-            let (zoom, pan) = world
+            let (zoom, pan, rotation) = world
                 .get::<&ViewportState>(*_e)
-                .map(|vs| (vs.zoom, vs.pan))
-                .unwrap_or((1.0, [0.0, 0.0]));
+                .map(|vs| (vs.zoom, vs.pan, vs.user_rotation))
+                .unwrap_or((1.0, [0.0, 0.0], [0.0, 0.0, 0.0, 1.0]));
 
             let uniforms = ContourUniforms {
                 zoom,
@@ -766,10 +840,13 @@ pub fn render_frame(
                 _pad3: 0,
                 volume_spacing,
                 current_slice,
+                cursor_pos,
+                _pad4: 0.0,
+                rotation,
                 _padding: [0.0; 4],
             };
 
-            contour_pipeline.update_uniforms(queue, &uniforms, view_mode);
+            contour_pipeline.update_uniforms(queue, &uniforms, *u_idx as usize);
 
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Contour Pass"),
@@ -788,7 +865,7 @@ pub fn render_frame(
             });
 
             pass.set_viewport(rect[0], rect[1], rect[2], rect[3], 0.0, 1.0);
-            contour_pipeline.render(&mut pass, view_mode);
+            contour_pipeline.render(&mut pass, *u_idx as usize);
         }
     }
 
@@ -825,11 +902,11 @@ pub fn render_frame(
                 .unwrap_or([0.5, 0.5, 0.5]);
 
             let sdf_dims = sdf_preview_pipeline.sdf_dims();
-            for (_e, rect, u_idx) in &viewports {
-                if *u_idx == 0 {
+            for (_e, rect, u_idx, mode) in &viewports {
+                if *mode == ViewMode::ThreeD || *mode == ViewMode::Oblique {
                     continue;
                 }
-                let view_mode = *u_idx;
+                let view_mode = *mode as u32;
                 let current_slice = current_slice_index(view_mode, cursor_pos, volume_dims);
 
                 let (zoom, pan) = world
@@ -860,7 +937,7 @@ pub fn render_frame(
                     _pad_align1: [0.0; 3],
                     _pad2: [0.0; 4],
                 };
-                sdf_preview_pipeline.update_uniforms(queue, &uniforms, view_mode);
+                sdf_preview_pipeline.update_uniforms(queue, &uniforms, *u_idx);
 
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("SDF Preview Pass"),
@@ -878,7 +955,7 @@ pub fn render_frame(
                     occlusion_query_set: None,
                 });
                 pass.set_viewport(rect[0], rect[1], rect[2], rect[3], 0.0, 1.0);
-                sdf_preview_pipeline.render(&mut pass, view_mode);
+                sdf_preview_pipeline.render(&mut pass, *u_idx);
             }
         }
     }
@@ -928,8 +1005,8 @@ pub fn render_frame(
 
                         if mesh_ready {
                             if let Some((_, mesh_res)) = segment_mesh_gpu_cache.get(&segment.id) {
-                                for (e, rect, u_idx) in &viewports {
-                                    if *u_idx != 0 {
+                                for (e, rect, _u_idx, mode) in &viewports {
+                                    if *mode != ViewMode::ThreeD {
                                         continue;
                                     }
 

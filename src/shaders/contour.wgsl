@@ -22,6 +22,10 @@ struct Uniforms {
     sp_y: f32,
     sp_z: f32,
     current_slice: i32,
+    cursor_pos: vec3<f32>,
+    _pad4: f32,
+    rotation: vec4<f32>,
+    _padding: vec4<f32>,
 }
 
 struct ContourLine {
@@ -50,6 +54,37 @@ fn volume_to_screen(vol: vec3<f32>) -> vec2<f32> {
         zoomed = vec2<f32>(1.0 - vol.x, 1.0 - vol.y);
     } else if u.view_mode == 2u { // Coronal (XZ)
         zoomed = vec2<f32>(1.0 - vol.x, 1.0 - vol.z);
+    } else if u.view_mode == 4u { // Oblique (rotation-driven slice)
+        let q = u.rotation;
+        let x2 = q.x + q.x;
+        let y2 = q.y + q.y;
+        let z2 = q.z + q.z;
+        let xx = q.x * x2;
+        let xy = q.x * y2;
+        let xz = q.x * z2;
+        let yy = q.y * y2;
+        let yz = q.y * z2;
+        let zz = q.z * z2;
+        let wx = q.w * x2;
+        let wy = q.w * y2;
+        let wz = q.w * z2;
+        let rot = mat3x3<f32>(
+            vec3<f32>(1.0 - (yy + zz), xy + wz, xz - wy),
+            vec3<f32>(xy - wz, 1.0 - (xx + zz), yz + wx),
+            vec3<f32>(xz + wy, yz - wx, 1.0 - (xx + yy))
+        );
+        let u_axis = normalize(rot * vec3<f32>(1.0, 0.0, 0.0));
+        let v_axis = normalize(rot * vec3<f32>(0.0, 1.0, 0.0));
+        let dims = vec3<f32>(f32(u.dim_x), f32(u.dim_y), f32(u.dim_z));
+        let sp = vec3<f32>(u.sp_x, u.sp_y, u.sp_z);
+        let phys = max(dims * sp, vec3<f32>(0.001));
+        let p_mm = (vol - 0.5) * phys;
+        let c_mm = (vec3<f32>(u.cursor_pos.x, u.cursor_pos.y, u.cursor_pos.z) - 0.5) * phys;
+        let du = dot(p_mm - c_mm, u_axis);
+        let dv = dot(p_mm - c_mm, v_axis);
+        let lu = max(length(u_axis * phys), 1e-3);
+        let lv = max(length(v_axis * phys), 1e-3);
+        zoomed = vec2<f32>(0.5 - du / lu, 0.5 - dv / lv);
     } else {                       // Sagittal (YZ)
         zoomed = vec2<f32>(1.0 - vol.y, 1.0 - vol.z);
     }
@@ -64,6 +99,30 @@ fn volume_to_screen(vol: vec3<f32>) -> vec2<f32> {
         slice_aspect = dx / dy;
     } else if u.view_mode == 2u {
         slice_aspect = dx / dz;
+    } else if u.view_mode == 4u {
+        let q = u.rotation;
+        let x2 = q.x + q.x;
+        let y2 = q.y + q.y;
+        let z2 = q.z + q.z;
+        let xx = q.x * x2;
+        let xy = q.x * y2;
+        let xz = q.x * z2;
+        let yy = q.y * y2;
+        let yz = q.y * z2;
+        let zz = q.z * z2;
+        let wx = q.w * x2;
+        let wy = q.w * y2;
+        let wz = q.w * z2;
+        let rot = mat3x3<f32>(
+            vec3<f32>(1.0 - (yy + zz), xy + wz, xz - wy),
+            vec3<f32>(xy - wz, 1.0 - (xx + zz), yz + wx),
+            vec3<f32>(xz + wy, yz - wx, 1.0 - (xx + yy))
+        );
+        let u_axis = normalize(rot * vec3<f32>(1.0, 0.0, 0.0));
+        let v_axis = normalize(rot * vec3<f32>(0.0, 1.0, 0.0));
+        let lu = max(length(vec3<f32>(dx, dy, dz) * u_axis), 1e-3);
+        let lv = max(length(vec3<f32>(dx, dy, dz) * v_axis), 1e-3);
+        slice_aspect = lu / lv;
     } else {
         slice_aspect = dy / dz;
     }
@@ -95,6 +154,9 @@ fn vs_main(
     } else if u.view_mode == 2u { // Coronal (XZ), Depth Y
         depth_axis = 1u;
         dim_depth = u.dim_y;
+    } else if u.view_mode == 4u { // Oblique
+        depth_axis = 2u;
+        dim_depth = 1u;
     } else { // Sagittal (YZ), Depth X
         depth_axis = 0u;
         dim_depth = u.dim_x;
@@ -113,7 +175,7 @@ fn vs_main(
         out.clip_position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
         return out;
     }
-    if i32(line.plane_info.y) != u.current_slice {
+    if u.view_mode != 4u && i32(line.plane_info.y) != u.current_slice {
         out.clip_position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
         return out;
     }
