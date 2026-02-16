@@ -425,6 +425,51 @@ mod tests {
         components
     }
 
+    fn assert_contour_valid_for_plane(
+        contour: &PlaneContour,
+        plane: SlicePlane,
+        slice_index: i32,
+        dims: [u32; 3],
+        spacing: [f32; 3],
+    ) {
+        assert!(contour.is_closed, "contour must be closed");
+        assert!(
+            contour.points.len() >= 3,
+            "contour must have at least 3 points"
+        );
+
+        let expected_depth = match plane {
+            SlicePlane::Axial => (slice_index as f32 + 0.5) * spacing[2],
+            SlicePlane::Coronal => (slice_index as f32 + 0.5) * spacing[1],
+            SlicePlane::Sagittal => (slice_index as f32 + 0.5) * spacing[0],
+        };
+
+        let max_x = dims[0] as f32 * spacing[0];
+        let max_y = dims[1] as f32 * spacing[1];
+        let max_z = dims[2] as f32 * spacing[2];
+
+        for p in &contour.points {
+            assert!(p[0].is_finite() && p[1].is_finite() && p[2].is_finite());
+            match plane {
+                SlicePlane::Axial => {
+                    assert!((p[2] - expected_depth).abs() <= 1e-3);
+                    assert!(p[0] >= -1e-3 && p[0] <= max_x + 1e-3);
+                    assert!(p[1] >= -1e-3 && p[1] <= max_y + 1e-3);
+                }
+                SlicePlane::Coronal => {
+                    assert!((p[1] - expected_depth).abs() <= 1e-3);
+                    assert!(p[0] >= -1e-3 && p[0] <= max_x + 1e-3);
+                    assert!(p[2] >= -1e-3 && p[2] <= max_z + 1e-3);
+                }
+                SlicePlane::Sagittal => {
+                    assert!((p[0] - expected_depth).abs() <= 1e-3);
+                    assert!(p[1] >= -1e-3 && p[1] <= max_y + 1e-3);
+                    assert!(p[2] >= -1e-3 && p[2] <= max_z + 1e-3);
+                }
+            }
+        }
+    }
+
     #[test]
     #[ignore = "Local dataset regression: /Users/nieage/Downloads/liver_0_label.nii"]
     fn test_liver_0_label_component_contour_parity() {
@@ -477,5 +522,60 @@ mod tests {
             total_loops,
             mismatches.iter().take(12).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    #[ignore = "Local dataset regression: /Users/nieage/Downloads/liver_0_label.nii"]
+    fn test_liver_0_label_axis_aligned_contour_validity() {
+        let path = "/Users/nieage/Downloads/liver_0_label.nii";
+        if !Path::new(path).exists() {
+            panic!("local dataset not found at {path}");
+        }
+
+        let data = std::fs::read(path).expect("failed to read liver_0_label.nii");
+        let loaded = crate::io::nifti::load_label_from_bytes(&data, "liver_0_label.nii".into())
+            .expect("failed to parse liver_0_label.nii");
+
+        let spacing = [1.0, 1.0, 1.0];
+        let set = extract_axis_aligned_contours_from_labelmap(
+            &loaded.data,
+            loaded.dimensions,
+            spacing,
+            None,
+        );
+
+        for (slice, contours) in &set.axial {
+            for contour in contours {
+                assert_contour_valid_for_plane(
+                    contour,
+                    SlicePlane::Axial,
+                    *slice,
+                    loaded.dimensions,
+                    spacing,
+                );
+            }
+        }
+        for (slice, contours) in &set.coronal {
+            for contour in contours {
+                assert_contour_valid_for_plane(
+                    contour,
+                    SlicePlane::Coronal,
+                    *slice,
+                    loaded.dimensions,
+                    spacing,
+                );
+            }
+        }
+        for (slice, contours) in &set.sagittal {
+            for contour in contours {
+                assert_contour_valid_for_plane(
+                    contour,
+                    SlicePlane::Sagittal,
+                    *slice,
+                    loaded.dimensions,
+                    spacing,
+                );
+            }
+        }
     }
 }

@@ -128,12 +128,19 @@ cross-view contour display consistency.
 - [x] Derived-by-default display model wired with explicit per-slice overrides:
   edited slices are marked override and render authored contours; untouched
   slices render derived isolines.
+- [x] Explicit slice override state added to `Segment` (`edited_slices`) instead
+  of implicit authored-presence checks, so render behavior follows a stable
+  data contract.
+- [x] 2D derived isoline extraction moved from monolithic `Segment.sdf` sampling
+  to chunked TSDF sampling (`Segment.chunk_runtime.tsdf_chunks` + TSDF grid
+  metadata), aligning display with the authoritative volumetric runtime store.
 - [x] Mapping invariants covered by new unit tests in
   `src/convert/coord_mapping.rs`.
 
 Notes:
-- Current derived isoline path is still monolithic-SDF-backed for active
-  segment display (TSDF-chunk-native extraction remains pending).
+- Derived isolines now use TSDF chunk sampling for axis-aligned slice views.
+- Monolithic `Segment.sdf` remains in runtime for compatibility with the SDF
+  preview pipeline and CPU build/update orchestration.
 - Frame budget target remains hard gate (`<= 16.6ms p95`) for interactive mode.
 
 ## Algorithm Decision: Surface Nets Everywhere

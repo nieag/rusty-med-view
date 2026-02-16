@@ -214,6 +214,9 @@ fn regenerate_segment_if_dirty_with_resolution(
         // Pad each chunk by +1 voxel on all edges so Surface Nets can
         // connect vertices across chunk boundaries (eliminates seam lines).
         if let Some(sdf) = &segment.sdf {
+            segment.chunk_runtime.tsdf_dims = sdf.dimensions;
+            segment.chunk_runtime.tsdf_spacing = sdf.spacing;
+            segment.chunk_runtime.tsdf_origin = sdf.origin;
             let bounds = live_updated_bounds.unwrap_or([
                 0,
                 0,
@@ -752,6 +755,7 @@ pub fn finish_drawing(
 
         if processed {
             if let Some(segment) = manager.active_segment_mut() {
+                segment.mark_slice_edited(slice_plane, slice_index);
                 if let Some(roi) = stroke_roi_world {
                     segment.mark_dirty_with_world_roi(roi);
                     if let Some(index_bounds) =
@@ -814,6 +818,7 @@ pub fn finish_drawing(
             segment
                 .contours
                 .add_contour(slice_plane, slice_index, contour);
+            segment.mark_slice_edited(slice_plane, slice_index);
             if let Some(roi) = stroke_roi_world {
                 segment.mark_dirty_with_world_roi(roi);
                 if let Some(index_bounds) =

@@ -5,7 +5,7 @@
 
 use crate::convert::contour_to_tsdf_chunks::TsdfChunk;
 use crate::util::orientation::SlicePlane;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 // ============================================================================
 // Plane3D - Arbitrary 3D plane representation
@@ -459,12 +459,25 @@ pub struct ChunkKey {
     pub z: i32,
 }
 
+/// Key for an axis-aligned authored contour slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ContourSliceKey {
+    pub plane: SlicePlane,
+    pub index: i32,
+}
+
 /// Runtime chunk cache used by live meshing.
 #[derive(Debug, Clone)]
 pub struct SegmentRuntimeCache {
     pub chunk_size: u32,
     /// Persistent TSDF store: the authoritative volumetric representation.
     pub tsdf_chunks: HashMap<ChunkKey, TsdfChunk>,
+    /// Global TSDF grid dimensions for slice extraction.
+    pub tsdf_dims: [u32; 3],
+    /// Global TSDF voxel spacing in world units.
+    pub tsdf_spacing: [f32; 3],
+    /// Global TSDF origin in world units.
+    pub tsdf_origin: [f32; 3],
     pub dirty_tsdf_chunks: VecDeque<ChunkKey>,
     pub dirty_mesh_chunks: VecDeque<ChunkKey>,
     pub mesh_chunks_cpu: HashMap<ChunkKey, MeshData>,
@@ -476,6 +489,9 @@ impl Default for SegmentRuntimeCache {
         Self {
             chunk_size: 32,
             tsdf_chunks: HashMap::new(),
+            tsdf_dims: [0, 0, 0],
+            tsdf_spacing: [1.0, 1.0, 1.0],
+            tsdf_origin: [0.0, 0.0, 0.0],
             dirty_tsdf_chunks: VecDeque::new(),
             dirty_mesh_chunks: VecDeque::new(),
             mesh_chunks_cpu: HashMap::new(),
@@ -525,6 +541,8 @@ pub struct Segment {
     // === Ground Truth ===
     /// User-drawn contours (the source of truth)
     pub contours: ContourSet,
+    /// Explicit per-slice edit overrides for 2D rendering behavior.
+    pub edited_slices: HashSet<ContourSliceKey>,
 
     // === Derived Caches ===
     /// Signed distance field (regenerated when contours change)
@@ -564,6 +582,7 @@ impl Segment {
             color,
             visible: true,
             contours: ContourSet::new(),
+            edited_slices: HashSet::new(),
             sdf: None,
             mesh: None,
             mesh_revision: 0,
@@ -618,10 +637,41 @@ impl Segment {
     /// Clear live chunk mesh cache and pending chunk queue.
     pub fn clear_chunk_runtime(&mut self) {
         self.chunk_runtime.tsdf_chunks.clear();
+        self.chunk_runtime.tsdf_dims = [0, 0, 0];
+        self.chunk_runtime.tsdf_spacing = [1.0, 1.0, 1.0];
+        self.chunk_runtime.tsdf_origin = [0.0, 0.0, 0.0];
         self.chunk_runtime.dirty_tsdf_chunks.clear();
         self.chunk_runtime.dirty_mesh_chunks.clear();
         self.chunk_runtime.mesh_chunks_cpu.clear();
         self.chunk_runtime.mesh_chunks_gpu_revision.clear();
+    }
+
+    /// Mark a slice as explicitly edited by the user.
+    pub fn mark_slice_edited(&mut self, plane: SlicePlane, index: i32) {
+        self.edited_slices.insert(ContourSliceKey { plane, index });
+    }
+
+    /// True when this slice should use authored overlays instead of derived isolines.
+    pub fn is_slice_edited(&self, plane: SlicePlane, index: i32) -> bool {
+        self.edited_slices
+            .contains(&ContourSliceKey { plane, index })
+    }
+
+    /// Rebuild explicit edited-slice overrides from the currently authored contour maps.
+    pub fn sync_edited_slices_from_contours(&mut self) {
+        self.edited_slices.clear();
+        let axial: Vec<i32> = self.contours.axial.keys().copied().collect();
+        let coronal: Vec<i32> = self.contours.coronal.keys().copied().collect();
+        let sagittal: Vec<i32> = self.contours.sagittal.keys().copied().collect();
+        for idx in axial {
+            self.mark_slice_edited(SlicePlane::Axial, idx);
+        }
+        for idx in coronal {
+            self.mark_slice_edited(SlicePlane::Coronal, idx);
+        }
+        for idx in sagittal {
+            self.mark_slice_edited(SlicePlane::Sagittal, idx);
+        }
     }
 
     /// Check if segment has any contours
@@ -868,6 +918,7 @@ mod tests {
         assert!(!segment.has_mesh());
         assert!(segment.sdf_dirty);
         assert!(segment.mesh_dirty);
+        assert!(segment.edited_slices.is_empty());
     }
 
     #[test]
@@ -880,6 +931,34 @@ mod tests {
 
         assert!(segment.sdf_dirty);
         assert!(segment.mesh_dirty);
+    }
+
+    #[test]
+    fn test_segment_slice_edit_overrides() {
+        let mut segment = Segment::new("Test", [1.0, 0.0, 0.0, 1.0]);
+        assert!(!segment.is_slice_edited(SlicePlane::Axial, 12));
+        segment.mark_slice_edited(SlicePlane::Axial, 12);
+        assert!(segment.is_slice_edited(SlicePlane::Axial, 12));
+        assert!(!segment.is_slice_edited(SlicePlane::Coronal, 12));
+    }
+
+    #[test]
+    fn test_sync_edited_slices_from_contours() {
+        let mut segment = Segment::new("Test", [1.0, 0.0, 0.0, 1.0]);
+        segment.contours.add_contour(
+            SlicePlane::Axial,
+            3,
+            PlaneContour::new(Plane3D::from_axial(3.5)),
+        );
+        segment.contours.add_contour(
+            SlicePlane::Coronal,
+            7,
+            PlaneContour::new(Plane3D::from_coronal(7.5)),
+        );
+        segment.sync_edited_slices_from_contours();
+        assert!(segment.is_slice_edited(SlicePlane::Axial, 3));
+        assert!(segment.is_slice_edited(SlicePlane::Coronal, 7));
+        assert!(!segment.is_slice_edited(SlicePlane::Sagittal, 7));
     }
 
     #[test]

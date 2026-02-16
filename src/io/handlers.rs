@@ -272,6 +272,7 @@ pub fn import_labelmap_as_contours(
         let seg_idx = mgr.add_segment(&format!("{} (Contours)", loaded_label.filename), color);
         if let Some(seg) = mgr.segments.get_mut(seg_idx) {
             seg.contours = contour_set;
+            seg.sync_edited_slices_from_contours();
             seg.mark_dirty();
         }
         Some(seg_idx)

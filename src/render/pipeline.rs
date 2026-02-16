@@ -286,11 +286,15 @@ fn current_slice_index(view_mode: u32, cursor_pos: [f32; 3], volume_dims: [u32; 
     }
 }
 
-fn sdf_slice_index_from_cursor_uv(view_mode: u32, cursor_pos: [f32; 3], sdf_dims: [u32; 3]) -> i32 {
+fn field_slice_index_from_cursor_uv(
+    view_mode: u32,
+    cursor_pos: [f32; 3],
+    field_dims: [u32; 3],
+) -> i32 {
     match view_mode {
-        1 => slice_index_from_cursor_uv(cursor_pos[2], sdf_dims[2]),
-        2 => slice_index_from_cursor_uv(cursor_pos[1], sdf_dims[1]),
-        3 => slice_index_from_cursor_uv(cursor_pos[0], sdf_dims[0]),
+        1 => slice_index_from_cursor_uv(cursor_pos[2], field_dims[2]),
+        2 => slice_index_from_cursor_uv(cursor_pos[1], field_dims[1]),
+        3 => slice_index_from_cursor_uv(cursor_pos[0], field_dims[0]),
         _ => 0,
     }
 }
@@ -307,11 +311,11 @@ fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     ]
 }
 
-fn sdf_corner_value(sdf: &SdfVolume, plane: SlicePlane, slice: u32, u: u32, v: u32) -> f32 {
+fn plane_corner_index(plane: SlicePlane, slice: u32, u: u32, v: u32) -> [u32; 3] {
     match plane {
-        SlicePlane::Axial => sdf.get(u, v, slice),
-        SlicePlane::Coronal => sdf.get(u, slice, v),
-        SlicePlane::Sagittal => sdf.get(slice, u, v),
+        SlicePlane::Axial => [u, v, slice],
+        SlicePlane::Coronal => [u, slice, v],
+        SlicePlane::Sagittal => [slice, u, v],
     }
 }
 
@@ -323,8 +327,8 @@ fn index_to_uv(idx: u32, dim: u32) -> f32 {
     }
 }
 
-fn sdf_corner_volume_uv(
-    sdf: &SdfVolume,
+fn corner_volume_uv_for_dims(
+    dims: [u32; 3],
     plane: SlicePlane,
     slice: u32,
     u: u32,
@@ -332,21 +336,28 @@ fn sdf_corner_volume_uv(
 ) -> [f32; 3] {
     match plane {
         SlicePlane::Axial => [
-            index_to_uv(u, sdf.dimensions[0]),
-            index_to_uv(v, sdf.dimensions[1]),
-            index_to_uv(slice, sdf.dimensions[2]),
+            index_to_uv(u, dims[0]),
+            index_to_uv(v, dims[1]),
+            index_to_uv(slice, dims[2]),
         ],
         SlicePlane::Coronal => [
-            index_to_uv(u, sdf.dimensions[0]),
-            index_to_uv(slice, sdf.dimensions[1]),
-            index_to_uv(v, sdf.dimensions[2]),
+            index_to_uv(u, dims[0]),
+            index_to_uv(slice, dims[1]),
+            index_to_uv(v, dims[2]),
         ],
         SlicePlane::Sagittal => [
-            index_to_uv(slice, sdf.dimensions[0]),
-            index_to_uv(u, sdf.dimensions[1]),
-            index_to_uv(v, sdf.dimensions[2]),
+            index_to_uv(slice, dims[0]),
+            index_to_uv(u, dims[1]),
+            index_to_uv(v, dims[2]),
         ],
     }
+}
+
+fn sample_sdf_at_index(sdf: &SdfVolume, idx: [u32; 3]) -> Option<f32> {
+    if idx[0] >= sdf.dimensions[0] || idx[1] >= sdf.dimensions[1] || idx[2] >= sdf.dimensions[2] {
+        return None;
+    }
+    Some(sdf.get(idx[0], idx[1], idx[2]))
 }
 
 fn extract_sdf_isolines_for_slice(
@@ -359,10 +370,11 @@ fn extract_sdf_isolines_for_slice(
         return Vec::new();
     }
 
+    let dims = sdf.dimensions;
     let (u_dim, v_dim, depth_dim) = match plane {
-        SlicePlane::Axial => (sdf.dimensions[0], sdf.dimensions[1], sdf.dimensions[2]),
-        SlicePlane::Coronal => (sdf.dimensions[0], sdf.dimensions[2], sdf.dimensions[1]),
-        SlicePlane::Sagittal => (sdf.dimensions[1], sdf.dimensions[2], sdf.dimensions[0]),
+        SlicePlane::Axial => (dims[0], dims[1], dims[2]),
+        SlicePlane::Coronal => (dims[0], dims[2], dims[1]),
+        SlicePlane::Sagittal => (dims[1], dims[2], dims[0]),
     };
 
     let slice = slice_index as u32;
@@ -377,17 +389,26 @@ fn extract_sdf_isolines_for_slice(
                 return segments;
             }
 
-            let val = [
-                sdf_corner_value(sdf, plane, slice, u, v),
-                sdf_corner_value(sdf, plane, slice, u + 1, v),
-                sdf_corner_value(sdf, plane, slice, u + 1, v + 1),
-                sdf_corner_value(sdf, plane, slice, u, v + 1),
-            ];
+            let idx00 = plane_corner_index(plane, slice, u, v);
+            let idx10 = plane_corner_index(plane, slice, u + 1, v);
+            let idx11 = plane_corner_index(plane, slice, u + 1, v + 1);
+            let idx01 = plane_corner_index(plane, slice, u, v + 1);
+
+            let (Some(v00), Some(v10), Some(v11), Some(v01)) = (
+                sample_sdf_at_index(sdf, idx00),
+                sample_sdf_at_index(sdf, idx10),
+                sample_sdf_at_index(sdf, idx11),
+                sample_sdf_at_index(sdf, idx01),
+            ) else {
+                continue;
+            };
+
+            let val = [v00, v10, v11, v01];
             let pos = [
-                sdf_corner_volume_uv(sdf, plane, slice, u, v),
-                sdf_corner_volume_uv(sdf, plane, slice, u + 1, v),
-                sdf_corner_volume_uv(sdf, plane, slice, u + 1, v + 1),
-                sdf_corner_volume_uv(sdf, plane, slice, u, v + 1),
+                corner_volume_uv_for_dims(dims, plane, slice, u, v),
+                corner_volume_uv_for_dims(dims, plane, slice, u + 1, v),
+                corner_volume_uv_for_dims(dims, plane, slice, u + 1, v + 1),
+                corner_volume_uv_for_dims(dims, plane, slice, u, v + 1),
             ];
 
             let mut edges: [Option<[f32; 3]>; 4] = [None, None, None, None];
@@ -623,8 +644,8 @@ pub fn render_frame(
                 (volume_dims[2] as f32 * volume_spacing[2]).max(0.001),
             ];
 
-            // 1) Derived isolines from each visible segment SDF in views without authored
-            // contours on the current slice.
+            // 1) Derived isolines from each visible segment TSDF in views/slices that
+            // are not explicitly edited.
             const MAX_DERIVED_SEGMENTS_PER_VIEW: usize = 32768;
             for segment in &manager.segments {
                 if !segment.visible {
@@ -637,14 +658,9 @@ pub fn render_frame(
                         (3u32, SlicePlane::Sagittal),
                     ] {
                         let sdf_slice =
-                            sdf_slice_index_from_cursor_uv(view_mode, cursor_pos, sdf.dimensions);
+                            field_slice_index_from_cursor_uv(view_mode, cursor_pos, sdf.dimensions);
                         let slice = current_slices[view_mode as usize];
-                        let has_authored_on_this_slice = segment
-                            .contours
-                            .contours_at_slice(plane, slice)
-                            .map(|c| !c.is_empty())
-                            .unwrap_or(false);
-                        if has_authored_on_this_slice {
+                        if segment.is_slice_edited(plane, slice) {
                             continue;
                         }
 
@@ -703,16 +719,25 @@ pub fn render_frame(
                     };
 
                 for (slice, contours) in &segment.contours.axial {
+                    if !segment.is_slice_edited(SlicePlane::Axial, *slice) {
+                        continue;
+                    }
                     for contour in contours {
                         push_contour(contour, 1u32, *slice);
                     }
                 }
                 for (slice, contours) in &segment.contours.coronal {
+                    if !segment.is_slice_edited(SlicePlane::Coronal, *slice) {
+                        continue;
+                    }
                     for contour in contours {
                         push_contour(contour, 2u32, *slice);
                     }
                 }
                 for (slice, contours) in &segment.contours.sagittal {
+                    if !segment.is_slice_edited(SlicePlane::Sagittal, *slice) {
+                        continue;
+                    }
                     for contour in contours {
                         push_contour(contour, 3u32, *slice);
                     }
