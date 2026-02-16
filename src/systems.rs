@@ -12,4 +12,3 @@ pub use paint::*;
 pub use picking::*;
 pub use render_prep::*;
 pub use segment_system::*;
-

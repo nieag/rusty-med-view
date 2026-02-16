@@ -4,6 +4,7 @@
 //! converting screen-space points to 3D world-space contours.
 
 use crate::app::segment::{Plane3D, PlaneContour};
+use crate::convert::{cursor_uv_to_world_depth, slice_center_uv};
 use crate::util::orientation::SlicePlane;
 
 // ============================================================================
@@ -56,18 +57,26 @@ pub fn screen_uv_to_world(
     volume_dims: [u32; 3],
     volume_spacing: [f32; 3],
 ) -> [f32; 3] {
+    let depth_axis = slice_plane.depth_axis();
+    let depth_uv = slice_center_uv(slice_index, volume_dims[depth_axis]);
+
     // Get volume UV using radiological convention (from orientation.rs)
-    let volume_uv = slice_plane.screen_uv_to_volume(
-        uv,
-        (slice_index as f32 + 0.5) / volume_dims[slice_plane.depth_axis()] as f32,
-    );
+    let volume_uv = slice_plane.screen_uv_to_volume(uv, depth_uv);
 
     // Convert volume UV [0,1] to world coordinates
-    [
-        volume_uv[0] * (volume_dims[0] as f32 - 1.0) * volume_spacing[0],
-        volume_uv[1] * (volume_dims[1] as f32 - 1.0) * volume_spacing[1],
-        volume_uv[2] * (volume_dims[2] as f32 - 1.0) * volume_spacing[2],
-    ]
+    let mut world = [
+        cursor_uv_to_world_depth(volume_uv[0], volume_dims[0], volume_spacing[0]),
+        cursor_uv_to_world_depth(volume_uv[1], volume_dims[1], volume_spacing[1]),
+        cursor_uv_to_world_depth(volume_uv[2], volume_dims[2], volume_spacing[2]),
+    ];
+
+    // Keep point depth exactly on the authored slice plane distance convention.
+    world[depth_axis] = cursor_uv_to_world_depth(
+        depth_uv,
+        volume_dims[depth_axis],
+        volume_spacing[depth_axis],
+    );
+    world
 }
 
 /// Convert a sequence of screen UV points to a 3D PlaneContour.
@@ -80,7 +89,11 @@ pub fn screen_points_to_plane_contour(
 ) -> PlaneContour {
     // Compute the plane position in world space
     let depth_axis = slice_plane.depth_axis();
-    let plane_position = (slice_index as f32 + 0.5) * volume_spacing[depth_axis];
+    let plane_position = cursor_uv_to_world_depth(
+        slice_center_uv(slice_index, volume_dims[depth_axis]),
+        volume_dims[depth_axis],
+        volume_spacing[depth_axis],
+    );
 
     let plane = Plane3D::from_slice_plane(slice_plane, plane_position);
 
@@ -671,8 +684,8 @@ pub fn sculpt_contour(
     let sub_stroke = &stroke[s_i..=s_j];
     let start_snap_dist = dist3(existing[start], sub_stroke[0])
         .min(dist3(existing[start], sub_stroke[sub_stroke.len() - 1]));
-    let end_snap_dist =
-        dist3(existing[end], sub_stroke[0]).min(dist3(existing[end], sub_stroke[sub_stroke.len() - 1]));
+    let end_snap_dist = dist3(existing[end], sub_stroke[0])
+        .min(dist3(existing[end], sub_stroke[sub_stroke.len() - 1]));
     if start_snap_dist > snap_threshold * 1.5 || end_snap_dist > snap_threshold * 1.5 {
         return false;
     }

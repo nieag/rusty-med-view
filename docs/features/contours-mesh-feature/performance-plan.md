@@ -74,6 +74,68 @@ Chosen continuation path:
 ### Phase E — Compute Offload: Not started
 ### Phase F — Finalize/Export Path: Partial (deferred finalize exists, not yet chunk-aware)
 
+### Phase G — Spatial Contours + TSDF Slice-Authoritative Rendering: In progress
+
+Goal: keep contour editing high-fidelity while using derived SDF/TSDF geometry for
+cross-view contour display consistency.
+
+#### Decision (locked)
+
+- Source-of-truth for editing remains authored contours.
+- Source-of-truth for cross-view 2D contour display is derived field slicing
+  (SDF/TSDF iso-contours), not raw contour projection.
+- Raw authored contours render as overlays; derived isolines render as the
+  anatomy-consistent contour in each slice viewport.
+
+#### Implementation Status (February 15, 2026)
+
+- [x] Add `SpatialPlane` / `SpatialContour` model primitives in `src/app/segment.rs`.
+- [x] Enable oblique authored contour participation in 2D cross-plane render path
+  (remove CPU skip in `src/render/pipeline.rs`).
+- [x] Add active-segment SDF marching-squares isolines per viewport slice in
+  `src/render/pipeline.rs` (performance bounded by per-view segment cap).
+- [ ] Migrate derived contour extraction from monolithic `Segment.sdf` to chunked
+  TSDF sampling path.
+- [ ] Add compute-shader slice extraction path (WebGPU) with CPU fallback.
+- [ ] Add oblique drawing-plane authoring path.
+
+#### Performance Gates for Phase G
+
+- Maintain interactive frame pacing under live edits (target <= 16.6ms p95 on
+  representative WASM scenes).
+- Avoid full-volume recompute in interactive loop; rely on bounded per-slice
+  extraction cost and existing chunked derivative updates.
+- Keep line buffer writes bounded (`MAX_CONTOUR_LINES`) and avoid invalid GPU
+  writes on overflow.
+
+#### Alignment Tightening Checkpoint (current branch)
+
+- [x] Shared coordinate mapping helpers added (`src/convert/coord_mapping.rs`)
+  and consumed by contour draw + contour render paths.
+- [x] Slice/depth conversions deduplicated through shared helpers in:
+  - `src/render/pipeline.rs`
+  - `src/systems/contour_draw.rs`
+  - `src/systems/input.rs`
+- [x] 2D contour display locked to strict slice-following with fixed behavior
+  (no toggle): authored contours on their exact source slice, derived SDF
+  isolines for views/slices without authored contours.
+- [x] Neighbor-slice SDF slab bridging is disabled by default
+  (`SdfBuildConfig.neighbor_slice_bridging = false`) to avoid keyframe-style
+  interpolation in 2D contour behavior.
+- [x] Live derivative build enables neighbor bridging for volumetric continuity
+  in mesh/cross-view derived contours (`src/systems/segment_system.rs`), while
+  authored-slice overlays remain strict.
+- [x] Derived-by-default display model wired with explicit per-slice overrides:
+  edited slices are marked override and render authored contours; untouched
+  slices render derived isolines.
+- [x] Mapping invariants covered by new unit tests in
+  `src/convert/coord_mapping.rs`.
+
+Notes:
+- Current derived isoline path is still monolithic-SDF-backed for active
+  segment display (TSDF-chunk-native extraction remains pending).
+- Frame budget target remains hard gate (`<= 16.6ms p95`) for interactive mode.
+
 ## Algorithm Decision: Surface Nets Everywhere
 
 Medical segmentation produces organic shapes (organs, tumors) — no sharp features.

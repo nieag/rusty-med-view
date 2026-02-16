@@ -1,5 +1,6 @@
 // src/systems/input.rs
 use crate::components::*;
+use crate::convert::slice_index_from_cursor_uv;
 use crate::systems::picking::get_voxel_at_mouse;
 use crate::systems::segment_system::{
     add_drawing_point, cancel_drawing, finish_drawing, is_drawing, start_drawing, SegmentManager,
@@ -229,7 +230,7 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
 
                 if steps_to_move != 0 {
                     let current_uv = transform.position[axis];
-                    let current_voxel = (current_uv * dim as f32).floor() as i32;
+                    let current_voxel = slice_index_from_cursor_uv(current_uv, dim);
                     let new_voxel = (current_voxel + steps_to_move).clamp(0, dim as i32 - 1);
                     transform.position[axis] = (new_voxel as f32 + 0.5) / dim as f32;
                 }
@@ -452,9 +453,9 @@ pub fn sys_handle_contour_mouse_button(
         ];
 
         let slice_idx = match vp.mode {
-            ViewMode::Axial => (cursor_pos[2] * dims[2] as f32) as i32,
-            ViewMode::Coronal => (cursor_pos[1] * dims[1] as f32) as i32,
-            ViewMode::Sagittal => (cursor_pos[0] * dims[0] as f32) as i32,
+            ViewMode::Axial => slice_index_from_cursor_uv(cursor_pos[2], dims[2]),
+            ViewMode::Coronal => slice_index_from_cursor_uv(cursor_pos[1], dims[1]),
+            ViewMode::Sagittal => slice_index_from_cursor_uv(cursor_pos[0], dims[0]),
             ViewMode::ThreeD => return,
         };
 

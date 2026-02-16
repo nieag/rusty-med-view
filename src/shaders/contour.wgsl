@@ -106,39 +106,16 @@ fn vs_main(
     var p1_uv = line.p1;
     var is_intersection = false;
 
-    if source_view_mode == u.view_mode {
-        // Standard in-plane rendering: Only show if slice matches
-        if i32(line.plane_info.y) != u.current_slice {
-            out.clip_position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-            return out;
-        }
-    } else {
-        // Cross-plane intersection rendering
-        let d0 = p0_uv[depth_axis] - slice_uv;
-        let d1 = p1_uv[depth_axis] - slice_uv;
-
-        if d0 * d1 > 0.0 {
-            // Both points on same side of slice plane, no intersection
-            out.clip_position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-            return out;
-        }
-
-        // Calculate intersection point p_int
-        let denom = p1_uv[depth_axis] - p0_uv[depth_axis];
-        var t = 0.5;
-        if abs(denom) > 1e-6 {
-            t = (slice_uv - p0_uv[depth_axis]) / denom;
-        }
-        let p_int = p0_uv + (p1_uv - p0_uv) * t;
-        
-        // For intersection, we draw a very small segment around p_int 
-        // to give the line thickness logic something to work with.
-        // We nudge it slightly in one of the other axes.
-        let nudge_axis = (depth_axis + 1u) % 3u;
-        p0_uv = p_int;
-        p1_uv = p_int;
-        p1_uv[nudge_axis] += 0.005; // 0.5% nudge to create a "dot"
-        is_intersection = true;
+    // Render contours only in their own viewport mode/slice.
+    // Cross-plane intersection markers are intentionally disabled now that
+    // derived slice isolines are rendered as the canonical cross-view contour.
+    if source_view_mode != u.view_mode {
+        out.clip_position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return out;
+    }
+    if i32(line.plane_info.y) != u.current_slice {
+        out.clip_position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        return out;
     }
 
     // Select endpoint for current vertex

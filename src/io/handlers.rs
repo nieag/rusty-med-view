@@ -4,11 +4,86 @@
 //! This module extracts the load handling logic from lib.rs to improve code organization.
 
 use crate::components::*;
-use crate::convert::extract_axial_contours_from_labelmap;
+use crate::convert::extract_axis_aligned_contours_from_labelmap;
 use crate::nifti_loader::LoadedVolume;
 use crate::systems::SegmentManager;
 use crate::volume;
 use hecs::World;
+use std::collections::VecDeque;
+
+fn idx_3d(dims: [u32; 3], x: u32, y: u32, z: u32) -> usize {
+    (x + y * dims[0] + z * dims[0] * dims[1]) as usize
+}
+
+fn is_fg(mask: &[u8], dims: [u32; 3], x: i32, y: i32, z: u32) -> bool {
+    if x < 0 || y < 0 || x >= dims[0] as i32 || y >= dims[1] as i32 {
+        return false;
+    }
+    mask[idx_3d(dims, x as u32, y as u32, z)] != 0
+}
+
+fn count_axial_components(mask: &[u8], dims: [u32; 3], z: u32) -> usize {
+    let w = dims[0] as i32;
+    let h = dims[1] as i32;
+    if w <= 0 || h <= 0 {
+        return 0;
+    }
+
+    let mut visited = vec![false; (dims[0] * dims[1]) as usize];
+    let mut components = 0usize;
+    let mut q = VecDeque::new();
+    let neighbors = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+
+    for y in 0..h {
+        for x in 0..w {
+            let flat = (x as u32 + y as u32 * dims[0]) as usize;
+            if visited[flat] || !is_fg(mask, dims, x, y, z) {
+                continue;
+            }
+
+            components += 1;
+            visited[flat] = true;
+            q.push_back((x, y));
+
+            while let Some((cx, cy)) = q.pop_front() {
+                for (dx, dy) in neighbors {
+                    let nx = cx + dx;
+                    let ny = cy + dy;
+                    if nx < 0 || ny < 0 || nx >= w || ny >= h {
+                        continue;
+                    }
+                    let nflat = (nx as u32 + ny as u32 * dims[0]) as usize;
+                    if visited[nflat] || !is_fg(mask, dims, nx, ny, z) {
+                        continue;
+                    }
+                    visited[nflat] = true;
+                    q.push_back((nx, ny));
+                }
+            }
+        }
+    }
+
+    components
+}
+
+fn slice_has_foreground(mask: &[u8], dims: [u32; 3], z: u32) -> bool {
+    let start = (z * dims[0] * dims[1]) as usize;
+    let end = start + (dims[0] * dims[1]) as usize;
+    mask[start..end].iter().any(|&v| v != 0)
+}
+
+fn signed_area_xy(points: &[[f32; 3]]) -> f32 {
+    if points.len() < 3 {
+        return 0.0;
+    }
+    let mut area2 = 0.0f32;
+    for i in 0..points.len() {
+        let a = points[i];
+        let b = points[(i + 1) % points.len()];
+        area2 += a[0] * b[1] - b[0] * a[1];
+    }
+    0.5 * area2
+}
 
 /// Handle a successfully loaded volume, updating ECS components and GPU resources.
 ///
@@ -79,8 +154,8 @@ pub fn handle_label_load(
     let entity = world.spawn((
         Segmentation {
             name: loaded_label.filename.clone(),
-            // Keep imported labelmap hidden by default; contour/mesh workflow is primary.
-            is_visible: false,
+            // Show imported labelmap immediately for contour-vs-label inspection.
+            is_visible: true,
         },
         LayerSettings { opacity: 0.5 },
         LabelmapData {
@@ -113,7 +188,7 @@ pub fn import_labelmap_as_contours(
         .map(|(_, v)| v.spacing)
         .unwrap_or([1.0, 1.0, 1.0]);
 
-    let contour_set = extract_axial_contours_from_labelmap(
+    let contour_set = extract_axis_aligned_contours_from_labelmap(
         &loaded_label.data,
         loaded_label.dimensions,
         spacing,
@@ -121,6 +196,66 @@ pub fn import_labelmap_as_contours(
     );
     if contour_set.is_empty() {
         return None;
+    }
+
+    // Import QA: compare axial connected components in labelmap vs extracted contour loops.
+    let mut mismatched = 0usize;
+    let mut roi_slices = 0usize;
+    let mut total_components = 0usize;
+    let mut total_loops = 0usize;
+    let mut mismatch_rows: Vec<String> = Vec::new();
+    for z in 0..loaded_label.dimensions[2] {
+        if !slice_has_foreground(&loaded_label.data, loaded_label.dimensions, z) {
+            continue;
+        }
+        roi_slices += 1;
+        let components = count_axial_components(&loaded_label.data, loaded_label.dimensions, z);
+        let slice_contours = contour_set.axial.get(&(z as i32));
+        let loops = slice_contours.map(|v| v.len()).unwrap_or(0);
+        total_components += components;
+        total_loops += loops;
+        if components != loops {
+            mismatched += 1;
+            if mismatch_rows.len() < 12 {
+                let mut pos_oriented = 0usize;
+                let mut neg_oriented = 0usize;
+                if let Some(contours) = slice_contours {
+                    for c in contours {
+                        if signed_area_xy(&c.points) >= 0.0 {
+                            pos_oriented += 1;
+                        } else {
+                            neg_oriented += 1;
+                        }
+                    }
+                }
+                mismatch_rows.push(format!(
+                    "z={z}: components={components}, loops={loops}, loop_orientation(+/-)={pos_oriented}/{neg_oriented}"
+                ));
+            }
+        }
+    }
+    if mismatched > 0 {
+        log::warn!(
+            "Labelmap->contour import mismatch on {}/{} ROI axial slices (components={}, contours={})",
+            mismatched,
+            roi_slices,
+            total_components,
+            total_loops
+        );
+        if !mismatch_rows.is_empty() {
+            log::warn!(
+                "Labelmap->contour mismatch details (first {}): {}",
+                mismatch_rows.len(),
+                mismatch_rows.join(" | ")
+            );
+        }
+    } else {
+        log::info!(
+            "Labelmap->contour import parity OK across {} ROI axial slices (components={}, contours={})",
+            roi_slices,
+            total_components,
+            total_loops
+        );
     }
 
     if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments) {
@@ -134,10 +269,7 @@ pub fn import_labelmap_as_contours(
             [0.3, 1.0, 1.0, 0.8],
         ];
         let color = colors[idx % colors.len()];
-        let seg_idx = mgr.add_segment(
-            &format!("{} (Contours)", loaded_label.filename),
-            color,
-        );
+        let seg_idx = mgr.add_segment(&format!("{} (Contours)", loaded_label.filename), color);
         if let Some(seg) = mgr.segments.get_mut(seg_idx) {
             seg.contours = contour_set;
             seg.mark_dirty();

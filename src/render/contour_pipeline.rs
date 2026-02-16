@@ -224,7 +224,11 @@ impl ContourPipeline {
     pub fn update_lines(&mut self, queue: &wgpu::Queue, lines: &[ContourLineGpu]) {
         self.line_count = lines.len().min(MAX_CONTOUR_LINES) as u32;
         if self.line_count > 0 {
-            queue.write_buffer(&self.line_buffer, 0, bytemuck::cast_slice(lines));
+            queue.write_buffer(
+                &self.line_buffer,
+                0,
+                bytemuck::cast_slice(&lines[..self.line_count as usize]),
+            );
         }
     }
 

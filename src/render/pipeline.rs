@@ -3,6 +3,7 @@
 // Rendering infrastructure: pipeline setup, bind group creation, and frame rendering.
 
 use crate::components::*;
+use crate::convert::{slice_center_uv, slice_index_from_cursor_uv};
 use crate::gui;
 use crate::overlay::OverlayPrimitive;
 use crate::render::contour_pipeline::{ContourLineGpu, ContourPipeline, ContourUniforms};
@@ -11,6 +12,7 @@ use crate::render::mesh_pipeline::{MeshPipeline, MeshResources, MeshUniforms};
 use crate::render::sdf_preview_pipeline::{SdfPreviewPipeline, SdfPreviewUniforms};
 use crate::systems::{self, ContourDrawState, SegmentManager};
 use crate::util::orientation::SlicePlane;
+use crate::{app::segment::SdfVolume, components::SdfPreviewState};
 use hecs::World;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -271,6 +273,174 @@ pub fn create_scene_bind_group(
     })
 }
 
+fn current_slice_index(view_mode: u32, cursor_pos: [f32; 3], volume_dims: [u32; 3]) -> i32 {
+    let (uv, dim) = match view_mode {
+        1 => (cursor_pos[2], volume_dims[2]),
+        2 => (cursor_pos[1], volume_dims[1]),
+        3 => (cursor_pos[0], volume_dims[0]),
+        _ => (0.0, 1),
+    };
+    match view_mode {
+        1..=3 => slice_index_from_cursor_uv(uv, dim),
+        _ => 0,
+    }
+}
+
+fn sdf_slice_index_from_cursor_uv(view_mode: u32, cursor_pos: [f32; 3], sdf_dims: [u32; 3]) -> i32 {
+    match view_mode {
+        1 => slice_index_from_cursor_uv(cursor_pos[2], sdf_dims[2]),
+        2 => slice_index_from_cursor_uv(cursor_pos[1], sdf_dims[1]),
+        3 => slice_index_from_cursor_uv(cursor_pos[0], sdf_dims[0]),
+        _ => 0,
+    }
+}
+
+fn crosses_iso_zero(a: f32, b: f32) -> bool {
+    (a <= 0.0 && b > 0.0) || (a > 0.0 && b <= 0.0)
+}
+
+fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ]
+}
+
+fn sdf_corner_value(sdf: &SdfVolume, plane: SlicePlane, slice: u32, u: u32, v: u32) -> f32 {
+    match plane {
+        SlicePlane::Axial => sdf.get(u, v, slice),
+        SlicePlane::Coronal => sdf.get(u, slice, v),
+        SlicePlane::Sagittal => sdf.get(slice, u, v),
+    }
+}
+
+fn index_to_uv(idx: u32, dim: u32) -> f32 {
+    if dim == 0 {
+        0.5
+    } else {
+        (idx as f32 + 0.5) / dim as f32
+    }
+}
+
+fn sdf_corner_volume_uv(
+    sdf: &SdfVolume,
+    plane: SlicePlane,
+    slice: u32,
+    u: u32,
+    v: u32,
+) -> [f32; 3] {
+    match plane {
+        SlicePlane::Axial => [
+            index_to_uv(u, sdf.dimensions[0]),
+            index_to_uv(v, sdf.dimensions[1]),
+            index_to_uv(slice, sdf.dimensions[2]),
+        ],
+        SlicePlane::Coronal => [
+            index_to_uv(u, sdf.dimensions[0]),
+            index_to_uv(slice, sdf.dimensions[1]),
+            index_to_uv(v, sdf.dimensions[2]),
+        ],
+        SlicePlane::Sagittal => [
+            index_to_uv(slice, sdf.dimensions[0]),
+            index_to_uv(u, sdf.dimensions[1]),
+            index_to_uv(v, sdf.dimensions[2]),
+        ],
+    }
+}
+
+fn extract_sdf_isolines_for_slice(
+    sdf: &SdfVolume,
+    plane: SlicePlane,
+    slice_index: i32,
+    max_segments: usize,
+) -> Vec<([f32; 3], [f32; 3])> {
+    if slice_index < 0 {
+        return Vec::new();
+    }
+
+    let (u_dim, v_dim, depth_dim) = match plane {
+        SlicePlane::Axial => (sdf.dimensions[0], sdf.dimensions[1], sdf.dimensions[2]),
+        SlicePlane::Coronal => (sdf.dimensions[0], sdf.dimensions[2], sdf.dimensions[1]),
+        SlicePlane::Sagittal => (sdf.dimensions[1], sdf.dimensions[2], sdf.dimensions[0]),
+    };
+
+    let slice = slice_index as u32;
+    if slice >= depth_dim || u_dim < 2 || v_dim < 2 {
+        return Vec::new();
+    }
+
+    let mut segments = Vec::with_capacity((u_dim as usize * v_dim as usize) / 4);
+    for v in 0..(v_dim - 1) {
+        for u in 0..(u_dim - 1) {
+            if segments.len() >= max_segments {
+                return segments;
+            }
+
+            let val = [
+                sdf_corner_value(sdf, plane, slice, u, v),
+                sdf_corner_value(sdf, plane, slice, u + 1, v),
+                sdf_corner_value(sdf, plane, slice, u + 1, v + 1),
+                sdf_corner_value(sdf, plane, slice, u, v + 1),
+            ];
+            let pos = [
+                sdf_corner_volume_uv(sdf, plane, slice, u, v),
+                sdf_corner_volume_uv(sdf, plane, slice, u + 1, v),
+                sdf_corner_volume_uv(sdf, plane, slice, u + 1, v + 1),
+                sdf_corner_volume_uv(sdf, plane, slice, u, v + 1),
+            ];
+
+            let mut edges: [Option<[f32; 3]>; 4] = [None, None, None, None];
+            let pairs = [(0usize, 1usize), (1, 2), (2, 3), (3, 0)];
+            for (edge_idx, (a, b)) in pairs.iter().enumerate() {
+                let va = val[*a];
+                let vb = val[*b];
+                if !crosses_iso_zero(va, vb) {
+                    continue;
+                }
+                let denom = vb - va;
+                let t = if denom.abs() > 1e-6 {
+                    (-va / denom).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+                edges[edge_idx] = Some(lerp3(pos[*a], pos[*b], t));
+            }
+
+            let case = ((val[0] < 0.0) as u8)
+                | (((val[1] < 0.0) as u8) << 1)
+                | (((val[2] < 0.0) as u8) << 2)
+                | (((val[3] < 0.0) as u8) << 3);
+
+            let mut push_pair = |a: usize, b: usize| {
+                if let (Some(p0), Some(p1)) = (edges[a], edges[b]) {
+                    segments.push((p0, p1));
+                }
+            };
+
+            match case {
+                0 | 15 => {}
+                1 | 14 => push_pair(3, 0),
+                2 | 13 => push_pair(0, 1),
+                3 | 12 => push_pair(3, 1),
+                4 | 11 => push_pair(1, 2),
+                5 => {
+                    push_pair(3, 2);
+                    push_pair(0, 1);
+                }
+                6 | 9 => push_pair(0, 2),
+                7 | 8 => push_pair(3, 2),
+                10 => {
+                    push_pair(0, 3);
+                    push_pair(1, 2);
+                }
+                _ => {}
+            }
+        }
+    }
+    segments
+}
+
 /// Render a complete frame with all 4 viewports.
 pub fn render_frame(
     device: &wgpu::Device,
@@ -436,79 +606,124 @@ pub fn render_frame(
             .map(|t| t.position)
             .unwrap_or([0.5, 0.5, 0.5]);
 
-        // Create GPU lines from SegmentManager (Step 3: Real Data)
+        // Create GPU lines from SegmentManager:
+        // authored contours on their own slice, derived SDF isolines elsewhere.
         let mut gpu_lines = Vec::new();
-
+        let current_slices = [
+            0,
+            current_slice_index(1, cursor_pos, volume_dims),
+            current_slice_index(2, cursor_pos, volume_dims),
+            current_slice_index(3, cursor_pos, volume_dims),
+        ];
         if let Ok(manager) = world.get::<&SegmentManager>(entities.segments) {
-            // 1. Collect lines from existing segments
+            // Volume UV normalization factor: 1.0 / ((dims-1) * spacing)
+            let denoms = [
+                (volume_dims[0] as f32 * volume_spacing[0]).max(0.001),
+                (volume_dims[1] as f32 * volume_spacing[1]).max(0.001),
+                (volume_dims[2] as f32 * volume_spacing[2]).max(0.001),
+            ];
+
+            // 1) Derived isolines from each visible segment SDF in views without authored
+            // contours on the current slice.
+            const MAX_DERIVED_SEGMENTS_PER_VIEW: usize = 32768;
+            for segment in &manager.segments {
+                if !segment.visible {
+                    continue;
+                }
+                if let Some(sdf) = segment.sdf.as_ref() {
+                    for (view_mode, plane) in [
+                        (1u32, SlicePlane::Axial),
+                        (2u32, SlicePlane::Coronal),
+                        (3u32, SlicePlane::Sagittal),
+                    ] {
+                        let sdf_slice =
+                            sdf_slice_index_from_cursor_uv(view_mode, cursor_pos, sdf.dimensions);
+                        let slice = current_slices[view_mode as usize];
+                        let has_authored_on_this_slice = segment
+                            .contours
+                            .contours_at_slice(plane, slice)
+                            .map(|c| !c.is_empty())
+                            .unwrap_or(false);
+                        if has_authored_on_this_slice {
+                            continue;
+                        }
+
+                        let segs = extract_sdf_isolines_for_slice(
+                            sdf,
+                            plane,
+                            sdf_slice,
+                            MAX_DERIVED_SEGMENTS_PER_VIEW,
+                        );
+                        for (p0, p1) in segs {
+                            gpu_lines.push(ContourLineGpu::new(
+                                p0,
+                                p1,
+                                [segment.color[0], segment.color[1], segment.color[2], 0.95],
+                                view_mode,
+                                slice,
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // 2) Authored contour overlays (all segments).
             for segment in &manager.segments {
                 if !segment.visible {
                     continue;
                 }
 
-                // Volume UV normalization factor: 1.0 / ( (dims-1) * spacing )
-                let denoms = [
-                    ((volume_dims[0] as f32 - 1.0) * volume_spacing[0]).max(0.001),
-                    ((volume_dims[1] as f32 - 1.0) * volume_spacing[1]).max(0.001),
-                    ((volume_dims[2] as f32 - 1.0) * volume_spacing[2]).max(0.001),
-                ];
+                let mut push_contour =
+                    |contour: &crate::app::segment::PlaneContour, view_mode: u32, slice: i32| {
+                        if contour.points.len() < 2 {
+                            return;
+                        }
+                        let segment_count = if contour.is_closed {
+                            contour.points.len()
+                        } else {
+                            contour.points.len().saturating_sub(1)
+                        };
 
-                for contour in segment.contours.all_contours() {
-                    if contour.points.len() < 2 {
-                        continue;
-                    }
+                        for i in 0..segment_count {
+                            let j = (i + 1) % contour.points.len();
+                            let p_i = contour.points[i];
+                            let p_j = contour.points[j];
 
-                    // Which axis-aligned plane is this on? (heuristic check)
-                    let view_mode = if contour.plane.normal[2].abs() > 0.9 {
-                        1u32 // Axial
-                    } else if contour.plane.normal[1].abs() > 0.9 {
-                        2u32 // Coronal
-                    } else if contour.plane.normal[0].abs() > 0.9 {
-                        3u32 // Sagittal
-                    } else {
-                        0u32 // 3D/Oblique
+                            let p0 = [p_i[0] / denoms[0], p_i[1] / denoms[1], p_i[2] / denoms[2]];
+                            let p1 = [p_j[0] / denoms[0], p_j[1] / denoms[1], p_j[2] / denoms[2]];
+
+                            gpu_lines.push(ContourLineGpu::new(
+                                p0,
+                                p1,
+                                segment.color,
+                                view_mode,
+                                slice,
+                            ));
+                        }
                     };
 
-                    if view_mode == 0 {
-                        continue; // Skip oblique for now
+                for (slice, contours) in &segment.contours.axial {
+                    for contour in contours {
+                        push_contour(contour, 1u32, *slice);
                     }
-
-                    // Slice index from plane distance
-                    let depth_axis = match view_mode {
-                        1 => 2,
-                        2 => 1,
-                        3 => 0,
-                        _ => 2,
-                    };
-                    let slice =
-                        (contour.plane.distance / volume_spacing[depth_axis]).floor() as i32;
-
-                    let segment_count = if contour.is_closed {
-                        contour.points.len()
-                    } else {
-                        contour.points.len().saturating_sub(1)
-                    };
-
-                    for i in 0..segment_count {
-                        let j = (i + 1) % contour.points.len();
-                        let p_i = contour.points[i];
-                        let p_j = contour.points[j];
-
-                        let p0 = [p_i[0] / denoms[0], p_i[1] / denoms[1], p_i[2] / denoms[2]];
-                        let p1 = [p_j[0] / denoms[0], p_j[1] / denoms[1], p_j[2] / denoms[2]];
-
-                        gpu_lines.push(ContourLineGpu::new(
-                            p0,
-                            p1,
-                            segment.color,
-                            view_mode,
-                            slice,
-                        ));
+                }
+                for (slice, contours) in &segment.contours.coronal {
+                    for contour in contours {
+                        push_contour(contour, 2u32, *slice);
                     }
+                }
+                for (slice, contours) in &segment.contours.sagittal {
+                    for contour in contours {
+                        push_contour(contour, 3u32, *slice);
+                    }
+                }
+                for contour in &segment.contours.oblique {
+                    // Oblique contours participate only in cross-plane intersection path.
+                    push_contour(contour, 0u32, 0);
                 }
             }
 
-            // 2. Add current drawing preview line
+            // 3) Live drawing preview line
             if let ContourDrawState::Drawing {
                 points,
                 slice_plane,
@@ -522,7 +737,7 @@ pub fn render_frame(
                 };
 
                 let depth_idx = slice_plane.depth_axis();
-                let depth_uv = (*slice_index as f32 + 0.5) / volume_dims[depth_idx].max(1) as f32;
+                let depth_uv = slice_center_uv(*slice_index, volume_dims[depth_idx]);
 
                 for i in 0..points.len().saturating_sub(1) {
                     let p0_uv = slice_plane.screen_uv_to_volume(points[i], depth_uv);
@@ -549,12 +764,7 @@ pub fn render_frame(
             let view_mode = *u_idx;
 
             // Calculate current slice index for this viewport
-            let current_slice = match view_mode {
-                1 => (cursor_pos[2] * volume_dims[2] as f32) as i32,
-                2 => (cursor_pos[1] * volume_dims[1] as f32) as i32,
-                3 => (cursor_pos[0] * volume_dims[0] as f32) as i32,
-                _ => 0,
-            };
+            let current_slice = current_slice_index(view_mode, cursor_pos, volume_dims);
 
             // Read real zoom/pan from ViewportState
             let (zoom, pan) = world
@@ -639,12 +849,7 @@ pub fn render_frame(
                     continue;
                 }
                 let view_mode = *u_idx;
-                let current_slice = match view_mode {
-                    1 => (cursor_pos[2] * volume_dims[2] as f32) as i32,
-                    2 => (cursor_pos[1] * volume_dims[1] as f32) as i32,
-                    3 => (cursor_pos[0] * volume_dims[0] as f32) as i32,
-                    _ => 0,
-                };
+                let current_slice = current_slice_index(view_mode, cursor_pos, volume_dims);
 
                 let (zoom, pan) = world
                     .get::<&ViewportState>(*_e)

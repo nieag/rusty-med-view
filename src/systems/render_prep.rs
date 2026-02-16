@@ -188,5 +188,3 @@ pub fn get_overlay_render_data(
 
     (primitives_bytes, count, dragging_idx, mouse_uv)
 }
-
-

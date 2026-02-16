@@ -310,15 +310,30 @@ const TRI_TABLE: [[i8; 16]; 256] = [
 
 /// Cube corner offsets [x, y, z] for each of the 8 vertices.
 const CORNER_OFFSETS: [[u32; 3]; 8] = [
-    [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
-    [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1],
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 1, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+    [1, 0, 1],
+    [1, 1, 1],
+    [0, 1, 1],
 ];
 
 /// Edge endpoint indices (which two corners form each edge).
 const EDGE_VERTICES: [[usize; 2]; 12] = [
-    [0, 1], [1, 2], [2, 3], [3, 0],
-    [4, 5], [5, 6], [6, 7], [7, 4],
-    [0, 4], [1, 5], [2, 6], [3, 7],
+    [0, 1],
+    [1, 2],
+    [2, 3],
+    [3, 0],
+    [4, 5],
+    [5, 6],
+    [6, 7],
+    [7, 4],
+    [0, 4],
+    [1, 5],
+    [2, 6],
+    [3, 7],
 ];
 
 // ============================================================================
@@ -365,12 +380,13 @@ pub fn marching_cubes_with_options(
 ) -> MeshData {
     let mut mesh = MeshData::new();
     let dims = sdf.dimensions;
-    
+
     if dims[0] < 2 || dims[1] < 2 || dims[2] < 2 {
         return mesh;
     }
 
-    let (x_start, x_end, y_start, y_end, z_start, z_end) = if let Some(b) = options.bounds_override {
+    let (x_start, x_end, y_start, y_end, z_start, z_end) = if let Some(b) = options.bounds_override
+    {
         (
             b[0].min(dims[0].saturating_sub(2)),
             b[3].min(dims[0].saturating_sub(2)),
@@ -381,15 +397,15 @@ pub fn marching_cubes_with_options(
         )
     } else if options.restrict_to_active_bounds {
         if let Some(b) = sdf.active_bounds {
-        // Expand by one cell so cubes that straddle ROI boundaries are still processed.
-        (
-            b[0].saturating_sub(1),
-            b[3].min(dims[0].saturating_sub(2)),
-            b[1].saturating_sub(1),
-            b[4].min(dims[1].saturating_sub(2)),
-            b[2].saturating_sub(1),
-            b[5].min(dims[2].saturating_sub(2)),
-        )
+            // Expand by one cell so cubes that straddle ROI boundaries are still processed.
+            (
+                b[0].saturating_sub(1),
+                b[3].min(dims[0].saturating_sub(2)),
+                b[1].saturating_sub(1),
+                b[4].min(dims[1].saturating_sub(2)),
+                b[2].saturating_sub(1),
+                b[5].min(dims[2].saturating_sub(2)),
+            )
         } else {
             (
                 0,
@@ -546,8 +562,13 @@ fn process_cube(sdf: &SdfVolume, pos: [u32; 3], iso_level: f32, mesh: &mut MeshD
         if (edges & (1 << i)) != 0 {
             let [v0, v1] = EDGE_VERTICES[i];
             edge_vertices[i] = interpolate_vertex(
-                sdf, pos, &CORNER_OFFSETS[v0], &CORNER_OFFSETS[v1],
-                values[v0], values[v1], iso_level,
+                sdf,
+                pos,
+                &CORNER_OFFSETS[v0],
+                &CORNER_OFFSETS[v1],
+                values[v0],
+                values[v1],
+                iso_level,
             );
         }
     }
@@ -557,7 +578,7 @@ fn process_cube(sdf: &SdfVolume, pos: [u32; 3], iso_level: f32, mesh: &mut MeshD
     let mut i = 0;
     while i < 16 && tri_row[i] >= 0 {
         let base_idx = mesh.vertices.len() as u32;
-        
+
         // Add three vertices
         mesh.vertices.push(edge_vertices[tri_row[i] as usize]);
         mesh.vertices.push(edge_vertices[tri_row[i + 1] as usize]);
@@ -668,11 +689,11 @@ fn compute_gradient_at(sdf: &SdfVolume, world_pos: [f32; 3]) -> [f32; 3] {
     let h = sdf.spacing[0].min(sdf.spacing[1]).min(sdf.spacing[2]) * 0.5;
 
     let dx = sample_sdf_world(sdf, [world_pos[0] + h, world_pos[1], world_pos[2]])
-           - sample_sdf_world(sdf, [world_pos[0] - h, world_pos[1], world_pos[2]]);
+        - sample_sdf_world(sdf, [world_pos[0] - h, world_pos[1], world_pos[2]]);
     let dy = sample_sdf_world(sdf, [world_pos[0], world_pos[1] + h, world_pos[2]])
-           - sample_sdf_world(sdf, [world_pos[0], world_pos[1] - h, world_pos[2]]);
+        - sample_sdf_world(sdf, [world_pos[0], world_pos[1] - h, world_pos[2]]);
     let dz = sample_sdf_world(sdf, [world_pos[0], world_pos[1], world_pos[2] + h])
-           - sample_sdf_world(sdf, [world_pos[0], world_pos[1], world_pos[2] - h]);
+        - sample_sdf_world(sdf, [world_pos[0], world_pos[1], world_pos[2] - h]);
 
     let len = (dx * dx + dy * dy + dz * dz).sqrt();
     if len > 1e-10 {
@@ -754,27 +775,28 @@ mod tests {
                 for x in 0..10 {
                     let world = sdf.index_to_world([x, y, z]);
                     let dist = ((world[0] - center[0]).powi(2)
-                              + (world[1] - center[1]).powi(2)
-                              + (world[2] - center[2]).powi(2))
-                        .sqrt() - radius;
+                        + (world[1] - center[1]).powi(2)
+                        + (world[2] - center[2]).powi(2))
+                    .sqrt()
+                        - radius;
                     sdf.set(x, y, z, dist);
                 }
             }
         }
 
         let mesh = marching_cubes(&sdf, 0.0);
-        
+
         // Should have generated some triangles
         assert!(!mesh.is_empty(), "Mesh should not be empty");
         assert!(mesh.triangle_count() > 0, "Should have triangles");
-        
+
         // Normals should be computed
         assert_eq!(mesh.normals.len(), mesh.vertices.len());
     }
 
     #[test]
     fn test_marching_cubes_cube() {
-        // Create SDF for a cube 
+        // Create SDF for a cube
         let mut sdf = SdfVolume::new([10, 10, 10], [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
 
         for z in 0..10u32 {
@@ -789,10 +811,13 @@ mod tests {
 
         let mesh = marching_cubes(&sdf, 0.0);
         assert!(!mesh.is_empty());
-        
+
         // A box should have ~12 triangles (2 per face)
         // But with non-interpolated edges, we get more
-        assert!(mesh.triangle_count() >= 12, "Box should have at least 12 triangles");
+        assert!(
+            mesh.triangle_count() >= 12,
+            "Box should have at least 12 triangles"
+        );
     }
 
     #[test]
@@ -806,7 +831,7 @@ mod tests {
     fn test_tri_table_termination() {
         // Entry 0 should have only -1s
         assert_eq!(TRI_TABLE[0][0], -1);
-        
+
         // Entry 1 should have some valid entries
         assert!(TRI_TABLE[1][0] >= 0);
     }
@@ -828,7 +853,10 @@ mod tests {
             .vertices
             .iter()
             .any(|v| (v[0].fract()).abs() > 1e-3 && (1.0 - v[0].fract()).abs() > 1e-3);
-        assert!(has_fractional_x, "expected interpolated (non-grid-snapped) vertices");
+        assert!(
+            has_fractional_x,
+            "expected interpolated (non-grid-snapped) vertices"
+        );
     }
 
     #[test]

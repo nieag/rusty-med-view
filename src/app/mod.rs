@@ -106,7 +106,12 @@ impl ApplicationHandler<AppEvent> for App {
             }
             WindowEvent::MouseInput { button, state, .. } => {
                 systems::sys_handle_mouse_button(&mut ctx.world, &ctx.entities, button, state);
-                systems::sys_handle_contour_mouse_button(&mut ctx.world, &ctx.entities, button, state);
+                systems::sys_handle_contour_mouse_button(
+                    &mut ctx.world,
+                    &ctx.entities,
+                    button,
+                    state,
+                );
                 ctx.window.request_redraw();
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -199,12 +204,17 @@ impl ApplicationHandler<AppEvent> for App {
                                 dims
                             }
                             LoadResult::Label(ref loaded_label) => {
-                                let (_new_entity, dims) = handlers::handle_label_load(
+                                let (new_entity, dims) = handlers::handle_label_load(
                                     &ctx.device,
                                     &ctx.queue,
                                     &mut ctx.world,
                                     loaded_label,
                                 );
+                                if let Ok(mut editor) =
+                                    ctx.world.get::<&mut EditorState>(ctx.entities.editor)
+                                {
+                                    editor.active_layer = Some(new_entity);
+                                }
                                 let imported_segment = handlers::import_labelmap_as_contours(
                                     &mut ctx.world,
                                     &ctx.entities,

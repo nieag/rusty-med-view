@@ -138,6 +138,7 @@ fn regenerate_segment_if_dirty_with_resolution(
         let sdf_start = Instant::now();
         let build_cfg = SdfBuildConfig {
             resolution_multiplier,
+            neighbor_slice_bridging: true,
             clamp_distance_mm: sdf_band_mm.max(0.5),
             ..SdfBuildConfig::default()
         };
