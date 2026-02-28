@@ -4,7 +4,7 @@
 
 This review covers the `rusty-med-view` codebase — a medical image viewer and segmentation editor built in Rust with WebGPU (wgpu), winit, egui, and an ECS architecture (hecs). The project supports both native desktop and WASM targets, loading NIfTI medical images and providing contour-based segmentation with real-time SDF/mesh generation. The codebase is ~12,700 LOC across 44 Rust source files with 104 unit tests.
 
-> **Progress:** 12/17 findings resolved. See individual items for commit references.
+> **Progress:** 17/17 findings resolved. See individual items for commit references.
 
 ---
 
@@ -181,6 +181,8 @@ This improves readability and enables finer-grained borrowing.
 
 ### 11. No integration tests or end-to-end test infrastructure
 
+> ✅ **Fixed** — `Test: add integration tests, benchmarks, and doctests (#11, #14, #15)`
+
 **Issue:** All 104 tests are unit tests embedded in source files. No `tests/` directory exists. No integration tests verify cross-module behavior.
 
 **Impact:** Regressions in cross-module interactions go undetected until manual testing.
@@ -229,6 +231,8 @@ This improves readability and enables finer-grained borrowing.
 
 ### 14. No benchmarks for performance-critical algorithms
 
+> ✅ **Fixed** — `Test: add integration tests, benchmarks, and doctests (#11, #14, #15)`
+
 **Issue:** The contour-to-SDF and marching cubes algorithms are performance-critical but have no benchmarks.
 
 **Recommendation:** Add Criterion.rs benchmarks for `contour_to_sdf` and `marching_cubes` with representative volumes (64^3, 128^3, 256^3).
@@ -238,6 +242,8 @@ This improves readability and enables finer-grained borrowing.
 ---
 
 ### 15. No doctests or public API documentation examples
+
+> ✅ **Fixed** — `Test: add integration tests, benchmarks, and doctests (#11, #14, #15)`
 
 **Issue:** Public functions have narrative doc comments but no executable examples.
 
@@ -277,9 +283,9 @@ This improves readability and enables finer-grained borrowing.
 |----------|-------|----------|-----------|
 | Critical | 3     | 3 ✅     | 0         |
 | High     | 5     | 5 ✅     | 0         |
-| Medium   | 5     | 4 ✅     | 1 (#11)   |
-| Low      | 4     | 2 ✅     | 2 (#14, #15) |
-| **Total**| **17**| **14 ✅**| **3**     |
+| Medium   | 5     | 5 ✅     | 0         |
+| Low      | 4     | 4 ✅     | 0         |
+| **Total**| **17**| **17 ✅**| **0**     |
 
 ## Recommended Implementation Order
 

@@ -91,6 +91,17 @@ pub fn signed_distance_to_segment_2d(point: [f32; 2], a: [f32; 2], b: [f32; 2]) 
     (dx * dx + dy * dy).sqrt()
 }
 
+/// Test whether a 2D point is inside a polygon using ray-casting (even-odd rule).
+///
+/// # Examples
+///
+/// ```
+/// use rusty_med_view::convert::is_inside_polygon;
+///
+/// let square = &[[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
+/// assert!(is_inside_polygon([0.0, 0.0], square));   // center — inside
+/// assert!(!is_inside_polygon([2.0, 0.0], square));  // outside
+/// ```
 pub fn is_inside_polygon(point: [f32; 2], polygon: &[[f32; 2]]) -> bool {
     if polygon.len() < 3 {
         return false;
@@ -113,6 +124,20 @@ pub fn is_inside_polygon(point: [f32; 2], polygon: &[[f32; 2]]) -> bool {
     crossings % 2 == 1
 }
 
+/// Compute signed distance from a 2D point to a polygon boundary.
+/// Negative inside, positive outside.
+///
+/// # Examples
+///
+/// ```
+/// use rusty_med_view::convert::signed_distance_to_polygon_2d;
+///
+/// let square = &[[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
+/// let d_inside = signed_distance_to_polygon_2d([0.0, 0.0], square);
+/// assert!(d_inside < 0.0, "center should be inside (negative SDF)");
+/// let d_outside = signed_distance_to_polygon_2d([3.0, 0.0], square);
+/// assert!(d_outside > 0.0, "point outside should have positive SDF");
+/// ```
 pub fn signed_distance_to_polygon_2d(point: [f32; 2], polygon: &[[f32; 2]]) -> f32 {
     if polygon.len() < 3 {
         return f32::MAX;

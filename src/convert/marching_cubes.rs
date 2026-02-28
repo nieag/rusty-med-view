@@ -492,6 +492,29 @@ pub fn marching_cubes_with_options(
 }
 
 /// Default high-quality mesh extraction path.
+/// Extract a triangle mesh from an SDF volume at the given iso-level.
+///
+/// Uses the standard Marching Cubes algorithm with outward-facing winding order.
+///
+/// # Examples
+///
+/// ```
+/// use rusty_med_view::app::segment::SdfVolume;
+/// use rusty_med_view::convert::marching_cubes;
+///
+/// // Create a small sphere SDF (radius 3, centered in 8^3 grid)
+/// let mut sdf = SdfVolume::new([8, 8, 8], [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+/// for z in 0..8u32 { for y in 0..8u32 { for x in 0..8u32 {
+///     let dx = x as f32 - 3.5;
+///     let dy = y as f32 - 3.5;
+///     let dz = z as f32 - 3.5;
+///     sdf.set(x, y, z, (dx*dx + dy*dy + dz*dz).sqrt() - 3.0);
+/// }}}
+///
+/// let mesh = marching_cubes(&sdf, 0.0);
+/// assert!(!mesh.vertices.is_empty(), "sphere should produce vertices");
+/// assert!(!mesh.indices.is_empty(), "sphere should produce triangles");
+/// ```
 pub fn marching_cubes(sdf: &SdfVolume, iso_level: f32) -> MeshData {
     marching_cubes_with_options(sdf, iso_level, MarchingCubesOptions::default())
 }

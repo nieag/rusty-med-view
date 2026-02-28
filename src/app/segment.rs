@@ -342,7 +342,17 @@ pub struct SdfVolume {
 }
 
 impl SdfVolume {
-    /// Create new SDF volume initialized to large positive values
+    /// Create new SDF volume initialized to large positive values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rusty_med_view::app::segment::SdfVolume;
+    ///
+    /// let sdf = SdfVolume::new([4, 4, 4], [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+    /// assert_eq!(sdf.dimensions, [4, 4, 4]);
+    /// assert_eq!(sdf.data.len(), 64); // 4 * 4 * 4
+    /// ```
     pub fn new(dimensions: [u32; 3], spacing: [f32; 3], origin: [f32; 3]) -> Self {
         let size = (dimensions[0] * dimensions[1] * dimensions[2]) as usize;
         Self {
@@ -354,7 +364,17 @@ impl SdfVolume {
         }
     }
 
-    /// Get value at grid index
+    /// Get value at grid index. Returns `f32::MAX` for out-of-bounds indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rusty_med_view::app::segment::SdfVolume;
+    ///
+    /// let sdf = SdfVolume::new([4, 4, 4], [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+    /// assert_eq!(sdf.get(0, 0, 0), f32::MAX); // initialized to f32::MAX
+    /// assert_eq!(sdf.get(4, 0, 0), f32::MAX); // out of bounds → f32::MAX
+    /// ```
     pub fn get(&self, x: u32, y: u32, z: u32) -> f32 {
         if x >= self.dimensions[0] || y >= self.dimensions[1] || z >= self.dimensions[2] {
             return f32::MAX;
@@ -363,7 +383,18 @@ impl SdfVolume {
         self.data[idx]
     }
 
-    /// Set value at grid index
+    /// Set value at grid index. No-ops for out-of-bounds indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rusty_med_view::app::segment::SdfVolume;
+    ///
+    /// let mut sdf = SdfVolume::new([4, 4, 4], [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+    /// sdf.set(1, 2, 3, -0.5);
+    /// assert_eq!(sdf.get(1, 2, 3), -0.5);
+    /// sdf.set(99, 0, 0, 1.0); // out of bounds — ignored
+    /// ```
     pub fn set(&mut self, x: u32, y: u32, z: u32, value: f32) {
         if x >= self.dimensions[0] || y >= self.dimensions[1] || z >= self.dimensions[2] {
             return;
