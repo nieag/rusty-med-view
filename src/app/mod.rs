@@ -106,10 +106,7 @@ impl ApplicationHandler<AppEvent> for App {
                     position.y,
                 );
                 systems::sys_handle_mouse_drag(&mut ctx.scene.world, &ctx.scene.entities);
-                systems::sys_handle_contour_mouse_drag(
-                    &mut ctx.scene.world,
-                    &ctx.scene.entities,
-                );
+                systems::sys_handle_contour_mouse_drag(&mut ctx.scene.world, &ctx.scene.entities);
                 ctx.window.request_redraw();
             }
             WindowEvent::MouseInput { button, state, .. } => {
@@ -153,9 +150,11 @@ impl ApplicationHandler<AppEvent> for App {
                 ctx.gpu.config.width = size.width;
                 ctx.gpu.config.height = size.height;
                 ctx.gpu.surface.configure(&ctx.gpu.device, &ctx.gpu.config);
-                ctx.pipelines
-                    .mesh
-                    .resize(&ctx.gpu.device, ctx.gpu.config.width, ctx.gpu.config.height);
+                ctx.pipelines.mesh.resize(
+                    &ctx.gpu.device,
+                    ctx.gpu.config.width,
+                    ctx.gpu.config.height,
+                );
                 let mut query = ctx
                     .scene
                     .world
@@ -306,23 +305,15 @@ impl ApplicationHandler<AppEvent> for App {
                 for (_, vol) in ctx.scene.world.query::<&VolumeData>().iter() {
                     dims = vol.dimensions;
                 }
-                let (tex, view, sampler, data) = crate::io::volume::create_blank_labelmap(
-                    &ctx.gpu.device,
-                    &ctx.gpu.queue,
-                    dims,
-                );
+                let (tex, view, sampler, data) =
+                    crate::io::volume::create_blank_labelmap(&ctx.gpu.device, &ctx.gpu.queue, dims);
                 let mut count = 0;
                 for _ in ctx.scene.world.query::<&Segmentation>().iter() {
                     count += 1;
                 }
                 let name = format!("Layer {}", count + 1);
                 let mut placeholder_bg = None;
-                if let Some((_, res)) = ctx
-                    .scene
-                    .world
-                    .query::<&GpuVolumeResources>()
-                    .iter()
-                    .next()
+                if let Some((_, res)) = ctx.scene.world.query::<&GpuVolumeResources>().iter().next()
                 {
                     placeholder_bg = Some(res.bind_group.clone());
                 }

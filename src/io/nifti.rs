@@ -218,7 +218,12 @@ fn parse_nifti_raw(data: &[u8]) -> Result<ParsedNifti, LoadError> {
     let vox_offset = header.vox_offset as usize;
     if vox_offset > raw_data.len() {
         return Err(LoadError::VolumeParseFailed(
-            format!("vox_offset {} exceeds file size {}", vox_offset, raw_data.len()).into(),
+            format!(
+                "vox_offset {} exceeds file size {}",
+                vox_offset,
+                raw_data.len()
+            )
+            .into(),
         ));
     }
 

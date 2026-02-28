@@ -336,8 +336,11 @@ fn prepare_uniforms(
         u.overlay_dragging_idx = dragging_idx;
         u.overlay_mouse_uv = overlay_mouse_uv;
         let offset = *u_idx as u64 * 256;
-        gpu.queue
-            .write_buffer(&volume_res.uniform_buffer, offset, bytemuck::cast_slice(&[u]));
+        gpu.queue.write_buffer(
+            &volume_res.uniform_buffer,
+            offset,
+            bytemuck::cast_slice(&[u]),
+        );
     }
     viewports
 }
@@ -408,10 +411,7 @@ fn render_volume_pass(
 
     render_pass.set_pipeline(render_pipeline);
     render_pass.set_vertex_buffer(0, volume_res.vertex_buffer.slice(..));
-    render_pass.set_index_buffer(
-        volume_res.index_buffer.slice(..),
-        wgpu::IndexFormat::Uint16,
-    );
+    render_pass.set_index_buffer(volume_res.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 
     let mut query = world
         .query::<&GpuVolumeResources>()
@@ -461,33 +461,26 @@ fn render_contour_pass(
                 continue;
             }
 
-            let mut push_contour =
-                |contour: &crate::app::segment::PlaneContour, view_mode: u32, slice: i32| {
-                    if contour.points.len() < 2 {
-                        return;
-                    }
-                    let segment_count = if contour.is_closed {
-                        contour.points.len()
-                    } else {
-                        contour.points.len().saturating_sub(1)
-                    };
-                    for i in 0..segment_count {
-                        let j = (i + 1) % contour.points.len();
-                        let p_i = contour.points[i];
-                        let p_j = contour.points[j];
-                        let p0 =
-                            [p_i[0] / denoms[0], p_i[1] / denoms[1], p_i[2] / denoms[2]];
-                        let p1 =
-                            [p_j[0] / denoms[0], p_j[1] / denoms[1], p_j[2] / denoms[2]];
-                        gpu_lines.push(ContourLineGpu::new(
-                            p0,
-                            p1,
-                            segment.color,
-                            view_mode,
-                            slice,
-                        ));
-                    }
+            let mut push_contour = |contour: &crate::app::segment::PlaneContour,
+                                    view_mode: u32,
+                                    slice: i32| {
+                if contour.points.len() < 2 {
+                    return;
+                }
+                let segment_count = if contour.is_closed {
+                    contour.points.len()
+                } else {
+                    contour.points.len().saturating_sub(1)
                 };
+                for i in 0..segment_count {
+                    let j = (i + 1) % contour.points.len();
+                    let p_i = contour.points[i];
+                    let p_j = contour.points[j];
+                    let p0 = [p_i[0] / denoms[0], p_i[1] / denoms[1], p_i[2] / denoms[2]];
+                    let p1 = [p_j[0] / denoms[0], p_j[1] / denoms[1], p_j[2] / denoms[2]];
+                    gpu_lines.push(ContourLineGpu::new(p0, p1, segment.color, view_mode, slice));
+                }
+            };
 
             for (slice, contours) in &segment.contours.axial {
                 for contour in contours {
@@ -657,7 +650,11 @@ fn render_sdf_preview_pass(
             pan,
             pivot: [0.5, 0.5],
             view_mode,
-            show_zero_isoline: if preview_state.show_zero_isoline { 1 } else { 0 },
+            show_zero_isoline: if preview_state.show_zero_isoline {
+                1
+            } else {
+                0
+            },
             resolution: [rect[2], rect[3]],
             _pad_align0: [0; 2],
             volume_dims,
@@ -737,9 +734,7 @@ fn render_mesh_pass(
                     }
                 }
                 if !mesh_ready {
-                    if let Some(mesh_res) =
-                        MeshResources::from_mesh_data(&gpu.device, mesh_data)
-                    {
+                    if let Some(mesh_res) = MeshResources::from_mesh_data(&gpu.device, mesh_data) {
                         segment_mesh_gpu_cache
                             .insert(segment.id, (segment.mesh_revision, mesh_res));
                         mesh_ready = true;
@@ -761,11 +756,10 @@ fn render_mesh_pass(
                                 .ok()
                                 .map(|r| *r)
                                 .unwrap_or_default();
-                            let composed_rotation =
-                                crate::util::orientation::compose_view_rotation(
-                                    data_orientation,
-                                    vs.user_rotation,
-                                );
+                            let composed_rotation = crate::util::orientation::compose_view_rotation(
+                                data_orientation,
+                                vs.user_rotation,
+                            );
 
                             let phys = [
                                 (volume_dims[0].saturating_sub(1) as f32 * volume_spacing[0])
@@ -782,11 +776,9 @@ fn render_mesh_pass(
                                 -0.5 * phys[1],
                                 -0.5 * phys[2],
                             ));
-                            let s_norm =
-                                glam::Mat4::from_scale(glam::Vec3::splat(1.0 / max_phys));
-                            let r = glam::Mat4::from_quat(glam::Quat::from_array(
-                                composed_rotation,
-                            ));
+                            let s_norm = glam::Mat4::from_scale(glam::Vec3::splat(1.0 / max_phys));
+                            let r =
+                                glam::Mat4::from_quat(glam::Quat::from_array(composed_rotation));
                             let model = r * s_norm * t_center;
 
                             let aspect = (rect[2] / rect[3].max(1.0)).max(1e-3);
@@ -835,33 +827,30 @@ fn render_mesh_pass(
                             };
                             mesh_pipeline.update_uniforms(&gpu.queue, &mesh_uniforms);
 
-                            let mut pass =
-                                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                    label: Some("SDF 3D Surface Pass"),
-                                    color_attachments: &[Some(
-                                        wgpu::RenderPassColorAttachment {
-                                            view,
-                                            resolve_target: None,
-                                            ops: wgpu::Operations {
-                                                load: wgpu::LoadOp::Load,
-                                                store: wgpu::StoreOp::Store,
-                                            },
-                                            depth_slice: None,
-                                        },
-                                    )],
-                                    depth_stencil_attachment: Some(
-                                        wgpu::RenderPassDepthStencilAttachment {
-                                            view: &mesh_pipeline.depth_texture,
-                                            depth_ops: Some(wgpu::Operations {
-                                                load: wgpu::LoadOp::Clear(1.0),
-                                                store: wgpu::StoreOp::Store,
-                                            }),
-                                            stencil_ops: None,
-                                        },
-                                    ),
-                                    timestamp_writes: None,
-                                    occlusion_query_set: None,
-                                });
+                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("SDF 3D Surface Pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Load,
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                    depth_slice: None,
+                                })],
+                                depth_stencil_attachment: Some(
+                                    wgpu::RenderPassDepthStencilAttachment {
+                                        view: &mesh_pipeline.depth_texture,
+                                        depth_ops: Some(wgpu::Operations {
+                                            load: wgpu::LoadOp::Clear(1.0),
+                                            store: wgpu::StoreOp::Store,
+                                        }),
+                                        stencil_ops: None,
+                                    },
+                                ),
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
                             pass.set_viewport(rect[0], rect[1], rect[2], rect[3], 0.0, 1.0);
                             mesh_pipeline.render(&mut pass, mesh_res);
                         }
