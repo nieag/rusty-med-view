@@ -25,9 +25,9 @@ pub struct LoadedVolume {
 /// Error type for NIfTI loading operations
 #[derive(Debug)]
 pub enum LoadError {
-    DecompressionFailed(String),
-    HeaderParseFailed(String),
-    VolumeParseFailed(String),
+    DecompressionFailed(Box<dyn std::error::Error + Send + Sync>),
+    HeaderParseFailed(Box<dyn std::error::Error + Send + Sync>),
+    VolumeParseFailed(Box<dyn std::error::Error + Send + Sync>),
     DimensionError(String),
 }
 
@@ -42,7 +42,16 @@ impl std::fmt::Display for LoadError {
     }
 }
 
-impl std::error::Error for LoadError {}
+impl std::error::Error for LoadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            LoadError::DecompressionFailed(e) => Some(e.as_ref()),
+            LoadError::HeaderParseFailed(e) => Some(e.as_ref()),
+            LoadError::VolumeParseFailed(e) => Some(e.as_ref()),
+            LoadError::DimensionError(_) => None,
+        }
+    }
+}
 
 /// Check if data starts with gzip magic bytes
 fn is_gzipped(data: &[u8]) -> bool {
@@ -55,7 +64,7 @@ fn decompress_gzip(data: &[u8]) -> Result<Vec<u8>, LoadError> {
     let mut decompressed = Vec::new();
     decoder
         .read_to_end(&mut decompressed)
-        .map_err(|e| LoadError::DecompressionFailed(e.to_string()))?;
+        .map_err(|e| LoadError::DecompressionFailed(e.into()))?;
     Ok(decompressed)
 }
 
@@ -155,11 +164,21 @@ fn rotation_matrix_to_quaternion(m: [[f32; 3]; 3]) -> [f32; 4] {
     }
 }
 
-/// Load a NIfTI volume from raw bytes (works on both native and WASM)
+/// Shared parsed result from decompression + header parsing + volume loading.
+struct ParsedNifti {
+    header: NiftiHeader,
+    volume: InMemNiftiVolume,
+    /// [width, height, depth]
+    dimensions: [u32; 3],
+    total_voxels: usize,
+}
+
+/// Parse raw NIfTI bytes (optionally gzip-compressed) into a `ParsedNifti`.
 ///
-/// Automatically handles gzip decompression if the file is compressed.
-pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
-    // Handle gzip compression
+/// Handles: gzip detection, decompression, header parsing, 3D dimension
+/// validation, u16 bounds check, vox_offset bounds check, volume loading,
+/// and checked total-voxel multiplication.
+fn parse_nifti_raw(data: &[u8]) -> Result<ParsedNifti, LoadError> {
     let decompressed;
     let raw_data = if is_gzipped(data) {
         decompressed = decompress_gzip(data)?;
@@ -168,16 +187,13 @@ pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
         data
     };
 
-    // Parse header
     let mut cursor = Cursor::new(raw_data);
     let header = NiftiHeader::from_reader(&mut cursor)
-        .map_err(|e| LoadError::HeaderParseFailed(e.to_string()))?;
+        .map_err(|e| LoadError::HeaderParseFailed(e.into()))?;
 
-    // Get dimensions
     let dims = header
         .dim()
         .map_err(|e| LoadError::DimensionError(e.to_string()))?;
-
     if dims.len() < 3 {
         return Err(LoadError::DimensionError(format!(
             "Expected 3D volume, got {}D",
@@ -189,31 +205,56 @@ pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
     let height = dims[1] as u32;
     let depth = dims[2] as u32;
 
-    // Get voxel spacing from pixdim
-    let spacing = [header.pixdim[1], header.pixdim[2], header.pixdim[3]];
+    // Validate dimensions fit in u16 (required by the nifti crate's get_f64 index API)
+    for (name, dim) in [("width", width), ("height", height), ("depth", depth)] {
+        if dim > u16::MAX as u32 {
+            return Err(LoadError::DimensionError(format!(
+                "{name} dimension {dim} exceeds maximum supported size of {}",
+                u16::MAX
+            )));
+        }
+    }
 
-    // Skip to volume data (header is 352 bytes for NIfTI-1)
     let vox_offset = header.vox_offset as usize;
     if vox_offset > raw_data.len() {
-        return Err(LoadError::VolumeParseFailed(format!(
-            "vox_offset {} exceeds file size {}",
-            vox_offset,
-            raw_data.len()
-        )));
+        return Err(LoadError::VolumeParseFailed(
+            format!("vox_offset {} exceeds file size {}", vox_offset, raw_data.len()).into(),
+        ));
     }
 
     let volume_data = &raw_data[vox_offset..];
-    let volume_cursor = Cursor::new(volume_data);
+    let volume = InMemNiftiVolume::from_reader(Cursor::new(volume_data), &header)
+        .map_err(|e| LoadError::VolumeParseFailed(e.into()))?;
 
-    // Load the volume
-    let volume = InMemNiftiVolume::from_reader(volume_cursor, &header)
-        .map_err(|e| LoadError::VolumeParseFailed(e.to_string()))?;
+    let total_voxels = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|wh| wh.checked_mul(depth as usize))
+        .ok_or_else(|| {
+            LoadError::DimensionError(format!(
+                "Volume {width}x{height}x{depth} exceeds addressable memory"
+            ))
+        })?;
 
-    // Convert volume data to f32 intensities
-    let total_voxels = (width * height * depth) as usize;
-    let mut intensity_data = Vec::with_capacity(total_voxels);
+    Ok(ParsedNifti {
+        header,
+        volume,
+        dimensions: [width, height, depth],
+        total_voxels,
+    })
+}
 
-    // Get scaling factors
+/// Load a NIfTI volume from raw bytes (works on both native and WASM)
+///
+/// Automatically handles gzip decompression if the file is compressed.
+pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
+    let ParsedNifti {
+        header,
+        volume,
+        dimensions: [width, height, depth],
+        total_voxels,
+    } = parse_nifti_raw(data)?;
+
+    let spacing = [header.pixdim[1], header.pixdim[2], header.pixdim[3]];
     let scl_slope = if header.scl_slope == 0.0 {
         1.0
     } else {
@@ -221,18 +262,16 @@ pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
     };
     let scl_inter = header.scl_inter;
 
-    // Read voxel values and apply scaling
+    let mut intensity_data = Vec::with_capacity(total_voxels);
     for z in 0..depth as u16 {
         for y in 0..height as u16 {
             for x in 0..width as u16 {
                 let value: f64 = volume.get_f64(&[x, y, z]).unwrap_or(0.0);
-                let scaled = (value * scl_slope as f64 + scl_inter as f64) as f32;
-                intensity_data.push(scaled);
+                intensity_data.push((value * scl_slope as f64 + scl_inter as f64) as f32);
             }
         }
     }
 
-    // Find min/max for normalization
     let mut min_val = f32::MAX;
     let mut max_val = f32::MIN;
     for &v in &intensity_data {
@@ -241,16 +280,12 @@ pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
             max_val = max_val.max(v);
         }
     }
-
-    // Avoid division by zero
     if max_val <= min_val {
         max_val = min_val + 1.0;
     }
 
-    // Extract orientation from sform matrix
     let orientation = extract_orientation_from_sform(&header);
 
-    // No longer convert to RGBA8 - return raw float data for HU-based windowing
     Ok(LoadedVolume {
         dimensions: [width, height, depth],
         spacing,
@@ -265,50 +300,14 @@ pub fn load_label_from_bytes(
     data: &[u8],
     filename: String,
 ) -> Result<crate::components::LoadedLabel, LoadError> {
-    // Reuse decompression and header parsing logic (simplified for this brief)
-    // For brevity, I will re-implement the core loop or refactor later.
-    // Actually, let's just do a clean implementation for Labels.
-    let decompressed;
-    let raw_data = if is_gzipped(data) {
-        decompressed = decompress_gzip(data)?;
-        &decompressed[..]
-    } else {
-        data
-    };
+    let ParsedNifti {
+        volume,
+        dimensions: [width, height, depth],
+        total_voxels,
+        ..
+    } = parse_nifti_raw(data)?;
 
-    let mut cursor = Cursor::new(raw_data);
-    let header = NiftiHeader::from_reader(&mut cursor)
-        .map_err(|e| LoadError::HeaderParseFailed(e.to_string()))?;
-
-    let dims = header
-        .dim()
-        .map_err(|e| LoadError::DimensionError(e.to_string()))?;
-    if dims.len() < 3 {
-        return Err(LoadError::DimensionError(format!(
-            "Expected 3D labelmap, got {}D",
-            dims.len()
-        )));
-    }
-    let width = dims[0] as u32;
-    let height = dims[1] as u32;
-    let depth = dims[2] as u32;
-
-    let vox_offset = header.vox_offset as usize;
-    if vox_offset > raw_data.len() {
-        return Err(LoadError::VolumeParseFailed(format!(
-            "vox_offset {} exceeds file size {}",
-            vox_offset,
-            raw_data.len()
-        )));
-    }
-    let volume_data = &raw_data[vox_offset..];
-    let volume_cursor = Cursor::new(volume_data);
-    let volume = InMemNiftiVolume::from_reader(volume_cursor, &header)
-        .map_err(|e| LoadError::VolumeParseFailed(e.to_string()))?;
-
-    let total_voxels = (width * height * depth) as usize;
     let mut label_data = Vec::with_capacity(total_voxels);
-
     for z in 0..depth as u16 {
         for y in 0..height as u16 {
             for x in 0..width as u16 {

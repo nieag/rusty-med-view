@@ -141,26 +141,24 @@ impl SdfPreviewPipeline {
             cache: None,
         });
 
-        let mut uniform_buffers = Vec::with_capacity(4);
-        let mut uniform_bind_groups = Vec::with_capacity(4);
-        for i in 0..4 {
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        let uniform_buffers: [wgpu::Buffer; 4] = std::array::from_fn(|i| {
+            device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(&format!("SDF Preview Uniform Buffer {i}")),
                 size: std::mem::size_of::<SdfPreviewUniforms>() as u64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
-            });
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            })
+        });
+        let uniform_bind_groups: [wgpu::BindGroup; 4] = std::array::from_fn(|i| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(&format!("SDF Preview Uniform BG {i}")),
                 layout: &uniform_layout,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: buffer.as_entire_binding(),
+                    resource: uniform_buffers[i].as_entire_binding(),
                 }],
-            });
-            uniform_buffers.push(buffer);
-            uniform_bind_groups.push(bind_group);
-        }
+            })
+        });
 
         let sdf_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("SDF Preview Sampler"),
@@ -175,12 +173,8 @@ impl SdfPreviewPipeline {
 
         Self {
             pipeline,
-            uniform_bind_groups: uniform_bind_groups
-                .try_into()
-                .unwrap_or_else(|_| panic!("Expected 4 SDF preview bind groups")),
-            uniform_buffers: uniform_buffers
-                .try_into()
-                .unwrap_or_else(|_| panic!("Expected 4 SDF preview uniform buffers")),
+            uniform_bind_groups,
+            uniform_buffers,
             texture_bind_group_layout,
             texture_bind_group: None,
             sdf_texture: None,
