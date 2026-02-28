@@ -97,16 +97,14 @@ impl ContourPipeline {
         });
 
         // Create 4 uniform buffers, one for each viewport slot.
-        let mut uniform_buffers = Vec::with_capacity(4);
-        for i in 0..4 {
-            let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(&format!("Contour Uniforms {}", i)),
+        let uniform_buffers: [wgpu::Buffer; 4] = std::array::from_fn(|i| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&format!("Contour Uniforms {i}")),
                 size: std::mem::size_of::<ContourUniforms>() as u64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
-            });
-            uniform_buffers.push(uniform_buffer);
-        }
+            })
+        });
 
         // Create line storage buffer
         let line_buffer_size = (std::mem::size_of::<ContourLineGpu>() * MAX_CONTOUR_LINES) as u64;
@@ -147,10 +145,9 @@ impl ContourPipeline {
         });
 
         // Create 4 bind groups
-        let mut bind_groups = Vec::with_capacity(4);
-        for i in 0..4 {
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("Contour Bind Group {}", i)),
+        let bind_groups: [wgpu::BindGroup; 4] = std::array::from_fn(|i| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&format!("Contour Bind Group {i}")),
                 layout: &bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -162,16 +159,8 @@ impl ContourPipeline {
                         resource: line_buffer.as_entire_binding(),
                     },
                 ],
-            });
-            bind_groups.push(bind_group);
-        }
-
-        let uniform_buffers: [wgpu::Buffer; 4] = uniform_buffers
-            .try_into()
-            .unwrap_or_else(|_| panic!("Failed to create 4 uniform buffers"));
-        let bind_groups: [wgpu::BindGroup; 4] = bind_groups
-            .try_into()
-            .unwrap_or_else(|_| panic!("Failed to create 4 bind groups"));
+            })
+        });
 
         // Create pipeline layout
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
