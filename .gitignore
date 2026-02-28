@@ -1,7 +1,5 @@
 /target
 /dist
 .DS_Store
-*.nii
-*.nii.gz
 *.ninc
 *.nrrd
