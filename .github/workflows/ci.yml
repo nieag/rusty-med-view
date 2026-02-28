@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ main ]
 
+# Minimal default permissions; deploy jobs override per-job below.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint
@@ -15,6 +19,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
       - name: Rustfmt Check
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -26,6 +39,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
       - name: Run Tests
         run: cargo test
 
@@ -35,6 +57,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
       - name: Build
         run: cargo build --release
 
@@ -46,14 +77,68 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Install wasm-bindgen-cli
-        run: |
-          # Use a specific version to match Cargo.toml or just latest compatible
-          # Standard Ubuntu runners have a lot of tools, but wasm-bindgen is usually not there
-          cargo install wasm-bindgen-cli
-      - name: Build WASM
-        run: cargo build --target wasm32-unknown-unknown --release
-      - name: Generate Bindings
-        run: |
-          mkdir -p dist
-          wasm-bindgen --out-dir dist --target web target/wasm32-unknown-unknown/release/rust_starter_app.wasm
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Check WASM compilation
+        run: cargo check --target wasm32-unknown-unknown -q
+
+  # ── Deploy (push to main only, gated on lint + test passing) ──────────────
+
+  build-pages:
+    name: Build Pages
+    needs: [ lint, test ]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-deploy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-deploy-
+      - name: Install trunk
+        uses: jetli/trunk-action@v0.5.0
+        with:
+          version: 'latest'
+      - name: Build WASM with trunk
+        run: trunk build --release --public-url "/${{ github.event.repository.name }}/"
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './dist'
+
+  deploy-pages:
+    name: Deploy Pages
+    needs: build-pages
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
