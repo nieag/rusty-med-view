@@ -189,6 +189,16 @@ pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
     let height = dims[1] as u32;
     let depth = dims[2] as u32;
 
+    // Validate dimensions fit in u16 (required by the nifti crate's get_f64 index API)
+    for (name, dim) in [("width", width), ("height", height), ("depth", depth)] {
+        if dim > u16::MAX as u32 {
+            return Err(LoadError::DimensionError(format!(
+                "{name} dimension {dim} exceeds maximum supported size of {}",
+                u16::MAX
+            )));
+        }
+    }
+
     // Get voxel spacing from pixdim
     let spacing = [header.pixdim[1], header.pixdim[2], header.pixdim[3]];
 
@@ -210,7 +220,14 @@ pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
         .map_err(|e| LoadError::VolumeParseFailed(e.to_string()))?;
 
     // Convert volume data to f32 intensities
-    let total_voxels = (width * height * depth) as usize;
+    let total_voxels = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|wh| wh.checked_mul(depth as usize))
+        .ok_or_else(|| {
+            LoadError::DimensionError(format!(
+                "Volume {width}x{height}x{depth} exceeds addressable memory"
+            ))
+        })?;
     let mut intensity_data = Vec::with_capacity(total_voxels);
 
     // Get scaling factors
@@ -293,6 +310,16 @@ pub fn load_label_from_bytes(
     let height = dims[1] as u32;
     let depth = dims[2] as u32;
 
+    // Validate dimensions fit in u16 (required by the nifti crate's get_f64 index API)
+    for (name, dim) in [("width", width), ("height", height), ("depth", depth)] {
+        if dim > u16::MAX as u32 {
+            return Err(LoadError::DimensionError(format!(
+                "{name} dimension {dim} exceeds maximum supported size of {}",
+                u16::MAX
+            )));
+        }
+    }
+
     let vox_offset = header.vox_offset as usize;
     if vox_offset > raw_data.len() {
         return Err(LoadError::VolumeParseFailed(format!(
@@ -306,7 +333,14 @@ pub fn load_label_from_bytes(
     let volume = InMemNiftiVolume::from_reader(volume_cursor, &header)
         .map_err(|e| LoadError::VolumeParseFailed(e.to_string()))?;
 
-    let total_voxels = (width * height * depth) as usize;
+    let total_voxels = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|wh| wh.checked_mul(depth as usize))
+        .ok_or_else(|| {
+            LoadError::DimensionError(format!(
+                "Labelmap {width}x{height}x{depth} exceeds addressable memory"
+            ))
+        })?;
     let mut label_data = Vec::with_capacity(total_voxels);
 
     for z in 0..depth as u16 {

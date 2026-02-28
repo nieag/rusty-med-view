@@ -366,7 +366,8 @@ pub fn render_frame(
                     return std::time::Duration::from_millis(16);
                 }
                 Err(wgpu::SurfaceError::OutOfMemory) => {
-                    panic!("Surface out of memory after reconfigure");
+                    log::error!("Surface out of memory after reconfigure; skipping frame");
+                    return std::time::Duration::from_millis(16);
                 }
                 Err(err) => {
                     log::warn!("Surface error after reconfigure: {err:?}; skipping frame");
@@ -379,7 +380,8 @@ pub fn render_frame(
             return std::time::Duration::from_millis(16);
         }
         Err(wgpu::SurfaceError::OutOfMemory) => {
-            panic!("Surface out of memory");
+            log::error!("Surface out of memory; skipping frame");
+            return std::time::Duration::from_millis(16);
         }
         Err(err) => {
             log::warn!("Surface error: {err:?}; skipping frame");
