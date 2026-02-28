@@ -19,6 +19,7 @@ glam = "0.29"
 
 # NIfTI medical image loading
 nifti = { version = "0.17", default-features = false }
+thiserror = "2"
 rfd = "0.15"
 flate2 = "1.0"
 uuid = { version = "1.19.0", features = ["v4", "js"] }

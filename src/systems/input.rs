@@ -268,7 +268,9 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
     if (!is_dragging && !is_rotating && !is_panning) || active_vp.is_none() {
         return;
     }
-    let avp = active_vp.unwrap();
+    let Some(avp) = active_vp else {
+        return;
+    };
 
     let mut vol_aspects = [1.0, 1.0, 1.0];
     for (_, vol) in world.query::<&VolumeData>().iter() {

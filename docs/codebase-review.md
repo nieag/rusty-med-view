@@ -149,6 +149,8 @@ This improves readability and enables finer-grained borrowing.
 
 ### 9. Unguarded `unwrap()` on ECS entity lookups (multiple files)
 
+> ✅ **Fixed** — `Fix: replace unguarded unwraps with early returns, adopt thiserror (#9, #13)`
+
 **Issue:** ~20 non-test `unwrap()` / `expect()` calls on `world.get::<&Component>(entity)` that assume entities always exist:
 - `src/gui/sidebar.rs:97` — `world.get::<&mut EditorState>(entities.editor).unwrap()`
 - `src/render/protocols.rs:99,100,107,139-157` — 12 `.unwrap()` on world queries
@@ -210,6 +212,8 @@ This improves readability and enables finer-grained borrowing.
 ---
 
 ### 13. `LoadError` doesn't chain underlying errors (`src/io/nifti.rs:27-32`)
+
+> ✅ **Fixed** — `Fix: replace unguarded unwraps with early returns, adopt thiserror (#9, #13)`
 
 **Issue:** `LoadError` variants store `String` instead of the original error. The `std::error::Error` impl has no `source()` override.
 
@@ -273,9 +277,9 @@ This improves readability and enables finer-grained borrowing.
 |----------|-------|----------|-----------|
 | Critical | 3     | 3 ✅     | 0         |
 | High     | 5     | 5 ✅     | 0         |
-| Medium   | 5     | 2 ✅     | 3 (#9, #11, #13) |
+| Medium   | 5     | 4 ✅     | 1 (#11)   |
 | Low      | 4     | 2 ✅     | 2 (#14, #15) |
-| **Total**| **17**| **12 ✅**| **5**     |
+| **Total**| **17**| **14 ✅**| **3**     |
 
 ## Recommended Implementation Order
 

@@ -100,15 +100,21 @@ pub fn apply_protocol(world: &mut World, entities: &AppEntities, protocol_name: 
 
 pub fn toggle_maximize(world: &mut World, entities: &AppEntities, vp_entity: Entity) {
     let (mode, is_already_maximized) = {
-        let proto_state = world.get::<&ProtocolState>(entities.protocol).unwrap();
-        let vp = world.get::<&Viewport>(vp_entity).unwrap();
+        let Ok(proto_state) = world.get::<&ProtocolState>(entities.protocol) else {
+            return;
+        };
+        let Ok(vp) = world.get::<&Viewport>(vp_entity) else {
+            return;
+        };
         (vp.mode, proto_state.active_protocol.starts_with("Single"))
     };
 
     if is_already_maximized {
         // Restore
         let restore_name = {
-            let mut proto_state = world.get::<&mut ProtocolState>(entities.protocol).unwrap();
+            let Ok(mut proto_state) = world.get::<&mut ProtocolState>(entities.protocol) else {
+                return;
+            };
             proto_state
                 .last_protocol
                 .take()
@@ -141,25 +147,41 @@ pub fn swap_viewports(
     }
 
     let (mode_a, state_a) = {
-        let vp = world.get::<&Viewport>(entity_a).unwrap();
-        let vs = world.get::<&ViewportState>(entity_a).unwrap();
+        let Ok(vp) = world.get::<&Viewport>(entity_a) else {
+            return;
+        };
+        let Ok(vs) = world.get::<&ViewportState>(entity_a) else {
+            return;
+        };
         (vp.mode, *vs)
     };
     let (mode_b, state_b) = {
-        let vp = world.get::<&Viewport>(entity_b).unwrap();
-        let vs = world.get::<&ViewportState>(entity_b).unwrap();
+        let Ok(vp) = world.get::<&Viewport>(entity_b) else {
+            return;
+        };
+        let Ok(vs) = world.get::<&ViewportState>(entity_b) else {
+            return;
+        };
         (vp.mode, *vs)
     };
 
     {
-        let mut vp_a = world.get::<&mut Viewport>(entity_a).unwrap();
-        let mut vs_a = world.get::<&mut ViewportState>(entity_a).unwrap();
+        let Ok(mut vp_a) = world.get::<&mut Viewport>(entity_a) else {
+            return;
+        };
+        let Ok(mut vs_a) = world.get::<&mut ViewportState>(entity_a) else {
+            return;
+        };
         vp_a.mode = mode_b;
         *vs_a = state_b;
     }
     {
-        let mut vp_b = world.get::<&mut Viewport>(entity_b).unwrap();
-        let mut vs_b = world.get::<&mut ViewportState>(entity_b).unwrap();
+        let Ok(mut vp_b) = world.get::<&mut Viewport>(entity_b) else {
+            return;
+        };
+        let Ok(mut vs_b) = world.get::<&mut ViewportState>(entity_b) else {
+            return;
+        };
         vp_b.mode = mode_a;
         *vs_b = state_a;
     }

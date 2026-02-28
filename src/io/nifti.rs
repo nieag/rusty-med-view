@@ -6,6 +6,7 @@
 use flate2::read::GzDecoder;
 use nifti::{InMemNiftiVolume, NiftiHeader, RandomAccessNiftiVolume};
 use std::io::{Cursor, Read};
+use thiserror::Error;
 
 /// Result of loading a NIfTI volume
 #[derive(Debug)]
@@ -23,34 +24,16 @@ pub struct LoadedVolume {
 }
 
 /// Error type for NIfTI loading operations
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum LoadError {
-    DecompressionFailed(Box<dyn std::error::Error + Send + Sync>),
-    HeaderParseFailed(Box<dyn std::error::Error + Send + Sync>),
-    VolumeParseFailed(Box<dyn std::error::Error + Send + Sync>),
+    #[error("Gzip decompression failed: {0}")]
+    DecompressionFailed(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("Failed to parse NIfTI header: {0}")]
+    HeaderParseFailed(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("Failed to parse NIfTI volume: {0}")]
+    VolumeParseFailed(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("Invalid volume dimensions: {0}")]
     DimensionError(String),
-}
-
-impl std::fmt::Display for LoadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            LoadError::DecompressionFailed(e) => write!(f, "Gzip decompression failed: {}", e),
-            LoadError::HeaderParseFailed(e) => write!(f, "Failed to parse NIfTI header: {}", e),
-            LoadError::VolumeParseFailed(e) => write!(f, "Failed to parse NIfTI volume: {}", e),
-            LoadError::DimensionError(e) => write!(f, "Invalid volume dimensions: {}", e),
-        }
-    }
-}
-
-impl std::error::Error for LoadError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            LoadError::DecompressionFailed(e) => Some(e.as_ref()),
-            LoadError::HeaderParseFailed(e) => Some(e.as_ref()),
-            LoadError::VolumeParseFailed(e) => Some(e.as_ref()),
-            LoadError::DimensionError(_) => None,
-        }
-    }
 }
 
 /// Check if data starts with gzip magic bytes

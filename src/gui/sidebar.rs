@@ -94,7 +94,9 @@ pub fn draw_sidebar(
     if let Ok(editor) = world.get::<&EditorState>(entities.editor) {
         if editor.active_tool != EditorTool::Navigation {
             ui.collapsing("🖌 Brush Settings", |ui| {
-                let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+                let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) else {
+                    return;
+                };
                 ui.label(format!("Size: {:.1} px", editor.brush_size));
                 ui.add(egui::Slider::new(&mut editor.brush_size, 1.0..=20.0));
 
