@@ -9,16 +9,18 @@ A high-performance 2D/3D medical volume viewer built with Rust + WGPU. Supports 
 ## Commands
 
 ```bash
-cargo run                                              # Run native desktop app
-cargo test -q                                          # Run all 112 unit tests
-cargo test <module_path>::<test_name>                  # Run a single test
-cargo fmt --all                                        # Format code
-cargo clippy --all-targets --all-features -D warnings  # Lint (warnings = errors)
-cargo check --target wasm32-unknown-unknown -q         # Verify WASM compilation
-trunk serve                                            # Run WASM locally (requires trunk + wasm32 target)
+cargo run                                                   # Run native desktop app
+cargo test -q                                               # Run all 129 unit tests
+cargo test <module_path>::<test_name>                       # Run a single test
+cargo fmt --all                                             # Format code
+cargo fmt --all -- --check                                  # Check formatting (CI)
+cargo clippy -- -D warnings -A clippy::too-many-arguments  # Lint (CI)
+cargo build --release                                       # Verify native build (CI)
+cargo check --target wasm32-unknown-unknown -q              # Verify WASM compilation (CI)
+trunk serve                                                 # Run WASM locally (requires trunk + wasm32 target)
 ```
 
-CI runs fmt check, clippy, tests, and both native/WASM builds on every push.
+CI runs fmt check, clippy, tests, and both native/WASM builds on every push to main and every PR.
 
 ## Architecture
 
