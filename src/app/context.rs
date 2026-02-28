@@ -5,7 +5,7 @@ use crate::io::handlers;
 use crate::io::volume;
 use crate::overlay::OverlayManager;
 use crate::render::contour_pipeline::ContourPipeline;
-use crate::render::mesh_pipeline::MeshPipeline;
+use crate::render::mesh_pipeline::{MeshPipeline, MeshResources};
 use crate::render::pipeline;
 use crate::render::protocols;
 use crate::render::sdf_preview_pipeline::SdfPreviewPipeline;
@@ -16,40 +16,45 @@ use std::sync::Arc;
 use winit::event_loop::EventLoopProxy;
 use winit::window::Window;
 
-pub struct RenderingContext {
-    pub window: Arc<Window>,
-    pub surface: wgpu::Surface<'static>,
+pub struct GpuState {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    pub surface: wgpu::Surface<'static>,
     pub config: wgpu::SurfaceConfiguration,
+}
 
-    // Pipelines and Buffers
-    pub render_pipeline: wgpu::RenderPipeline,
+pub struct Pipelines {
+    pub render: wgpu::RenderPipeline,
+    pub contour: ContourPipeline,
+    pub sdf_preview: SdfPreviewPipeline,
+    pub mesh: MeshPipeline,
+}
+
+pub struct VolumeResources {
     pub texture_bind_group_layout: wgpu::BindGroupLayout,
     pub uniform_buffer: wgpu::Buffer,
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
     pub num_indices: u32,
-
-    // ECS and GUI
-    pub world: World,
-    pub entities: AppEntities,
-    pub gui: Gui,
-    pub settings_entity: hecs::Entity,
-
-    // Shared Resources
+    pub overlay_buffer: wgpu::Buffer,
     pub dummy_r8: (wgpu::Texture, wgpu::TextureView, wgpu::Sampler),
     pub default_lut: (wgpu::Texture, wgpu::TextureView),
-    pub overlay_buffer: wgpu::Buffer,
+}
 
-    // Contour rendering pipeline
-    pub contour_pipeline: ContourPipeline,
-    pub sdf_preview_pipeline: SdfPreviewPipeline,
-    pub mesh_pipeline: MeshPipeline,
-    pub segment_mesh_gpu_cache:
-        HashMap<uuid::Uuid, (u64, crate::render::mesh_pipeline::MeshResources)>,
+pub struct SceneState {
+    pub world: World,
+    pub entities: AppEntities,
+}
 
-    // Proxy for waking up the event loop from async tasks
+pub struct RenderingContext {
+    pub window: Arc<Window>,
+    pub gpu: GpuState,
+    pub pipelines: Pipelines,
+    pub volume_resources: VolumeResources,
+    pub scene: SceneState,
+    pub gui: Gui,
+    pub settings_entity: hecs::Entity,
+    pub segment_mesh_gpu_cache: HashMap<uuid::Uuid, (u64, MeshResources)>,
     pub event_proxy: EventLoopProxy<AppEvent>,
 }
 
@@ -216,26 +221,31 @@ impl RenderingContext {
 
         RenderingContext {
             window,
-            surface,
-            device,
-            queue,
-            config,
-            render_pipeline,
-            texture_bind_group_layout,
-            uniform_buffer,
-            vertex_buffer,
-            index_buffer,
-            num_indices,
-            world,
-            entities,
+            gpu: GpuState {
+                device,
+                queue,
+                surface,
+                config,
+            },
+            pipelines: Pipelines {
+                render: render_pipeline,
+                contour: contour_pipeline,
+                sdf_preview: sdf_preview_pipeline,
+                mesh: mesh_pipeline,
+            },
+            volume_resources: VolumeResources {
+                texture_bind_group_layout,
+                uniform_buffer,
+                vertex_buffer,
+                index_buffer,
+                num_indices,
+                overlay_buffer,
+                dummy_r8,
+                default_lut,
+            },
+            scene: SceneState { world, entities },
             gui,
             settings_entity,
-            dummy_r8,
-            default_lut,
-            overlay_buffer,
-            contour_pipeline,
-            sdf_preview_pipeline,
-            mesh_pipeline,
             segment_mesh_gpu_cache: HashMap::new(),
             event_proxy,
         }

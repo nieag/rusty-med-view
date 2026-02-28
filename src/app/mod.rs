@@ -99,16 +99,29 @@ impl ApplicationHandler<AppEvent> for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::CursorMoved { position, .. } => {
-                systems::sys_update_mouse(&mut ctx.world, &ctx.entities, position.x, position.y);
-                systems::sys_handle_mouse_drag(&mut ctx.world, &ctx.entities);
-                systems::sys_handle_contour_mouse_drag(&mut ctx.world, &ctx.entities);
+                systems::sys_update_mouse(
+                    &mut ctx.scene.world,
+                    &ctx.scene.entities,
+                    position.x,
+                    position.y,
+                );
+                systems::sys_handle_mouse_drag(&mut ctx.scene.world, &ctx.scene.entities);
+                systems::sys_handle_contour_mouse_drag(
+                    &mut ctx.scene.world,
+                    &ctx.scene.entities,
+                );
                 ctx.window.request_redraw();
             }
             WindowEvent::MouseInput { button, state, .. } => {
-                systems::sys_handle_mouse_button(&mut ctx.world, &ctx.entities, button, state);
+                systems::sys_handle_mouse_button(
+                    &mut ctx.scene.world,
+                    &ctx.scene.entities,
+                    button,
+                    state,
+                );
                 systems::sys_handle_contour_mouse_button(
-                    &mut ctx.world,
-                    &ctx.entities,
+                    &mut ctx.scene.world,
+                    &ctx.scene.entities,
                     button,
                     state,
                 );
@@ -120,21 +133,31 @@ impl ApplicationHandler<AppEvent> for App {
                     MouseScrollDelta::PixelDelta(pos) => (pos.y * 0.05) as f32,
                 };
                 if y_delta != 0.0 {
-                    systems::sys_handle_input_scroll(&mut ctx.world, &ctx.entities, y_delta);
+                    systems::sys_handle_input_scroll(
+                        &mut ctx.scene.world,
+                        &ctx.scene.entities,
+                        y_delta,
+                    );
                     ctx.window.request_redraw();
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => {
-                systems::sys_update_modifiers(&mut ctx.world, &ctx.entities, modifiers.state());
+                systems::sys_update_modifiers(
+                    &mut ctx.scene.world,
+                    &ctx.scene.entities,
+                    modifiers.state(),
+                );
                 ctx.window.request_redraw();
             }
             WindowEvent::Resized(size) => {
-                ctx.config.width = size.width;
-                ctx.config.height = size.height;
-                ctx.surface.configure(&ctx.device, &ctx.config);
-                ctx.mesh_pipeline
-                    .resize(&ctx.device, ctx.config.width, ctx.config.height);
+                ctx.gpu.config.width = size.width;
+                ctx.gpu.config.height = size.height;
+                ctx.gpu.surface.configure(&ctx.gpu.device, &ctx.gpu.config);
+                ctx.pipelines
+                    .mesh
+                    .resize(&ctx.gpu.device, ctx.gpu.config.width, ctx.gpu.config.height);
                 let mut query = ctx
+                    .scene
                     .world
                     .query_one::<&mut WindowSettings>(ctx.settings_entity)
                     .unwrap();
@@ -146,22 +169,11 @@ impl ApplicationHandler<AppEvent> for App {
             }
             WindowEvent::RedrawRequested => {
                 let repaint_after = pipeline::render_frame(
-                    &ctx.device,
-                    &ctx.queue,
-                    &ctx.surface,
-                    &ctx.config,
-                    &ctx.render_pipeline,
-                    &ctx.uniform_buffer,
-                    &ctx.vertex_buffer,
-                    &ctx.index_buffer,
-                    ctx.num_indices,
-                    &ctx.overlay_buffer,
-                    &mut ctx.contour_pipeline,
-                    &mut ctx.sdf_preview_pipeline,
-                    &ctx.mesh_pipeline,
+                    &ctx.gpu,
+                    &ctx.volume_resources,
+                    &mut ctx.pipelines,
                     &mut ctx.segment_mesh_gpu_cache,
-                    &mut ctx.world,
-                    &ctx.entities,
+                    &mut ctx.scene,
                     &mut ctx.gui,
                     &ctx.window,
                     ctx.event_proxy.clone(),
@@ -190,39 +202,41 @@ impl ApplicationHandler<AppEvent> for App {
                         let _dims = match load_res {
                             LoadResult::Volume(ref loaded) => {
                                 let dims = handlers::handle_volume_load(
-                                    &ctx.device,
-                                    &ctx.queue,
-                                    &mut ctx.world,
-                                    &ctx.entities,
+                                    &ctx.gpu.device,
+                                    &ctx.gpu.queue,
+                                    &mut ctx.scene.world,
+                                    &ctx.scene.entities,
                                     loaded,
                                 );
                                 handlers::set_status_message(
-                                    &mut ctx.world,
-                                    &ctx.entities,
+                                    &mut ctx.scene.world,
+                                    &ctx.scene.entities,
                                     format!("Volume Loaded: {}x{}", dims[0], dims[1]),
                                 );
                                 dims
                             }
                             LoadResult::Label(ref loaded_label) => {
                                 let (new_entity, dims) = handlers::handle_label_load(
-                                    &ctx.device,
-                                    &ctx.queue,
-                                    &mut ctx.world,
+                                    &ctx.gpu.device,
+                                    &ctx.gpu.queue,
+                                    &mut ctx.scene.world,
                                     loaded_label,
                                 );
-                                if let Ok(mut editor) =
-                                    ctx.world.get::<&mut EditorState>(ctx.entities.editor)
+                                if let Ok(mut editor) = ctx
+                                    .scene
+                                    .world
+                                    .get::<&mut EditorState>(ctx.scene.entities.editor)
                                 {
                                     editor.active_layer = Some(new_entity);
                                 }
                                 let imported_segment = handlers::import_labelmap_as_contours(
-                                    &mut ctx.world,
-                                    &ctx.entities,
+                                    &mut ctx.scene.world,
+                                    &ctx.scene.entities,
                                     loaded_label,
                                 );
                                 handlers::set_status_message(
-                                    &mut ctx.world,
-                                    &ctx.entities,
+                                    &mut ctx.scene.world,
+                                    &ctx.scene.entities,
                                     if imported_segment.is_some() {
                                         format!(
                                             "Label Loaded: {}x{} (contours imported)",
@@ -238,27 +252,28 @@ impl ApplicationHandler<AppEvent> for App {
                         };
 
                         let active_layer = ctx
+                            .scene
                             .world
                             .query::<&EditorState>()
                             .iter()
                             .next()
                             .and_then(|(_, e)| e.active_layer);
                         handlers::recreate_bind_groups(
-                            &ctx.device,
-                            &mut ctx.world,
-                            &ctx.texture_bind_group_layout,
-                            &ctx.uniform_buffer,
-                            &ctx.dummy_r8.1,
-                            &ctx.dummy_r8.2,
-                            &ctx.default_lut.1,
-                            &ctx.overlay_buffer,
+                            &ctx.gpu.device,
+                            &mut ctx.scene.world,
+                            &ctx.volume_resources.texture_bind_group_layout,
+                            &ctx.volume_resources.uniform_buffer,
+                            &ctx.volume_resources.dummy_r8.1,
+                            &ctx.volume_resources.dummy_r8.2,
+                            &ctx.volume_resources.default_lut.1,
+                            &ctx.volume_resources.overlay_buffer,
                             active_layer,
                         );
                     }
                     Err(e) => {
                         handlers::set_status_message(
-                            &mut ctx.world,
-                            &ctx.entities,
+                            &mut ctx.scene.world,
+                            &ctx.scene.entities,
                             format!("Error: {:?}", e),
                         );
                     }
@@ -267,42 +282,52 @@ impl ApplicationHandler<AppEvent> for App {
             }
             AppEvent::RebuildBindGroups => {
                 let active_layer = ctx
+                    .scene
                     .world
                     .query::<&EditorState>()
                     .iter()
                     .next()
                     .and_then(|(_, e)| e.active_layer);
                 handlers::recreate_bind_groups(
-                    &ctx.device,
-                    &mut ctx.world,
-                    &ctx.texture_bind_group_layout,
-                    &ctx.uniform_buffer,
-                    &ctx.dummy_r8.1,
-                    &ctx.dummy_r8.2,
-                    &ctx.default_lut.1,
-                    &ctx.overlay_buffer,
+                    &ctx.gpu.device,
+                    &mut ctx.scene.world,
+                    &ctx.volume_resources.texture_bind_group_layout,
+                    &ctx.volume_resources.uniform_buffer,
+                    &ctx.volume_resources.dummy_r8.1,
+                    &ctx.volume_resources.dummy_r8.2,
+                    &ctx.volume_resources.default_lut.1,
+                    &ctx.volume_resources.overlay_buffer,
                     active_layer,
                 );
                 ctx.window.request_redraw();
             }
             AppEvent::CreateNewLayer => {
                 let mut dims = [64, 64, 64];
-                for (_, vol) in ctx.world.query::<&VolumeData>().iter() {
+                for (_, vol) in ctx.scene.world.query::<&VolumeData>().iter() {
                     dims = vol.dimensions;
                 }
-                let (tex, view, sampler, data) =
-                    crate::io::volume::create_blank_labelmap(&ctx.device, &ctx.queue, dims);
+                let (tex, view, sampler, data) = crate::io::volume::create_blank_labelmap(
+                    &ctx.gpu.device,
+                    &ctx.gpu.queue,
+                    dims,
+                );
                 let mut count = 0;
-                for _ in ctx.world.query::<&Segmentation>().iter() {
+                for _ in ctx.scene.world.query::<&Segmentation>().iter() {
                     count += 1;
                 }
                 let name = format!("Layer {}", count + 1);
                 let mut placeholder_bg = None;
-                if let Some((_, res)) = ctx.world.query::<&GpuVolumeResources>().iter().next() {
+                if let Some((_, res)) = ctx
+                    .scene
+                    .world
+                    .query::<&GpuVolumeResources>()
+                    .iter()
+                    .next()
+                {
                     placeholder_bg = Some(res.bind_group.clone());
                 }
                 let placeholder_bg = placeholder_bg.expect("Main volume should exist");
-                let entity = ctx.world.spawn((
+                let entity = ctx.scene.world.spawn((
                     Segmentation {
                         name,
                         is_visible: true,
@@ -321,43 +346,45 @@ impl ApplicationHandler<AppEvent> for App {
                     SegmentationTag,
                 ));
                 let active_layer = ctx
+                    .scene
                     .world
                     .query::<&EditorState>()
                     .iter()
                     .next()
                     .and_then(|(_, e)| e.active_layer);
                 handlers::recreate_bind_groups(
-                    &ctx.device,
-                    &mut ctx.world,
-                    &ctx.texture_bind_group_layout,
-                    &ctx.uniform_buffer,
-                    &ctx.dummy_r8.1,
-                    &ctx.dummy_r8.2,
-                    &ctx.default_lut.1,
-                    &ctx.overlay_buffer,
+                    &ctx.gpu.device,
+                    &mut ctx.scene.world,
+                    &ctx.volume_resources.texture_bind_group_layout,
+                    &ctx.volume_resources.uniform_buffer,
+                    &ctx.volume_resources.dummy_r8.1,
+                    &ctx.volume_resources.dummy_r8.2,
+                    &ctx.volume_resources.default_lut.1,
+                    &ctx.volume_resources.overlay_buffer,
                     active_layer,
                 );
-                for (_, editor) in ctx.world.query_mut::<&mut EditorState>() {
+                for (_, editor) in ctx.scene.world.query_mut::<&mut EditorState>() {
                     editor.active_layer = Some(entity);
                 }
                 ctx.window.request_redraw();
             }
             AppEvent::SwitchProtocol(name) => {
-                protocols::apply_protocol(&mut ctx.world, &ctx.entities, &name);
+                protocols::apply_protocol(&mut ctx.scene.world, &ctx.scene.entities, &name);
                 ctx.window.request_redraw();
             }
             AppEvent::ToggleMaximize(entity) => {
-                protocols::toggle_maximize(&mut ctx.world, &ctx.entities, entity);
+                protocols::toggle_maximize(&mut ctx.scene.world, &ctx.scene.entities, entity);
                 ctx.window.request_redraw();
             }
             AppEvent::SwapViewports(a, b) => {
-                protocols::swap_viewports(&mut ctx.world, &ctx.entities, a, b);
+                protocols::swap_viewports(&mut ctx.scene.world, &ctx.scene.entities, a, b);
                 ctx.window.request_redraw();
             }
             AppEvent::FocusAnnotation(id) => {
                 if let Ok(mut state) = ctx
+                    .scene
                     .world
-                    .get::<&mut AnnotationState>(ctx.entities.annotations)
+                    .get::<&mut AnnotationState>(ctx.scene.entities.annotations)
                 {
                     state.focused_id = Some(id);
                     state.show_right_sidebar = true;
@@ -366,8 +393,9 @@ impl ApplicationHandler<AppEvent> for App {
             }
             AppEvent::AddComment(id, text) => {
                 if let Ok(mut state) = ctx
+                    .scene
                     .world
-                    .get::<&mut AnnotationState>(ctx.entities.annotations)
+                    .get::<&mut AnnotationState>(ctx.scene.entities.annotations)
                 {
                     if let Some(ann) = state.annotations.iter_mut().find(|a| a.id == id) {
                         ann.comments.push(Comment {
@@ -380,8 +408,9 @@ impl ApplicationHandler<AppEvent> for App {
             }
             AppEvent::DeleteAnnotation(id) => {
                 if let Ok(mut state) = ctx
+                    .scene
                     .world
-                    .get::<&mut AnnotationState>(ctx.entities.annotations)
+                    .get::<&mut AnnotationState>(ctx.scene.entities.annotations)
                 {
                     state.annotations.retain(|a| a.id != id);
                     if state.focused_id == Some(id) {
