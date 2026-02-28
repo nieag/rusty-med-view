@@ -4,11 +4,15 @@
 
 This review covers the `rusty-med-view` codebase — a medical image viewer and segmentation editor built in Rust with WebGPU (wgpu), winit, egui, and an ECS architecture (hecs). The project supports both native desktop and WASM targets, loading NIfTI medical images and providing contour-based segmentation with real-time SDF/mesh generation. The codebase is ~12,700 LOC across 44 Rust source files with 104 unit tests.
 
+> **Progress:** 8/17 findings resolved. See individual items for commit references.
+
 ---
 
 ## Critical Priority
 
 ### 1. Integer overflow in volume dimension iteration (`src/io/nifti.rs:225-233`)
+
+> ✅ **Fixed** — `43e9a81` (Fix: critical review findings — overflow, panics, deps)
 
 **Issue:** Volume voxel iteration casts `depth`, `height`, `width` (u32) to `u16`:
 ```rust
@@ -29,6 +33,8 @@ The identical issue exists in `load_label_from_bytes()` at lines 309-314.
 ---
 
 ### 2. `panic!()` calls in rendering hot path (`src/render/pipeline.rs:354,367`)
+
+> ✅ **Fixed** — `43e9a81` (Fix: critical review findings — overflow, panics, deps)
 
 **Issue:** `panic!("Surface out of memory")` in `render_frame()` crashes the entire application on a recoverable GPU condition. On WASM, this kills the tab.
 
@@ -68,6 +74,8 @@ The identical issue exists in `load_label_from_bytes()` at lines 309-314.
 
 ### 5. Unused `cgmath` dependency (`Cargo.toml:11`)
 
+> ✅ **Fixed** — `43e9a81` (Fix: critical review findings — overflow, panics, deps)
+
 **Issue:** `cgmath = "0.18"` is listed but all math code uses `glam`. No `use cgmath` appears anywhere in the source.
 
 **Impact:** Unnecessary compile-time cost and dependency bloat.
@@ -80,6 +88,8 @@ The identical issue exists in `load_label_from_bytes()` at lines 309-314.
 
 ### 6. Duplicated NIfTI loading logic (`src/io/nifti.rs:161-261` vs `264-326`)
 
+> ✅ **Fixed** — `2963228` (Refactor: extract shared NIfTI parse helper (#6))
+
 **Issue:** `load_nifti_from_bytes()` and `load_label_from_bytes()` share ~60% identical code: gzip detection, decompression, header parsing, dimension validation, vox_offset checks, and volume reading. The code contains a comment: *"For brevity, I will re-implement the core loop or refactor later."*
 
 **Impact:** Bug fixes (like the u16 overflow above) must be applied in two places.
@@ -91,6 +101,8 @@ The identical issue exists in `load_label_from_bytes()` at lines 309-314.
 ---
 
 ### 7. `render_frame()` god function (`src/render/pipeline.rs:275-859`)
+
+> ✅ **Fixed** — `28c9199` (Refactor: decompose render_frame into per-pass functions (#7))
 
 **Issue:** A single 585-line function that takes 15 parameters and handles: system ticks, GUI preparation, overlay sync, uniform updates, volume rendering, contour rendering, SDF preview, 3D mesh rendering, and GUI rendering. The CI globally suppresses `clippy::too-many-arguments` to accommodate this.
 
@@ -111,6 +123,8 @@ Each takes only the parameters it needs. The orchestrator becomes ~50 lines.
 ---
 
 ### 8. `RenderingContext` mega-struct (`src/app/context.rs:19-54`)
+
+> ✅ **Fixed** — `f2f35c2` (Refactor: introduce GpuState, Pipelines, VolumeResources, SceneState sub-structs (#8))
 
 **Issue:** 20+ public fields holding the entire application state as a flat bag: GPU device, pipelines, buffers, ECS world, GUI, caches, event proxy. Every field is `pub`.
 
@@ -146,6 +160,8 @@ This improves readability and enables finer-grained borrowing.
 ---
 
 ### 10. `panic!()` in pipeline initialization (`src/render/contour_pipeline.rs:166,169` and `src/render/sdf_preview_pipeline.rs:180,183`)
+
+> ✅ **Fixed** — `dafaef5` (Fix: remove Vec-to-array panics in pipeline constructors (#10))
 
 **Issue:** `Vec::try_into::<[T; 4]>` with `unwrap_or_else(|_| panic!(...))`. These convert a Vec of exactly 4 elements into a fixed-size array.
 
@@ -223,6 +239,8 @@ This improves readability and enables finer-grained borrowing.
 
 ### 16. `#[allow(dead_code)]` markers suggest incomplete features (`src/systems/segment_system.rs`)
 
+> ✅ **Fixed** — `43e9a81` (Fix: critical review findings — overflow, panics, deps)
+
 **Issue:** Two functions (`regenerate_live_chunk_meshes`, `merge_chunk_meshes`) are annotated with `#[allow(dead_code)]`, indicating they were written for a chunked mesh regeneration feature but never integrated.
 
 **Recommendation:** Either integrate the functions or remove them. Dead code rots and creates false confidence in test coverage.
@@ -243,13 +261,13 @@ This improves readability and enables finer-grained borrowing.
 
 ## Summary
 
-| Priority | Count | Estimated Effort |
-|----------|-------|-----------------|
-| Critical | 3     | ~1.75 hours      |
-| High     | 5     | ~9 hours         |
-| Medium   | 5     | ~6 hours         |
-| Low      | 4     | ~3.5 hours       |
-| **Total**| **17**| **~20 hours**    |
+| Priority | Total | Resolved | Remaining |
+|----------|-------|----------|-----------|
+| Critical | 3     | 2 ✅     | 1 (#3)    |
+| High     | 5     | 4 ✅     | 1 (#4)    |
+| Medium   | 5     | 0        | 5         |
+| Low      | 4     | 0        | 4         |
+| **Total**| **17**| **8 ✅** | **9**     |
 
 ## Recommended Implementation Order
 
