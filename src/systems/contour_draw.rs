@@ -231,8 +231,7 @@ pub fn simplify_rdp(points: &[[f32; 3]], epsilon: f32) -> Vec<[f32; 3]> {
         let line_len_sq =
             line_vec[0] * line_vec[0] + line_vec[1] * line_vec[1] + line_vec[2] * line_vec[2];
 
-        for i in (start + 1)..end {
-            let p = points[i];
+        for (i, &p) in points.iter().enumerate().take(end).skip(start + 1) {
             let dist = if line_len_sq < 1e-6 {
                 // Points coincide, use distance to start
                 let dx = p[0] - p0[0];
@@ -708,11 +707,9 @@ pub fn sculpt_contour(
                 new_points.push(p);
             }
         }
-    } else {
-        if sub_stroke.len() > 2 {
-            for &p in sub_stroke[1..sub_stroke.len() - 1].iter().rev() {
-                new_points.push(p);
-            }
+    } else if sub_stroke.len() > 2 {
+        for &p in sub_stroke[1..sub_stroke.len() - 1].iter().rev() {
+            new_points.push(p);
         }
     }
 

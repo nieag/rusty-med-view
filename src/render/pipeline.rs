@@ -598,10 +598,9 @@ fn render_sdf_preview_pass(
 ) {
     let mut volume_dims = [0u32; 3];
     let mut volume_spacing = [1.0f32; 3];
-    for (_, vol) in scene.world.query::<&VolumeData>().iter() {
+    if let Some((_, vol)) = scene.world.query::<&VolumeData>().iter().next() {
         volume_dims = vol.dimensions;
         volume_spacing = vol.spacing;
-        break;
     }
 
     let preview_state = scene
@@ -713,11 +712,10 @@ fn render_mesh_pass(
     let mut volume_dims = [0u32; 3];
     let mut volume_spacing = [1.0f32; 3];
     let mut data_orientation = [0.0f32; 4];
-    for (_, vol) in scene.world.query::<&VolumeData>().iter() {
+    if let Some((_, vol)) = scene.world.query::<&VolumeData>().iter().next() {
         volume_dims = vol.dimensions;
         volume_spacing = vol.spacing;
         data_orientation = vol.orientation;
-        break;
     }
 
     if let Ok(manager) = scene.world.get::<&SegmentManager>(scene.entities.segments) {

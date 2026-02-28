@@ -544,8 +544,8 @@ fn process_cube(sdf: &SdfVolume, pos: [u32; 3], iso_level: f32, mesh: &mut MeshD
 
     // Build cube index from corner signs
     let mut cube_index = 0u8;
-    for i in 0..8 {
-        if values[i] < iso_level {
+    for (i, &v) in values.iter().enumerate() {
+        if v < iso_level {
             cube_index |= 1 << i;
         }
     }

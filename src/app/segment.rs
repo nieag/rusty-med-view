@@ -737,7 +737,7 @@ impl Segment {
 
     /// Check if segment has a valid mesh for rendering
     pub fn has_mesh(&self) -> bool {
-        self.mesh.as_ref().map_or(false, |m| !m.is_empty())
+        self.mesh.as_ref().is_some_and(|m| !m.is_empty())
     }
 
     /// True when a voxel-like reconstructed representation is available.

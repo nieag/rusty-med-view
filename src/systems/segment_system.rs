@@ -346,10 +346,9 @@ pub fn regenerate_all_dirty(
 pub fn sys_update_segment_derivatives(world: &mut World, entities: &AppEntities) -> bool {
     let mut volume_dims = [0u32; 3];
     let mut volume_spacing = [0.0f32; 3];
-    for (_, vol) in world.query::<&VolumeData>().iter() {
+    if let Some((_, vol)) = world.query::<&VolumeData>().iter().next() {
         volume_dims = vol.dimensions;
         volume_spacing = vol.spacing;
-        break;
     }
 
     if volume_dims.contains(&0) {

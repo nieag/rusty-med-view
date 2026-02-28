@@ -1,0 +1,9 @@
+{
+    "rust-analyzer.checkOnSave.command": "clippy",
+    "rust-analyzer.checkOnSave.extraArgs": [
+        "-D",
+        "warnings",
+        "-A",
+        "clippy::too-many-arguments"
+    ]
+}

@@ -1,0 +1,13 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "cargo clippy (CI flags)",
+            "type": "shell",
+            "command": "cargo",
+            "args": ["clippy", "--", "-D", "warnings", "-A", "clippy::too-many-arguments"],
+            "group": "build",
+            "problemMatcher": []
+        }
+    ]
+}

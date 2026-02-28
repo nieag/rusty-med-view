@@ -85,7 +85,12 @@ impl SlicePlane {
 }
 
 /// Base rotation to make Superior UP in default 3D view
-pub const BASE_ROTATION: [f32; 4] = [0.7071068, 0.0, 0.0, 0.7071068]; // 90° rotation around X
+pub const BASE_ROTATION: [f32; 4] = [
+    std::f32::consts::FRAC_1_SQRT_2,
+    0.0,
+    0.0,
+    std::f32::consts::FRAC_1_SQRT_2,
+]; // 90° rotation around X
 
 /// Compose final view rotation from data orientation and user rotation.
 /// Formula: final = user_rotation * BASE_ROTATION * data_orientation

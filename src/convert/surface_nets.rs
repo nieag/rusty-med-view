@@ -89,7 +89,7 @@ pub fn surface_nets_chunk(chunk: &TsdfChunk) -> MeshData {
     // Phase 2: Connect adjacent dual vertices with quads (split into tris).
     let mut indices: Vec<u32> = Vec::new();
 
-    for (&(x, y, z), _) in &cell_to_vertex {
+    for &(x, y, z) in cell_to_vertex.keys() {
         // For each of the 3 axis-aligned edges emanating from the min corner of
         // this cell, check if there is a sign change along that edge.  If so,
         // the 4 cells sharing that edge all have dual vertices — connect them.
@@ -99,18 +99,14 @@ pub fn surface_nets_chunk(chunk: &TsdfChunk) -> MeshData {
         // Edge along X: (x,y,z) -> (x+1,y,z)
         if x + 1 < dx - 1 {
             let v100 = val(x + 1, y, z);
-            if (v000 < 0.0) != (v100 < 0.0) {
-                // The 4 cells sharing this edge (if they exist and have vertices):
-                // (x,y,z), (x,y-1,z), (x,y,z-1), (x,y-1,z-1)
-                if y > 0 && z > 0 {
-                    if let (Some(&a), Some(&b), Some(&c), Some(&d)) = (
-                        cell_to_vertex.get(&(x, y, z)),
-                        cell_to_vertex.get(&(x, y - 1, z)),
-                        cell_to_vertex.get(&(x, y - 1, z - 1)),
-                        cell_to_vertex.get(&(x, y, z - 1)),
-                    ) {
-                        emit_quad(&mut indices, a, b, c, d, v000 < 0.0);
-                    }
+            if (v000 < 0.0) != (v100 < 0.0) && y > 0 && z > 0 {
+                if let (Some(&a), Some(&b), Some(&c), Some(&d)) = (
+                    cell_to_vertex.get(&(x, y, z)),
+                    cell_to_vertex.get(&(x, y - 1, z)),
+                    cell_to_vertex.get(&(x, y - 1, z - 1)),
+                    cell_to_vertex.get(&(x, y, z - 1)),
+                ) {
+                    emit_quad(&mut indices, a, b, c, d, v000 < 0.0);
                 }
             }
         }
@@ -118,16 +114,14 @@ pub fn surface_nets_chunk(chunk: &TsdfChunk) -> MeshData {
         // Edge along Y: (x,y,z) -> (x,y+1,z)
         if y + 1 < dy - 1 {
             let v010 = val(x, y + 1, z);
-            if (v000 < 0.0) != (v010 < 0.0) {
-                if x > 0 && z > 0 {
-                    if let (Some(&a), Some(&b), Some(&c), Some(&d)) = (
-                        cell_to_vertex.get(&(x, y, z)),
-                        cell_to_vertex.get(&(x, y, z - 1)),
-                        cell_to_vertex.get(&(x - 1, y, z - 1)),
-                        cell_to_vertex.get(&(x - 1, y, z)),
-                    ) {
-                        emit_quad(&mut indices, a, b, c, d, v000 < 0.0);
-                    }
+            if (v000 < 0.0) != (v010 < 0.0) && x > 0 && z > 0 {
+                if let (Some(&a), Some(&b), Some(&c), Some(&d)) = (
+                    cell_to_vertex.get(&(x, y, z)),
+                    cell_to_vertex.get(&(x, y, z - 1)),
+                    cell_to_vertex.get(&(x - 1, y, z - 1)),
+                    cell_to_vertex.get(&(x - 1, y, z)),
+                ) {
+                    emit_quad(&mut indices, a, b, c, d, v000 < 0.0);
                 }
             }
         }
@@ -135,16 +129,14 @@ pub fn surface_nets_chunk(chunk: &TsdfChunk) -> MeshData {
         // Edge along Z: (x,y,z) -> (x,y,z+1)
         if z + 1 < dz - 1 {
             let v001 = val(x, y, z + 1);
-            if (v000 < 0.0) != (v001 < 0.0) {
-                if x > 0 && y > 0 {
-                    if let (Some(&a), Some(&b), Some(&c), Some(&d)) = (
-                        cell_to_vertex.get(&(x, y, z)),
-                        cell_to_vertex.get(&(x - 1, y, z)),
-                        cell_to_vertex.get(&(x - 1, y - 1, z)),
-                        cell_to_vertex.get(&(x, y - 1, z)),
-                    ) {
-                        emit_quad(&mut indices, a, b, c, d, v000 < 0.0);
-                    }
+            if (v000 < 0.0) != (v001 < 0.0) && x > 0 && y > 0 {
+                if let (Some(&a), Some(&b), Some(&c), Some(&d)) = (
+                    cell_to_vertex.get(&(x, y, z)),
+                    cell_to_vertex.get(&(x - 1, y, z)),
+                    cell_to_vertex.get(&(x - 1, y - 1, z)),
+                    cell_to_vertex.get(&(x, y - 1, z)),
+                ) {
+                    emit_quad(&mut indices, a, b, c, d, v000 < 0.0);
                 }
             }
         }
@@ -232,7 +224,7 @@ pub fn surface_nets_from_sdf(
 
     let mut indices: Vec<u32> = Vec::new();
 
-    for (&(x, y, z), _) in &cell_to_vertex {
+    for &(x, y, z) in cell_to_vertex.keys() {
         let v000 = val(x, y, z);
 
         if x + 1 < bx - 1 {

@@ -143,12 +143,12 @@ pub fn swap_viewports(
     let (mode_a, state_a) = {
         let vp = world.get::<&Viewport>(entity_a).unwrap();
         let vs = world.get::<&ViewportState>(entity_a).unwrap();
-        (vp.mode, (*vs).clone())
+        (vp.mode, *vs)
     };
     let (mode_b, state_b) = {
         let vp = world.get::<&Viewport>(entity_b).unwrap();
         let vs = world.get::<&ViewportState>(entity_b).unwrap();
-        (vp.mode, (*vs).clone())
+        (vp.mode, *vs)
     };
 
     {

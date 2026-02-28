@@ -101,13 +101,12 @@ pub fn draw_discussion_sidebar(
                     let res = ui.add(
                         egui::TextEdit::singleline(&mut input_text).hint_text("Type a reply..."),
                     );
-                    if (res.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter)))
-                        || ui.button("Send").clicked()
+                    if ((res.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter)))
+                        || ui.button("Send").clicked())
+                        && !input_text.is_empty()
                     {
-                        if !input_text.is_empty() {
-                            comment_to_add = Some((focused_id, input_text.clone()));
-                            input_text.clear();
-                        }
+                        comment_to_add = Some((focused_id, input_text.clone()));
+                        input_text.clear();
                     }
                     ctx.memory_mut(|mem| mem.data.insert_temp(dnd_id, input_text));
                 });
