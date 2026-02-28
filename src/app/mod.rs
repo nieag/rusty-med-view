@@ -20,6 +20,9 @@ use winit::{
     window::WindowAttributes,
 };
 
+/// Pixel-to-line scroll normalization factor for trackpad deltas.
+const PIXEL_SCROLL_FACTOR: f64 = 0.05;
+
 pub struct AppState {
     pub context: Option<RenderingContext>,
 }
@@ -133,7 +136,7 @@ impl ApplicationHandler<AppEvent> for App {
             WindowEvent::MouseWheel { delta, .. } => {
                 let y_delta = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
-                    MouseScrollDelta::PixelDelta(pos) => (pos.y * 0.05) as f32,
+                    MouseScrollDelta::PixelDelta(pos) => (pos.y * PIXEL_SCROLL_FACTOR) as f32,
                 };
                 if y_delta != 0.0 {
                     systems::sys_handle_input_scroll(

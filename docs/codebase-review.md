@@ -4,7 +4,7 @@
 
 This review covers the `rusty-med-view` codebase — a medical image viewer and segmentation editor built in Rust with WebGPU (wgpu), winit, egui, and an ECS architecture (hecs). The project supports both native desktop and WASM targets, loading NIfTI medical images and providing contour-based segmentation with real-time SDF/mesh generation. The codebase is ~12,700 LOC across 44 Rust source files with 104 unit tests.
 
-> **Progress:** 8/17 findings resolved. See individual items for commit references.
+> **Progress:** 12/17 findings resolved. See individual items for commit references.
 
 ---
 
@@ -48,6 +48,8 @@ The identical issue exists in `load_label_from_bytes()` at lines 309-314.
 
 ### 3. Package name mismatch (`Cargo.toml:2`)
 
+> ✅ **Fixed** — `Refactor: rename package, add named constants and lint config (#3, #12, #17)`
+
 **Issue:** `name = "rust_starter_app"` — clearly a leftover from a project template. The binary, library crate, and WASM deploy URL all carry this name. `lib.rs` exports `rust_starter_app::run()`. CI references `rust_starter_app.wasm`.
 
 **Impact:** Confusing for contributors; the WASM artifact is deployed as `rust_starter_app_bg.wasm`.
@@ -61,6 +63,8 @@ The identical issue exists in `load_label_from_bytes()` at lines 309-314.
 ## High Priority
 
 ### 4. WASM-only dependencies compiled for native builds (`Cargo.toml:16-21`)
+
+> ✅ **Fixed** — All WASM crates are correctly under `[target.'cfg(target_arch = "wasm32")'.dependencies]`.
 
 **Issue:** `wasm-bindgen`, `wasm-bindgen-futures`, `js-sys`, `web-sys`, `console_error_panic_hook`, and `console_log` are in the global `[dependencies]` section. Only `getrandom` is correctly gated under `[target.'cfg(target_arch = "wasm32")'.dependencies]`.
 
@@ -189,6 +193,8 @@ This improves readability and enables finer-grained borrowing.
 
 ### 12. Magic numbers without documentation
 
+> ✅ **Fixed** — `Refactor: rename package, add named constants and lint config (#3, #12, #17)`
+
 **Issue:** Several hardcoded constants lack explanation:
 - `256` for uniform buffer alignment (`src/render/pipeline.rs:185,338`) — should query `device.limits().min_uniform_buffer_offset_alignment`
 - `131072` for `MAX_CONTOUR_LINES` (`src/render/contour_pipeline.rs:68`)
@@ -251,6 +257,8 @@ This improves readability and enables finer-grained borrowing.
 
 ### 17. No `rustfmt.toml` or `clippy.toml` for team conventions
 
+> ✅ **Fixed** — `Refactor: rename package, add named constants and lint config (#3, #12, #17)`
+
 **Issue:** While CI enforces `rustfmt` and `clippy`, there's no project-level configuration. The CI allows `clippy::too-many-arguments` globally, which masks the `render_frame` issue.
 
 **Recommendation:** Add `rustfmt.toml` with explicit settings and `clippy.toml` to document intentional lint suppressions. Suppress `too-many-arguments` only on specific functions rather than globally.
@@ -263,11 +271,11 @@ This improves readability and enables finer-grained borrowing.
 
 | Priority | Total | Resolved | Remaining |
 |----------|-------|----------|-----------|
-| Critical | 3     | 2 ✅     | 1 (#3)    |
-| High     | 5     | 4 ✅     | 1 (#4)    |
-| Medium   | 5     | 0        | 5         |
-| Low      | 4     | 0        | 4         |
-| **Total**| **17**| **8 ✅** | **9**     |
+| Critical | 3     | 3 ✅     | 0         |
+| High     | 5     | 5 ✅     | 0         |
+| Medium   | 5     | 2 ✅     | 3 (#9, #11, #13) |
+| Low      | 4     | 2 ✅     | 2 (#14, #15) |
+| **Total**| **17**| **12 ✅**| **5**     |
 
 ## Recommended Implementation Order
 

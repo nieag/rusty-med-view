@@ -1,0 +1,8 @@
+# clippy.toml
+# CI runs: cargo clippy -- -D warnings -A clippy::too-many-arguments
+#
+# too-many-arguments is globally suppressed in CI because several rendering pass
+# functions legitimately accept many parameters (GPU state, pipeline, scene state,
+# etc.) without a clean way to reduce them without introducing artificial wrappers.
+# Suppression is intentional and should be revisited if a future refactor changes
+# the calling conventions.

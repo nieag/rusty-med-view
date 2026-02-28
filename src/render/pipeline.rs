@@ -118,6 +118,12 @@ pub fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout 
 
 const MAX_OVERLAY_PRIMITIVES: usize = 64;
 
+/// WebGPU minimum uniform buffer offset alignment (bytes).
+/// TODO: query from device.limits().min_uniform_buffer_offset_alignment at runtime.
+const UNIFORM_ALIGNMENT: u64 = 256;
+/// Number of viewports in the layout protocol.
+const MAX_VIEWPORTS: u64 = 4;
+
 /// Create the overlay primitives storage buffer.
 pub fn create_overlay_buffer(device: &wgpu::Device) -> wgpu::Buffer {
     let buffer_size = (std::mem::size_of::<OverlayPrimitive>() * MAX_OVERLAY_PRIMITIVES) as u64;
@@ -185,8 +191,8 @@ pub fn create_render_pipeline(
 
 /// Create the uniform buffer with proper alignment for 4 viewports.
 pub fn create_uniform_buffer(device: &wgpu::Device) -> wgpu::Buffer {
-    let uniform_alignment = 256;
-    let uniform_buffer_size = (uniform_alignment * 4) as u64;
+    let uniform_alignment = UNIFORM_ALIGNMENT;
+    let uniform_buffer_size = uniform_alignment * MAX_VIEWPORTS;
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Uniform Buffer"),
         size: uniform_buffer_size,
@@ -335,7 +341,7 @@ fn prepare_uniforms(
         u.overlay_primitive_count = overlay_count;
         u.overlay_dragging_idx = dragging_idx;
         u.overlay_mouse_uv = overlay_mouse_uv;
-        let offset = *u_idx as u64 * 256;
+        let offset = *u_idx as u64 * UNIFORM_ALIGNMENT;
         gpu.queue.write_buffer(
             &volume_res.uniform_buffer,
             offset,

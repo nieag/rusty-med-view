@@ -1,0 +1,5 @@
+# rustfmt.toml
+# Explicit configuration signals that rustfmt formatting is intentionally enforced.
+# CI runs: cargo fmt --all -- --check
+# Defaults (edition = "2021", 4-space indent, 100-char line width) are used unless overridden.
+edition = "2021"

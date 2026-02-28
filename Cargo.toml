@@ -1,5 +1,5 @@
 [package]
-name = "rust_starter_app"
+name = "rusty_med_view"
 version = "0.1.0"
 edition = "2021"
 
