@@ -3,9 +3,13 @@
 //!
 //! This module extracts the load handling logic from lib.rs to improve code organization.
 
+use crate::app::segment::PrimaryShapeKind;
 use crate::components::*;
-use crate::convert::extract_axis_aligned_contours_from_labelmap;
+use crate::convert::{
+    build_tsdf_chunks_from_labelmap, extract_axis_aligned_contours_from_labelmap,
+};
 use crate::nifti_loader::LoadedVolume;
+use crate::render::tsdf_compute_pipeline::TsdfComputePipeline;
 use crate::systems::SegmentManager;
 use crate::volume;
 use hecs::World;
@@ -113,7 +117,118 @@ pub fn handle_label_load(
     (entity, loaded_label.dimensions)
 }
 
+/// Import a loaded labelmap as voxel-driven segments backed directly by TSDF chunks.
+///
+/// Tries the GPU JFA path first (`tsdf_pipeline` is `Some` on native WebGPU).
+/// Falls back to the CPU separable-EDT path when the GPU pipeline is unavailable
+/// (WebGL2, WASM) or when the ROI exceeds the 10-bit JFA coordinate limit.
+///
+/// Each segment gets `primary_shape = PrimaryShapeKind::Voxels` so that
+/// `sys_update_segment_derivatives` skips the SDF build and goes straight to meshing.
+pub fn import_labelmap_direct(
+    world: &mut World,
+    entities: &AppEntities,
+    loaded_label: &LoadedLabel,
+    #[cfg(not(target_arch = "wasm32"))] device: &wgpu::Device,
+    #[cfg(not(target_arch = "wasm32"))] queue: &wgpu::Queue,
+    tsdf_pipeline: Option<&TsdfComputePipeline>,
+) -> Option<usize> {
+    let spacing = world
+        .query::<&VolumeData>()
+        .with::<&MainVolumeTag>()
+        .iter()
+        .next()
+        .map(|(_, v)| v.spacing)
+        .unwrap_or([1.0, 1.0, 1.0]);
+
+    let labels = non_zero_labels(&loaded_label.data);
+    if labels.is_empty() {
+        return None;
+    }
+
+    const CHUNK_SIZE: u32 = 32;
+    const TRUNCATION_MM: f32 = 24.0;
+
+    let colors = [
+        [1.0, 0.3, 0.3, 0.8],
+        [0.3, 1.0, 0.3, 0.8],
+        [0.3, 0.3, 1.0, 0.8],
+        [1.0, 1.0, 0.3, 0.8],
+        [1.0, 0.3, 1.0, 0.8],
+        [0.3, 1.0, 1.0, 0.8],
+    ];
+
+    if let Ok(mut mgr) = world.get::<&mut SegmentManager>(entities.segments) {
+        let mut imported: Option<usize> = None;
+        for label in labels {
+            // Try GPU path first (native + WebGPU only).
+            #[cfg(not(target_arch = "wasm32"))]
+            let gpu_result = tsdf_pipeline.and_then(|p| {
+                p.build_tsdf_sync(
+                    device,
+                    queue,
+                    &loaded_label.data,
+                    loaded_label.dimensions,
+                    spacing,
+                    label,
+                    CHUNK_SIZE,
+                    TRUNCATION_MM,
+                )
+            });
+            #[cfg(target_arch = "wasm32")]
+            let gpu_result: Option<_> = None;
+
+            // CPU fallback when GPU path is unavailable or returns None.
+            let result = gpu_result.or_else(|| {
+                let (chunks, tsdf_dims, tsdf_spacing, tsdf_origin) =
+                    build_tsdf_chunks_from_labelmap(
+                        &loaded_label.data,
+                        loaded_label.dimensions,
+                        spacing,
+                        label,
+                        CHUNK_SIZE,
+                        TRUNCATION_MM,
+                    );
+                if chunks.is_empty() {
+                    None
+                } else {
+                    Some((chunks, tsdf_dims, tsdf_spacing, tsdf_origin))
+                }
+            });
+
+            let Some((chunks, tsdf_dims, tsdf_spacing, tsdf_origin)) = result else {
+                continue;
+            };
+
+            let chunk_keys: Vec<_> = chunks.keys().copied().collect();
+            let idx = mgr.len();
+            let color = colors[idx % colors.len()];
+            let seg_idx =
+                mgr.add_segment(&format!("{} (L{})", loaded_label.filename, label), color);
+
+            if let Some(seg) = mgr.segments.get_mut(seg_idx) {
+                seg.primary_shape = PrimaryShapeKind::Voxels;
+                seg.chunk_runtime.tsdf_chunks = chunks;
+                seg.chunk_runtime.tsdf_dims = tsdf_dims;
+                seg.chunk_runtime.tsdf_spacing = tsdf_spacing;
+                seg.chunk_runtime.tsdf_origin = tsdf_origin;
+                seg.chunk_runtime.enqueue_dirty_mesh_chunks(chunk_keys);
+                seg.mesh_dirty = true;
+                seg.sdf_dirty = false; // TSDF is already populated
+            }
+            imported = Some(seg_idx);
+        }
+        imported
+    } else {
+        None
+    }
+}
+
 /// Import loaded labelmap as editable contours into a new contour segment.
+///
+/// Retained for the contour-editing workflow where users want per-slice authored
+/// contours as the primary shape.  For bulk labelmap loads prefer
+/// [`import_labelmap_direct`] which avoids the O(slices × axes) contour extraction.
 pub fn import_labelmap_as_contours(
     world: &mut World,
     entities: &AppEntities,

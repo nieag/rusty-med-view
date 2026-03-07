@@ -237,17 +237,22 @@ impl ApplicationHandler<AppEvent> for App {
                                 {
                                     editor.active_layer = Some(new_entity);
                                 }
-                                let imported_segment = handlers::import_labelmap_as_contours(
+                                let imported_segment = handlers::import_labelmap_direct(
                                     &mut ctx.scene.world,
                                     &ctx.scene.entities,
                                     loaded_label,
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    &ctx.gpu.device,
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    &ctx.gpu.queue,
+                                    ctx.tsdf_compute.as_ref(),
                                 );
                                 handlers::set_status_message(
                                     &mut ctx.scene.world,
                                     &ctx.scene.entities,
                                     if imported_segment.is_some() {
                                         format!(
-                                            "Label Loaded: {}x{} (contours imported)",
+                                            "Label Loaded: {}x{} (segments imported)",
                                             dims[0], dims[1]
                                         )
                                     } else {

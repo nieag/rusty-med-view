@@ -3,7 +3,8 @@
 //! Manages the full pipeline: contour drawing → SDF generation → mesh rendering.
 
 use crate::app::segment::{
-    ChunkKey, MeshData, Plane3D, PlaneContour, SdfVolume, Segment, SegmentChunkRuntime,
+    ChunkKey, MeshData, Plane3D, PlaneContour, PrimaryShapeKind, SdfVolume, Segment,
+    SegmentChunkRuntime,
 };
 use crate::components::{AppEntities, SegPerfConfig, VolumeData};
 use crate::convert::{
@@ -133,134 +134,151 @@ fn regenerate_segment_if_dirty_with_resolution(
     let mut mesh_ms = 0.0f32;
     let mut live_updated_bounds: Option<[u32; 6]> = None;
 
-    // Regenerate SDF if dirty
+    // Regenerate SDF → TSDF if dirty.
+    //
+    // For `PrimaryShapeKind::Voxels` segments the TSDF is pre-populated by
+    // `import_labelmap_direct` and must not be overwritten by a contour-based
+    // SDF build.  We clear the dirty flag and fall through to mesh rebuilding.
     if segment.sdf_dirty {
-        let sdf_start = Instant::now();
-        let build_cfg = SdfBuildConfig {
-            resolution_multiplier,
-            neighbor_slice_bridging: true,
-            clamp_distance_mm: sdf_band_mm.max(0.5),
-            ..SdfBuildConfig::default()
-        };
-        let sdf = if let Some(dirty_roi) = segment.dirty_roi_world {
-            if let Some(existing) = segment.sdf.as_mut() {
-                // Incremental update of existing SDF
-                let updated = update_sdf_region_from_contours_with_config(
-                    existing,
-                    &segment.contours,
-                    build_cfg,
-                    dirty_roi,
-                );
-                if updated.is_some() {
-                    live_updated_bounds = updated;
-                    None
-                } else {
-                    // Fallback if ROI update failed
-                    Some(build_sdf_from_contours_with_config(
+        if segment.primary_shape == PrimaryShapeKind::Voxels
+            && !segment.chunk_runtime.tsdf_chunks.is_empty()
+        {
+            // TSDF already populated from labelmap import — skip SDF build.
+            segment.sdf_dirty = false;
+            segment.mesh_dirty = true;
+        } else {
+            // Contour-driven path: build SDF → bake TSDF chunks.
+            let sdf_start = Instant::now();
+            let build_cfg = SdfBuildConfig {
+                resolution_multiplier,
+                neighbor_slice_bridging: true,
+                clamp_distance_mm: sdf_band_mm.max(0.5),
+                ..SdfBuildConfig::default()
+            };
+            let sdf = if let Some(dirty_roi) = segment.dirty_roi_world {
+                if let Some(existing) = segment.sdf.as_mut() {
+                    // Incremental update of existing SDF.
+                    let updated = update_sdf_region_from_contours_with_config(
+                        existing,
                         &segment.contours,
-                        volume_dims,
-                        volume_spacing,
                         build_cfg,
-                    ))
+                        dirty_roi,
+                    );
+                    if updated.is_some() {
+                        live_updated_bounds = updated;
+                        None
+                    } else {
+                        Some(build_sdf_from_contours_with_config(
+                            &segment.contours,
+                            volume_dims,
+                            volume_spacing,
+                            build_cfg,
+                        ))
+                    }
+                } else {
+                    // First stroke: allocate SDF and update only the dirty ROI.
+                    let rm = build_cfg.resolution_multiplier.max(0.1);
+                    let sdf_dims = [
+                        (volume_dims[0] as f32 * rm).round().max(1.0) as u32,
+                        (volume_dims[1] as f32 * rm).round().max(1.0) as u32,
+                        (volume_dims[2] as f32 * rm).round().max(1.0) as u32,
+                    ];
+                    let sdf_spacing = [
+                        volume_spacing[0] / rm,
+                        volume_spacing[1] / rm,
+                        volume_spacing[2] / rm,
+                    ];
+                    let mut new_sdf = SdfVolume::new(sdf_dims, sdf_spacing, [0.0, 0.0, 0.0]);
+                    live_updated_bounds = update_sdf_region_from_contours_with_config(
+                        &mut new_sdf,
+                        &segment.contours,
+                        build_cfg,
+                        dirty_roi,
+                    );
+                    Some(new_sdf)
                 }
             } else {
-                // First stroke: build an empty SDF and update only the ROI
-                let rm = build_cfg.resolution_multiplier.max(0.1);
-                let sdf_dims = [
-                    (volume_dims[0] as f32 * rm).round().max(1.0) as u32,
-                    (volume_dims[1] as f32 * rm).round().max(1.0) as u32,
-                    (volume_dims[2] as f32 * rm).round().max(1.0) as u32,
-                ];
-                let sdf_spacing = [
-                    volume_spacing[0] / rm,
-                    volume_spacing[1] / rm,
-                    volume_spacing[2] / rm,
-                ];
-                let mut new_sdf = SdfVolume::new(sdf_dims, sdf_spacing, [0.0, 0.0, 0.0]);
-                let updated = update_sdf_region_from_contours_with_config(
-                    &mut new_sdf,
+                // No ROI: full rebuild.
+                Some(build_sdf_from_contours_with_config(
                     &segment.contours,
+                    volume_dims,
+                    volume_spacing,
                     build_cfg,
-                    dirty_roi,
-                );
-                live_updated_bounds = updated;
-                Some(new_sdf)
-            }
-        } else {
-            // No ROI available: full build
-            Some(build_sdf_from_contours_with_config(
-                &segment.contours,
-                volume_dims,
-                volume_spacing,
-                build_cfg,
-            ))
-        };
-        sdf_ms = sdf_start.elapsed().as_secs_f32() * 1000.0;
-        if let Some(sdf) = sdf {
-            segment.sdf = Some(sdf);
-            live_updated_bounds = segment.sdf.as_ref().and_then(|s| s.active_bounds);
-        }
-        segment.dirty_roi_world = None;
-        segment.sdf_revision = segment.sdf_revision.wrapping_add(1);
-        if is_live {
-            segment.live_sdf_revision = segment.sdf_revision;
-            segment.sdf_dirty = false;
-        } else {
-            segment.final_sdf_revision = segment.sdf_revision;
-            segment.sdf_dirty = false;
-        }
+                ))
+            };
+            sdf_ms = sdf_start.elapsed().as_secs_f32() * 1000.0;
 
-        // Bake dirty TSDF chunks from the updated SDF.
-        // Pad each chunk by +1 voxel on all edges so Surface Nets can
-        // connect vertices across chunk boundaries (eliminates seam lines).
-        if let Some(sdf) = &segment.sdf {
-            segment.chunk_runtime.tsdf_dims = sdf.dimensions;
-            segment.chunk_runtime.tsdf_spacing = sdf.spacing;
-            segment.chunk_runtime.tsdf_origin = sdf.origin;
-            let bounds = live_updated_bounds.unwrap_or([
-                0,
-                0,
-                0,
-                sdf.dimensions[0].saturating_sub(1),
-                sdf.dimensions[1].saturating_sub(1),
-                sdf.dimensions[2].saturating_sub(1),
-            ]);
-            let keys = chunk_keys_for_bounds(bounds, mesh_chunk_size);
-            let trunc = sdf_band_mm.max(1.0);
-            for key in &keys {
-                if let Some(cb) = chunk_bounds_for_key(*key, mesh_chunk_size, sdf.dimensions) {
-                    // Pad bounds by 1 voxel in each direction for overlap.
-                    let padded = [
-                        cb[0].saturating_sub(1),
-                        cb[1].saturating_sub(1),
-                        cb[2].saturating_sub(1),
-                        (cb[3] + 1).min(sdf.dimensions[0].saturating_sub(1)),
-                        (cb[4] + 1).min(sdf.dimensions[1].saturating_sub(1)),
-                        (cb[5] + 1).min(sdf.dimensions[2].saturating_sub(1)),
-                    ];
-                    if let Some(tsdf) =
-                        build_tsdf_chunk_from_sdf(sdf, padded, trunc, segment.sdf_revision)
-                    {
-                        segment.chunk_runtime.tsdf_chunks.insert(*key, tsdf);
+            if let Some(sdf) = sdf {
+                segment.sdf = Some(sdf);
+                live_updated_bounds = segment.sdf.as_ref().and_then(|s| s.active_bounds);
+            }
+            segment.dirty_roi_world = None;
+            segment.sdf_revision = segment.sdf_revision.wrapping_add(1);
+            if is_live {
+                segment.live_sdf_revision = segment.sdf_revision;
+            } else {
+                segment.final_sdf_revision = segment.sdf_revision;
+            }
+            segment.sdf_dirty = false;
+
+            // Bake TSDF chunks from the updated SDF.
+            // Pad each chunk by +1 voxel on all edges so Surface Nets can
+            // connect vertices across chunk boundaries (eliminates seam lines).
+            if let Some(sdf) = &segment.sdf {
+                segment.chunk_runtime.tsdf_dims = sdf.dimensions;
+                segment.chunk_runtime.tsdf_spacing = sdf.spacing;
+                segment.chunk_runtime.tsdf_origin = sdf.origin;
+                let bounds = live_updated_bounds.unwrap_or([
+                    0,
+                    0,
+                    0,
+                    sdf.dimensions[0].saturating_sub(1),
+                    sdf.dimensions[1].saturating_sub(1),
+                    sdf.dimensions[2].saturating_sub(1),
+                ]);
+                let keys = chunk_keys_for_bounds(bounds, mesh_chunk_size);
+                let trunc = sdf_band_mm.max(1.0);
+                for key in &keys {
+                    if let Some(cb) = chunk_bounds_for_key(*key, mesh_chunk_size, sdf.dimensions) {
+                        let padded = [
+                            cb[0].saturating_sub(1),
+                            cb[1].saturating_sub(1),
+                            cb[2].saturating_sub(1),
+                            (cb[3] + 1).min(sdf.dimensions[0].saturating_sub(1)),
+                            (cb[4] + 1).min(sdf.dimensions[1].saturating_sub(1)),
+                            (cb[5] + 1).min(sdf.dimensions[2].saturating_sub(1)),
+                        ];
+                        if let Some(tsdf) =
+                            build_tsdf_chunk_from_sdf(sdf, padded, trunc, segment.sdf_revision)
+                        {
+                            segment.chunk_runtime.tsdf_chunks.insert(*key, tsdf);
+                        }
                     }
                 }
+                segment.chunk_runtime.enqueue_dirty_mesh_chunks(keys);
             }
-            // Enqueue mesh rebuild for the baked chunks.
-            segment.chunk_runtime.enqueue_dirty_mesh_chunks(keys);
-        }
 
-        segment.mesh_dirty = true; // SDF changed, mesh needs update
+            segment.mesh_dirty = true; // SDF changed, mesh needs update
+        }
     }
 
-    // Regenerate mesh if dirty
+    // Regenerate mesh if dirty.
+    //
+    // `PrimaryShapeKind::Voxels` segments have TSDF chunks pre-populated but
+    // no `sdf` field, so they always use the chunk-based live path regardless
+    // of the `is_live` flag.  Contour-driven segments can use the high-quality
+    // full-volume Surface Nets finalize path when `is_live` is false.
     if segment.mesh_dirty && allow_mesh_rebuild {
         let mesh_start = Instant::now();
-        if is_live {
-            // Live path: process dirty chunk meshes within frame budget.
+        let use_chunk_path = is_live
+            || (segment.primary_shape == PrimaryShapeKind::Voxels
+                && !segment.chunk_runtime.tsdf_chunks.is_empty());
+
+        if use_chunk_path {
+            // Chunk path: process dirty mesh chunks within a frame budget.
             let chunks_before = segment.chunk_runtime.dirty_mesh_chunks.len();
             let _done = regenerate_live_chunk_meshes(&mut segment.chunk_runtime);
             let chunks_processed = chunks_before - segment.chunk_runtime.dirty_mesh_chunks.len();
-            // Only re-merge when at least one chunk was actually meshed.
             if chunks_processed > 0 {
                 let merged = merge_chunk_meshes(&segment.chunk_runtime.mesh_chunks_cpu);
                 if !merged.is_empty() {
@@ -270,7 +288,7 @@ fn regenerate_segment_if_dirty_with_resolution(
                 }
             }
         } else {
-            // Finalize path: full-volume Surface Nets extraction.
+            // Finalize path: full-volume Surface Nets from the contour SDF.
             segment.clear_chunk_runtime();
             if let Some(sdf) = &segment.sdf {
                 let mesh = surface_nets_from_sdf(sdf, 0.0, sdf.active_bounds);

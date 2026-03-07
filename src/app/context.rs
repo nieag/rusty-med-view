@@ -9,6 +9,7 @@ use crate::render::mesh_pipeline::{MeshPipeline, MeshResources};
 use crate::render::pipeline;
 use crate::render::protocols;
 use crate::render::sdf_preview_pipeline::SdfPreviewPipeline;
+use crate::render::tsdf_compute_pipeline::TsdfComputePipeline;
 use crate::systems::SegmentManager;
 use hecs::World;
 use std::collections::HashMap;
@@ -50,6 +51,8 @@ pub struct RenderingContext {
     pub window: Arc<Window>,
     pub gpu: GpuState,
     pub pipelines: Pipelines,
+    /// GPU TSDF compute pipeline (JFA).  `None` on WebGL2 / fallback backends.
+    pub tsdf_compute: Option<TsdfComputePipeline>,
     pub volume_resources: VolumeResources,
     pub scene: SceneState,
     pub gui: Gui,
@@ -174,6 +177,7 @@ impl RenderingContext {
         let annotations = world.spawn((AnnotationState::default(),));
         let overlay = world.spawn((OverlayManager::default(),));
         let sdf_preview = world.spawn((SdfPreviewState::default(),));
+        let fallback_active = seg_perf_cfg.fallback_active;
         let seg_perf = world.spawn((seg_perf_cfg,));
         let mut segment_manager = SegmentManager::new();
         segment_manager.add_segment("Segment 1", [1.0, 0.0, 0.0, 1.0]); // Red
@@ -219,6 +223,20 @@ impl RenderingContext {
         let sdf_preview_pipeline = SdfPreviewPipeline::new(&device, config.format);
         let mesh_pipeline = MeshPipeline::new(&device, config.format, config.width, config.height);
 
+        // GPU TSDF compute pipeline — unavailable on WebGL2 (fallback) or WASM.
+        let tsdf_compute = if fallback_active {
+            None
+        } else {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                Some(TsdfComputePipeline::new(&device))
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                None
+            }
+        };
+
         RenderingContext {
             window,
             gpu: GpuState {
@@ -233,6 +251,7 @@ impl RenderingContext {
                 sdf_preview: sdf_preview_pipeline,
                 mesh: mesh_pipeline,
             },
+            tsdf_compute,
             volume_resources: VolumeResources {
                 texture_bind_group_layout,
                 uniform_buffer,
