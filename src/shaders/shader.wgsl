@@ -34,10 +34,6 @@ struct Uniforms {
     overlay_mouse_uv: vec2<f32>,     // Mouse position for dragged primitive
     overlay_primitive_count: u32,    // Number of active primitives
     overlay_dragging_idx: u32,       // Index being dragged (0xFFFFFFFF = none)
-    // Brush preview
-    brush_preview: vec4<f32>,        // [brush_size, active, viewport, _]
-    brush_center_voxel: vec4<f32>,   // [voxel_x, voxel_y, voxel_z, valid]
-    // ---
     zoom: f32,
     view_mode: u32,
     overlay_flags: u32,
@@ -388,41 +384,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             ch_len = 0.0;
             ch_alpha = 0.7;
 
-            // --- Brush preview (using CPU-computed center for guaranteed sync) ---
-            let brush_size = uniforms.brush_preview.x;
-            let brush_active = uniforms.brush_preview.y;
-            let brush_viewport = u32(uniforms.brush_preview.z);
-            let center_valid = uniforms.brush_center_voxel.w;
-
-            if brush_active > 0.5 && brush_viewport == uniforms.view_mode && center_valid > 0.5 {
-                // Use sample_pos (the volume coord of THIS pixel) vs brush_center_voxel (volume coord of MOUSE)
-                // This guarantees the preview matches the voxel sampling and the paint logic!
-                let diff = (sample_pos - uniforms.brush_center_voxel.xyz) * dims;
-                var dist_sq = 0.0;
-                var dx = 0.0;
-                var dy = 0.0;
-
-                if uniforms.view_mode == 1u {
-                    dx = diff.x; dy = diff.y;
-                } else if uniforms.view_mode == 2u {
-                    dx = diff.x; dy = diff.z;
-                } else if uniforms.view_mode == 3u {
-                    dx = diff.y; dy = diff.z;
-                }
-                dist_sq = dx * dx + dy * dy;
-
-                let r = brush_size;
-                let r2 = r * r;
-
-                if dist_sq <= r2 {
-                    // Only show edge voxels (thin outline)
-                    let is_edge = (abs(dx) + 1.0) * (abs(dx) + 1.0) + dy * dy > r2 || dx * dx + (abs(dy) + 1.0) * (abs(dy) + 1.0) > r2;
-
-                    if is_edge || brush_size <= 1.5 {
-                        final_color = vec4<f32>(0.0, 1.0, 1.0, 1.0);
-                    }
-                }
-            }
         }
     } else {
         // --- MODE 0: 3D X-RAY (Volume-Based Rotation) ---

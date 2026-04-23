@@ -90,32 +90,11 @@ pub fn draw_sidebar(
 
     ui.separator();
 
-    // --- Toolbox (Brush Settings) ---
-    if let Ok(editor) = world.get::<&EditorState>(entities.editor) {
-        if editor.active_tool != EditorTool::Navigation {
-            ui.collapsing("🖌 Brush Settings", |ui| {
-                let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) else {
-                    return;
-                };
-                ui.label(format!("Size: {:.1} px", editor.brush_size));
-                ui.add(egui::Slider::new(&mut editor.brush_size, 1.0..=20.0));
-
-                ui.label("Label ID");
-                ui.add(egui::Slider::new(&mut editor.active_label_index, 1..=10));
-            });
-            ui.separator();
-        }
-    }
-
     // --- Layer Control ---
     ui.collapsing("📚 Layers", |ui| {
         let mut layers: Vec<(hecs::Entity, String, bool, f32)> = Vec::new();
         for (e, (seg, settings)) in world.query::<(&Segmentation, &LayerSettings)>().iter() {
             layers.push((e, seg.name.clone(), seg.is_visible, settings.opacity));
-        }
-
-        if ui.button("➕ Create New Layer").clicked() {
-            let _ = event_proxy.send_event(AppEvent::CreateNewLayer);
         }
 
         let active_layer = world
@@ -153,13 +132,6 @@ pub fn draw_sidebar(
                 let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
             }
         }
-    });
-
-    ui.separator();
-
-    // --- Contour Segments ---
-    ui.collapsing("📐 Contour Segments", |ui| {
-        super::segments::draw_segment_panel(ui, world, entities);
     });
 
     ui.separator();
@@ -228,7 +200,7 @@ pub fn draw_sidebar(
 
     ui.separator();
     ui.collapsing("⌨ Controls", |ui| {
-        ui.label("LMB: Crosshair / Paint");
+        ui.label("LMB: Set crosshair");
         ui.label("MMB: Pan");
         ui.label("RMB: Rotate (3D)");
         ui.label("Scroll: Zoom / Slice");

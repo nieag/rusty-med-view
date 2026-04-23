@@ -5,7 +5,6 @@ use crate::io::nifti::LoadError;
 pub enum AppEvent {
     VolumeLoaded(Result<LoadResult, LoadError>),
     RebuildBindGroups,
-    CreateNewLayer,
     SwitchProtocol(String),
     ToggleMaximize(hecs::Entity),
     SwapViewports(hecs::Entity, hecs::Entity),

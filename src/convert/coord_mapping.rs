@@ -51,18 +51,18 @@ pub fn plane_distance_to_slice_index(distance_mm: f32, spacing: f32, dim: u32) -
     (((distance_mm / spacing.max(1e-6)) - 0.5).round() as i32).clamp(0, dim as i32 - 1)
 }
 
-/// Convert world depth to SDF slice index using center-based slice semantics.
-pub fn world_depth_to_sdf_slice(
+/// Convert world depth to a regularly spaced grid slice index using center-based semantics.
+pub fn world_depth_to_grid_slice(
     world_depth: f32,
-    sdf_origin: f32,
-    sdf_spacing: f32,
-    sdf_dim: u32,
+    grid_origin: f32,
+    grid_spacing: f32,
+    grid_dim: u32,
 ) -> i32 {
-    if sdf_dim == 0 {
+    if grid_dim == 0 {
         return 0;
     }
-    ((((world_depth - sdf_origin) / sdf_spacing.max(1e-6)) - 0.5).round() as i32)
-        .clamp(0, sdf_dim as i32 - 1)
+    ((((world_depth - grid_origin) / grid_spacing.max(1e-6)) - 0.5).round() as i32)
+        .clamp(0, grid_dim as i32 - 1)
 }
 
 #[cfg(test)]
@@ -100,11 +100,11 @@ mod tests {
     }
 
     #[test]
-    fn test_world_depth_to_sdf_slice_center_convention() {
+    fn test_world_depth_to_grid_slice_center_convention() {
         let spacing = 0.5;
         let dim = 200;
         let slice = 23;
         let world = (slice as f32 + 0.5) * spacing;
-        assert_eq!(world_depth_to_sdf_slice(world, 0.0, spacing, dim), slice);
+        assert_eq!(world_depth_to_grid_slice(world, 0.0, spacing, dim), slice);
     }
 }

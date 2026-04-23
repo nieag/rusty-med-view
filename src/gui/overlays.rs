@@ -4,16 +4,25 @@ use crate::AppEvent;
 use hecs::{Entity, World};
 use winit::event_loop::EventLoopProxy;
 
+/// Viewport layout inputs for overlay drawing.
+pub struct OverlayViewCtx<'a> {
+    pub central_rect: egui::Rect,
+    pub vps: &'a [(Entity, ViewMode, egui::Rect)],
+    pub active_viewport_entity: Option<Entity>,
+    pub volume_info: Option<[u32; 3]>,
+}
+
 pub fn draw_viewport_overlays(
     ctx: &egui::Context,
     world: &mut World,
     entities: &AppEntities,
     event_proxy: &EventLoopProxy<AppEvent>,
-    central_rect: egui::Rect,
-    vps: &[(Entity, ViewMode, egui::Rect)],
-    active_viewport_entity: Option<Entity>,
-    volume_info: Option<[u32; 3]>,
+    view_ctx: &OverlayViewCtx<'_>,
 ) {
+    let central_rect = view_ctx.central_rect;
+    let vps = view_ctx.vps;
+    let active_viewport_entity = view_ctx.active_viewport_entity;
+    let volume_info = view_ctx.volume_info;
     let mut cursor_pos = [0.0, 0.0, 0.0];
     if let Ok(t) = world.get::<&Transform>(entities.cursor) {
         cursor_pos = t.position;
@@ -218,11 +227,13 @@ pub fn draw_viewport_overlays(
                             items,
                             &vs,
                             vd,
-                            *rect,
-                            *mode,
                             &mut overlay,
-                            focused_id,
-                            cursor_pos,
+                            &AnnotationViewCtx {
+                                rect: *rect,
+                                mode: *mode,
+                                focused_id,
+                                cursor_pos,
+                            },
                         ) {
                             clicked_id = Some(id);
                         }
@@ -269,18 +280,33 @@ fn marker(ui: &mut egui::Ui, text: &str, pos: egui::Pos2) {
     );
 }
 
+struct AnnotationViewCtx {
+    rect: egui::Rect,
+    mode: ViewMode,
+    focused_id: Option<uuid::Uuid>,
+    cursor_pos: glam::Vec3,
+}
+
 fn draw_annotations(
     ui: &mut egui::Ui,
     annotations: &mut [Annotation],
     view: &ViewportState,
     vol: &VolumeData,
-    rect: egui::Rect,
-    mode: ViewMode,
     overlay: &mut OverlayManager,
-    focused_id: Option<uuid::Uuid>,
-    cursor_pos: glam::Vec3,
+    ann_ctx: &AnnotationViewCtx,
 ) -> Option<uuid::Uuid> {
+    let rect = ann_ctx.rect;
+    let mode = ann_ctx.mode;
+    let focused_id = ann_ctx.focused_id;
+    let cursor_pos = ann_ctx.cursor_pos;
     let aspect_ratios = vol.aspect_ratios();
+    let proj = crate::render::geometry::ViewProjection {
+        zoom: view.zoom,
+        pan: view.pan,
+        pivot: view.pivot,
+        rotation: view.user_rotation,
+        aspect_ratios,
+    };
 
     if vol.dimensions[0] == 0 {
         return None;
@@ -307,16 +333,7 @@ fn draw_annotations(
             }
         }
 
-        if let Some(screen_pos) = world_to_screen(
-            ann.world_pos,
-            viewport_idx,
-            view.zoom,
-            view.pan,
-            view.pivot,
-            view.user_rotation,
-            aspect_ratios,
-            rect,
-        ) {
+        if let Some(screen_pos) = world_to_screen(ann.world_pos, viewport_idx, &proj, rect) {
             let sense = if viewport_idx > 0 {
                 egui::Sense::click_and_drag()
             } else {
@@ -336,10 +353,6 @@ fn draw_annotations(
                 overlay.dragging_viewport = viewport_idx as u32;
 
                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
-                    let zoom = view.zoom;
-                    let pan = view.pan;
-                    let pivot = view.pivot;
-
                     let screen_w = rect.width();
                     let screen_h = rect.height();
                     let screen_aspect = if screen_h > 0.0 {
@@ -361,8 +374,8 @@ fn draw_annotations(
 
                     overlay.mouse_screen_uv = [ndc_x, ndc_y];
 
-                    let world_u = ((ndc_x - pivot[0]) * k / zoom) + pivot[0] + pan[0];
-                    let world_v = ((ndc_y - pivot[1]) / zoom) + pivot[1] + pan[1];
+                    let world_u = ((ndc_x - proj.pivot[0]) * k / proj.zoom) + proj.pivot[0] + proj.pan[0];
+                    let world_v = ((ndc_y - proj.pivot[1]) / proj.zoom) + proj.pivot[1] + proj.pan[1];
 
                     if let Some(plane) =
                         crate::util::orientation::SlicePlane::from_viewport(viewport_idx as u32)
@@ -383,16 +396,7 @@ fn draw_annotations(
             let draw_pos = if response.dragged() {
                 ui.ctx().pointer_latest_pos().unwrap_or(screen_pos)
             } else {
-                world_to_screen(
-                    ann.world_pos,
-                    viewport_idx,
-                    view.zoom,
-                    view.pan,
-                    view.pivot,
-                    view.user_rotation,
-                    aspect_ratios,
-                    rect,
-                )
+                world_to_screen(ann.world_pos, viewport_idx, &proj, rect)
                 .unwrap_or(screen_pos)
             };
 
@@ -453,11 +457,7 @@ fn draw_annotations(
 fn world_to_screen(
     pos: glam::Vec3,
     viewport_idx: usize,
-    zoom: f32,
-    pan: [f32; 2],
-    pivot: [f32; 2],
-    rotation: [f32; 4],
-    aspect_ratios: [f32; 3],
+    proj: &crate::render::geometry::ViewProjection,
     rect: egui::Rect,
 ) -> Option<egui::Pos2> {
     let screen_aspect = if rect.height() > 0.0 {
@@ -466,16 +466,7 @@ fn world_to_screen(
         1.0
     };
 
-    if let Some([ndc_x, ndc_y]) = crate::render::geometry::world_to_ndc(
-        pos,
-        viewport_idx,
-        zoom,
-        pan,
-        pivot,
-        rotation,
-        aspect_ratios,
-        screen_aspect,
-    ) {
+    if let Some([ndc_x, ndc_y]) = crate::render::geometry::world_to_ndc(pos, viewport_idx, proj, screen_aspect) {
         if (!(0.0..=1.0).contains(&ndc_x) || !(0.0..=1.0).contains(&ndc_y)) && viewport_idx > 0 {
             return None;
         }

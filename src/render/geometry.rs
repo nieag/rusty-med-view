@@ -55,35 +55,40 @@ pub const QUAD_INDICES: &[u16] = &[
     0, 2, 3, // Triangle 2
 ];
 
+/// View projection parameters for 2D/3D viewport coordinate mapping.
+pub struct ViewProjection {
+    pub zoom: f32,
+    pub pan: [f32; 2],
+    pub pivot: [f32; 2],
+    pub rotation: [f32; 4],
+    pub aspect_ratios: [f32; 3],
+}
+
 /// Project a world position (0..1) to Normalized Device Coordinates (0..1 relative to viewport)
 pub fn world_to_ndc(
     pos: Vec3,
     viewport_idx: usize,
-    zoom: f32,
-    pan: [f32; 2],
-    pivot: [f32; 2],
-    rotation: [f32; 4],
-    aspect_ratios: [f32; 3],
+    proj: &ViewProjection,
     screen_aspect: f32,
 ) -> Option<[f32; 2]> {
     if viewport_idx > 0 {
         // --- 2D Viewports ---
         let plane = crate::util::orientation::SlicePlane::from_viewport(viewport_idx as u32)?;
         let [ndc_x_relative, ndc_y_relative] = plane.volume_to_screen_uv(pos.into());
-        let k = screen_aspect / plane.slice_aspect(aspect_ratios);
+        let k = screen_aspect / plane.slice_aspect(proj.aspect_ratios);
 
-        let ndc_x = ((ndc_x_relative - pivot[0] - pan[0]) * zoom / k) + pivot[0];
-        let ndc_y = ((ndc_y_relative - pivot[1] - pan[1]) * zoom) + pivot[1];
+        let ndc_x = ((ndc_x_relative - proj.pivot[0] - proj.pan[0]) * proj.zoom / k) + proj.pivot[0];
+        let ndc_y = ((ndc_y_relative - proj.pivot[1] - proj.pan[1]) * proj.zoom) + proj.pivot[1];
 
         Some([ndc_x, ndc_y])
     } else {
         // --- 3D Viewport ---
         crate::util::orientation::volume_to_screen_3d(
             pos.into(),
-            rotation,
-            aspect_ratios,
-            zoom,
-            pan,
+            proj.rotation,
+            proj.aspect_ratios,
+            proj.zoom,
+            proj.pan,
             screen_aspect,
         )
     }

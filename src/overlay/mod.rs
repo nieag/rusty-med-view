@@ -10,19 +10,10 @@ pub struct AnnotationMarker {
     pub world_pos: Vec3,
 }
 
-/// Preview of a brush stroke
-#[derive(Clone, Debug)]
-pub struct BrushPreview {
-    pub world_pos: Vec3,
-    pub radius: f32,
-    pub viewport_mask: u32,
-}
-
 /// Manager for all overlay primitives, providing a cleaner abstraction than a flat vector.
 pub struct OverlayManager {
     /// Specialized collections
     pub annotations: Vec<AnnotationMarker>,
-    pub brush_preview: Option<BrushPreview>,
 
     /// Cached GPU primitives (built from specialized collections)
     pub primitives: Vec<OverlayPrimitive>,
@@ -41,7 +32,6 @@ impl OverlayManager {
     pub fn new() -> Self {
         Self {
             annotations: Vec::new(),
-            brush_preview: None,
             primitives: Vec::new(),
             mouse_screen_uv: [0.5, 0.5],
             dragging_idx: None,
@@ -63,16 +53,6 @@ impl OverlayManager {
             ));
         }
 
-        // Add brush preview
-        if let Some(brush) = &self.brush_preview {
-            self.primitives.push(OverlayPrimitive::ring(
-                brush.world_pos,
-                brush.radius,
-                0.005,                // thickness
-                [1.0, 1.0, 1.0, 0.8], // White translucent
-                brush.viewport_mask,
-            ));
-        }
     }
 
     pub fn add_annotation(&mut self, pos: Vec3) {

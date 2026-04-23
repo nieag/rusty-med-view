@@ -24,13 +24,6 @@ rfd = "0.15"
 flate2 = "1.0"
 uuid = { version = "1.19.0", features = ["v4", "js"] }
 
-[dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
-
-[[bench]]
-name = "segmentation"
-harness = false
-
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
 wasm-bindgen = "0.2"

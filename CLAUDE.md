@@ -4,17 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A high-performance 2D/3D medical volume viewer built with Rust + WGPU. Supports orthogonal slicing (Axial/Coronal/Sagittal), volumetric X-ray rendering, interactive crosshair picking, and contour-based segmentation with a chunked TSDF → Surface Nets meshing pipeline. Targets both native desktop (Metal) and WebAssembly (WebGPU/WebGL2).
+A 2D/3D medical volume viewer built with Rust + WGPU. The current codebase supports orthogonal slicing (Axial/Coronal/Sagittal), volumetric rendering, interactive crosshair picking, labelmap overlays, annotations, and both native desktop and WebAssembly targets.
 
 ## Commands
 
 ```bash
 cargo run                                                   # Run native desktop app
-cargo test -q                                               # Run all 129 unit tests
+cargo test -q                                               # Run all unit tests
 cargo test <module_path>::<test_name>                       # Run a single test
 cargo fmt --all                                             # Format code
 cargo fmt --all -- --check                                  # Check formatting (CI)
-cargo clippy -- -D warnings -A clippy::too-many-arguments  # Lint (CI)
+cargo clippy -- -D warnings                                 # Lint (CI)
 cargo build --release                                       # Verify native build (CI)
 cargo check --target wasm32-unknown-unknown -q              # Verify WASM compilation (CI)
 trunk serve                                                 # Run WASM locally (requires trunk + wasm32 target)
@@ -36,11 +36,11 @@ CI runs fmt check, clippy, tests, and both native/WASM builds on every push to m
 This zero-lag order means interactions appear in the same frame they occur.
 
 **Key module areas:**
-- `src/app/` — ECS components (`components.rs`), app event enum (`events.rs`), segmentation data model (`segment.rs`), rendering context init (`context.rs`)
-- `src/systems/` — input, picking (3D raymarching), paint (voxel labelmap editing), segment_system (contour→SDF→TSDF→Surface Nets), contour_draw, render_prep
-- `src/convert/` — pure algorithmic code: `contour_to_sdf`, `contour_to_tsdf_chunks`, `surface_nets` (active mesher), `marching_cubes` (retained, not active), `chunk_grid`, `slice_isolines`, `labelmap_to_contours`, `coord_mapping`
+- `src/app/` — ECS components (`components.rs`), app event enum (`events.rs`), rendering context init (`context.rs`)
+- `src/systems/` — input, picking, render preparation
+- `src/convert/` — shared coordinate-mapping helpers
 - `src/render/` — WGPU pipeline setup and frame rendering
-- `src/gui/` — egui panels (toolbar, sidebar, annotations, segments)
+- `src/gui/` — egui panels (toolbar, sidebar, annotations, overlays)
 - `src/io/` — async NIfTI loading, texture creation, bind group recreation
 - `src/util/orientation.rs` — **single source of truth** for all coordinate transforms and radiological mappings
 - `src/shaders/` — WGSL shader sources (`shader.wgsl` is the main volume raymarcher)
@@ -56,36 +56,30 @@ View rotation composition: `final = user_rotation * BASE_ROTATION * data_orienta
 
 CPU picking (`screen_to_ray_3d`) and GPU raymarching use identical math — verified by "shader parity" unit tests in `orientation.rs`.
 
-## Segmentation Pipeline
+## Current Editing Scope
 
-`Contours → SDF (incremental ROI update) → TSDF chunks (i16 quantized) → Surface Nets → merged mesh`
-
-- `SegmentRuntimeCache.tsdf_chunks: HashMap<ChunkKey, TsdfChunk>` is the persistent authoritative representation
-- Each chunk is padded +1 voxel on all edges so Surface Nets can connect vertices across boundaries
-- Live editing processes only dirty chunks within a configurable **frame budget**
-- "Finalize" path uses `surface_nets_from_sdf` for full-volume extraction at higher resolution
+The current application supports viewing a main volume, loading labelmaps as overlay layers, adjusting viewport/windowing state, and working with annotations. The older contour/SDF/mesh segmentation pipeline has been removed from the active codebase and is being redesigned separately.
 
 ## Testing Approach
 
-Tests live in `#[cfg(test)]` modules within each source file. The "modular math" pattern extracts pure functions (no GPU/ECS dependencies) so geometry and coordinate logic can be unit tested directly. Key coverage: AABB intersections, quaternion↔matrix conversions, voxel painting, Surface Nets parity (CPU vs expected), pipeline budget/locality verification, contour discretization.
+Tests live in `#[cfg(test)]` modules within each source file. The "modular math" pattern extracts pure functions (no GPU/ECS dependencies) so geometry and coordinate logic can be unit tested directly. Key coverage includes coordinate transforms, picking, orientation math, and rendering-related helpers.
 
-For rendering/segmentation changes include: a correctness test (geometry/bounds), a regression test (prior bug), and a WASM compile check.
+For rendering or overlay changes include: a correctness test where practical, a regression test for prior bugs, and a WASM compile check.
 
 ## Key Invariants
 
 - `Uniforms` struct layout in `components.rs` must match `shader.wgsl` exactly (16-byte alignment boundaries)
 - `shader.wgsl` early-exits when `volume_dims == [0,0,0]` (startup guard against NaN aspect ratios)
 - Overlays and crosshairs are inhibited until a valid volume is loaded
-- Marching Cubes is retained in `convert/marching_cubes.rs` but is not in the active pipeline
 
 ## Coding Conventions
 
 - Rust 2021 edition, 4-space indentation, standard `rustfmt`
 - `snake_case` for functions/variables/modules, `CamelCase` for types
-- Descriptive system names: `sys_update_segment_derivatives`
-- Commit style: short imperative with scope prefix — `Perf: incremental SDF ROI updates`, `Fix: crosshair projection in sagittal view`
+- Descriptive system names like `sys_handle_input_scroll`
+- Commit style: short imperative with scope prefix — `Fix: crosshair projection in sagittal view`, `Docs: update current repo status`
 - Keep commits focused; don't mix refactors with behavior changes
-- If an active plan doc exists in `docs/features/`, update its Implementation Status log in the same commit as the code change
+- If an active plan doc exists in `docs/`, update its Implementation Status log in the same commit as the code change
 
 ## Sample Data
 

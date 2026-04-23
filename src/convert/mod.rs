@@ -1,24 +1,4 @@
-//! Conversion algorithms for segmentation representations.
-//!
-//! This module contains algorithms for converting between different
-//! segmentation formats (contours, SDF, mesh).
+//! Coordinate mapping helpers used by rendering and input.
 
-pub mod chunk_grid;
-pub mod contour_to_sdf;
-pub mod contour_to_tsdf_chunks;
 pub mod coord_mapping;
-pub mod labelmap_to_contours;
-pub mod labelmap_to_tsdf;
-pub mod marching_cubes;
-pub mod slice_isolines;
-pub mod surface_nets;
-
-pub use chunk_grid::*;
-pub use contour_to_sdf::*;
-pub use contour_to_tsdf_chunks::*;
 pub use coord_mapping::*;
-pub use labelmap_to_contours::*;
-pub use labelmap_to_tsdf::*;
-pub use marching_cubes::*;
-pub use slice_isolines::*;
-pub use surface_nets::*;

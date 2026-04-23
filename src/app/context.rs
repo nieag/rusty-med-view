@@ -4,15 +4,9 @@ use crate::gui::Gui;
 use crate::io::handlers;
 use crate::io::volume;
 use crate::overlay::OverlayManager;
-use crate::render::contour_pipeline::ContourPipeline;
-use crate::render::mesh_pipeline::{MeshPipeline, MeshResources};
 use crate::render::pipeline;
 use crate::render::protocols;
-use crate::render::sdf_preview_pipeline::SdfPreviewPipeline;
-use crate::render::tsdf_compute_pipeline::TsdfComputePipeline;
-use crate::systems::SegmentManager;
 use hecs::World;
-use std::collections::HashMap;
 use std::sync::Arc;
 use winit::event_loop::EventLoopProxy;
 use winit::window::Window;
@@ -26,9 +20,6 @@ pub struct GpuState {
 
 pub struct Pipelines {
     pub render: wgpu::RenderPipeline,
-    pub contour: ContourPipeline,
-    pub sdf_preview: SdfPreviewPipeline,
-    pub mesh: MeshPipeline,
 }
 
 pub struct VolumeResources {
@@ -51,13 +42,10 @@ pub struct RenderingContext {
     pub window: Arc<Window>,
     pub gpu: GpuState,
     pub pipelines: Pipelines,
-    /// GPU TSDF compute pipeline (JFA).  `None` on WebGL2 / fallback backends.
-    pub tsdf_compute: Option<TsdfComputePipeline>,
     pub volume_resources: VolumeResources,
     pub scene: SceneState,
     pub gui: Gui,
     pub settings_entity: hecs::Entity,
-    pub segment_mesh_gpu_cache: HashMap<uuid::Uuid, (u64, MeshResources)>,
     pub event_proxy: EventLoopProxy<AppEvent>,
 }
 
@@ -86,11 +74,6 @@ impl RenderingContext {
             .request_device(&wgpu::DeviceDescriptor::default())
             .await
             .expect("Failed to create device");
-
-        let mut seg_perf_cfg = SegPerfConfig::default();
-        if matches!(adapter.get_info().backend, wgpu::Backend::Gl) {
-            seg_perf_cfg.fallback_active = true;
-        }
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps.formats[0];
@@ -147,14 +130,16 @@ impl RenderingContext {
         let diffuse_bind_group = pipeline::create_scene_bind_group(
             &device,
             &texture_bind_group_layout,
-            &volume_view,
-            &volume_sampler,
-            &uniform_buffer,
-            &dummy_r8.1,
-            &default_lut.1,
-            &dummy_r8.1,
-            &default_lut.1,
-            &overlay_buffer,
+            &pipeline::SceneTextureViews {
+                volume_view: &volume_view,
+                volume_sampler: &volume_sampler,
+                uniform_buffer: &uniform_buffer,
+                overlay1_view: &dummy_r8.1,
+                overlay1_lut: &default_lut.1,
+                overlay2_view: &dummy_r8.1,
+                overlay2_lut: &default_lut.1,
+                overlay_buffer: &overlay_buffer,
+            },
         );
 
         world.spawn((
@@ -176,12 +161,6 @@ impl RenderingContext {
         let windowing = world.spawn((VolumeWindowing::default(),));
         let annotations = world.spawn((AnnotationState::default(),));
         let overlay = world.spawn((OverlayManager::default(),));
-        let sdf_preview = world.spawn((SdfPreviewState::default(),));
-        let fallback_active = seg_perf_cfg.fallback_active;
-        let seg_perf = world.spawn((seg_perf_cfg,));
-        let mut segment_manager = SegmentManager::new();
-        segment_manager.add_segment("Segment 1", [1.0, 0.0, 0.0, 1.0]); // Red
-        let segments = world.spawn((segment_manager,));
 
         let entities = AppEntities {
             input,
@@ -193,9 +172,6 @@ impl RenderingContext {
             protocol,
             cursor,
             window_settings: settings_entity,
-            segments,
-            sdf_preview,
-            seg_perf,
         };
 
         protocols::apply_protocol(&mut world, &entities, "Standard 2x2");
@@ -209,33 +185,16 @@ impl RenderingContext {
         handlers::recreate_bind_groups(
             &device,
             &mut world,
-            &texture_bind_group_layout,
-            &uniform_buffer,
-            &dummy_r8.1,
-            &dummy_r8.2,
-            &default_lut.1,
-            &overlay_buffer,
+            &handlers::BindGroupResources {
+                layout: &texture_bind_group_layout,
+                uniform_buffer: &uniform_buffer,
+                dummy_view: &dummy_r8.1,
+                dummy_sampler: &dummy_r8.2,
+                default_lut_view: &default_lut.1,
+                overlay_buffer: &overlay_buffer,
+            },
             None,
         );
-
-        // Create contour rendering pipeline
-        let contour_pipeline = ContourPipeline::new(&device, config.format);
-        let sdf_preview_pipeline = SdfPreviewPipeline::new(&device, config.format);
-        let mesh_pipeline = MeshPipeline::new(&device, config.format, config.width, config.height);
-
-        // GPU TSDF compute pipeline — unavailable on WebGL2 (fallback) or WASM.
-        let tsdf_compute = if fallback_active {
-            None
-        } else {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                Some(TsdfComputePipeline::new(&device))
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                None
-            }
-        };
 
         RenderingContext {
             window,
@@ -247,11 +206,7 @@ impl RenderingContext {
             },
             pipelines: Pipelines {
                 render: render_pipeline,
-                contour: contour_pipeline,
-                sdf_preview: sdf_preview_pipeline,
-                mesh: mesh_pipeline,
             },
-            tsdf_compute,
             volume_resources: VolumeResources {
                 texture_bind_group_layout,
                 uniform_buffer,
@@ -265,7 +220,6 @@ impl RenderingContext {
             scene: SceneState { world, entities },
             gui,
             settings_entity,
-            segment_mesh_gpu_cache: HashMap::new(),
             event_proxy,
         }
     }

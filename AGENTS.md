@@ -3,13 +3,13 @@
 ## Project Structure & Module Organization
 - `src/` contains the application code.
 - Core areas:
-  - `src/app/`: ECS components, app context, segmentation data model.
-  - `src/systems/`: runtime systems (input, contouring, segmentation updates, rendering prep).
+  - `src/app/`: ECS components, app context, and events.
+  - `src/systems/`: runtime systems (input, picking, rendering prep).
   - `src/render/`: WGPU pipelines and frame rendering.
-  - `src/convert/`: representation conversions (contours, SDF, meshing, chunk utilities).
-  - `src/gui/`: egui panels and tooling UI.
+  - `src/convert/`: shared conversion and coordinate-mapping helpers.
+  - `src/gui/`: egui panels and viewer UI.
   - `src/shaders/`: WGSL shader sources.
-- `docs/features/` stores implementation plans and feature design notes.
+- `docs/` stores implementation plans and design notes.
 - Tests are colocated in `#[cfg(test)]` modules in each Rust source file.
 
 ## Build, Test, and Development Commands
@@ -26,13 +26,13 @@
 - Naming:
   - `snake_case` for functions/modules/variables.
   - `CamelCase` for structs/enums/traits.
-  - descriptive system names like `sys_update_segment_derivatives`.
+  - descriptive system names like `sys_prepare_render_data`.
 - Keep public APIs explicit in `mod.rs`; avoid broad re-exports unless needed.
 
 ## Testing Guidelines
 - Add unit tests with each non-trivial behavior change.
-- Test names should describe outcome, e.g. `test_incremental_update_preserves_prior_active_bounds`.
-- For rendering/segmentation changes, include:
+- Test names should describe outcome, e.g. `test_plane_distance_to_slice_index_matches_center_convention`.
+- For rendering/viewer changes, include:
   - correctness test (geometry/bounds),
   - regression test (previous bug),
   - WASM compile check.
@@ -50,7 +50,7 @@
   - screenshots or short clips for UI/visual rendering changes.
 
 ## Plan Tracking Discipline
-- If an active plan document exists (for example `docs/features/.../performance-plan.md`), update it as implementation progresses.
+- If an active plan document exists, update it as implementation progresses.
 - Maintain an **Implementation Status** log with:
   - current phase/state,
   - concise completed/pending checklist items,

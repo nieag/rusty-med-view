@@ -1,7 +1,6 @@
 pub mod components;
 pub mod context;
 pub mod events;
-pub mod segment;
 
 use crate::app::components::*;
 use crate::app::context::RenderingContext;
@@ -115,17 +114,10 @@ impl ApplicationHandler<AppEvent> for App {
                     position.y,
                 );
                 systems::sys_handle_mouse_drag(&mut ctx.scene.world, &ctx.scene.entities);
-                systems::sys_handle_contour_mouse_drag(&mut ctx.scene.world, &ctx.scene.entities);
                 ctx.window.request_redraw();
             }
             WindowEvent::MouseInput { button, state, .. } => {
                 systems::sys_handle_mouse_button(
-                    &mut ctx.scene.world,
-                    &ctx.scene.entities,
-                    button,
-                    state,
-                );
-                systems::sys_handle_contour_mouse_button(
                     &mut ctx.scene.world,
                     &ctx.scene.entities,
                     button,
@@ -159,11 +151,6 @@ impl ApplicationHandler<AppEvent> for App {
                 ctx.gpu.config.width = size.width;
                 ctx.gpu.config.height = size.height;
                 ctx.gpu.surface.configure(&ctx.gpu.device, &ctx.gpu.config);
-                ctx.pipelines.mesh.resize(
-                    &ctx.gpu.device,
-                    ctx.gpu.config.width,
-                    ctx.gpu.config.height,
-                );
                 let mut query = ctx
                     .scene
                     .world
@@ -180,7 +167,6 @@ impl ApplicationHandler<AppEvent> for App {
                     &ctx.gpu,
                     &ctx.volume_resources,
                     &mut ctx.pipelines,
-                    &mut ctx.segment_mesh_gpu_cache,
                     &mut ctx.scene,
                     &mut ctx.gui,
                     &ctx.window,
@@ -237,27 +223,10 @@ impl ApplicationHandler<AppEvent> for App {
                                 {
                                     editor.active_layer = Some(new_entity);
                                 }
-                                let imported_segment = handlers::import_labelmap_direct(
-                                    &mut ctx.scene.world,
-                                    &ctx.scene.entities,
-                                    loaded_label,
-                                    #[cfg(not(target_arch = "wasm32"))]
-                                    &ctx.gpu.device,
-                                    #[cfg(not(target_arch = "wasm32"))]
-                                    &ctx.gpu.queue,
-                                    ctx.tsdf_compute.as_ref(),
-                                );
                                 handlers::set_status_message(
                                     &mut ctx.scene.world,
                                     &ctx.scene.entities,
-                                    if imported_segment.is_some() {
-                                        format!(
-                                            "Label Loaded: {}x{} (segments imported)",
-                                            dims[0], dims[1]
-                                        )
-                                    } else {
-                                        format!("Label Loaded: {}x{}", dims[0], dims[1])
-                                    },
+                                    format!("Label Loaded: {}x{}", dims[0], dims[1]),
                                 );
 
                                 dims
@@ -274,12 +243,14 @@ impl ApplicationHandler<AppEvent> for App {
                         handlers::recreate_bind_groups(
                             &ctx.gpu.device,
                             &mut ctx.scene.world,
-                            &ctx.volume_resources.texture_bind_group_layout,
-                            &ctx.volume_resources.uniform_buffer,
-                            &ctx.volume_resources.dummy_r8.1,
-                            &ctx.volume_resources.dummy_r8.2,
-                            &ctx.volume_resources.default_lut.1,
-                            &ctx.volume_resources.overlay_buffer,
+                            &handlers::BindGroupResources {
+                                layout: &ctx.volume_resources.texture_bind_group_layout,
+                                uniform_buffer: &ctx.volume_resources.uniform_buffer,
+                                dummy_view: &ctx.volume_resources.dummy_r8.1,
+                                dummy_sampler: &ctx.volume_resources.dummy_r8.2,
+                                default_lut_view: &ctx.volume_resources.default_lut.1,
+                                overlay_buffer: &ctx.volume_resources.overlay_buffer,
+                            },
                             active_layer,
                         );
                     }
@@ -304,73 +275,16 @@ impl ApplicationHandler<AppEvent> for App {
                 handlers::recreate_bind_groups(
                     &ctx.gpu.device,
                     &mut ctx.scene.world,
-                    &ctx.volume_resources.texture_bind_group_layout,
-                    &ctx.volume_resources.uniform_buffer,
-                    &ctx.volume_resources.dummy_r8.1,
-                    &ctx.volume_resources.dummy_r8.2,
-                    &ctx.volume_resources.default_lut.1,
-                    &ctx.volume_resources.overlay_buffer,
+                    &handlers::BindGroupResources {
+                        layout: &ctx.volume_resources.texture_bind_group_layout,
+                        uniform_buffer: &ctx.volume_resources.uniform_buffer,
+                        dummy_view: &ctx.volume_resources.dummy_r8.1,
+                        dummy_sampler: &ctx.volume_resources.dummy_r8.2,
+                        default_lut_view: &ctx.volume_resources.default_lut.1,
+                        overlay_buffer: &ctx.volume_resources.overlay_buffer,
+                    },
                     active_layer,
                 );
-                ctx.window.request_redraw();
-            }
-            AppEvent::CreateNewLayer => {
-                let mut dims = [64, 64, 64];
-                for (_, vol) in ctx.scene.world.query::<&VolumeData>().iter() {
-                    dims = vol.dimensions;
-                }
-                let (tex, view, sampler, data) =
-                    crate::io::volume::create_blank_labelmap(&ctx.gpu.device, &ctx.gpu.queue, dims);
-                let mut count = 0;
-                for _ in ctx.scene.world.query::<&Segmentation>().iter() {
-                    count += 1;
-                }
-                let name = format!("Layer {}", count + 1);
-                let mut placeholder_bg = None;
-                if let Some((_, res)) = ctx.scene.world.query::<&GpuVolumeResources>().iter().next()
-                {
-                    placeholder_bg = Some(res.bind_group.clone());
-                }
-                let placeholder_bg = placeholder_bg.expect("Main volume should exist");
-                let entity = ctx.scene.world.spawn((
-                    Segmentation {
-                        name,
-                        is_visible: true,
-                    },
-                    LayerSettings { opacity: 0.7 },
-                    LabelmapData {
-                        dimensions: dims,
-                        raw_data: data,
-                    },
-                    Representation::Voxel(GpuVolumeResources {
-                        texture: tex,
-                        view,
-                        sampler,
-                        bind_group: placeholder_bg,
-                    }),
-                    SegmentationTag,
-                ));
-                let active_layer = ctx
-                    .scene
-                    .world
-                    .query::<&EditorState>()
-                    .iter()
-                    .next()
-                    .and_then(|(_, e)| e.active_layer);
-                handlers::recreate_bind_groups(
-                    &ctx.gpu.device,
-                    &mut ctx.scene.world,
-                    &ctx.volume_resources.texture_bind_group_layout,
-                    &ctx.volume_resources.uniform_buffer,
-                    &ctx.volume_resources.dummy_r8.1,
-                    &ctx.volume_resources.dummy_r8.2,
-                    &ctx.volume_resources.default_lut.1,
-                    &ctx.volume_resources.overlay_buffer,
-                    active_layer,
-                );
-                for (_, editor) in ctx.scene.world.query_mut::<&mut EditorState>() {
-                    editor.active_layer = Some(entity);
-                }
                 ctx.window.request_redraw();
             }
             AppEvent::SwitchProtocol(name) => {

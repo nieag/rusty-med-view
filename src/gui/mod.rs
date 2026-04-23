@@ -1,7 +1,6 @@
 pub mod annotations;
 pub mod gizmo;
 pub mod overlays;
-pub mod segments;
 pub mod sidebar;
 pub mod toolbar;
 
@@ -180,10 +179,12 @@ impl Gui {
                 world,
                 entities,
                 &event_proxy,
-                central_rect,
-                &vps,
-                active_viewport_entity,
-                volume_info,
+                &overlays::OverlayViewCtx {
+                    central_rect,
+                    vps: &vps,
+                    active_viewport_entity,
+                    volume_info,
+                },
             );
 
             // 5. Input Synchronization

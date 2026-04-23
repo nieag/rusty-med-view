@@ -1,7 +1,6 @@
 // src/systems/render_prep.rs
 use crate::components::*;
 use crate::overlay::OverlayManager;
-use crate::systems::picking::get_voxel_at_mouse;
 use glam::Vec3;
 use hecs::World;
 
@@ -47,10 +46,8 @@ pub fn sys_prepare_render_data(
 
     // 4. Get Mouse UV
     let mut mouse_uv = [0.5, 0.5];
-    let mut active_viewport_entity = None;
     if let Ok(inp) = world.get::<&InputState>(entities.input) {
         mouse_uv = inp.mouse_uv;
-        active_viewport_entity = inp.active_viewport;
     }
 
     // 5. Get Volume Info and Compose Rotation
@@ -102,34 +99,6 @@ pub fn sys_prepare_render_data(
         window_params[1] = windowing.width;
     }
 
-    // 8. Get brush preview settings
-    let mut brush_preview = [0.0f32; 4];
-    if let Ok(editor) = world.get::<&EditorState>(entities.editor) {
-        match editor.active_tool {
-            EditorTool::Brush | EditorTool::Eraser => {
-                brush_preview[0] = editor.brush_size;
-                brush_preview[1] = 1.0;
-            }
-            _ => {}
-        }
-    }
-
-    let is_active = Some(viewport_entity) == active_viewport_entity;
-
-    if is_active && brush_preview[1] > 0.0 {
-        // shader expects view_mode at index 2 for conditional rendering
-        brush_preview[2] = view_mode as f32;
-    }
-
-    let brush_center_voxel = if is_active && brush_preview[1] > 0.0 {
-        match get_voxel_at_mouse(world, entities, viewport_entity, mouse_uv) {
-            Some([x, y, z]) => [x, y, z, 1.0],
-            None => [0.0, 0.0, 0.0, 0.0],
-        }
-    } else {
-        [0.0, 0.0, 0.0, 0.0]
-    };
-
     Uniforms {
         cursor_pos,
         volume_dims,
@@ -144,8 +113,6 @@ pub fn sys_prepare_render_data(
         overlay_mouse_uv: mouse_uv,
         overlay_primitive_count: 0,
         overlay_dragging_idx: u32::MAX,
-        brush_preview,
-        brush_center_voxel,
         zoom: zoom_val,
         view_mode,
         overlay_flags,

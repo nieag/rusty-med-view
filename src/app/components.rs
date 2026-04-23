@@ -144,10 +144,6 @@ pub struct Uniforms {
     pub overlay_mouse_uv: [f32; 2], // Mouse position for dragged primitive
     pub overlay_primitive_count: u32, // Number of active primitives
     pub overlay_dragging_idx: u32,  // Index being dragged (u32::MAX = none)
-    // --- Brush preview ---
-    pub brush_preview: [f32; 4], // [brush_size, active (0/1), viewport, _]
-    pub brush_center_voxel: [f32; 4], // [voxel_x, voxel_y, voxel_z, valid (0/1)]
-    // ---
     pub zoom: f32,
     pub view_mode: u32,
     pub overlay_flags: u32,
@@ -164,29 +160,12 @@ pub struct GuiState {
 pub enum EditorTool {
     #[default]
     Navigation,
-    Brush,
-    Eraser,
-    ContourDraw,
 }
 
+#[derive(Default)]
 pub struct EditorState {
     pub active_layer: Option<hecs::Entity>,
     pub active_tool: EditorTool,
-    pub brush_size: f32,
-    pub active_label_index: u8,
-    pub last_paint_voxel: Option<[u32; 3]>,
-}
-
-impl Default for EditorState {
-    fn default() -> Self {
-        Self {
-            active_layer: None,
-            active_tool: EditorTool::default(),
-            brush_size: 5.0,
-            active_label_index: 1,
-            last_paint_voxel: None,
-        }
-    }
 }
 
 pub struct Segmentation {
@@ -201,63 +180,6 @@ pub struct LayerSettings {
 pub struct LabelmapData {
     pub dimensions: [u32; 3],
     pub raw_data: Vec<u8>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct SdfPreviewState {
-    pub enabled: bool,
-    pub opacity: f32,
-    pub show_zero_isoline: bool,
-    pub value_window_mm: f32,
-    pub show_3d_surface: bool,
-}
-
-impl Default for SdfPreviewState {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            opacity: 0.35,
-            show_zero_isoline: true,
-            value_window_mm: 8.0,
-            show_3d_surface: true,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct SegPerfConfig {
-    pub live_enabled: bool,
-    pub webgpu_required: bool,
-    pub fallback_active: bool,
-    pub resolution_scale: f32,
-    pub frame_budget_ms: f32,
-    pub sdf_band_mm: f32,
-    pub mesh_chunk_size: u32,
-    pub max_roi_margin_mm: f32,
-    pub next_finalize_index: usize,
-    pub last_sdf_ms: f32,
-    pub last_mesh_ms: f32,
-    pub queue_depth: u32,
-}
-
-impl Default for SegPerfConfig {
-    fn default() -> Self {
-        Self {
-            live_enabled: true,
-            webgpu_required: true,
-            fallback_active: false,
-            // Unified resolution: sharp enough for detail, fast enough for chunks.
-            resolution_scale: 1.25,
-            frame_budget_ms: 6.0,
-            sdf_band_mm: 16.0,
-            mesh_chunk_size: 32,
-            max_roi_margin_mm: 12.0,
-            next_finalize_index: 0,
-            last_sdf_ms: 0.0,
-            last_mesh_ms: 0.0,
-            queue_depth: 0,
-        }
-    }
 }
 
 pub enum Representation {
@@ -328,9 +250,6 @@ pub struct AppEntities {
     pub protocol: hecs::Entity,
     pub cursor: hecs::Entity,
     pub window_settings: hecs::Entity,
-    pub segments: hecs::Entity,
-    pub sdf_preview: hecs::Entity,
-    pub seg_perf: hecs::Entity,
 }
 
 #[cfg(test)]
