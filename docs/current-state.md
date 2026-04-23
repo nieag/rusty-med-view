@@ -27,3 +27,6 @@ Completed:
 Pending:
 - Define the new segmentation direction in a fresh design/plan document
 - Reintroduce segmentation code only behind a coherent staged plan
+
+Plan Document:
+- See `docs/segmentation-reimplementation-plan.md` for the canonical roadmap and implementation status.
