@@ -50,9 +50,12 @@ Core runtime concepts to introduce:
 
 - `PlaneFamily`
 - `PlaneDefinition`
+- named coordinate spaces and transform contracts
 - explicit primary-switch requests
 - cache generation tracking
 - frame-budgeted conversion scheduling
+
+The current `util/orientation.rs` module should be treated as the seed of the future shared transform layer, not bypassed by ad hoc math in tools or rendering code.
 
 ## Subplans
 
@@ -117,20 +120,33 @@ Acceptance:
 - overlay rendering works through ROI state
 - this becomes the stable base for contour and mesh work
 
-### 4. Plane and Geometry Context
+### 4. Transform, Plane, and Geometry Context
 
 Purpose:
-- define the shared plane model required for contour and deformation tools
+- define the shared transform stack and plane model required for contour and deformation tools
 
 Deliver:
+- canonical coordinate-space definitions for:
+  - voxel/index space
+  - volume UV space
+  - world/patient space
+  - plane-local 2D space
+  - viewport UV space
+  - egui screen space
+  - render-facing GPU/NDC space
 - `PlaneFamily`
 - `PlaneDefinition`
 - orthogonal and oblique plane support
-- shared mapping utilities between viewport, world, and ROI-local space
+- shared mapping utilities between viewport, world, plane-local, and ROI-local space
+- explicit egui/wgpu convention reconciliation rules
+- migration of oblique-plane math into the shared transform/orientation layer
+- removal of viewport-index-based plane assumptions from new segmentation code
 
 Acceptance:
-- all future editing workflows use the same plane abstraction
+- all future editing workflows use the same transform and plane abstraction
 - oblique planes are first-class, not special-case math
+- overlay placement, picking, and render projection use the same shared conversion APIs
+- CPU and GPU transform paths have parity tests for orthogonal and oblique views
 
 ### 5. Contour Representation Architecture
 
@@ -283,6 +299,13 @@ Runtime tests:
 - missing derivative caches trigger rebuild scheduling instead of panics
 - large edits remain correct even when rebuilds span multiple frames
 
+Transform and parity tests:
+
+- orthogonal plane roundtrip tests between screen, viewport UV, plane-local, and volume space
+- oblique plane roundtrip tests through the shared plane definition APIs
+- parity tests between CPU picking, egui overlay placement, and GPU-facing projection inputs
+- regression tests for radiological orientation and screen-axis flip behavior
+
 ## Implementation Status
 
 Current Phase:
@@ -296,3 +319,4 @@ Pending:
 - define the ROI core model in code
 - migrate current label overlays onto ROI instances
 - introduce cache and job-state scaffolding without changing current viewer behavior
+- strengthen the shared transform/orientation layer before contour or mesh workflows begin
