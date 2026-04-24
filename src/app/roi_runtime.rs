@@ -9,6 +9,12 @@ pub struct RoiCacheStatus {
     pub is_current: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VoxelRoiStats {
+    pub occupied_voxels: u64,
+    pub volume_mm3: f32,
+}
+
 /// GPU handles needed to rebuild scene bind groups after ROI or volume updates.
 pub struct BindGroupResources<'a> {
     pub layout: &'a wgpu::BindGroupLayout,
@@ -85,6 +91,41 @@ pub fn recreate_scene_bind_groups(
     }
 }
 
+pub fn create_voxel_roi_from_label(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    world: &mut World,
+    loaded_label: &LoadedLabel,
+) -> hecs::Entity {
+    let (new_texture, new_view, new_sampler) =
+        crate::io::volume::create_texture_from_labelmap(device, queue, loaded_label);
+
+    let placeholder_bg = world
+        .query::<&GpuVolumeResources>()
+        .iter()
+        .next()
+        .map(|(_, res)| res.bind_group.clone())
+        .expect("Main volume should exist");
+
+    let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
+    world.spawn((
+        Roi::new_voxel(
+            RoiId(next_roi_id),
+            loaded_label.filename.clone(),
+            loaded_label.dimensions,
+            loaded_label.data.clone(),
+            GpuVolumeResources {
+                texture: new_texture,
+                view: new_view,
+                sampler: new_sampler,
+                bind_group: placeholder_bg,
+            },
+        ),
+        LayerSettings { opacity: 0.5 },
+        RoiTag,
+    ))
+}
+
 pub fn cache_status(
     world: &World,
     roi_entity: hecs::Entity,
@@ -128,6 +169,33 @@ pub fn complete_cache_rebuild(
     true
 }
 
+pub fn voxel_roi_stats(world: &World, roi_entity: hecs::Entity) -> Option<VoxelRoiStats> {
+    let roi = world.get::<&Roi>(roi_entity).ok()?;
+    let voxel_data = match &roi.authoritative_data {
+        RoiAuthoritativeData::Voxel(voxel) => voxel,
+        RoiAuthoritativeData::Contour | RoiAuthoritativeData::Mesh => return None,
+    };
+
+    let occupied_voxels = voxel_data
+        .raw_data
+        .iter()
+        .filter(|value| **value != 0)
+        .count() as u64;
+
+    let volume_scale_mm3 = world
+        .query::<&VolumeData>()
+        .with::<&MainVolumeTag>()
+        .iter()
+        .next()
+        .map(|(_, volume)| volume.spacing[0] * volume.spacing[1] * volume.spacing[2])
+        .unwrap_or(1.0);
+
+    Some(VoxelRoiStats {
+        occupied_voxels,
+        volume_mm3: occupied_voxels as f32 * volume_scale_mm3,
+    })
+}
+
 fn cache_kind_to_job_kind(kind: RoiCacheKind) -> RoiJobKind {
     match kind {
         RoiCacheKind::Voxel => RoiJobKind::RebuildVoxelCache,
@@ -148,6 +216,19 @@ mod tests {
             vec![1; 64],
             None,
         ),))
+    }
+
+    fn spawn_main_volume(world: &mut World, spacing: [f32; 3]) {
+        world.spawn((
+            VolumeData {
+                dimensions: [4, 4, 4],
+                spacing,
+                intensities: vec![],
+                intensity_range: [0.0, 1.0],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
+            MainVolumeTag,
+        ));
     }
 
     #[test]
@@ -190,5 +271,23 @@ mod tests {
         assert!(!status_after.is_dirty);
         assert!(status_after.is_current);
         assert_eq!(roi.job_state.running, None);
+    }
+
+    #[test]
+    fn test_voxel_roi_stats_use_nonzero_voxels_and_volume_spacing() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [0.5, 0.5, 2.0]);
+        let entity = world.spawn((Roi::new_voxel_with_cache(
+            RoiId(2),
+            "Mask".to_string(),
+            [2, 2, 2],
+            vec![0, 1, 2, 0, 0, 3, 4, 0],
+            None,
+        ),));
+
+        let stats = voxel_roi_stats(&world, entity).unwrap();
+
+        assert_eq!(stats.occupied_voxels, 4);
+        assert!((stats.volume_mm3 - 2.0).abs() < f32::EPSILON);
     }
 }

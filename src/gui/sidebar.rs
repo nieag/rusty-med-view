@@ -3,6 +3,8 @@ use crate::AppEvent;
 use hecs::World;
 use winit::event_loop::EventLoopProxy;
 
+use crate::app::roi_runtime;
+
 pub fn draw_sidebar(
     ctx: &egui::Context,
     ui: &mut egui::Ui,
@@ -92,13 +94,20 @@ pub fn draw_sidebar(
 
     // --- Layer Control ---
     ui.collapsing("📚 Layers", |ui| {
-        let mut layers: Vec<(hecs::Entity, String, bool, f32)> = Vec::new();
+        let mut layers: Vec<(
+            hecs::Entity,
+            String,
+            bool,
+            f32,
+            Option<roi_runtime::VoxelRoiStats>,
+        )> = Vec::new();
         for (e, (roi, settings)) in world.query::<(&Roi, &LayerSettings)>().iter() {
             layers.push((
                 e,
                 roi.metadata.name.clone(),
                 roi.metadata.is_visible,
                 settings.opacity,
+                roi_runtime::voxel_roi_stats(world, e),
             ));
         }
 
@@ -108,7 +117,7 @@ pub fn draw_sidebar(
             .and_then(|e| e.active_roi);
         let mut new_active_roi = active_roi;
 
-        for (entity, name, mut visible, mut opacity) in layers {
+        for (entity, name, mut visible, mut opacity, stats) in layers {
             ui.group(|ui| {
                 ui.horizontal(|ui| {
                     ui.radio_value(&mut new_active_roi, Some(entity), "");
@@ -119,6 +128,12 @@ pub fn draw_sidebar(
                     }
                     ui.label(name);
                 });
+                if let Some(stats) = stats {
+                    ui.label(format!(
+                        "{} voxels, {:.2} mm^3",
+                        stats.occupied_voxels, stats.volume_mm3
+                    ));
+                }
                 if visible
                     && ui
                         .add(egui::Slider::new(&mut opacity, 0.0..=1.0).text("Opacity"))

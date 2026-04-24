@@ -3,6 +3,7 @@
 //!
 //! This module extracts the load handling logic from lib.rs to improve code organization.
 
+use crate::app::roi_runtime;
 use crate::components::*;
 use crate::nifti_loader::LoadedVolume;
 use crate::volume;
@@ -61,35 +62,7 @@ pub fn handle_label_load(
     loaded_label: &LoadedLabel,
 ) -> (hecs::Entity, [u32; 3]) {
     log::info!("Labelmap loaded: {:?} dimensions", loaded_label.dimensions);
-
-    let (new_texture, new_view, new_sampler) =
-        volume::create_texture_from_labelmap(device, queue, loaded_label);
-
-    // Fetch an existing bind group as placeholder (will be fixed by recreate_bind_groups)
-    let placeholder_bg = world
-        .query::<&GpuVolumeResources>()
-        .iter()
-        .next()
-        .map(|(_, res)| res.bind_group.clone())
-        .expect("Main volume should exist");
-
-    let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
-    let entity = world.spawn((
-        Roi::new_voxel(
-            RoiId(next_roi_id),
-            loaded_label.filename.clone(),
-            loaded_label.dimensions,
-            loaded_label.data.clone(),
-            GpuVolumeResources {
-                texture: new_texture,
-                view: new_view,
-                sampler: new_sampler,
-                bind_group: placeholder_bg,
-            },
-        ),
-        LayerSettings { opacity: 0.5 },
-        RoiTag,
-    ));
+    let entity = roi_runtime::create_voxel_roi_from_label(device, queue, world, loaded_label);
 
     (entity, loaded_label.dimensions)
 }

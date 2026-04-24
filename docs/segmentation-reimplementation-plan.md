@@ -309,7 +309,7 @@ Transform and parity tests:
 ## Implementation Status
 
 Current Phase:
-- `Subplan 3: Voxel Baseline Integration`
+- `Subplan 4: Transform, Plane, and Geometry Context`
 
 Completed:
 - `1453511` Baseline: remove legacy segmentation stack
@@ -323,8 +323,9 @@ Completed:
 - move scene bind-group rebuild orchestration out of load handlers into `app::roi_runtime` as the first explicit ROI runtime/service boundary
 - add world-level ROI runtime APIs for cache status, rebuild request, job start, and rebuild completion so later systems can target a runtime boundary instead of entity internals
 - complete `Subplan 2: Conversion and Job Runtime`
+- begin `Subplan 3` by moving voxel ROI creation into `app::roi_runtime` and adding explicit voxel ROI occupancy/volume stats from authoritative voxel data
+- complete `Subplan 3: Voxel Baseline Integration`
 
 Pending:
-- finish routing voxel baseline behavior through the runtime-facing ROI model end to end
 - decide how frame-budgeted runtime progression should be surfaced once real conversion work exists
 - strengthen the shared transform/orientation layer before contour or mesh workflows begin
