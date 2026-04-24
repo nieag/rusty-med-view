@@ -128,6 +128,9 @@ Acceptance:
 Purpose:
 - correct the remaining architectural assumptions exposed by the first implementation wave before transform and plane work begins
 
+Implementation note:
+- the concrete implementation brief for this phase lives in [docs/pre-subplan-4-implementer-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/pre-subplan-4-implementer-handoff.md:1)
+
 Deliver:
 - add explicit voxel spatial metadata to authoritative ROI voxel state
   - minimum requirement: dimensions plus spacing and orientation
@@ -362,4 +365,5 @@ Pending:
 - add explicit spatial metadata or shared grid/world transform data to authoritative ROI voxel state
 - stop deriving voxel ROI stats and future voxel conversions from borrowed main-volume spacing
 - make the current two-overlay renderer limit explicit in either runtime/UI behavior or rendering scope
+- execute the concrete handoff in `docs/pre-subplan-4-implementer-handoff.md`
 - after those corrections, begin strengthening the shared transform/orientation layer before contour or mesh workflows begin
