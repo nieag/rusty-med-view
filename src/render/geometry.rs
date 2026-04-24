@@ -69,13 +69,13 @@ pub struct ViewProjection {
 /// Project a world position (0..1) to Normalized Device Coordinates (0..1 relative to viewport)
 pub fn world_to_ndc(
     pos: Vec3,
-    viewport_idx: usize,
+    view_mode: crate::components::ViewMode,
     proj: &ViewProjection,
     screen_aspect: f32,
 ) -> Option<[f32; 2]> {
-    if viewport_idx > 0 {
+    if view_mode != crate::components::ViewMode::ThreeD {
         // --- 2D Viewports ---
-        let plane = crate::util::orientation::SlicePlane::from_viewport(viewport_idx as u32)?;
+        let plane = crate::util::orientation::SlicePlane::from_mode(view_mode)?;
         if let Some(plane_definition) = crate::convert::orthogonal_plane_from_volume_uv(
             plane.to_plane_family(),
             pos.into(),

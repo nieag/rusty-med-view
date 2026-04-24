@@ -389,6 +389,11 @@ Completed:
   - remove private oblique mapping math from `src/systems/picking.rs`
   - route oblique picking through `PlaneDefinition` + `ViewportMapping`
   - add oblique parity tests for identity and non-identity rotations against legacy behavior
+- complete `Subplan 4 Step 4E` from [docs/subplan-4-transform-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-4-transform-handoff.md:1):
+  - remove `viewport_idx -> SlicePlane` assumptions from shared projection/mapping paths
+  - route projection and overlay mapping through `ViewMode -> SlicePlane` adapters in shared conversion flows
+  - keep viewport-index handling only at UI/runtime boundary points
+  - retain compatibility adapter `SlicePlane::from_viewport` only at the orientation boundary
 
 Pending:
-- implement Subplan 4 using [docs/subplan-4-transform-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-4-transform-handoff.md:1), continuing with `Step 4E: Retire new viewport-index assumptions`
+- begin `Subplan 5: Contour Representation Architecture` using the same coordinate and plane abstractions from Subplan 4

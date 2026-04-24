@@ -340,7 +340,7 @@ fn draw_annotations(
             }
         }
 
-        if let Some(screen_pos) = world_to_screen(ann.world_pos, viewport_idx, &proj, rect) {
+        if let Some(screen_pos) = world_to_screen(ann.world_pos, mode, &proj, rect) {
             let sense = if viewport_idx > 0 {
                 egui::Sense::click_and_drag()
             } else {
@@ -373,9 +373,7 @@ fn draw_annotations(
 
                     overlay.mouse_screen_uv = [ndc_x, ndc_y];
 
-                    if let Some(plane) =
-                        crate::util::orientation::SlicePlane::from_viewport(viewport_idx as u32)
-                    {
+                    if let Some(plane) = crate::util::orientation::SlicePlane::from_mode(mode) {
                         if let Some(plane_definition) =
                             crate::convert::orthogonal_plane_from_volume_uv(
                                 plane.to_plane_family(),
@@ -409,7 +407,7 @@ fn draw_annotations(
             let draw_pos = if response.dragged() {
                 ui.ctx().pointer_latest_pos().unwrap_or(screen_pos)
             } else {
-                world_to_screen(ann.world_pos, viewport_idx, &proj, rect).unwrap_or(screen_pos)
+                world_to_screen(ann.world_pos, mode, &proj, rect).unwrap_or(screen_pos)
             };
 
             let is_focused = focused_id == Some(ann.id);
@@ -468,7 +466,7 @@ fn draw_annotations(
 
 fn world_to_screen(
     pos: glam::Vec3,
-    viewport_idx: usize,
+    mode: ViewMode,
     proj: &crate::render::geometry::ViewProjection,
     rect: egui::Rect,
 ) -> Option<egui::Pos2> {
@@ -479,9 +477,11 @@ fn world_to_screen(
     };
 
     if let Some([ndc_x, ndc_y]) =
-        crate::render::geometry::world_to_ndc(pos, viewport_idx, proj, screen_aspect)
+        crate::render::geometry::world_to_ndc(pos, mode, proj, screen_aspect)
     {
-        if (!(0.0..=1.0).contains(&ndc_x) || !(0.0..=1.0).contains(&ndc_y)) && viewport_idx > 0 {
+        if (!(0.0..=1.0).contains(&ndc_x) || !(0.0..=1.0).contains(&ndc_y))
+            && mode != ViewMode::ThreeD
+        {
             return None;
         }
 
