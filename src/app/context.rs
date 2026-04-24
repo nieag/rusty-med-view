@@ -1,7 +1,7 @@
 use crate::app::components::*;
 use crate::app::events::AppEvent;
+use crate::app::roi_runtime;
 use crate::gui::Gui;
-use crate::io::handlers;
 use crate::io::volume;
 use crate::overlay::OverlayManager;
 use crate::render::pipeline;
@@ -182,10 +182,10 @@ impl RenderingContext {
 
         let gui = Gui::new(&device, config.format, &window);
 
-        handlers::recreate_bind_groups(
+        roi_runtime::recreate_scene_bind_groups(
             &device,
             &mut world,
-            &handlers::BindGroupResources {
+            &roi_runtime::BindGroupResources {
                 layout: &texture_bind_group_layout,
                 uniform_buffer: &uniform_buffer,
                 dummy_view: &dummy_r8.1,

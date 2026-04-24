@@ -1,6 +1,7 @@
 pub mod components;
 pub mod context;
 pub mod events;
+pub mod roi_runtime;
 
 use crate::app::components::*;
 use crate::app::context::RenderingContext;
@@ -240,10 +241,10 @@ impl ApplicationHandler<AppEvent> for App {
                             .iter()
                             .next()
                             .and_then(|(_, e)| e.active_roi);
-                        handlers::recreate_bind_groups(
+                        roi_runtime::recreate_scene_bind_groups(
                             &ctx.gpu.device,
                             &mut ctx.scene.world,
-                            &handlers::BindGroupResources {
+                            &roi_runtime::BindGroupResources {
                                 layout: &ctx.volume_resources.texture_bind_group_layout,
                                 uniform_buffer: &ctx.volume_resources.uniform_buffer,
                                 dummy_view: &ctx.volume_resources.dummy_r8.1,
@@ -272,10 +273,10 @@ impl ApplicationHandler<AppEvent> for App {
                     .iter()
                     .next()
                     .and_then(|(_, e)| e.active_roi);
-                handlers::recreate_bind_groups(
+                roi_runtime::recreate_scene_bind_groups(
                     &ctx.gpu.device,
                     &mut ctx.scene.world,
-                    &handlers::BindGroupResources {
+                    &roi_runtime::BindGroupResources {
                         layout: &ctx.volume_resources.texture_bind_group_layout,
                         uniform_buffer: &ctx.volume_resources.uniform_buffer,
                         dummy_view: &ctx.volume_resources.dummy_r8.1,

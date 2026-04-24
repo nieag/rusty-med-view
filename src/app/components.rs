@@ -215,6 +215,13 @@ pub struct ContourCache;
 pub struct MeshCache;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoiCacheKind {
+    Voxel,
+    Contour,
+    Mesh,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CacheGeneration {
     pub authoritative: u64,
     pub voxel: u64,
@@ -250,16 +257,9 @@ pub enum RoiJobKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RoiJobStatus {
-    #[default]
-    Idle,
-    Queued(RoiJobKind),
-    Running(RoiJobKind),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RoiJobState {
-    pub current: RoiJobStatus,
+    pub running: Option<RoiJobKind>,
+    pub queued: Option<RoiJobKind>,
 }
 
 pub struct Roi {
@@ -289,6 +289,7 @@ impl Roi {
         raw_data: Vec<u8>,
         gpu_resources: Option<GpuVolumeResources>,
     ) -> Self {
+        let has_voxel_cache = gpu_resources.is_some();
         Self {
             metadata: RoiMetadata {
                 roi_id,
@@ -307,7 +308,14 @@ impl Roi {
                 contour: None,
                 mesh: None,
             },
-            dirty_state: RoiDirtyState::default(),
+            dirty_state: RoiDirtyState {
+                voxel_cache_dirty: !has_voxel_cache,
+                generations: CacheGeneration {
+                    voxel: if has_voxel_cache { 1 } else { 0 },
+                    ..CacheGeneration::default()
+                },
+                ..RoiDirtyState::default()
+            },
             job_state: RoiJobState::default(),
         }
     }
@@ -318,6 +326,101 @@ impl Roi {
 
     pub fn voxel_cache_mut(&mut self) -> Option<&mut GpuVolumeResources> {
         self.session_caches.voxel.as_mut()
+    }
+
+    pub fn cache_generation(&self, kind: RoiCacheKind) -> u64 {
+        match kind {
+            RoiCacheKind::Voxel => self.dirty_state.generations.voxel,
+            RoiCacheKind::Contour => self.dirty_state.generations.contour,
+            RoiCacheKind::Mesh => self.dirty_state.generations.mesh,
+        }
+    }
+
+    pub fn is_cache_dirty(&self, kind: RoiCacheKind) -> bool {
+        match kind {
+            RoiCacheKind::Voxel => self.dirty_state.voxel_cache_dirty,
+            RoiCacheKind::Contour => self.dirty_state.contour_cache_dirty,
+            RoiCacheKind::Mesh => self.dirty_state.mesh_cache_dirty,
+        }
+    }
+
+    pub fn is_cache_current(&self, kind: RoiCacheKind) -> bool {
+        !self.is_cache_dirty(kind)
+            && self.cache_generation(kind) == self.dirty_state.generations.authoritative
+    }
+
+    pub fn mark_authoritative_changed(&mut self) {
+        self.dirty_state.authoritative_dirty = true;
+        self.dirty_state.generations.authoritative += 1;
+        self.mark_cache_dirty(RoiCacheKind::Voxel);
+        self.mark_cache_dirty(RoiCacheKind::Contour);
+        self.mark_cache_dirty(RoiCacheKind::Mesh);
+    }
+
+    pub fn mark_cache_dirty(&mut self, kind: RoiCacheKind) {
+        match kind {
+            RoiCacheKind::Voxel => self.dirty_state.voxel_cache_dirty = true,
+            RoiCacheKind::Contour => self.dirty_state.contour_cache_dirty = true,
+            RoiCacheKind::Mesh => self.dirty_state.mesh_cache_dirty = true,
+        }
+    }
+
+    pub fn enqueue_rebuild(&mut self, kind: RoiJobKind) {
+        if self.job_state.running == Some(kind) {
+            return;
+        }
+        self.job_state.queued = Some(kind);
+    }
+
+    pub fn start_queued_job(&mut self) -> Option<RoiJobKind> {
+        if self.job_state.running.is_some() {
+            return None;
+        }
+        let next = self.job_state.queued.take()?;
+        self.job_state.running = Some(next);
+        Some(next)
+    }
+
+    pub fn finish_job(&mut self, kind: RoiJobKind) {
+        if self.job_state.running == Some(kind) {
+            self.job_state.running = None;
+        }
+    }
+
+    pub fn finish_cache_rebuild(&mut self, kind: RoiCacheKind) {
+        let authoritative_generation = self.dirty_state.generations.authoritative;
+        match kind {
+            RoiCacheKind::Voxel => {
+                self.dirty_state.voxel_cache_dirty = false;
+                self.dirty_state.generations.voxel = authoritative_generation;
+                self.finish_job(RoiJobKind::RebuildVoxelCache);
+            }
+            RoiCacheKind::Contour => {
+                self.dirty_state.contour_cache_dirty = false;
+                self.dirty_state.generations.contour = authoritative_generation;
+                self.finish_job(RoiJobKind::RebuildContourCache);
+            }
+            RoiCacheKind::Mesh => {
+                self.dirty_state.mesh_cache_dirty = false;
+                self.dirty_state.generations.mesh = authoritative_generation;
+                self.finish_job(RoiJobKind::RebuildMeshCache);
+            }
+        }
+        self.dirty_state.authoritative_dirty = false;
+    }
+
+    pub fn renderable_voxel_cache(&self) -> Option<&GpuVolumeResources> {
+        if self.metadata.is_visible && self.is_cache_current(RoiCacheKind::Voxel) {
+            self.voxel_cache()
+        } else {
+            None
+        }
+    }
+
+    pub fn update_voxel_bind_group(&mut self, bind_group: wgpu::BindGroup) {
+        if let Some(resources) = self.voxel_cache_mut() {
+            resources.bind_group = bind_group;
+        }
     }
 }
 
@@ -457,6 +560,8 @@ mod tests {
         assert!(roi.voxel_cache().is_none());
         assert!(roi.session_caches.contour.is_none());
         assert!(roi.session_caches.mesh.is_none());
+        assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
     }
 
     #[test]
@@ -469,5 +574,93 @@ mod tests {
         assert!(!state.mesh_cache_dirty);
         assert_eq!(state.generations.authoritative, 1);
         assert_eq!(state.generations.voxel, 0);
+    }
+
+    #[test]
+    fn test_new_voxel_roi_without_cache_starts_with_dirty_voxel_cache() {
+        let roi = Roi::new_voxel_with_cache(
+            RoiId(8),
+            "Kidney".to_string(),
+            [8, 8, 8],
+            vec![1; 8 * 8 * 8],
+            None,
+        );
+
+        assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
+    }
+
+    #[test]
+    fn test_cache_current_requires_matching_generation_and_clean_state() {
+        let mut roi = Roi::new_voxel_with_cache(
+            RoiId(12),
+            "Aorta".to_string(),
+            [8, 8, 8],
+            vec![1; 8 * 8 * 8],
+            None,
+        );
+
+        roi.dirty_state.voxel_cache_dirty = false;
+        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+        assert!(roi.is_cache_current(RoiCacheKind::Voxel));
+
+        roi.dirty_state.generations.voxel -= 1;
+        assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
+    }
+
+    #[test]
+    fn test_mark_authoritative_changed_invalidates_all_derived_caches() {
+        let mut roi =
+            Roi::new_voxel_with_cache(RoiId(9), "Spleen".to_string(), [4, 4, 4], vec![1; 64], None);
+
+        roi.dirty_state.voxel_cache_dirty = false;
+        roi.dirty_state.contour_cache_dirty = false;
+        roi.dirty_state.mesh_cache_dirty = false;
+        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+
+        roi.mark_authoritative_changed();
+
+        assert!(roi.dirty_state.authoritative_dirty);
+        assert_eq!(roi.dirty_state.generations.authoritative, 2);
+        assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert!(roi.is_cache_dirty(RoiCacheKind::Contour));
+        assert!(roi.is_cache_dirty(RoiCacheKind::Mesh));
+        assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
+    }
+
+    #[test]
+    fn test_enqueue_rebuild_supersedes_previous_queued_job() {
+        let mut roi = Roi::new_voxel_with_cache(
+            RoiId(10),
+            "Pancreas".to_string(),
+            [4, 4, 4],
+            vec![0; 64],
+            None,
+        );
+
+        roi.enqueue_rebuild(RoiJobKind::RebuildContourCache);
+        roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
+
+        assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+        assert_eq!(roi.start_queued_job(), Some(RoiJobKind::RebuildVoxelCache));
+        assert_eq!(roi.job_state.running, Some(RoiJobKind::RebuildVoxelCache));
+    }
+
+    #[test]
+    fn test_finish_cache_rebuild_marks_cache_current_and_clears_job() {
+        let mut roi =
+            Roi::new_voxel_with_cache(RoiId(11), "Heart".to_string(), [4, 4, 4], vec![0; 64], None);
+
+        roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
+        assert_eq!(roi.start_queued_job(), Some(RoiJobKind::RebuildVoxelCache));
+
+        roi.finish_cache_rebuild(RoiCacheKind::Voxel);
+
+        assert!(!roi.dirty_state.authoritative_dirty);
+        assert!(!roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert!(roi.is_cache_current(RoiCacheKind::Voxel));
+        assert_eq!(roi.job_state.running, None);
     }
 }

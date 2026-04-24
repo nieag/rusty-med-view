@@ -309,7 +309,7 @@ Transform and parity tests:
 ## Implementation Status
 
 Current Phase:
-- `Subplan 2: Conversion and Job Runtime`
+- `Subplan 3: Voxel Baseline Integration`
 
 Completed:
 - `1453511` Baseline: remove legacy segmentation stack
@@ -318,9 +318,13 @@ Completed:
 - migrate current loaded label overlays from `Segmentation` entities to `Roi` entities
 - rename editor selection from `active_layer` to `active_roi`
 - complete `Subplan 1: ROI Core Model`
+- begin `Subplan 2` with ROI cache generation helpers, dirty/current checks, and typed queued/running job state
+- route current overlay bind-group rebuild access through ROI runtime helpers instead of open-coding raw voxel-cache access in handlers
+- move scene bind-group rebuild orchestration out of load handlers into `app::roi_runtime` as the first explicit ROI runtime/service boundary
+- add world-level ROI runtime APIs for cache status, rebuild request, job start, and rebuild completion so later systems can target a runtime boundary instead of entity internals
+- complete `Subplan 2: Conversion and Job Runtime`
 
 Pending:
-- define the conversion/job runtime API and lifecycle
-- finish decoupling render-facing overlay access from direct voxel-cache internals
-- add cache generation and invalidation helpers around ROI cache access
+- finish routing voxel baseline behavior through the runtime-facing ROI model end to end
+- decide how frame-budgeted runtime progression should be surfaced once real conversion work exists
 - strengthen the shared transform/orientation layer before contour or mesh workflows begin
