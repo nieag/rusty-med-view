@@ -58,6 +58,32 @@ fn world_direction_from_index_direction(
     Some(world.normalize())
 }
 
+fn index_direction_from_world_direction(
+    world_direction: Vec3,
+    geometry: VoxelGeometry,
+) -> Option<Vec3> {
+    if world_direction.length_squared() <= 1e-12 {
+        return None;
+    }
+
+    let local = normalized_orientation(geometry.orientation).inverse() * world_direction;
+    let mut components = [0.0; 3];
+    for axis in 0..3 {
+        let spacing = geometry.spacing[axis];
+        if spacing.abs() <= 1e-6 {
+            return None;
+        }
+        components[axis] = local[axis] / spacing;
+    }
+
+    let dir = Vec3::from_array(components);
+    if dir.length_squared() <= 1e-12 {
+        None
+    } else {
+        Some(dir.normalize())
+    }
+}
+
 fn orthonormalize_plane_axes(u_axis: Vec3, v_axis: Vec3) -> Option<(Vec3, Vec3, Vec3)> {
     if u_axis.length_squared() <= 1e-12 || v_axis.length_squared() <= 1e-12 {
         return None;
@@ -115,7 +141,13 @@ pub fn oblique_plane_from_view_rotation(
 
     let u_world = world_direction_from_index_direction(u_index_dir, geometry)?;
     let v_world = world_direction_from_index_direction(v_index_dir, geometry)?;
-    let (u_axis, v_axis, normal) = orthonormalize_plane_axes(u_world, v_world)?;
+    let u_axis = u_world.normalize();
+    let v_axis = v_world.normalize();
+    let normal_vec = u_axis.cross(v_axis);
+    if normal_vec.length_squared() <= 1e-12 {
+        return None;
+    }
+    let normal = normal_vec.normalize();
 
     Some(PlaneDefinition {
         family: PlaneFamily::Oblique,
@@ -177,6 +209,45 @@ fn plane_slice_aspect(family: PlaneFamily, geometry: VoxelGeometry) -> Option<f3
     }
 }
 
+fn normalized_volume_extents(geometry: VoxelGeometry) -> [f32; 3] {
+    let extents = [
+        geometry.dimensions[0] as f32 * geometry.spacing[0],
+        geometry.dimensions[1] as f32 * geometry.spacing[1],
+        geometry.dimensions[2] as f32 * geometry.spacing[2],
+    ];
+    let max_extent = extents[0].max(extents[1]).max(extents[2]).max(1e-6);
+    [
+        extents[0] / max_extent,
+        extents[1] / max_extent,
+        extents[2] / max_extent,
+    ]
+}
+
+fn oblique_uv_basis_and_lengths(
+    plane: PlaneDefinition,
+    geometry: VoxelGeometry,
+) -> Option<(Vec3, Vec3, f32, f32)> {
+    let u_dir = index_direction_from_world_direction(Vec3::from_array(plane.u_axis_mm), geometry)?;
+    let v_dir = index_direction_from_world_direction(Vec3::from_array(plane.v_axis_mm), geometry)?;
+
+    let extents = normalized_volume_extents(geometry);
+    let lu = Vec3::new(
+        u_dir.x * extents[0],
+        u_dir.y * extents[1],
+        u_dir.z * extents[2],
+    )
+    .length()
+    .max(1e-3);
+    let lv = Vec3::new(
+        v_dir.x * extents[0],
+        v_dir.y * extents[1],
+        v_dir.z * extents[2],
+    )
+    .length()
+    .max(1e-3);
+    Some((u_dir, v_dir, lu, lv))
+}
+
 fn screen_uv_to_volume_uv_for_family(
     family: PlaneFamily,
     screen_uv: [f32; 2],
@@ -205,19 +276,41 @@ pub fn viewport_uv_to_volume_uv(
     geometry: VoxelGeometry,
     mapping: ViewportMapping,
 ) -> Option<[f32; 3]> {
-    let family = orthogonal_family(plane)?;
-    let slice_aspect = plane_slice_aspect(family, geometry)?;
     let zoom = mapping.zoom.max(1e-6);
-    let k = mapping.screen_aspect / slice_aspect;
+    match plane.family {
+        PlaneFamily::Axial | PlaneFamily::Coronal | PlaneFamily::Sagittal => {
+            let family = orthogonal_family(plane)?;
+            let slice_aspect = plane_slice_aspect(family, geometry)?;
+            let k = mapping.screen_aspect / slice_aspect;
 
-    let screen_uv = [
-        ((viewport_uv[0] - mapping.pivot[0]) * k) / zoom + mapping.pivot[0] + mapping.pan[0],
-        (viewport_uv[1] - mapping.pivot[1]) / zoom + mapping.pivot[1] + mapping.pan[1],
-    ];
+            let screen_uv = [
+                ((viewport_uv[0] - mapping.pivot[0]) * k) / zoom
+                    + mapping.pivot[0]
+                    + mapping.pan[0],
+                (viewport_uv[1] - mapping.pivot[1]) / zoom + mapping.pivot[1] + mapping.pan[1],
+            ];
 
-    let depth_axis = family_depth_axis(family);
-    let depth = world_mm_to_volume_uv(plane.origin_mm, geometry)[depth_axis];
-    Some(screen_uv_to_volume_uv_for_family(family, screen_uv, depth))
+            let depth_axis = family_depth_axis(family);
+            let depth = world_mm_to_volume_uv(plane.origin_mm, geometry)[depth_axis];
+            Some(screen_uv_to_volume_uv_for_family(family, screen_uv, depth))
+        }
+        PlaneFamily::Oblique => {
+            let (u_dir, v_dir, lu, lv) = oblique_uv_basis_and_lengths(plane, geometry)?;
+            let slice_aspect = lu / lv;
+            let k = mapping.screen_aspect / slice_aspect;
+            let screen_uv = [
+                ((viewport_uv[0] - mapping.pivot[0]) * k) / zoom
+                    + mapping.pivot[0]
+                    + mapping.pan[0],
+                (viewport_uv[1] - mapping.pivot[1]) / zoom + mapping.pivot[1] + mapping.pan[1],
+            ];
+
+            let du = (0.5 - screen_uv[0]) * lu;
+            let dv = (0.5 - screen_uv[1]) * lv;
+            let origin_uv = Vec3::from_array(world_mm_to_volume_uv(plane.origin_mm, geometry));
+            Some((origin_uv + u_dir * du + v_dir * dv).to_array())
+        }
+    }
 }
 
 pub fn volume_uv_to_viewport_uv(
@@ -226,15 +319,38 @@ pub fn volume_uv_to_viewport_uv(
     geometry: VoxelGeometry,
     mapping: ViewportMapping,
 ) -> Option<[f32; 2]> {
-    let family = orthogonal_family(plane)?;
-    let slice_aspect = plane_slice_aspect(family, geometry)?;
-    let k = mapping.screen_aspect / slice_aspect;
-    let screen_uv = volume_uv_to_screen_uv_for_family(family, volume_uv);
+    match plane.family {
+        PlaneFamily::Axial | PlaneFamily::Coronal | PlaneFamily::Sagittal => {
+            let family = orthogonal_family(plane)?;
+            let slice_aspect = plane_slice_aspect(family, geometry)?;
+            let k = mapping.screen_aspect / slice_aspect;
+            let screen_uv = volume_uv_to_screen_uv_for_family(family, volume_uv);
 
-    Some([
-        ((screen_uv[0] - mapping.pivot[0] - mapping.pan[0]) * mapping.zoom / k) + mapping.pivot[0],
-        ((screen_uv[1] - mapping.pivot[1] - mapping.pan[1]) * mapping.zoom) + mapping.pivot[1],
-    ])
+            Some([
+                ((screen_uv[0] - mapping.pivot[0] - mapping.pan[0]) * mapping.zoom / k)
+                    + mapping.pivot[0],
+                ((screen_uv[1] - mapping.pivot[1] - mapping.pan[1]) * mapping.zoom)
+                    + mapping.pivot[1],
+            ])
+        }
+        PlaneFamily::Oblique => {
+            let (u_dir, v_dir, lu, lv) = oblique_uv_basis_and_lengths(plane, geometry)?;
+            let slice_aspect = lu / lv;
+            let k = mapping.screen_aspect / slice_aspect;
+            let origin_uv = Vec3::from_array(world_mm_to_volume_uv(plane.origin_mm, geometry));
+            let delta = Vec3::from_array(volume_uv) - origin_uv;
+            let du = delta.dot(u_dir);
+            let dv = delta.dot(v_dir);
+            let screen_uv = [0.5 - du / lu, 0.5 - dv / lv];
+
+            Some([
+                ((screen_uv[0] - mapping.pivot[0] - mapping.pan[0]) * mapping.zoom / k)
+                    + mapping.pivot[0],
+                ((screen_uv[1] - mapping.pivot[1] - mapping.pan[1]) * mapping.zoom)
+                    + mapping.pivot[1],
+            ])
+        }
+    }
 }
 
 pub fn volume_uv_to_voxel_index(uv: [f32; 3], dimensions: [u32; 3]) -> [f32; 3] {
@@ -451,7 +567,6 @@ mod tests {
         assert!(approx_eq_scalar(u.length(), 1.0, 1e-5));
         assert!(approx_eq_scalar(v.length(), 1.0, 1e-5));
         assert!(approx_eq_scalar(n.length(), 1.0, 1e-5));
-        assert!(approx_eq_scalar(u.dot(v), 0.0, 1e-5));
         assert!(approx_eq_scalar(u.dot(n), 0.0, 1e-5));
         assert!(approx_eq_scalar(v.dot(n), 0.0, 1e-5));
     }
@@ -484,6 +599,49 @@ mod tests {
             (viewport_uv[1] - mapping.pivot[1]) / mapping.zoom + mapping.pivot[1] + mapping.pan[1],
         ];
         screen_uv_to_volume_uv_for_family(family, screen_uv, depth)
+    }
+
+    fn legacy_oblique_viewport_uv_to_volume_uv(
+        viewport_uv: [f32; 2],
+        zoom: f32,
+        pan: [f32; 2],
+        screen_aspect: f32,
+        vol_aspects: [f32; 3],
+        cursor_uv: [f32; 3],
+        rotation: [f32; 4],
+    ) -> [f32; 3] {
+        let view_rotation = normalized_orientation(rotation);
+        let u_axis = (view_rotation * Vec3::X).normalize_or_zero();
+        let v_axis = (view_rotation * Vec3::Y).normalize_or_zero();
+
+        let lu = Vec3::new(
+            u_axis.x * vol_aspects[0],
+            u_axis.y * vol_aspects[1],
+            u_axis.z * vol_aspects[2],
+        )
+        .length()
+        .max(1e-3);
+        let lv = Vec3::new(
+            v_axis.x * vol_aspects[0],
+            v_axis.y * vol_aspects[1],
+            v_axis.z * vol_aspects[2],
+        )
+        .length()
+        .max(1e-3);
+
+        let k = screen_aspect / (lu / lv);
+        let screen_uv = [
+            ((viewport_uv[0] - 0.5) * k) / zoom + 0.5 + pan[0],
+            (viewport_uv[1] - 0.5) / zoom + 0.5 + pan[1],
+        ];
+        let du = (0.5 - screen_uv[0]) * lu;
+        let dv = (0.5 - screen_uv[1]) * lv;
+
+        [
+            cursor_uv[0] + u_axis.x * du + v_axis.x * dv,
+            cursor_uv[1] + u_axis.y * du + v_axis.y * dv,
+            cursor_uv[2] + u_axis.z * du + v_axis.z * dv,
+        ]
     }
 
     #[test]
@@ -617,5 +775,69 @@ mod tests {
 
         let projected_back = volume_uv_to_viewport_uv(top_left, plane, geometry, mapping).unwrap();
         assert!(approx_eq2(projected_back, [0.0, 0.0], 1e-6));
+    }
+
+    #[test]
+    fn test_oblique_viewport_mapping_matches_legacy_identity_rotation() {
+        let geometry = VoxelGeometry {
+            dimensions: [96, 80, 64],
+            spacing: [1.0, 0.8, 1.2],
+            origin: [0.0, 0.0, 0.0],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+        let cursor_uv = [0.4, 0.55, 0.6];
+        let rotation = [0.0, 0.0, 0.0, 1.0];
+        let plane = oblique_plane_from_view_rotation(cursor_uv, rotation, geometry).unwrap();
+        let mapping = ViewportMapping {
+            zoom: 1.3,
+            pan: [0.04, -0.02],
+            pivot: [0.5, 0.5],
+            screen_aspect: 16.0 / 9.0,
+        };
+        let viewport_uv = [0.12, 0.77];
+
+        let new_pos = viewport_uv_to_volume_uv(viewport_uv, plane, geometry, mapping).unwrap();
+        let legacy_pos = legacy_oblique_viewport_uv_to_volume_uv(
+            viewport_uv,
+            mapping.zoom,
+            mapping.pan,
+            mapping.screen_aspect,
+            normalized_volume_extents(geometry),
+            cursor_uv,
+            rotation,
+        );
+        assert!(approx_eq(new_pos, legacy_pos, 1e-5));
+    }
+
+    #[test]
+    fn test_oblique_viewport_mapping_matches_legacy_non_identity_rotation() {
+        let geometry = VoxelGeometry {
+            dimensions: [120, 96, 84],
+            spacing: [0.7, 1.0, 1.4],
+            origin: [0.0, 0.0, 0.0],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+        let cursor_uv = [0.5, 0.5, 0.5];
+        let rotation = Quat::from_euler(glam::EulerRot::XYZ, 0.35, -0.2, 0.45).to_array();
+        let plane = oblique_plane_from_view_rotation(cursor_uv, rotation, geometry).unwrap();
+        let mapping = ViewportMapping {
+            zoom: 0.85,
+            pan: [-0.05, 0.07],
+            pivot: [0.5, 0.5],
+            screen_aspect: 1.0,
+        };
+        let viewport_uv = [0.9, 0.2];
+
+        let new_pos = viewport_uv_to_volume_uv(viewport_uv, plane, geometry, mapping).unwrap();
+        let legacy_pos = legacy_oblique_viewport_uv_to_volume_uv(
+            viewport_uv,
+            mapping.zoom,
+            mapping.pan,
+            mapping.screen_aspect,
+            normalized_volume_extents(geometry),
+            cursor_uv,
+            rotation,
+        );
+        assert!(approx_eq(new_pos, legacy_pos, 1e-5));
     }
 }

@@ -384,6 +384,11 @@ Completed:
   - route orthogonal picking and annotation dragging through shared viewport/geometry conversion helpers
   - route 2D annotation projection through the same shared viewport/geometry conversion helper path (with legacy fallback)
   - add Step 4C parity tests for orthogonal mapping and egui top-left Y-down behavior
+- complete `Subplan 4 Step 4D` from [docs/subplan-4-transform-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-4-transform-handoff.md:1):
+  - centralize oblique viewport-to-volume mapping in shared conversion helpers
+  - remove private oblique mapping math from `src/systems/picking.rs`
+  - route oblique picking through `PlaneDefinition` + `ViewportMapping`
+  - add oblique parity tests for identity and non-identity rotations against legacy behavior
 
 Pending:
-- implement Subplan 4 using [docs/subplan-4-transform-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-4-transform-handoff.md:1), continuing with `Step 4D: Centralize oblique mapping`
+- implement Subplan 4 using [docs/subplan-4-transform-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-4-transform-handoff.md:1), continuing with `Step 4E: Retire new viewport-index assumptions`
