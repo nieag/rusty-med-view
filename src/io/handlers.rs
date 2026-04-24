@@ -33,6 +33,7 @@ pub fn handle_volume_load(
     {
         vol.dimensions = volume_data.dimensions;
         vol.spacing = volume_data.spacing;
+        vol.origin = volume_data.origin;
         vol.intensities = volume_data.intensities.clone();
         vol.intensity_range = volume_data.intensity_range;
         vol.orientation = volume_data.orientation;

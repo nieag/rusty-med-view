@@ -52,7 +52,6 @@ impl OverlayManager {
                 15,                   // All viewports
             ));
         }
-
     }
 
     pub fn add_annotation(&mut self, pos: Vec3) {

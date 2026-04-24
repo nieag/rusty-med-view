@@ -96,6 +96,7 @@ impl RenderingContext {
         let volume_data = VolumeData {
             dimensions: [0, 0, 0],
             spacing: [1.0, 1.0, 1.0],
+            origin: [0.0, 0.0, 0.0],
             intensities: vec![],
             intensity_range: [0.0, 0.0],
             orientation: [0.0, 0.0, 0.0, 1.0],

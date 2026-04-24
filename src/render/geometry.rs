@@ -77,7 +77,8 @@ pub fn world_to_ndc(
         let [ndc_x_relative, ndc_y_relative] = plane.volume_to_screen_uv(pos.into());
         let k = screen_aspect / plane.slice_aspect(proj.aspect_ratios);
 
-        let ndc_x = ((ndc_x_relative - proj.pivot[0] - proj.pan[0]) * proj.zoom / k) + proj.pivot[0];
+        let ndc_x =
+            ((ndc_x_relative - proj.pivot[0] - proj.pan[0]) * proj.zoom / k) + proj.pivot[0];
         let ndc_y = ((ndc_y_relative - proj.pivot[1] - proj.pan[1]) * proj.zoom) + proj.pivot[1];
 
         Some([ndc_x, ndc_y])

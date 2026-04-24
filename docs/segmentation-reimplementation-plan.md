@@ -155,6 +155,9 @@ Purpose:
 Prerequisite:
 - the Pre-Subplan 4 course corrections above are complete so voxel ROI geometry is explicit before transform work depends on it
 
+Implementation note:
+- the concrete implementation brief for this phase lives in [docs/subplan-4-transform-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-4-transform-handoff.md:1)
+
 Deliver:
 - canonical coordinate-space definitions for:
   - voxel/index space
@@ -167,7 +170,8 @@ Deliver:
 - `PlaneFamily`
 - `PlaneDefinition`
 - orthogonal and oblique plane support
-- shared mapping utilities between viewport, world, plane-local, and ROI-local space
+- shared mapping utilities between viewport, patient/world, plane-local, and ROI-local space
+- explicit voxel geometry origin/translation handling instead of orientation-only geometry
 - explicit egui/wgpu convention reconciliation rules
 - migration of oblique-plane math into the shared transform/orientation layer
 - removal of viewport-index-based plane assumptions from new segmentation code
@@ -360,11 +364,16 @@ Completed:
 - begin `Subplan 3` by moving voxel ROI creation into `app::roi_runtime` and adding explicit voxel ROI occupancy/volume stats from authoritative voxel data
 - complete `Subplan 3: Voxel Baseline Integration`
 - `40416de` Fix: show loaded ROI overlays by default
-- complete the Pre-Subplan 4 course corrections:
+- `ad37e27` complete the Pre-Subplan 4 course corrections:
   - add explicit voxel geometry to authoritative ROI voxel state
   - stop borrowing voxel ROI stats from the main volume entity
   - preserve label NIfTI geometry directly on ROI import and use the main volume only for validation
   - make the two-overlay renderer limit explicit in runtime/UI behavior
+- complete `Subplan 4 Step 4A` from [docs/subplan-4-transform-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-4-transform-handoff.md:1):
+  - add `origin` to `VolumeData`, `LoadedVolume`, `LoadedLabel`, and `VoxelGeometry`
+  - preserve NIfTI sform translation/origin for image and label loads (with invalid-sform fallback to `[0.0, 0.0, 0.0]`)
+  - add shared conversion helpers in `src/convert/geometry.rs` for `VolumeUv <-> VoxelIndex <-> PatientWorldMm`
+  - compare label/main origin in ROI import geometry validation
 
 Pending:
-- begin Subplan 4 by strengthening the shared transform/orientation layer before contour or mesh workflows begin
+- implement Subplan 4 using [docs/subplan-4-transform-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-4-transform-handoff.md:1), continuing with `Step 4B: Add plane definitions without behavior change`

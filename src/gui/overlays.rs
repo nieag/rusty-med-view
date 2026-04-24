@@ -374,8 +374,10 @@ fn draw_annotations(
 
                     overlay.mouse_screen_uv = [ndc_x, ndc_y];
 
-                    let world_u = ((ndc_x - proj.pivot[0]) * k / proj.zoom) + proj.pivot[0] + proj.pan[0];
-                    let world_v = ((ndc_y - proj.pivot[1]) / proj.zoom) + proj.pivot[1] + proj.pan[1];
+                    let world_u =
+                        ((ndc_x - proj.pivot[0]) * k / proj.zoom) + proj.pivot[0] + proj.pan[0];
+                    let world_v =
+                        ((ndc_y - proj.pivot[1]) / proj.zoom) + proj.pivot[1] + proj.pan[1];
 
                     if let Some(plane) =
                         crate::util::orientation::SlicePlane::from_viewport(viewport_idx as u32)
@@ -396,8 +398,7 @@ fn draw_annotations(
             let draw_pos = if response.dragged() {
                 ui.ctx().pointer_latest_pos().unwrap_or(screen_pos)
             } else {
-                world_to_screen(ann.world_pos, viewport_idx, &proj, rect)
-                .unwrap_or(screen_pos)
+                world_to_screen(ann.world_pos, viewport_idx, &proj, rect).unwrap_or(screen_pos)
             };
 
             let is_focused = focused_id == Some(ann.id);
@@ -466,7 +467,9 @@ fn world_to_screen(
         1.0
     };
 
-    if let Some([ndc_x, ndc_y]) = crate::render::geometry::world_to_ndc(pos, viewport_idx, proj, screen_aspect) {
+    if let Some([ndc_x, ndc_y]) =
+        crate::render::geometry::world_to_ndc(pos, viewport_idx, proj, screen_aspect)
+    {
         if (!(0.0..=1.0).contains(&ndc_x) || !(0.0..=1.0).contains(&ndc_y)) && viewport_idx > 0 {
             return None;
         }

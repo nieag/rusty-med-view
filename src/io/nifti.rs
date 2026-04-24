@@ -15,6 +15,8 @@ pub struct LoadedVolume {
     pub dimensions: [u32; 3],
     /// Voxel spacing in mm [x, y, z]
     pub spacing: [f32; 3],
+    /// Origin/translation in patient/world mm from NIfTI sform
+    pub origin: [f32; 3],
     /// Raw intensity data as f32 (HU or similar units)
     pub float_data: Vec<f32>,
     /// Data range [min, max]
@@ -57,7 +59,48 @@ fn decompress_gzip(data: &[u8]) -> Result<Vec<u8>, LoadError> {
 /// We extract the 3x3 upper-left rotation+scale portion, normalize the columns
 /// to get pure rotation, and convert to quaternion using Shepperd's method.
 fn extract_orientation_from_sform(header: &NiftiHeader) -> [f32; 4] {
+    if !has_valid_sform_axes(header.srow_x, header.srow_y, header.srow_z) {
+        return [0.0, 0.0, 0.0, 1.0];
+    }
     calculate_orientation_from_rows(header.srow_x, header.srow_y, header.srow_z)
+}
+
+/// Extract translation/origin from NIfTI sform rows.
+///
+/// Returns `[0, 0, 0]` when the sform axes are invalid to align with
+/// orientation fallback behavior.
+fn extract_origin_from_sform(header: &NiftiHeader) -> [f32; 3] {
+    extract_origin_from_rows(header.srow_x, header.srow_y, header.srow_z)
+}
+
+fn extract_origin_from_rows(srow_x: [f32; 4], srow_y: [f32; 4], srow_z: [f32; 4]) -> [f32; 3] {
+    if !has_valid_sform_axes(srow_x, srow_y, srow_z) {
+        return [0.0, 0.0, 0.0];
+    }
+
+    let origin = [srow_x[3], srow_y[3], srow_z[3]];
+    if origin.iter().all(|component| component.is_finite()) {
+        origin
+    } else {
+        [0.0, 0.0, 0.0]
+    }
+}
+
+fn has_valid_sform_axes(srow_x: [f32; 4], srow_y: [f32; 4], srow_z: [f32; 4]) -> bool {
+    let col0 = [srow_x[0], srow_y[0], srow_z[0]];
+    let col1 = [srow_x[1], srow_y[1], srow_z[1]];
+    let col2 = [srow_x[2], srow_y[2], srow_z[2]];
+
+    let len0 = (col0[0] * col0[0] + col0[1] * col0[1] + col0[2] * col0[2]).sqrt();
+    let len1 = (col1[0] * col1[0] + col1[1] * col1[1] + col1[2] * col1[2]).sqrt();
+    let len2 = (col2[0] * col2[0] + col2[1] * col2[1] + col2[2] * col2[2]).sqrt();
+
+    len0 >= 1e-6
+        && len1 >= 1e-6
+        && len2 >= 1e-6
+        && len0.is_finite()
+        && len1.is_finite()
+        && len2.is_finite()
 }
 
 /// Calculate orientation quaternion from sform rows.
@@ -243,6 +286,7 @@ pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
     } = parse_nifti_raw(data)?;
 
     let spacing = [header.pixdim[1], header.pixdim[2], header.pixdim[3]];
+    let origin = extract_origin_from_sform(&header);
     let scl_slope = if header.scl_slope == 0.0 {
         1.0
     } else {
@@ -277,6 +321,7 @@ pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
     Ok(LoadedVolume {
         dimensions: [width, height, depth],
         spacing,
+        origin,
         float_data: intensity_data,
         intensity_range: [min_val, max_val],
         orientation,
@@ -297,6 +342,7 @@ pub fn load_label_from_bytes(
     } = parse_nifti_raw(data)?;
 
     let spacing = [header.pixdim[1], header.pixdim[2], header.pixdim[3]];
+    let origin = extract_origin_from_sform(&header);
     let orientation = extract_orientation_from_sform(&header);
 
     let mut label_data = Vec::with_capacity(total_voxels);
@@ -312,6 +358,7 @@ pub fn load_label_from_bytes(
     Ok(crate::components::LoadedLabel {
         dimensions: [width, height, depth],
         spacing,
+        origin,
         orientation,
         data: label_data,
         filename,
@@ -397,5 +444,25 @@ mod tests {
 
         let result = calculate_orientation_from_rows(srow_x, srow_y, srow_z);
         assert!((result[3]).abs() > 0.0);
+    }
+
+    #[test]
+    fn test_extract_origin_from_rows_uses_sform_translation() {
+        let srow_x = [1.0, 0.0, 0.0, 12.0];
+        let srow_y = [0.0, 1.0, 0.0, -5.0];
+        let srow_z = [0.0, 0.0, 1.0, 33.5];
+
+        let origin = extract_origin_from_rows(srow_x, srow_y, srow_z);
+        assert_eq!(origin, [12.0, -5.0, 33.5]);
+    }
+
+    #[test]
+    fn test_extract_origin_from_rows_invalid_axes_fallback_to_zero() {
+        let srow_x = [0.0, 0.0, 0.0, 12.0];
+        let srow_y = [0.0, 0.0, 0.0, -5.0];
+        let srow_z = [0.0, 0.0, 0.0, 33.5];
+
+        let origin = extract_origin_from_rows(srow_x, srow_y, srow_z);
+        assert_eq!(origin, [0.0, 0.0, 0.0]);
     }
 }

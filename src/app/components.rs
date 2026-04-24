@@ -93,6 +93,7 @@ pub struct InputState {
 pub struct VolumeData {
     pub dimensions: [u32; 3],
     pub spacing: [f32; 3],
+    pub origin: [f32; 3],
     pub intensities: Vec<f32>,
     pub intensity_range: [f32; 2],
     pub orientation: [f32; 4], // Quaternion
@@ -201,6 +202,7 @@ pub struct VoxelData {
 pub struct VoxelGeometry {
     pub dimensions: [u32; 3],
     pub spacing: [f32; 3],
+    pub origin: [f32; 3],
     pub orientation: [f32; 4],
 }
 
@@ -454,6 +456,7 @@ pub enum LoadResult {
 pub struct LoadedLabel {
     pub dimensions: [u32; 3],
     pub spacing: [f32; 3],
+    pub origin: [f32; 3],
     pub orientation: [f32; 4],
     pub data: Vec<u8>,
     pub filename: String,
@@ -505,6 +508,7 @@ mod tests {
         let vol = VolumeData {
             dimensions: [100, 100, 100],
             spacing: [1.0, 1.0, 1.0],
+            origin: [0.0, 0.0, 0.0],
             intensities: vec![],
             intensity_range: [0.0, 1.0],
             orientation: [0.0, 0.0, 0.0, 1.0],
@@ -520,6 +524,7 @@ mod tests {
         let vol = VolumeData {
             dimensions: [256, 256, 128],
             spacing: [1.0, 1.0, 2.0], // Physical size is 256, 256, 256
+            origin: [0.0, 0.0, 0.0],
             intensities: vec![],
             intensity_range: [0.0, 1.0],
             orientation: [0.0, 0.0, 0.0, 1.0],
@@ -535,6 +540,7 @@ mod tests {
         let vol = VolumeData {
             dimensions: [0, 0, 0],
             spacing: [1.0, 1.0, 1.0],
+            origin: [0.0, 0.0, 0.0],
             intensities: vec![],
             intensity_range: [0.0, 1.0],
             orientation: [0.0, 0.0, 0.0, 1.0],
@@ -551,6 +557,7 @@ mod tests {
             VoxelGeometry {
                 dimensions: [16, 16, 8],
                 spacing: [1.0, 1.0, 1.0],
+                origin: [0.0, 0.0, 0.0],
                 orientation: [0.0, 0.0, 0.0, 1.0],
             },
             vec![1; 16 * 16 * 8],
@@ -566,6 +573,7 @@ mod tests {
                 geometry: VoxelGeometry {
                     dimensions: [16, 16, 8],
                     spacing: [1.0, 1.0, 1.0],
+                    origin: [0.0, 0.0, 0.0],
                     orientation: [0.0, 0.0, 0.0, 1.0],
                 },
                 ..
@@ -598,6 +606,7 @@ mod tests {
             VoxelGeometry {
                 dimensions: [8, 8, 8],
                 spacing: [0.5, 0.5, 0.5],
+                origin: [0.0, 0.0, 0.0],
                 orientation: [0.0, 0.0, 0.0, 1.0],
             },
             vec![1; 8 * 8 * 8],
@@ -616,6 +625,7 @@ mod tests {
             VoxelGeometry {
                 dimensions: [8, 8, 8],
                 spacing: [0.75, 0.75, 0.75],
+                origin: [0.0, 0.0, 0.0],
                 orientation: [0.0, 0.0, 0.0, 1.0],
             },
             vec![1; 8 * 8 * 8],
@@ -638,6 +648,7 @@ mod tests {
             VoxelGeometry {
                 dimensions: [4, 4, 4],
                 spacing: [1.0, 1.0, 1.0],
+                origin: [0.0, 0.0, 0.0],
                 orientation: [0.0, 0.0, 0.0, 1.0],
             },
             vec![1; 64],
@@ -669,6 +680,7 @@ mod tests {
             VoxelGeometry {
                 dimensions: [4, 4, 4],
                 spacing: [1.0, 1.0, 1.0],
+                origin: [0.0, 0.0, 0.0],
                 orientation: [0.0, 0.0, 0.0, 1.0],
             },
             vec![0; 64],
@@ -691,6 +703,7 @@ mod tests {
             VoxelGeometry {
                 dimensions: [4, 4, 4],
                 spacing: [1.0, 1.0, 1.0],
+                origin: [0.0, 0.0, 0.0],
                 orientation: [0.0, 0.0, 0.0, 1.0],
             },
             vec![0; 64],
@@ -713,6 +726,7 @@ mod tests {
         let geometry = VoxelGeometry {
             dimensions: [12, 10, 8],
             spacing: [0.8, 0.8, 1.5],
+            origin: [0.0, 0.0, 0.0],
             orientation: [0.0, 0.0, 0.0, 1.0],
         };
 

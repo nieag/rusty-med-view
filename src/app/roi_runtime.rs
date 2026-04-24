@@ -99,6 +99,7 @@ pub fn main_volume_voxel_geometry(world: &World) -> Option<VoxelGeometry> {
     Some(VoxelGeometry {
         dimensions: volume.dimensions,
         spacing: volume.spacing,
+        origin: volume.origin,
         orientation: volume.orientation,
     })
 }
@@ -140,15 +141,18 @@ pub fn prepare_voxel_roi_import(
     if let Some(main_geometry) = main_volume_voxel_geometry(world) {
         if main_geometry.dimensions != loaded_label.dimensions
             || !approx_eq_slice(main_geometry.spacing, loaded_label.spacing, 1e-5)
+            || !approx_eq_slice(main_geometry.origin, loaded_label.origin, 1e-5)
             || !approx_eq_slice(main_geometry.orientation, loaded_label.orientation, 1e-5)
         {
             log::warn!(
-                "Loaded label geometry differs from main volume geometry; label dims={:?} spacing={:?} orientation={:?}, main dims={:?} spacing={:?} orientation={:?}",
+                "Loaded label geometry differs from main volume geometry; label dims={:?} spacing={:?} origin={:?} orientation={:?}, main dims={:?} spacing={:?} origin={:?} orientation={:?}",
                 loaded_label.dimensions,
                 loaded_label.spacing,
+                loaded_label.origin,
                 loaded_label.orientation,
                 main_geometry.dimensions,
                 main_geometry.spacing,
+                main_geometry.origin,
                 main_geometry.orientation
             );
         }
@@ -158,6 +162,7 @@ pub fn prepare_voxel_roi_import(
         geometry: VoxelGeometry {
             dimensions: loaded_label.dimensions,
             spacing: loaded_label.spacing,
+            origin: loaded_label.origin,
             orientation: loaded_label.orientation,
         },
         start_visible: visible_roi_count(world) < MAX_SIMULTANEOUS_ROI_OVERLAYS,
@@ -294,6 +299,7 @@ mod tests {
             VoxelGeometry {
                 dimensions: [4, 4, 4],
                 spacing: [1.0, 1.0, 1.0],
+                origin: [0.0, 0.0, 0.0],
                 orientation: [0.0, 0.0, 0.0, 1.0],
             },
             vec![1; 64],
@@ -301,11 +307,12 @@ mod tests {
         ),))
     }
 
-    fn spawn_main_volume(world: &mut World, spacing: [f32; 3]) {
+    fn spawn_main_volume(world: &mut World, spacing: [f32; 3], origin: [f32; 3]) {
         world.spawn((
             VolumeData {
                 dimensions: [4, 4, 4],
                 spacing,
+                origin,
                 intensities: vec![],
                 intensity_range: [0.0, 1.0],
                 orientation: [0.0, 0.0, 0.0, 1.0],
@@ -359,13 +366,14 @@ mod tests {
     #[test]
     fn test_voxel_roi_stats_use_nonzero_voxels_and_volume_spacing() {
         let mut world = World::new();
-        spawn_main_volume(&mut world, [0.5, 0.5, 2.0]);
+        spawn_main_volume(&mut world, [0.5, 0.5, 2.0], [0.0, 0.0, 0.0]);
         let entity = world.spawn((Roi::new_voxel_with_cache(
             RoiId(2),
             "Mask".to_string(),
             VoxelGeometry {
                 dimensions: [2, 2, 2],
                 spacing: [0.5, 0.5, 2.0],
+                origin: [0.0, 0.0, 0.0],
                 orientation: [0.0, 0.0, 0.0, 1.0],
             },
             vec![0, 1, 2, 0, 0, 3, 4, 0],
@@ -381,12 +389,13 @@ mod tests {
     #[test]
     fn test_main_volume_voxel_geometry_reads_main_volume_fields() {
         let mut world = World::new();
-        spawn_main_volume(&mut world, [0.25, 0.5, 2.0]);
+        spawn_main_volume(&mut world, [0.25, 0.5, 2.0], [3.0, -1.5, 2.25]);
 
         let geometry = main_volume_voxel_geometry(&world).unwrap();
 
         assert_eq!(geometry.dimensions, [4, 4, 4]);
         assert_eq!(geometry.spacing, [0.25, 0.5, 2.0]);
+        assert_eq!(geometry.origin, [3.0, -1.5, 2.25]);
         assert_eq!(geometry.orientation, [0.0, 0.0, 0.0, 1.0]);
     }
 
@@ -422,6 +431,7 @@ mod tests {
         let loaded_label = LoadedLabel {
             dimensions: [2, 2, 2],
             spacing: [1.25, 1.5, 2.0],
+            origin: [5.0, 6.0, 7.0],
             orientation: [0.0, 0.0, 0.0, 1.0],
             data: vec![0; 8],
             filename: "Label".to_string(),
@@ -430,16 +440,18 @@ mod tests {
         let import_spec = prepare_voxel_roi_import(&world, &loaded_label).unwrap();
         assert_eq!(import_spec.geometry.dimensions, [2, 2, 2]);
         assert_eq!(import_spec.geometry.spacing, [1.25, 1.5, 2.0]);
+        assert_eq!(import_spec.geometry.origin, [5.0, 6.0, 7.0]);
         assert_eq!(import_spec.geometry.orientation, [0.0, 0.0, 0.0, 1.0]);
     }
 
     #[test]
     fn test_prepare_voxel_roi_import_preserves_label_geometry_even_when_main_volume_differs() {
         let mut world = World::new();
-        spawn_main_volume(&mut world, [0.5, 0.5, 2.0]);
+        spawn_main_volume(&mut world, [0.5, 0.5, 2.0], [10.0, 10.0, 10.0]);
         let loaded_label = LoadedLabel {
             dimensions: [3, 4, 5],
             spacing: [0.75, 0.8, 1.25],
+            origin: [-2.0, 4.5, 6.0],
             orientation: [0.0, 0.0, 1.0, 0.0],
             data: vec![0; 60],
             filename: "Label".to_string(),
@@ -449,6 +461,7 @@ mod tests {
 
         assert_eq!(import_spec.geometry.dimensions, [3, 4, 5]);
         assert_eq!(import_spec.geometry.spacing, [0.75, 0.8, 1.25]);
+        assert_eq!(import_spec.geometry.origin, [-2.0, 4.5, 6.0]);
         assert_eq!(import_spec.geometry.orientation, [0.0, 0.0, 1.0, 0.0]);
     }
 }
