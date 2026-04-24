@@ -221,7 +221,7 @@ impl ApplicationHandler<AppEvent> for App {
                                     .world
                                     .get::<&mut EditorState>(ctx.scene.entities.editor)
                                 {
-                                    editor.active_layer = Some(new_entity);
+                                    editor.active_roi = Some(new_entity);
                                 }
                                 handlers::set_status_message(
                                     &mut ctx.scene.world,
@@ -233,13 +233,13 @@ impl ApplicationHandler<AppEvent> for App {
                             }
                         };
 
-                        let active_layer = ctx
+                        let active_roi = ctx
                             .scene
                             .world
                             .query::<&EditorState>()
                             .iter()
                             .next()
-                            .and_then(|(_, e)| e.active_layer);
+                            .and_then(|(_, e)| e.active_roi);
                         handlers::recreate_bind_groups(
                             &ctx.gpu.device,
                             &mut ctx.scene.world,
@@ -251,7 +251,7 @@ impl ApplicationHandler<AppEvent> for App {
                                 default_lut_view: &ctx.volume_resources.default_lut.1,
                                 overlay_buffer: &ctx.volume_resources.overlay_buffer,
                             },
-                            active_layer,
+                            active_roi,
                         );
                     }
                     Err(e) => {
@@ -265,13 +265,13 @@ impl ApplicationHandler<AppEvent> for App {
                 ctx.window.request_redraw();
             }
             AppEvent::RebuildBindGroups => {
-                let active_layer = ctx
+                let active_roi = ctx
                     .scene
                     .world
                     .query::<&EditorState>()
                     .iter()
                     .next()
-                    .and_then(|(_, e)| e.active_layer);
+                    .and_then(|(_, e)| e.active_roi);
                 handlers::recreate_bind_groups(
                     &ctx.gpu.device,
                     &mut ctx.scene.world,
@@ -283,7 +283,7 @@ impl ApplicationHandler<AppEvent> for App {
                         default_lut_view: &ctx.volume_resources.default_lut.1,
                         overlay_buffer: &ctx.volume_resources.overlay_buffer,
                     },
-                    active_layer,
+                    active_roi,
                 );
                 ctx.window.request_redraw();
             }

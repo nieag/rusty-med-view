@@ -73,23 +73,22 @@ pub fn handle_label_load(
         .map(|(_, res)| res.bind_group.clone())
         .expect("Main volume should exist");
 
+    let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
     let entity = world.spawn((
-        Segmentation {
-            name: loaded_label.filename.clone(),
-            is_visible: false,
-        },
+        Roi::new_voxel(
+            RoiId(next_roi_id),
+            loaded_label.filename.clone(),
+            loaded_label.dimensions,
+            loaded_label.data.clone(),
+            GpuVolumeResources {
+                texture: new_texture,
+                view: new_view,
+                sampler: new_sampler,
+                bind_group: placeholder_bg,
+            },
+        ),
         LayerSettings { opacity: 0.5 },
-        LabelmapData {
-            dimensions: loaded_label.dimensions,
-            raw_data: loaded_label.data.clone(),
-        },
-        Representation::Voxel(GpuVolumeResources {
-            texture: new_texture,
-            view: new_view,
-            sampler: new_sampler,
-            bind_group: placeholder_bg,
-        }),
-        SegmentationTag,
+        RoiTag,
     ));
 
     (entity, loaded_label.dimensions)
@@ -113,7 +112,7 @@ pub fn recreate_bind_groups(
     device: &wgpu::Device,
     world: &mut World,
     resources: &BindGroupResources<'_>,
-    active_layer: Option<hecs::Entity>,
+    active_roi: Option<hecs::Entity>,
 ) {
     // Collect the texture views we need (must satisfy borrow checker)
     let main_view: Option<wgpu::TextureView>;
@@ -129,29 +128,28 @@ pub fn recreate_bind_groups(
     // Query overlay views
     {
         // 1. Prioritize active layer if it exists and is a voxel representation
-        if let Some(active) = active_layer {
-            if let (Ok(seg), Ok(repr)) = (
-                world.get::<&Segmentation>(active),
-                world.get::<&Representation>(active),
-            ) {
-                if seg.is_visible {
-                    let Representation::Voxel(res) = &*repr;
-                    overlay_views.push(res.view.clone());
+        if let Some(active) = active_roi {
+            if let Ok(roi) = world.get::<&Roi>(active) {
+                if roi.metadata.is_visible {
+                    if let Some(res) = roi.voxel_cache() {
+                        overlay_views.push(res.view.clone());
+                    }
                 }
             }
         }
 
         // 2. Add other visible layers that aren't the active one
-        let mut query = world.query::<(&Segmentation, &Representation)>();
-        for (e, (seg, repr)) in query.iter() {
-            if Some(e) == active_layer {
+        let mut query = world.query::<&Roi>();
+        for (e, roi) in query.iter() {
+            if Some(e) == active_roi {
                 continue;
             }
-            if !seg.is_visible {
+            if !roi.metadata.is_visible {
                 continue;
             }
-            let Representation::Voxel(res) = repr;
-            overlay_views.push(res.view.clone());
+            if let Some(res) = roi.voxel_cache() {
+                overlay_views.push(res.view.clone());
+            }
         }
     }
 
@@ -180,9 +178,10 @@ pub fn recreate_bind_groups(
     for (_, res) in world.query_mut::<&mut GpuVolumeResources>() {
         res.bind_group = new_bind_group.clone();
     }
-    for (_, repr) in world.query_mut::<&mut Representation>() {
-        let Representation::Voxel(res) = repr;
-        res.bind_group = new_bind_group.clone();
+    for (_, roi) in world.query_mut::<&mut Roi>() {
+        if let Some(res) = roi.voxel_cache_mut() {
+            res.bind_group = new_bind_group.clone();
+        }
     }
 }
 

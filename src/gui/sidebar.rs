@@ -93,23 +93,28 @@ pub fn draw_sidebar(
     // --- Layer Control ---
     ui.collapsing("📚 Layers", |ui| {
         let mut layers: Vec<(hecs::Entity, String, bool, f32)> = Vec::new();
-        for (e, (seg, settings)) in world.query::<(&Segmentation, &LayerSettings)>().iter() {
-            layers.push((e, seg.name.clone(), seg.is_visible, settings.opacity));
+        for (e, (roi, settings)) in world.query::<(&Roi, &LayerSettings)>().iter() {
+            layers.push((
+                e,
+                roi.metadata.name.clone(),
+                roi.metadata.is_visible,
+                settings.opacity,
+            ));
         }
 
-        let active_layer = world
+        let active_roi = world
             .get::<&EditorState>(entities.editor)
             .ok()
-            .and_then(|e| e.active_layer);
-        let mut new_active_layer = active_layer;
+            .and_then(|e| e.active_roi);
+        let mut new_active_roi = active_roi;
 
         for (entity, name, mut visible, mut opacity) in layers {
             ui.group(|ui| {
                 ui.horizontal(|ui| {
-                    ui.radio_value(&mut new_active_layer, Some(entity), "");
+                    ui.radio_value(&mut new_active_roi, Some(entity), "");
                     if ui.checkbox(&mut visible, "").changed() {
-                        if let Ok(mut seg) = world.get::<&mut Segmentation>(entity) {
-                            seg.is_visible = visible;
+                        if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
+                            roi.metadata.is_visible = visible;
                         }
                     }
                     ui.label(name);
@@ -126,9 +131,9 @@ pub fn draw_sidebar(
             });
         }
 
-        if new_active_layer != active_layer {
+        if new_active_roi != active_roi {
             if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
-                editor.active_layer = new_active_layer;
+                editor.active_roi = new_active_roi;
                 let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
             }
         }

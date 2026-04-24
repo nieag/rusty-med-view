@@ -74,8 +74,8 @@ pub fn sys_prepare_render_data(
     let mut overlay_opacities = [0.0f32; 4];
     let mut layer_count = 0;
 
-    for (_, (seg, settings)) in world.query::<(&Segmentation, &LayerSettings)>().iter() {
-        if !seg.is_visible {
+    for (_, (roi, settings)) in world.query::<(&Roi, &LayerSettings)>().iter() {
+        if !roi.metadata.is_visible {
             continue;
         }
         if layer_count >= 4 {

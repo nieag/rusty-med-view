@@ -154,7 +154,7 @@ impl RenderingContext {
         ));
 
         let editor = world.spawn((EditorState {
-            active_layer: None,
+            active_roi: None,
             ..Default::default()
         },));
 

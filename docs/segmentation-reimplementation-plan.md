@@ -309,14 +309,18 @@ Transform and parity tests:
 ## Implementation Status
 
 Current Phase:
-- `Subplan 1: ROI Core Model`
+- `Subplan 2: Conversion and Job Runtime`
 
 Completed:
 - `1453511` Baseline: remove legacy segmentation stack
 - add canonical segmentation reimplementation plan document
+- introduce `Roi`, `RoiMetadata`, `RoiId`, `PrimaryRepresentation`, `RoiAuthoritativeData`, `RoiSessionCaches`, `RoiDirtyState`, and `RoiJobState` in code
+- migrate current loaded label overlays from `Segmentation` entities to `Roi` entities
+- rename editor selection from `active_layer` to `active_roi`
+- complete `Subplan 1: ROI Core Model`
 
 Pending:
-- define the ROI core model in code
-- migrate current label overlays onto ROI instances
-- introduce cache and job-state scaffolding without changing current viewer behavior
+- define the conversion/job runtime API and lifecycle
+- finish decoupling render-facing overlay access from direct voxel-cache internals
+- add cache generation and invalidation helpers around ROI cache access
 - strengthen the shared transform/orientation layer before contour or mesh workflows begin

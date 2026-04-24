@@ -5,7 +5,7 @@ use winit::keyboard::ModifiersState;
 // --- Basic Tags ---
 pub struct CursorTag;
 pub struct MainVolumeTag;
-pub struct SegmentationTag;
+pub struct RoiTag;
 
 // --- Window & View ---
 pub struct WindowSettings {
@@ -164,26 +164,161 @@ pub enum EditorTool {
 
 #[derive(Default)]
 pub struct EditorState {
-    pub active_layer: Option<hecs::Entity>,
+    pub active_roi: Option<hecs::Entity>,
     pub active_tool: EditorTool,
 }
 
-pub struct Segmentation {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RoiId(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrimaryRepresentation {
+    Voxel,
+    Contour,
+    Mesh,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoiMetadata {
+    pub roi_id: RoiId,
     pub name: String,
     pub is_visible: bool,
+    pub is_locked: bool,
+    pub color: [f32; 4],
 }
 
 pub struct LayerSettings {
     pub opacity: f32,
 }
 
-pub struct LabelmapData {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoxelData {
     pub dimensions: [u32; 3],
     pub raw_data: Vec<u8>,
 }
 
-pub enum Representation {
-    Voxel(GpuVolumeResources),
+pub enum RoiAuthoritativeData {
+    Voxel(VoxelData),
+    Contour,
+    Mesh,
+}
+
+#[derive(Default)]
+pub struct RoiSessionCaches {
+    pub voxel: Option<GpuVolumeResources>,
+    pub contour: Option<ContourCache>,
+    pub mesh: Option<MeshCache>,
+}
+
+pub struct ContourCache;
+
+pub struct MeshCache;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CacheGeneration {
+    pub authoritative: u64,
+    pub voxel: u64,
+    pub contour: u64,
+    pub mesh: u64,
+}
+
+impl Default for CacheGeneration {
+    fn default() -> Self {
+        Self {
+            authoritative: 1,
+            voxel: 0,
+            contour: 0,
+            mesh: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RoiDirtyState {
+    pub authoritative_dirty: bool,
+    pub voxel_cache_dirty: bool,
+    pub contour_cache_dirty: bool,
+    pub mesh_cache_dirty: bool,
+    pub generations: CacheGeneration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoiJobKind {
+    RebuildVoxelCache,
+    RebuildContourCache,
+    RebuildMeshCache,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RoiJobStatus {
+    #[default]
+    Idle,
+    Queued(RoiJobKind),
+    Running(RoiJobKind),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RoiJobState {
+    pub current: RoiJobStatus,
+}
+
+pub struct Roi {
+    pub metadata: RoiMetadata,
+    pub primary_representation: PrimaryRepresentation,
+    pub authoritative_data: RoiAuthoritativeData,
+    pub session_caches: RoiSessionCaches,
+    pub dirty_state: RoiDirtyState,
+    pub job_state: RoiJobState,
+}
+
+impl Roi {
+    pub fn new_voxel(
+        roi_id: RoiId,
+        name: String,
+        dimensions: [u32; 3],
+        raw_data: Vec<u8>,
+        gpu_resources: GpuVolumeResources,
+    ) -> Self {
+        Self::new_voxel_with_cache(roi_id, name, dimensions, raw_data, Some(gpu_resources))
+    }
+
+    pub fn new_voxel_with_cache(
+        roi_id: RoiId,
+        name: String,
+        dimensions: [u32; 3],
+        raw_data: Vec<u8>,
+        gpu_resources: Option<GpuVolumeResources>,
+    ) -> Self {
+        Self {
+            metadata: RoiMetadata {
+                roi_id,
+                name,
+                is_visible: false,
+                is_locked: false,
+                color: [1.0, 0.2, 0.2, 1.0],
+            },
+            primary_representation: PrimaryRepresentation::Voxel,
+            authoritative_data: RoiAuthoritativeData::Voxel(VoxelData {
+                dimensions,
+                raw_data,
+            }),
+            session_caches: RoiSessionCaches {
+                voxel: gpu_resources,
+                contour: None,
+                mesh: None,
+            },
+            dirty_state: RoiDirtyState::default(),
+            job_state: RoiJobState::default(),
+        }
+    }
+
+    pub fn voxel_cache(&self) -> Option<&GpuVolumeResources> {
+        self.session_caches.voxel.as_ref()
+    }
+
+    pub fn voxel_cache_mut(&mut self) -> Option<&mut GpuVolumeResources> {
+        self.session_caches.voxel.as_mut()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -297,5 +432,42 @@ mod tests {
         };
         let ar = vol.aspect_ratios();
         assert_eq!(ar, [1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn test_new_voxel_roi_initializes_voxel_primary_state() {
+        let roi = Roi::new_voxel_with_cache(
+            RoiId(7),
+            "Liver".to_string(),
+            [16, 16, 8],
+            vec![1; 16 * 16 * 8],
+            None,
+        );
+
+        assert_eq!(roi.metadata.roi_id, RoiId(7));
+        assert_eq!(roi.metadata.name, "Liver");
+        assert_eq!(roi.primary_representation, PrimaryRepresentation::Voxel);
+        assert!(matches!(
+            roi.authoritative_data,
+            RoiAuthoritativeData::Voxel(VoxelData {
+                dimensions: [16, 16, 8],
+                ..
+            })
+        ));
+        assert!(roi.voxel_cache().is_none());
+        assert!(roi.session_caches.contour.is_none());
+        assert!(roi.session_caches.mesh.is_none());
+    }
+
+    #[test]
+    fn test_roi_dirty_state_defaults_match_clean_voxel_baseline() {
+        let state = RoiDirtyState::default();
+
+        assert!(!state.authoritative_dirty);
+        assert!(!state.voxel_cache_dirty);
+        assert!(!state.contour_cache_dirty);
+        assert!(!state.mesh_cache_dirty);
+        assert_eq!(state.generations.authoritative, 1);
+        assert_eq!(state.generations.voxel, 0);
     }
 }
