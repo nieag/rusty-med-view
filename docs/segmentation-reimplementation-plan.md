@@ -374,6 +374,16 @@ Completed:
   - preserve NIfTI sform translation/origin for image and label loads (with invalid-sform fallback to `[0.0, 0.0, 0.0]`)
   - add shared conversion helpers in `src/convert/geometry.rs` for `VolumeUv <-> VoxelIndex <-> PatientWorldMm`
   - compare label/main origin in ROI import geometry validation
+- complete `Subplan 4 Step 4B` from [docs/subplan-4-transform-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-4-transform-handoff.md:1):
+  - add `PlaneFamily` and `PlaneDefinition` in shared conversion code
+  - add orthogonal and oblique plane constructors with normalized patient/world axes
+  - add plane-local/world conversion helpers and Step 4B geometry tests
+  - add `SlicePlane <-> PlaneFamily` compatibility adapters without changing current viewport behavior
+- complete `Subplan 4 Step 4C` from [docs/subplan-4-transform-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-4-transform-handoff.md:1):
+  - add shared `ViewportMapping` plus `viewport_uv_to_volume_uv` and `volume_uv_to_viewport_uv` in shared conversion code
+  - route orthogonal picking and annotation dragging through shared viewport/geometry conversion helpers
+  - route 2D annotation projection through the same shared viewport/geometry conversion helper path (with legacy fallback)
+  - add Step 4C parity tests for orthogonal mapping and egui top-left Y-down behavior
 
 Pending:
-- implement Subplan 4 using [docs/subplan-4-transform-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-4-transform-handoff.md:1), continuing with `Step 4B: Add plane definitions without behavior change`
+- implement Subplan 4 using [docs/subplan-4-transform-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-4-transform-handoff.md:1), continuing with `Step 4D: Centralize oblique mapping`

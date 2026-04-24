@@ -38,6 +38,27 @@ impl SlicePlane {
         }
     }
 
+    /// Convert to the shared plane-family abstraction.
+    pub fn to_plane_family(self) -> crate::convert::PlaneFamily {
+        match self {
+            SlicePlane::Axial => crate::convert::PlaneFamily::Axial,
+            SlicePlane::Coronal => crate::convert::PlaneFamily::Coronal,
+            SlicePlane::Sagittal => crate::convert::PlaneFamily::Sagittal,
+        }
+    }
+
+    /// Convert from the shared plane-family abstraction.
+    ///
+    /// Returns `None` for non-orthogonal families (for now, `Oblique`).
+    pub fn from_plane_family(family: crate::convert::PlaneFamily) -> Option<Self> {
+        match family {
+            crate::convert::PlaneFamily::Axial => Some(SlicePlane::Axial),
+            crate::convert::PlaneFamily::Coronal => Some(SlicePlane::Coronal),
+            crate::convert::PlaneFamily::Sagittal => Some(SlicePlane::Sagittal),
+            crate::convert::PlaneFamily::Oblique => None,
+        }
+    }
+
     /// Get the volume axis index for the depth dimension (0=X, 1=Y, 2=Z)
     pub fn depth_axis(&self) -> usize {
         match self {
@@ -309,6 +330,26 @@ mod tests {
             assert!((uv[0] - recovered_uv[0]).abs() < 1e-6);
             assert!((uv[1] - recovered_uv[1]).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn test_slice_plane_plane_family_adapters() {
+        assert_eq!(
+            SlicePlane::from_plane_family(SlicePlane::Axial.to_plane_family()),
+            Some(SlicePlane::Axial)
+        );
+        assert_eq!(
+            SlicePlane::from_plane_family(SlicePlane::Coronal.to_plane_family()),
+            Some(SlicePlane::Coronal)
+        );
+        assert_eq!(
+            SlicePlane::from_plane_family(SlicePlane::Sagittal.to_plane_family()),
+            Some(SlicePlane::Sagittal)
+        );
+        assert_eq!(
+            SlicePlane::from_plane_family(crate::convert::PlaneFamily::Oblique),
+            None
+        );
     }
 
     #[test]

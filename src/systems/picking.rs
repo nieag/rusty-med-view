@@ -120,12 +120,21 @@ pub fn get_voxel_at_mouse(
         .map(|w| w.viewport_rect)
         .unwrap_or([0.0, 0.0, 100.0, 100.0]);
 
-    let (vol_aspects, vol_dims) = {
+    let (vol_aspects, vol_dims, main_geometry) = {
         let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
         if let Some((_, vol)) = query.iter().next() {
-            (vol.aspect_ratios(), Some(vol.dimensions))
+            (
+                vol.aspect_ratios(),
+                Some(vol.dimensions),
+                Some(VoxelGeometry {
+                    dimensions: vol.dimensions,
+                    spacing: vol.spacing,
+                    origin: vol.origin,
+                    orientation: vol.orientation,
+                }),
+            )
         } else {
-            ([1.0, 1.0, 1.0], None)
+            ([1.0, 1.0, 1.0], None, None)
         }
     };
 
@@ -160,20 +169,50 @@ pub fn get_voxel_at_mouse(
                 return Some(pos);
             }
         } else if let Some(plane) = crate::util::orientation::SlicePlane::from_mode(mode) {
-            let slice_aspect = plane.slice_aspect(vol_aspects);
-            let k = screen_aspect / slice_aspect;
+            let mut mapped_pos = None;
+            if let Some(geometry) = main_geometry {
+                if let Some(plane_definition) = crate::convert::orthogonal_plane_from_volume_uv(
+                    plane.to_plane_family(),
+                    cursor_pos,
+                    geometry,
+                ) {
+                    let mapping = crate::convert::ViewportMapping {
+                        zoom,
+                        pan,
+                        pivot: [0.5, 0.5],
+                        screen_aspect,
+                    };
+                    if let Some(pos) = crate::convert::viewport_uv_to_volume_uv(
+                        mouse_uv,
+                        plane_definition,
+                        geometry,
+                        mapping,
+                    ) {
+                        mapped_pos = Some(pos);
+                    }
+                }
+            }
 
-            let volume_uv = [
-                ((mouse_uv[0] - 0.5) * k) / zoom + 0.5 + pan[0],
-                (mouse_uv[1] - 0.5) / zoom + 0.5 + pan[1],
-            ];
+            if mapped_pos.is_none() {
+                let slice_aspect = plane.slice_aspect(vol_aspects);
+                let k = screen_aspect / slice_aspect;
 
-            let pos = plane.screen_uv_to_volume(volume_uv, cursor_pos[plane.depth_axis()]);
-            if (0.0..=1.0).contains(&pos[0])
-                && (0.0..=1.0).contains(&pos[1])
-                && (0.0..=1.0).contains(&pos[2])
-            {
-                return Some(pos);
+                let volume_uv = [
+                    ((mouse_uv[0] - 0.5) * k) / zoom + 0.5 + pan[0],
+                    (mouse_uv[1] - 0.5) / zoom + 0.5 + pan[1],
+                ];
+
+                mapped_pos =
+                    Some(plane.screen_uv_to_volume(volume_uv, cursor_pos[plane.depth_axis()]));
+            }
+
+            if let Some(pos) = mapped_pos {
+                if (0.0..=1.0).contains(&pos[0])
+                    && (0.0..=1.0).contains(&pos[1])
+                    && (0.0..=1.0).contains(&pos[2])
+                {
+                    return Some(pos);
+                }
             }
         }
         None

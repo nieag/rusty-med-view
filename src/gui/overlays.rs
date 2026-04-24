@@ -300,12 +300,19 @@ fn draw_annotations(
     let focused_id = ann_ctx.focused_id;
     let cursor_pos = ann_ctx.cursor_pos;
     let aspect_ratios = vol.aspect_ratios();
+    let geometry = VoxelGeometry {
+        dimensions: vol.dimensions,
+        spacing: vol.spacing,
+        origin: vol.origin,
+        orientation: vol.orientation,
+    };
     let proj = crate::render::geometry::ViewProjection {
         zoom: view.zoom,
         pan: view.pan,
         pivot: view.pivot,
         rotation: view.user_rotation,
         aspect_ratios,
+        geometry,
     };
 
     if vol.dimensions[0] == 0 {
@@ -361,32 +368,36 @@ fn draw_annotations(
                         1.0
                     };
 
-                    let slice_aspect = match viewport_idx {
-                        1 => aspect_ratios[0] / aspect_ratios[1],
-                        2 => aspect_ratios[0] / aspect_ratios[2],
-                        3 => aspect_ratios[1] / aspect_ratios[2],
-                        _ => 1.0,
-                    };
-                    let k = screen_aspect / slice_aspect;
-
                     let ndc_x = (mouse_pos.x - rect.min.x) / rect.width();
                     let ndc_y = (mouse_pos.y - rect.min.y) / rect.height();
 
                     overlay.mouse_screen_uv = [ndc_x, ndc_y];
 
-                    let world_u =
-                        ((ndc_x - proj.pivot[0]) * k / proj.zoom) + proj.pivot[0] + proj.pan[0];
-                    let world_v =
-                        ((ndc_y - proj.pivot[1]) / proj.zoom) + proj.pivot[1] + proj.pan[1];
-
                     if let Some(plane) =
                         crate::util::orientation::SlicePlane::from_viewport(viewport_idx as u32)
                     {
-                        let vol_pos = plane.screen_uv_to_volume(
-                            [world_u, world_v],
-                            ann.world_pos[plane.depth_axis()],
-                        );
-                        ann.world_pos = glam::Vec3::from(vol_pos);
+                        if let Some(plane_definition) =
+                            crate::convert::orthogonal_plane_from_volume_uv(
+                                plane.to_plane_family(),
+                                ann.world_pos.to_array(),
+                                geometry,
+                            )
+                        {
+                            let mapping = crate::convert::ViewportMapping {
+                                zoom: proj.zoom,
+                                pan: proj.pan,
+                                pivot: proj.pivot,
+                                screen_aspect,
+                            };
+                            if let Some(vol_pos) = crate::convert::viewport_uv_to_volume_uv(
+                                [ndc_x, ndc_y],
+                                plane_definition,
+                                geometry,
+                                mapping,
+                            ) {
+                                ann.world_pos = glam::Vec3::from(vol_pos);
+                            }
+                        }
                     }
 
                     ann.world_pos = ann.world_pos.clamp(glam::Vec3::ZERO, glam::Vec3::ONE);

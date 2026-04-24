@@ -1,5 +1,6 @@
 // src/geometry.rs
 // use crate::components::ViewState; // Removed
+use crate::components::VoxelGeometry;
 use glam::Vec3;
 
 #[repr(C)]
@@ -62,6 +63,7 @@ pub struct ViewProjection {
     pub pivot: [f32; 2],
     pub rotation: [f32; 4],
     pub aspect_ratios: [f32; 3],
+    pub geometry: VoxelGeometry,
 }
 
 /// Project a world position (0..1) to Normalized Device Coordinates (0..1 relative to viewport)
@@ -74,6 +76,27 @@ pub fn world_to_ndc(
     if viewport_idx > 0 {
         // --- 2D Viewports ---
         let plane = crate::util::orientation::SlicePlane::from_viewport(viewport_idx as u32)?;
+        if let Some(plane_definition) = crate::convert::orthogonal_plane_from_volume_uv(
+            plane.to_plane_family(),
+            pos.into(),
+            proj.geometry,
+        ) {
+            let mapping = crate::convert::ViewportMapping {
+                zoom: proj.zoom,
+                pan: proj.pan,
+                pivot: proj.pivot,
+                screen_aspect,
+            };
+            if let Some(viewport_uv) = crate::convert::volume_uv_to_viewport_uv(
+                pos.into(),
+                plane_definition,
+                proj.geometry,
+                mapping,
+            ) {
+                return Some(viewport_uv);
+            }
+        }
+
         let [ndc_x_relative, ndc_y_relative] = plane.volume_to_screen_uv(pos.into());
         let k = screen_aspect / plane.slice_aspect(proj.aspect_ratios);
 
