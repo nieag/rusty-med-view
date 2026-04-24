@@ -125,6 +125,7 @@ pub fn draw_sidebar(
                         if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
                             roi.metadata.is_visible = visible;
                         }
+                        let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
                     }
                     ui.label(name);
                 });

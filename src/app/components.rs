@@ -294,7 +294,7 @@ impl Roi {
             metadata: RoiMetadata {
                 roi_id,
                 name,
-                is_visible: false,
+                is_visible: true,
                 is_locked: false,
                 color: [1.0, 0.2, 0.2, 1.0],
             },
