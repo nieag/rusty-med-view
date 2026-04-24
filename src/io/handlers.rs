@@ -60,11 +60,11 @@ pub fn handle_label_load(
     queue: &wgpu::Queue,
     world: &mut World,
     loaded_label: &LoadedLabel,
-) -> (hecs::Entity, [u32; 3]) {
+) -> Result<(hecs::Entity, [u32; 3]), String> {
     log::info!("Labelmap loaded: {:?} dimensions", loaded_label.dimensions);
-    let entity = roi_runtime::create_voxel_roi_from_label(device, queue, world, loaded_label);
+    let entity = roi_runtime::create_voxel_roi_from_label(device, queue, world, loaded_label)?;
 
-    (entity, loaded_label.dimensions)
+    Ok((entity, loaded_label.dimensions))
 }
 
 /// Update GUI status message

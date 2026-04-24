@@ -191,10 +191,17 @@ pub struct LayerSettings {
     pub opacity: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VoxelData {
-    pub dimensions: [u32; 3],
+    pub geometry: VoxelGeometry,
     pub raw_data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VoxelGeometry {
+    pub dimensions: [u32; 3],
+    pub spacing: [f32; 3],
+    pub orientation: [f32; 4],
 }
 
 pub enum RoiAuthoritativeData {
@@ -275,17 +282,17 @@ impl Roi {
     pub fn new_voxel(
         roi_id: RoiId,
         name: String,
-        dimensions: [u32; 3],
+        geometry: VoxelGeometry,
         raw_data: Vec<u8>,
         gpu_resources: GpuVolumeResources,
     ) -> Self {
-        Self::new_voxel_with_cache(roi_id, name, dimensions, raw_data, Some(gpu_resources))
+        Self::new_voxel_with_cache(roi_id, name, geometry, raw_data, Some(gpu_resources))
     }
 
     pub fn new_voxel_with_cache(
         roi_id: RoiId,
         name: String,
-        dimensions: [u32; 3],
+        geometry: VoxelGeometry,
         raw_data: Vec<u8>,
         gpu_resources: Option<GpuVolumeResources>,
     ) -> Self {
@@ -299,10 +306,7 @@ impl Roi {
                 color: [1.0, 0.2, 0.2, 1.0],
             },
             primary_representation: PrimaryRepresentation::Voxel,
-            authoritative_data: RoiAuthoritativeData::Voxel(VoxelData {
-                dimensions,
-                raw_data,
-            }),
+            authoritative_data: RoiAuthoritativeData::Voxel(VoxelData { geometry, raw_data }),
             session_caches: RoiSessionCaches {
                 voxel: gpu_resources,
                 contour: None,
@@ -449,6 +453,8 @@ pub enum LoadResult {
 #[derive(Debug)]
 pub struct LoadedLabel {
     pub dimensions: [u32; 3],
+    pub spacing: [f32; 3],
+    pub orientation: [f32; 4],
     pub data: Vec<u8>,
     pub filename: String,
 }
@@ -542,7 +548,11 @@ mod tests {
         let roi = Roi::new_voxel_with_cache(
             RoiId(7),
             "Liver".to_string(),
-            [16, 16, 8],
+            VoxelGeometry {
+                dimensions: [16, 16, 8],
+                spacing: [1.0, 1.0, 1.0],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
             vec![1; 16 * 16 * 8],
             None,
         );
@@ -553,7 +563,11 @@ mod tests {
         assert!(matches!(
             roi.authoritative_data,
             RoiAuthoritativeData::Voxel(VoxelData {
-                dimensions: [16, 16, 8],
+                geometry: VoxelGeometry {
+                    dimensions: [16, 16, 8],
+                    spacing: [1.0, 1.0, 1.0],
+                    orientation: [0.0, 0.0, 0.0, 1.0],
+                },
                 ..
             })
         ));
@@ -581,7 +595,11 @@ mod tests {
         let roi = Roi::new_voxel_with_cache(
             RoiId(8),
             "Kidney".to_string(),
-            [8, 8, 8],
+            VoxelGeometry {
+                dimensions: [8, 8, 8],
+                spacing: [0.5, 0.5, 0.5],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
             vec![1; 8 * 8 * 8],
             None,
         );
@@ -595,7 +613,11 @@ mod tests {
         let mut roi = Roi::new_voxel_with_cache(
             RoiId(12),
             "Aorta".to_string(),
-            [8, 8, 8],
+            VoxelGeometry {
+                dimensions: [8, 8, 8],
+                spacing: [0.75, 0.75, 0.75],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
             vec![1; 8 * 8 * 8],
             None,
         );
@@ -610,8 +632,17 @@ mod tests {
 
     #[test]
     fn test_mark_authoritative_changed_invalidates_all_derived_caches() {
-        let mut roi =
-            Roi::new_voxel_with_cache(RoiId(9), "Spleen".to_string(), [4, 4, 4], vec![1; 64], None);
+        let mut roi = Roi::new_voxel_with_cache(
+            RoiId(9),
+            "Spleen".to_string(),
+            VoxelGeometry {
+                dimensions: [4, 4, 4],
+                spacing: [1.0, 1.0, 1.0],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
+            vec![1; 64],
+            None,
+        );
 
         roi.dirty_state.voxel_cache_dirty = false;
         roi.dirty_state.contour_cache_dirty = false;
@@ -635,7 +666,11 @@ mod tests {
         let mut roi = Roi::new_voxel_with_cache(
             RoiId(10),
             "Pancreas".to_string(),
-            [4, 4, 4],
+            VoxelGeometry {
+                dimensions: [4, 4, 4],
+                spacing: [1.0, 1.0, 1.0],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
             vec![0; 64],
             None,
         );
@@ -650,8 +685,17 @@ mod tests {
 
     #[test]
     fn test_finish_cache_rebuild_marks_cache_current_and_clears_job() {
-        let mut roi =
-            Roi::new_voxel_with_cache(RoiId(11), "Heart".to_string(), [4, 4, 4], vec![0; 64], None);
+        let mut roi = Roi::new_voxel_with_cache(
+            RoiId(11),
+            "Heart".to_string(),
+            VoxelGeometry {
+                dimensions: [4, 4, 4],
+                spacing: [1.0, 1.0, 1.0],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
+            vec![0; 64],
+            None,
+        );
 
         roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
         assert_eq!(roi.start_queued_job(), Some(RoiJobKind::RebuildVoxelCache));
@@ -662,5 +706,27 @@ mod tests {
         assert!(!roi.is_cache_dirty(RoiCacheKind::Voxel));
         assert!(roi.is_cache_current(RoiCacheKind::Voxel));
         assert_eq!(roi.job_state.running, None);
+    }
+
+    #[test]
+    fn test_voxel_geometry_is_preserved_on_constructor() {
+        let geometry = VoxelGeometry {
+            dimensions: [12, 10, 8],
+            spacing: [0.8, 0.8, 1.5],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+
+        let roi = Roi::new_voxel_with_cache(
+            RoiId(13),
+            "Gallbladder".to_string(),
+            geometry,
+            vec![0; 12 * 10 * 8],
+            None,
+        );
+
+        match roi.authoritative_data {
+            RoiAuthoritativeData::Voxel(voxel) => assert_eq!(voxel.geometry, geometry),
+            _ => panic!("expected voxel roi"),
+        }
     }
 }

@@ -47,21 +47,24 @@ Do **not**:
 
 ### 2. Label import geometry rule
 
-Current label import does not provide independent spatial metadata. For this checkpoint, use the following temporary rule:
+Label NIfTI geometry must be preserved directly on import.
 
-- a loaded label ROI copies `spacing` and `orientation` from the current main volume
-- the ROI keeps its own `dimensions` from the loaded label
+Use the following rule:
+
+- `LoadedLabel` must carry `dimensions`, `spacing`, and `orientation`
+- a loaded label ROI uses the label file's own geometry as its authoritative voxel geometry
+- if a main volume exists, it is used for validation only
 - after creation, the ROI owns this geometry and must not borrow it again from the main volume
 
-If there is no main volume loaded, label ROI creation must fail rather than guessing geometry.
+If label geometry differs from the current main volume geometry:
 
-If label dimensions differ from the current main volume dimensions:
-
-- still create the ROI using the label dimensions
-- still copy spacing and orientation from the current main volume
+- still create the ROI using the label file's geometry
 - log a warning describing the mismatch
 
-This is a temporary compatibility rule for the current loader, not the final import architecture.
+If no main volume resource exists for rendering:
+
+- label ROI creation may fail explicitly at the render-resource boundary
+- geometry import itself must not be blocked on main-volume geometry
 
 ### 3. Explicit overlay-cap rule
 
@@ -129,10 +132,10 @@ pub fn main_volume_voxel_geometry(world: &World) -> Option<VoxelGeometry>
 In `src/app/roi_runtime.rs`:
 
 - update `create_voxel_roi_from_label(...)`
-- copy spacing/orientation from `main_volume_voxel_geometry(world)`
-- use label dimensions as the ROI dimensions
-- if no main volume exists, fail explicitly rather than guessing
-- if dimensions mismatch, log a warning
+- use label `dimensions`, `spacing`, and `orientation` as the ROI geometry
+- if a main volume exists, validate against it and log a warning on mismatch
+- do not overwrite label geometry from the main volume
+- if no main volume render resource exists, fail explicitly at that resource boundary only
 
 Recommended API change:
 
@@ -188,7 +191,7 @@ When visibility is rejected by the overlay cap:
 - set GUI status to:
   - `Only two ROI overlays can be visible at once in the current renderer.`
 
-When label ROI creation fails because no main volume is loaded:
+When label ROI creation fails because no main volume render resource is available:
 
 - return an explicit error from the runtime/helper path
 - surface a human-readable status message rather than panicking
@@ -199,9 +202,9 @@ Add unit tests for:
 
 1. voxel ROI constructors preserve `VoxelGeometry`
 2. voxel ROI stats use ROI-owned spacing rather than main-volume spacing
-3. label ROI creation fails when no main volume is present
-4. label ROI creation copies spacing/orientation from the main volume
-5. label ROI creation preserves label dimensions even when they differ from the main volume
+3. label ROI import preserves label spacing/orientation without a main volume
+4. label ROI creation preserves label geometry even when it differs from the main volume
+5. label ROI creation only errors when required render resources are missing
 6. visible-ROI cap allows one and two visible ROIs but rejects a third
 
 Keep using:
@@ -215,7 +218,7 @@ This checkpoint is complete when all of the following are true:
 
 - a voxel-authoritative ROI owns `dimensions`, `spacing`, and `orientation`
 - voxel ROI stats no longer depend on global main-volume spacing
-- label ROI creation does not guess geometry when no main volume is present
+- label ROI creation preserves label geometry rather than guessing or borrowing it
 - more than two visible ROIs cannot occur silently
 - the plan doc is updated in the same commit
 

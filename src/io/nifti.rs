@@ -289,11 +289,15 @@ pub fn load_label_from_bytes(
     filename: String,
 ) -> Result<crate::components::LoadedLabel, LoadError> {
     let ParsedNifti {
+        header,
         volume,
         dimensions: [width, height, depth],
         total_voxels,
         ..
     } = parse_nifti_raw(data)?;
+
+    let spacing = [header.pixdim[1], header.pixdim[2], header.pixdim[3]];
+    let orientation = extract_orientation_from_sform(&header);
 
     let mut label_data = Vec::with_capacity(total_voxels);
     for z in 0..depth as u16 {
@@ -307,6 +311,8 @@ pub fn load_label_from_bytes(
 
     Ok(crate::components::LoadedLabel {
         dimensions: [width, height, depth],
+        spacing,
+        orientation,
         data: label_data,
         filename,
     })

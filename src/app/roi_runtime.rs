@@ -15,6 +15,8 @@ pub struct VoxelRoiStats {
     pub volume_mm3: f32,
 }
 
+pub const MAX_SIMULTANEOUS_ROI_OVERLAYS: usize = 2;
+
 /// GPU handles needed to rebuild scene bind groups after ROI or volume updates.
 pub struct BindGroupResources<'a> {
     pub layout: &'a wgpu::BindGroupLayout,
@@ -91,28 +93,103 @@ pub fn recreate_scene_bind_groups(
     }
 }
 
+pub fn main_volume_voxel_geometry(world: &World) -> Option<VoxelGeometry> {
+    let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
+    let (_, volume) = query.iter().next()?;
+    Some(VoxelGeometry {
+        dimensions: volume.dimensions,
+        spacing: volume.spacing,
+        orientation: volume.orientation,
+    })
+}
+
+pub fn visible_roi_count(world: &World) -> usize {
+    world
+        .query::<&Roi>()
+        .iter()
+        .filter(|(_, roi)| roi.metadata.is_visible)
+        .count()
+}
+
+pub fn can_enable_roi_visibility(world: &World, roi_entity: hecs::Entity) -> bool {
+    if let Ok(roi) = world.get::<&Roi>(roi_entity) {
+        if roi.metadata.is_visible {
+            return true;
+        }
+    }
+
+    visible_roi_count(world) < MAX_SIMULTANEOUS_ROI_OVERLAYS
+}
+
+fn approx_eq_slice<const N: usize>(lhs: [f32; N], rhs: [f32; N], epsilon: f32) -> bool {
+    lhs.into_iter()
+        .zip(rhs)
+        .all(|(left, right)| (left - right).abs() <= epsilon)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VoxelRoiImportSpec {
+    pub geometry: VoxelGeometry,
+    pub start_visible: bool,
+}
+
+pub fn prepare_voxel_roi_import(
+    world: &World,
+    loaded_label: &LoadedLabel,
+) -> Result<VoxelRoiImportSpec, String> {
+    if let Some(main_geometry) = main_volume_voxel_geometry(world) {
+        if main_geometry.dimensions != loaded_label.dimensions
+            || !approx_eq_slice(main_geometry.spacing, loaded_label.spacing, 1e-5)
+            || !approx_eq_slice(main_geometry.orientation, loaded_label.orientation, 1e-5)
+        {
+            log::warn!(
+                "Loaded label geometry differs from main volume geometry; label dims={:?} spacing={:?} orientation={:?}, main dims={:?} spacing={:?} orientation={:?}",
+                loaded_label.dimensions,
+                loaded_label.spacing,
+                loaded_label.orientation,
+                main_geometry.dimensions,
+                main_geometry.spacing,
+                main_geometry.orientation
+            );
+        }
+    }
+
+    Ok(VoxelRoiImportSpec {
+        geometry: VoxelGeometry {
+            dimensions: loaded_label.dimensions,
+            spacing: loaded_label.spacing,
+            orientation: loaded_label.orientation,
+        },
+        start_visible: visible_roi_count(world) < MAX_SIMULTANEOUS_ROI_OVERLAYS,
+    })
+}
+
 pub fn create_voxel_roi_from_label(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     world: &mut World,
     loaded_label: &LoadedLabel,
-) -> hecs::Entity {
+) -> Result<hecs::Entity, String> {
+    let import_spec = prepare_voxel_roi_import(world, loaded_label)?;
     let (new_texture, new_view, new_sampler) =
         crate::io::volume::create_texture_from_labelmap(device, queue, loaded_label);
 
     let placeholder_bg = world
         .query::<&GpuVolumeResources>()
+        .with::<&MainVolumeTag>()
         .iter()
         .next()
         .map(|(_, res)| res.bind_group.clone())
-        .expect("Main volume should exist");
+        .ok_or_else(|| {
+            "Cannot create a label ROI without an initialized main volume resource".to_string()
+        })?;
 
     let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
-    world.spawn((
+    let entity = world.spawn((
         Roi::new_voxel(
             RoiId(next_roi_id),
             loaded_label.filename.clone(),
-            loaded_label.dimensions,
+            import_spec.geometry,
             loaded_label.data.clone(),
             GpuVolumeResources {
                 texture: new_texture,
@@ -123,7 +200,13 @@ pub fn create_voxel_roi_from_label(
         ),
         LayerSettings { opacity: 0.5 },
         RoiTag,
-    ))
+    ));
+
+    if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
+        roi.metadata.is_visible = import_spec.start_visible;
+    }
+
+    Ok(entity)
 }
 
 pub fn cache_status(
@@ -182,13 +265,9 @@ pub fn voxel_roi_stats(world: &World, roi_entity: hecs::Entity) -> Option<VoxelR
         .filter(|value| **value != 0)
         .count() as u64;
 
-    let volume_scale_mm3 = world
-        .query::<&VolumeData>()
-        .with::<&MainVolumeTag>()
-        .iter()
-        .next()
-        .map(|(_, volume)| volume.spacing[0] * volume.spacing[1] * volume.spacing[2])
-        .unwrap_or(1.0);
+    let volume_scale_mm3 = voxel_data.geometry.spacing[0]
+        * voxel_data.geometry.spacing[1]
+        * voxel_data.geometry.spacing[2];
 
     Some(VoxelRoiStats {
         occupied_voxels,
@@ -212,7 +291,11 @@ mod tests {
         world.spawn((Roi::new_voxel_with_cache(
             RoiId(1),
             "Test".to_string(),
-            [4, 4, 4],
+            VoxelGeometry {
+                dimensions: [4, 4, 4],
+                spacing: [1.0, 1.0, 1.0],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
             vec![1; 64],
             None,
         ),))
@@ -280,7 +363,11 @@ mod tests {
         let entity = world.spawn((Roi::new_voxel_with_cache(
             RoiId(2),
             "Mask".to_string(),
-            [2, 2, 2],
+            VoxelGeometry {
+                dimensions: [2, 2, 2],
+                spacing: [0.5, 0.5, 2.0],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
             vec![0, 1, 2, 0, 0, 3, 4, 0],
             None,
         ),));
@@ -289,5 +376,79 @@ mod tests {
 
         assert_eq!(stats.occupied_voxels, 4);
         assert!((stats.volume_mm3 - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_main_volume_voxel_geometry_reads_main_volume_fields() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [0.25, 0.5, 2.0]);
+
+        let geometry = main_volume_voxel_geometry(&world).unwrap();
+
+        assert_eq!(geometry.dimensions, [4, 4, 4]);
+        assert_eq!(geometry.spacing, [0.25, 0.5, 2.0]);
+        assert_eq!(geometry.orientation, [0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn test_visible_roi_count_and_visibility_gate_respect_overlay_cap() {
+        let mut world = World::new();
+        let first = spawn_test_roi(&mut world);
+        let second = spawn_test_roi(&mut world);
+        let third = spawn_test_roi(&mut world);
+
+        {
+            let mut roi = world.get::<&mut Roi>(first).unwrap();
+            roi.metadata.is_visible = true;
+        }
+        {
+            let mut roi = world.get::<&mut Roi>(second).unwrap();
+            roi.metadata.is_visible = true;
+        }
+        {
+            let mut roi = world.get::<&mut Roi>(third).unwrap();
+            roi.metadata.is_visible = false;
+        }
+
+        assert_eq!(visible_roi_count(&world), 2);
+        assert!(can_enable_roi_visibility(&world, first));
+        assert!(can_enable_roi_visibility(&world, second));
+        assert!(!can_enable_roi_visibility(&world, third));
+    }
+
+    #[test]
+    fn test_prepare_voxel_roi_import_uses_label_geometry_without_main_volume() {
+        let world = World::new();
+        let loaded_label = LoadedLabel {
+            dimensions: [2, 2, 2],
+            spacing: [1.25, 1.5, 2.0],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+            data: vec![0; 8],
+            filename: "Label".to_string(),
+        };
+
+        let import_spec = prepare_voxel_roi_import(&world, &loaded_label).unwrap();
+        assert_eq!(import_spec.geometry.dimensions, [2, 2, 2]);
+        assert_eq!(import_spec.geometry.spacing, [1.25, 1.5, 2.0]);
+        assert_eq!(import_spec.geometry.orientation, [0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn test_prepare_voxel_roi_import_preserves_label_geometry_even_when_main_volume_differs() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [0.5, 0.5, 2.0]);
+        let loaded_label = LoadedLabel {
+            dimensions: [3, 4, 5],
+            spacing: [0.75, 0.8, 1.25],
+            orientation: [0.0, 0.0, 1.0, 0.0],
+            data: vec![0; 60],
+            filename: "Label".to_string(),
+        };
+
+        let import_spec = prepare_voxel_roi_import(&world, &loaded_label).unwrap();
+
+        assert_eq!(import_spec.geometry.dimensions, [3, 4, 5]);
+        assert_eq!(import_spec.geometry.spacing, [0.75, 0.8, 1.25]);
+        assert_eq!(import_spec.geometry.orientation, [0.0, 0.0, 1.0, 0.0]);
     }
 }

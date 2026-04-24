@@ -4,6 +4,7 @@ use hecs::World;
 use winit::event_loop::EventLoopProxy;
 
 use crate::app::roi_runtime;
+use crate::io::handlers;
 
 pub fn draw_sidebar(
     ctx: &egui::Context,
@@ -122,10 +123,29 @@ pub fn draw_sidebar(
                 ui.horizontal(|ui| {
                     ui.radio_value(&mut new_active_roi, Some(entity), "");
                     if ui.checkbox(&mut visible, "").changed() {
-                        if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
-                            roi.metadata.is_visible = visible;
+                        let allow_visibility = if visible {
+                            roi_runtime::can_enable_roi_visibility(world, entity)
+                        } else {
+                            true
+                        };
+
+                        if allow_visibility {
+                            if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
+                                roi.metadata.is_visible = visible;
+                            }
+                            let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
+                        } else {
+                            visible = false;
+                            if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
+                                roi.metadata.is_visible = false;
+                            }
+                            handlers::set_status_message(
+                                world,
+                                entities,
+                                "Only two ROI overlays can be visible at once in the current renderer."
+                                    .to_string(),
+                            );
                         }
-                        let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
                     }
                     ui.label(name);
                 });

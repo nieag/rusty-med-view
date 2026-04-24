@@ -211,26 +211,37 @@ impl ApplicationHandler<AppEvent> for App {
                                 dims
                             }
                             LoadResult::Label(ref loaded_label) => {
-                                let (new_entity, dims) = handlers::handle_label_load(
+                                match handlers::handle_label_load(
                                     &ctx.gpu.device,
                                     &ctx.gpu.queue,
                                     &mut ctx.scene.world,
                                     loaded_label,
-                                );
-                                if let Ok(mut editor) = ctx
-                                    .scene
-                                    .world
-                                    .get::<&mut EditorState>(ctx.scene.entities.editor)
-                                {
-                                    editor.active_roi = Some(new_entity);
-                                }
-                                handlers::set_status_message(
-                                    &mut ctx.scene.world,
-                                    &ctx.scene.entities,
-                                    format!("Label Loaded: {}x{}", dims[0], dims[1]),
-                                );
+                                ) {
+                                    Ok((new_entity, dims)) => {
+                                        if let Ok(mut editor) = ctx
+                                            .scene
+                                            .world
+                                            .get::<&mut EditorState>(ctx.scene.entities.editor)
+                                        {
+                                            editor.active_roi = Some(new_entity);
+                                        }
+                                        handlers::set_status_message(
+                                            &mut ctx.scene.world,
+                                            &ctx.scene.entities,
+                                            format!("Label Loaded: {}x{}", dims[0], dims[1]),
+                                        );
 
-                                dims
+                                        dims
+                                    }
+                                    Err(err) => {
+                                        handlers::set_status_message(
+                                            &mut ctx.scene.world,
+                                            &ctx.scene.entities,
+                                            err,
+                                        );
+                                        [0, 0, 0]
+                                    }
+                                }
                             }
                         };
 

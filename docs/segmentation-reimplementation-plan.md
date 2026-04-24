@@ -343,7 +343,7 @@ Transform and parity tests:
 ## Implementation Status
 
 Current Phase:
-- `Pre-Subplan 4 Course Corrections`
+- `Subplan 4: Transform, Plane, and Geometry Context`
 
 Completed:
 - `1453511` Baseline: remove legacy segmentation stack
@@ -360,10 +360,11 @@ Completed:
 - begin `Subplan 3` by moving voxel ROI creation into `app::roi_runtime` and adding explicit voxel ROI occupancy/volume stats from authoritative voxel data
 - complete `Subplan 3: Voxel Baseline Integration`
 - `40416de` Fix: show loaded ROI overlays by default
+- complete the Pre-Subplan 4 course corrections:
+  - add explicit voxel geometry to authoritative ROI voxel state
+  - stop borrowing voxel ROI stats from the main volume entity
+  - preserve label NIfTI geometry directly on ROI import and use the main volume only for validation
+  - make the two-overlay renderer limit explicit in runtime/UI behavior
 
 Pending:
-- add explicit spatial metadata or shared grid/world transform data to authoritative ROI voxel state
-- stop deriving voxel ROI stats and future voxel conversions from borrowed main-volume spacing
-- make the current two-overlay renderer limit explicit in either runtime/UI behavior or rendering scope
-- execute the concrete handoff in `docs/pre-subplan-4-implementer-handoff.md`
-- after those corrections, begin strengthening the shared transform/orientation layer before contour or mesh workflows begin
+- begin Subplan 4 by strengthening the shared transform/orientation layer before contour or mesh workflows begin
