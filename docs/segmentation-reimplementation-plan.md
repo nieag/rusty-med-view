@@ -447,6 +447,12 @@ Completed:
   - add contour render pass ordering after the volume pass and before `Gui::render(...)`
   - keep Step 6C contour render data preparation empty so current voxel/image viewer behavior remains unchanged
   - add Step 6C tests for thick-line triangle stability and empty render payload no-op behavior
+- complete `Subplan 6 Step 6D` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1):
+  - prepare native contour render vertices from active contour ROI slices/loops on matching plane-family 2D viewports
+  - project contour `PlaneLocalMm` points through world/volume into viewport UV and screen NDC using shared conversion helpers
+  - filter rendered contour slices by displayed-plane tolerance and skip 3D viewports for V1
+  - render contour line segments and point markers through the native contour pass while preserving existing voxel/image rendering behavior
+  - add Step 6D tests for point-marker geometry, slice-plane tolerance, projection stability, empty safety, and non-empty matching-slice render preparation
 
 Pending:
-- implement `Subplan 6 Step 6D` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1): render stored contour loops
+- implement `Subplan 6 Step 6E` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1): contour draw and loop closure

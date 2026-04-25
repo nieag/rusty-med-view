@@ -1,11 +1,110 @@
 use crate::components::*;
-use crate::convert::PlaneFamily;
+use crate::convert::{
+    oblique_plane_from_view_rotation, orthogonal_plane_from_volume_uv, PlaneFamily,
+};
 use crate::AppEvent;
 use hecs::World;
 use winit::event_loop::EventLoopProxy;
 
 use crate::app::roi_runtime;
 use crate::io::handlers;
+
+fn insert_test_contour_loop(
+    world: &mut World,
+    entities: &AppEntities,
+    roi_entity: hecs::Entity,
+) -> Result<(), String> {
+    let geometry = {
+        let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
+        let (_, volume) = query
+            .iter()
+            .next()
+            .ok_or_else(|| "Load a main volume before inserting a test contour.".to_string())?;
+        VoxelGeometry {
+            dimensions: volume.dimensions,
+            spacing: volume.spacing,
+            origin: volume.origin,
+            orientation: volume.orientation,
+        }
+    };
+
+    let cursor_uv = world
+        .get::<&Transform>(entities.cursor)
+        .map(|cursor| cursor.position)
+        .unwrap_or([0.5, 0.5, 0.5]);
+
+    let mut contour_data = world
+        .get::<&Roi>(roi_entity)
+        .map_err(|_| "Active contour ROI is missing.".to_string())?
+        .contour_data()
+        .cloned()
+        .ok_or_else(|| "Active ROI is not contour-primary.".to_string())?;
+
+    let plane = match contour_data.active_plane_family {
+        PlaneFamily::Axial | PlaneFamily::Coronal | PlaneFamily::Sagittal => {
+            orthogonal_plane_from_volume_uv(contour_data.active_plane_family, cursor_uv, geometry)
+                .ok_or_else(|| "Failed to resolve orthogonal contour plane.".to_string())?
+        }
+        PlaneFamily::Oblique => {
+            let active_viewport = world
+                .get::<&InputState>(entities.input)
+                .ok()
+                .and_then(|input| input.active_viewport)
+                .ok_or_else(|| {
+                    "Activate an oblique viewport before inserting an oblique test contour."
+                        .to_string()
+                })?;
+            let viewport = world
+                .get::<&Viewport>(active_viewport)
+                .map_err(|_| "Active viewport is missing.".to_string())?;
+            if viewport.mode != ViewMode::Oblique {
+                return Err(
+                    "Switch the active viewport to oblique before inserting oblique test contour."
+                        .to_string(),
+                );
+            }
+            let rotation = world
+                .get::<&ViewportState>(active_viewport)
+                .map_err(|_| "Active viewport state is missing.".to_string())?
+                .user_rotation;
+            oblique_plane_from_view_rotation(cursor_uv, rotation, geometry)
+                .ok_or_else(|| "Failed to resolve oblique contour plane.".to_string())?
+        }
+    };
+
+    let seeded_loop = ContourLoop {
+        points: vec![
+            ContourPoint {
+                local_mm: [-12.0, -10.0],
+            },
+            ContourPoint {
+                local_mm: [12.0, -10.0],
+            },
+            ContourPoint {
+                local_mm: [0.0, 12.0],
+            },
+        ],
+        is_closed: true,
+    };
+
+    contour_data.slices.push(ContourSlice {
+        plane,
+        loops: vec![seeded_loop],
+    });
+
+    roi_runtime::replace_contour_data(world, roi_entity, contour_data).map_err(
+        |err| match err {
+            roi_runtime::ContourMutationError::MissingRoi => {
+                "Active contour ROI is missing.".to_string()
+            }
+            roi_runtime::ContourMutationError::NotContourRoi => {
+                "Active ROI is not contour-primary.".to_string()
+            }
+        },
+    )?;
+
+    Ok(())
+}
 
 pub fn draw_sidebar(
     ctx: &egui::Context,
@@ -245,6 +344,24 @@ pub fn draw_sidebar(
                     }
                 }
             });
+
+            if ui
+                .small_button("Insert test contour (dev)")
+                .on_hover_text("Temporary helper: seed a closed contour loop on the active contour plane.")
+                .clicked()
+            {
+                match insert_test_contour_loop(world, entities, entity) {
+                    Ok(()) => {
+                        handlers::set_status_message(
+                            world,
+                            entities,
+                            "Inserted test contour loop for active ROI.".to_string(),
+                        );
+                        ctx.request_repaint();
+                    }
+                    Err(message) => handlers::set_status_message(world, entities, message),
+                }
+            }
         }
 
         if new_active_roi != active_roi {
