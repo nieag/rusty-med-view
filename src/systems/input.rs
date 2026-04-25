@@ -7,6 +7,12 @@ use hecs::World;
 use winit::event::{ElementState, MouseButton};
 use winit::keyboard::ModifiersState;
 
+fn set_status_message(world: &mut World, entities: &AppEntities, message: String) {
+    if let Ok(mut gui_state) = world.get::<&mut GuiState>(entities.gui_state) {
+        gui_state.status_message = Some(message);
+    }
+}
+
 /// Update keyboard modifier state (Ctrl/Shift/Alt) in the ECS.
 pub fn sys_update_modifiers(world: &mut World, entities: &AppEntities, mods: ModifiersState) {
     if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
@@ -109,6 +115,49 @@ pub fn sys_handle_mouse_button(
         && !super_pressed
         && state == ElementState::Pressed
     {
+        let active_tool = world
+            .get::<&EditorState>(entities.editor)
+            .map(|editor| editor.active_tool)
+            .unwrap_or(EditorTool::Navigation);
+        if active_tool == EditorTool::ContourDraw {
+            let click_pos = world
+                .get::<&InputState>(entities.input)
+                .map(|input| input.mouse_uv)
+                .unwrap_or([0.5, 0.5]);
+            match crate::systems::handle_contour_draw_click(world, entities, click_pos) {
+                Ok(crate::systems::ContourDrawClickOutcome::PointAdded) => {}
+                Ok(crate::systems::ContourDrawClickOutcome::LoopCommitted) => {
+                    set_status_message(world, entities, "Contour loop committed.".to_string());
+                }
+                Err(crate::systems::ContourDrawClickError::LoopNeedsThreePoints) => {
+                    set_status_message(
+                        world,
+                        entities,
+                        "Need at least 3 points to close a contour loop.".to_string(),
+                    );
+                }
+                Err(crate::systems::ContourDrawClickError::MissingActiveRoi) => {
+                    set_status_message(
+                        world,
+                        entities,
+                        "Select a contour ROI before drawing.".to_string(),
+                    );
+                }
+                Err(crate::systems::ContourDrawClickError::ActiveRoiNotContour) => {
+                    set_status_message(
+                        world,
+                        entities,
+                        "Active ROI is not contour-primary.".to_string(),
+                    );
+                }
+                Err(crate::systems::ContourDrawClickError::Mapping(error)) => {
+                    set_status_message(world, entities, format!("Contour draw blocked: {error:?}"));
+                }
+                Err(_) => {}
+            }
+            return;
+        }
+
         if let Some(avp) = active_vp {
             let mut click_pos = [0.0, 0.0];
             if let Ok(input) = world.get::<&InputState>(entities.input) {
@@ -276,7 +325,11 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
                 ));
             }
             // Crosshair update during drag - prepare info
-            if is_dragging && !is_panning && !is_rotating {
+            let active_tool = world
+                .get::<&EditorState>(entities.editor)
+                .map(|editor| editor.active_tool)
+                .unwrap_or(EditorTool::Navigation);
+            if is_dragging && !is_panning && !is_rotating && active_tool == EditorTool::Navigation {
                 crosshair_update = Some((avp, input.mouse_uv));
             }
         }

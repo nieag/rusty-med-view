@@ -453,6 +453,13 @@ Completed:
   - filter rendered contour slices by displayed-plane tolerance and skip 3D viewports for V1
   - render contour line segments and point markers through the native contour pass while preserving existing voxel/image rendering behavior
   - add Step 6D tests for point-marker geometry, slice-plane tolerance, projection stability, empty safety, and non-empty matching-slice render preparation
+- complete `Subplan 6 Step 6E` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1):
+  - add `ContourDraft` in editor state and route `ContourDraw` left-click interactions to draft point appends using shared viewport/plane mapping helpers
+  - implement near-first-point loop closure with minimum three-point validation and authoritative commit via `replace_contour_data(...)`
+  - commit closed loops into matching contour slices and preserve existing contour-plane ownership rules
+  - clear draft when leaving draw mode or switching active ROI
+  - render in-progress draft points/segments through the native contour renderer
+  - add Step 6E tests for draft append behavior, closure rejection for fewer than three points, successful loop commit/rebuild queue contract, and draft-clear rule
 
 Pending:
-- implement `Subplan 6 Step 6E` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1): contour draw and loop closure
+- implement `Subplan 6 Step 6F` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1): point and loop selection

@@ -297,13 +297,12 @@ fn viewport_uv_to_ndc(
 }
 
 pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> ContourRenderData {
-    let active_roi = match world
+    let (active_roi, contour_draft) = match world
         .get::<&EditorState>(entities.editor)
-        .ok()
-        .and_then(|editor| editor.active_roi)
+        .map(|editor| (editor.active_roi, editor.contour_draft.clone()))
     {
-        Some(active_roi) => active_roi,
-        None => return ContourRenderData::default(),
+        Ok((Some(active_roi), draft)) => (active_roi, draft),
+        Err(_) | Ok((None, _)) => return ContourRenderData::default(),
     };
 
     let roi = match world.get::<&Roi>(active_roi) {
@@ -428,6 +427,44 @@ pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> Con
                         roi_color,
                     ));
                 }
+            }
+        }
+
+        if let Some(draft) = contour_draft.as_ref().filter(|draft| {
+            draft.roi_entity == active_roi && draft.plane.family == displayed_plane.family
+        }) {
+            let mut draft_points_ndc = Vec::with_capacity(draft.points.len());
+            for point in &draft.points {
+                let world_mm = plane_local_mm_to_world_mm(point.local_mm, draft.plane);
+                let volume_uv = world_mm_to_volume_uv(world_mm, geometry);
+                let Some(viewport_uv) =
+                    volume_uv_to_viewport_uv(volume_uv, displayed_plane, geometry, mapping)
+                else {
+                    continue;
+                };
+                let Some(ndc) = viewport_uv_to_ndc(viewport_uv, viewport.rect, window_size) else {
+                    continue;
+                };
+                draft_points_ndc.push(ndc);
+            }
+
+            let draft_color = [
+                roi_color[0],
+                roi_color[1],
+                roi_color[2],
+                roi_color[3] * 0.85,
+            ];
+            vertices.extend(build_polyline_triangles_ndc(
+                &draft_points_ndc,
+                line_width_ndc,
+                draft_color,
+            ));
+            for point_ndc in draft_points_ndc {
+                vertices.extend(build_point_marker_triangles_ndc(
+                    point_ndc,
+                    point_size_ndc,
+                    draft_color,
+                ));
             }
         }
     }
@@ -610,6 +647,7 @@ mod tests {
         let editor = world.spawn((EditorState {
             active_roi: None,
             active_tool: EditorTool::Navigation,
+            contour_draft: None,
         },));
         let viewport = world.spawn((
             Viewport {

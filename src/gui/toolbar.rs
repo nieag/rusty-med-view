@@ -14,6 +14,7 @@ fn set_editor_tool(
             .get::<&mut EditorState>(entities.editor)
             .map_err(|_| "Missing editor state".to_string())?;
         editor.active_tool = EditorTool::Navigation;
+        editor.contour_draft = None;
         return Ok(());
     }
 
@@ -36,6 +37,9 @@ fn set_editor_tool(
         .get::<&mut EditorState>(entities.editor)
         .map_err(|_| "Missing editor state".to_string())?;
     editor.active_tool = requested_tool;
+    if requested_tool != EditorTool::ContourDraw {
+        editor.contour_draft = None;
+    }
     Ok(())
 }
 

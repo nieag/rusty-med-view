@@ -171,6 +171,7 @@ pub enum EditorTool {
 pub struct EditorState {
     pub active_roi: Option<hecs::Entity>,
     pub active_tool: EditorTool,
+    pub contour_draft: Option<ContourDraft>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -247,6 +248,13 @@ impl ContourData {
     pub fn has_loops(&self) -> bool {
         self.slices.iter().any(|slice| !slice.loops.is_empty())
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContourDraft {
+    pub roi_entity: hecs::Entity,
+    pub plane: PlaneDefinition,
+    pub points: Vec<ContourPoint>,
 }
 
 pub enum RoiAuthoritativeData {
