@@ -360,7 +360,7 @@ Transform and parity tests:
 ## Implementation Status
 
 Current Phase:
-- `Subplan 6: Contour Editing V1`
+- `Subplan 7: Mesh Representation Architecture` (planning/handoff)
 
 Completed:
 - `1453511` Baseline: remove legacy segmentation stack
@@ -474,6 +474,20 @@ Completed:
   - route all committed edit operations through runtime contour replacement so `RebuildVoxelCache` queueing remains consistent
   - add UI command buttons for insert/delete actions and preserve navigation behavior outside active edit operations
   - add Step 6G tests for move, insert, delete, loop-removal-at-min-size, and rebuild-queue contract
+- complete `Subplan 6 Step 6H` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1):
+  - finalize Subplan 6 implementation across commits `8d353db`, `1764ee2`, `de35bab`, `a4031eb`, and `3b632e4`
+  - rerun required verification commands: `cargo test -q`, `cargo check --target wasm32-unknown-unknown -q`, and `cargo fmt --all`
+  - manual regression checks completed:
+    - loading data: image NIfTI load and voxel label NIfTI load expected to preserve existing baseline behavior; observed pass
+    - visibility: image + voxel label rendering expected to remain stable in 2D and 3D views; observed pass
+    - interaction: contour draw/select/move/insert/delete expected to function on supported 2D plane families; observed pass
+    - regressions: 2D navigation, slice scrolling, and 3D viewer behavior expected unchanged outside contour edit actions; observed pass
+  - deferred limitations documented and accepted for Subplan 6 scope:
+    - no contour rasterization or contour-to-voxel conversion algorithm yet
+    - no contour interpolation/smoothing/boolean/margin toolset yet
+    - no mesh representation/deformation work yet
+    - no renderer expansion/import-export/registration-resampling yet
 
 Pending:
-- implement `Subplan 6 Step 6H` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1): Subplan 6 status closure and regression pass
+- define `Subplan 7: Mesh Representation Architecture` implementer handoff document
+- start `Subplan 7` implementation after handoff is approved
