@@ -1,3 +1,4 @@
+use crate::convert::{PlaneDefinition, PlaneFamily};
 use glam::Vec3;
 
 use winit::keyboard::ModifiersState;
@@ -161,6 +162,9 @@ pub struct GuiState {
 pub enum EditorTool {
     #[default]
     Navigation,
+    ContourSelect,
+    ContourDraw,
+    ContourPointMove,
 }
 
 #[derive(Default)]
@@ -206,9 +210,48 @@ pub struct VoxelGeometry {
     pub orientation: [f32; 4],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ContourPoint {
+    pub local_mm: [f32; 2],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContourLoop {
+    pub points: Vec<ContourPoint>,
+    pub is_closed: bool,
+}
+
+impl ContourLoop {
+    pub fn is_valid_closed_loop(&self) -> bool {
+        self.is_closed && self.points.len() >= 3
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContourSlice {
+    pub plane: PlaneDefinition,
+    pub loops: Vec<ContourLoop>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContourData {
+    pub active_plane_family: PlaneFamily,
+    pub slices: Vec<ContourSlice>,
+}
+
+impl ContourData {
+    pub fn is_empty(&self) -> bool {
+        self.slices.is_empty()
+    }
+
+    pub fn has_loops(&self) -> bool {
+        self.slices.iter().any(|slice| !slice.loops.is_empty())
+    }
+}
+
 pub enum RoiAuthoritativeData {
     Voxel(VoxelData),
-    Contour,
+    Contour(ContourData),
     Mesh,
 }
 
@@ -326,6 +369,37 @@ impl Roi {
         }
     }
 
+    pub fn new_contour(roi_id: RoiId, name: String, contour_data: ContourData) -> Self {
+        Self {
+            metadata: RoiMetadata {
+                roi_id,
+                name,
+                is_visible: true,
+                is_locked: false,
+                color: [1.0, 0.2, 0.2, 1.0],
+            },
+            primary_representation: PrimaryRepresentation::Contour,
+            authoritative_data: RoiAuthoritativeData::Contour(contour_data),
+            session_caches: RoiSessionCaches {
+                voxel: None,
+                contour: None,
+                mesh: None,
+            },
+            dirty_state: RoiDirtyState {
+                voxel_cache_dirty: true,
+                ..RoiDirtyState::default()
+            },
+            job_state: RoiJobState::default(),
+        }
+    }
+
+    pub fn contour_data(&self) -> Option<&ContourData> {
+        match &self.authoritative_data {
+            RoiAuthoritativeData::Contour(contour) => Some(contour),
+            RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Mesh => None,
+        }
+    }
+
     pub fn voxel_cache(&self) -> Option<&GpuVolumeResources> {
         self.session_caches.voxel.as_ref()
     }
@@ -361,6 +435,16 @@ impl Roi {
         self.mark_cache_dirty(RoiCacheKind::Voxel);
         self.mark_cache_dirty(RoiCacheKind::Contour);
         self.mark_cache_dirty(RoiCacheKind::Mesh);
+    }
+
+    pub fn mark_contour_authoritative_changed(&mut self) {
+        self.dirty_state.authoritative_dirty = true;
+        self.dirty_state.generations.authoritative += 1;
+        self.mark_cache_dirty(RoiCacheKind::Voxel);
+        self.mark_cache_dirty(RoiCacheKind::Mesh);
+        if self.session_caches.contour.is_some() {
+            self.mark_cache_dirty(RoiCacheKind::Contour);
+        }
     }
 
     pub fn mark_cache_dirty(&mut self, kind: RoiCacheKind) {
@@ -503,6 +587,16 @@ pub struct AppEntities {
 mod tests {
     use super::*;
 
+    fn test_plane_definition(family: PlaneFamily) -> PlaneDefinition {
+        PlaneDefinition {
+            family,
+            origin_mm: [10.0, 20.0, 30.0],
+            u_axis_mm: [1.0, 0.0, 0.0],
+            v_axis_mm: [0.0, 1.0, 0.0],
+            normal_mm: [0.0, 0.0, 1.0],
+        }
+    }
+
     #[test]
     fn test_aspect_ratio_cubic() {
         let vol = VolumeData {
@@ -584,6 +678,12 @@ mod tests {
         assert!(roi.session_caches.mesh.is_none());
         assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
         assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
+    }
+
+    #[test]
+    fn test_editor_tool_default_remains_navigation() {
+        let editor = EditorState::default();
+        assert_eq!(editor.active_tool, EditorTool::Navigation);
     }
 
     #[test]
@@ -673,6 +773,33 @@ mod tests {
     }
 
     #[test]
+    fn test_mark_contour_authoritative_changed_invalidates_only_derived_by_default() {
+        let mut roi = Roi::new_contour(
+            RoiId(16),
+            "CTV".to_string(),
+            ContourData {
+                active_plane_family: PlaneFamily::Axial,
+                slices: Vec::new(),
+            },
+        );
+
+        roi.dirty_state.voxel_cache_dirty = false;
+        roi.dirty_state.contour_cache_dirty = false;
+        roi.dirty_state.mesh_cache_dirty = false;
+        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+
+        roi.mark_contour_authoritative_changed();
+
+        assert!(roi.dirty_state.authoritative_dirty);
+        assert_eq!(roi.dirty_state.generations.authoritative, 2);
+        assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert!(!roi.is_cache_dirty(RoiCacheKind::Contour));
+        assert!(roi.is_cache_dirty(RoiCacheKind::Mesh));
+    }
+
+    #[test]
     fn test_enqueue_rebuild_supersedes_previous_queued_job() {
         let mut roi = Roi::new_voxel_with_cache(
             RoiId(10),
@@ -742,5 +869,130 @@ mod tests {
             RoiAuthoritativeData::Voxel(voxel) => assert_eq!(voxel.geometry, geometry),
             _ => panic!("expected voxel roi"),
         }
+    }
+
+    #[test]
+    fn test_contour_data_preserves_active_plane_family() {
+        let contour = ContourData {
+            active_plane_family: PlaneFamily::Oblique,
+            slices: Vec::new(),
+        };
+        assert_eq!(contour.active_plane_family, PlaneFamily::Oblique);
+        assert!(contour.is_empty());
+        assert!(!contour.has_loops());
+    }
+
+    #[test]
+    fn test_contour_slice_preserves_plane_definition() {
+        let plane = test_plane_definition(PlaneFamily::Coronal);
+        let slice = ContourSlice {
+            plane,
+            loops: vec![ContourLoop {
+                points: vec![
+                    ContourPoint {
+                        local_mm: [0.0, 0.0],
+                    },
+                    ContourPoint {
+                        local_mm: [2.0, 0.0],
+                    },
+                    ContourPoint {
+                        local_mm: [2.0, 2.0],
+                    },
+                ],
+                is_closed: true,
+            }],
+        };
+
+        assert_eq!(slice.plane, plane);
+        assert!(slice.loops[0].is_valid_closed_loop());
+    }
+
+    #[test]
+    fn test_contour_loop_requires_three_points_when_closed() {
+        let loop_with_two_points = ContourLoop {
+            points: vec![
+                ContourPoint {
+                    local_mm: [0.0, 0.0],
+                },
+                ContourPoint {
+                    local_mm: [1.0, 0.0],
+                },
+            ],
+            is_closed: true,
+        };
+        let loop_with_three_points = ContourLoop {
+            points: vec![
+                ContourPoint {
+                    local_mm: [0.0, 0.0],
+                },
+                ContourPoint {
+                    local_mm: [1.0, 0.0],
+                },
+                ContourPoint {
+                    local_mm: [0.0, 1.0],
+                },
+            ],
+            is_closed: true,
+        };
+
+        assert!(!loop_with_two_points.is_valid_closed_loop());
+        assert!(loop_with_three_points.is_valid_closed_loop());
+    }
+
+    #[test]
+    fn test_new_contour_roi_initializes_contour_primary_state() {
+        let contour_data = ContourData {
+            active_plane_family: PlaneFamily::Axial,
+            slices: vec![ContourSlice {
+                plane: test_plane_definition(PlaneFamily::Axial),
+                loops: vec![ContourLoop {
+                    points: vec![
+                        ContourPoint {
+                            local_mm: [0.0, 0.0],
+                        },
+                        ContourPoint {
+                            local_mm: [1.0, 0.0],
+                        },
+                        ContourPoint {
+                            local_mm: [1.0, 1.0],
+                        },
+                    ],
+                    is_closed: true,
+                }],
+            }],
+        };
+        let roi = Roi::new_contour(RoiId(14), "GTV".to_string(), contour_data.clone());
+
+        assert_eq!(roi.metadata.roi_id, RoiId(14));
+        assert_eq!(roi.metadata.name, "GTV");
+        assert_eq!(roi.primary_representation, PrimaryRepresentation::Contour);
+        assert!(matches!(
+            roi.authoritative_data,
+            RoiAuthoritativeData::Contour(_)
+        ));
+        assert_eq!(roi.contour_data(), Some(&contour_data));
+        assert!(roi.voxel_cache().is_none());
+        assert!(roi.session_caches.contour.is_none());
+        assert!(roi.session_caches.mesh.is_none());
+        assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
+    }
+
+    #[test]
+    fn test_contour_accessor_rejects_voxel_roi() {
+        let voxel_roi = Roi::new_voxel_with_cache(
+            RoiId(15),
+            "Body".to_string(),
+            VoxelGeometry {
+                dimensions: [8, 8, 8],
+                spacing: [1.0, 1.0, 1.0],
+                origin: [0.0, 0.0, 0.0],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
+            vec![0; 8 * 8 * 8],
+            None,
+        );
+
+        assert!(voxel_roi.contour_data().is_none());
     }
 }

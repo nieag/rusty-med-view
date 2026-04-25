@@ -353,6 +353,28 @@ pub fn volume_uv_to_viewport_uv(
     }
 }
 
+pub fn viewport_uv_to_plane_local_mm(
+    viewport_uv: [f32; 2],
+    plane: PlaneDefinition,
+    geometry: VoxelGeometry,
+    mapping: ViewportMapping,
+) -> Option<[f32; 2]> {
+    let volume_uv = viewport_uv_to_volume_uv(viewport_uv, plane, geometry, mapping)?;
+    let world_mm = volume_uv_to_world_mm(volume_uv, geometry);
+    Some(world_mm_to_plane_local_mm(world_mm, plane))
+}
+
+pub fn plane_local_mm_to_viewport_uv(
+    local_mm: [f32; 2],
+    plane: PlaneDefinition,
+    geometry: VoxelGeometry,
+    mapping: ViewportMapping,
+) -> Option<[f32; 2]> {
+    let world_mm = plane_local_mm_to_world_mm(local_mm, plane);
+    let volume_uv = world_mm_to_volume_uv(world_mm, geometry);
+    volume_uv_to_viewport_uv(volume_uv, plane, geometry, mapping)
+}
+
 pub fn volume_uv_to_voxel_index(uv: [f32; 3], dimensions: [u32; 3]) -> [f32; 3] {
     let mut index = [0.0; 3];
     for axis in 0..3 {
@@ -450,6 +472,15 @@ mod tests {
             spacing: [1.0, 1.0, 1.0],
             origin: [0.0, 0.0, 0.0],
             orientation: [0.0, 0.0, 0.0, 1.0],
+        }
+    }
+
+    fn default_mapping() -> ViewportMapping {
+        ViewportMapping {
+            zoom: 1.4,
+            pan: [0.03, -0.04],
+            pivot: [0.5, 0.5],
+            screen_aspect: 16.0 / 10.0,
         }
     }
 
@@ -752,6 +783,24 @@ mod tests {
             let roundtrip =
                 viewport_uv_to_volume_uv(viewport_uv, plane, geometry, mapping).unwrap();
             assert!(approx_eq(roundtrip, volume_uv, 1e-6));
+        }
+    }
+
+    #[test]
+    fn test_viewport_plane_local_roundtrip_for_orthogonal_planes() {
+        let geometry = identity_geometry();
+        let mapping = default_mapping();
+
+        for (family, cursor_uv, click_uv) in [
+            (PlaneFamily::Axial, [0.35, 0.45, 0.25], [0.2, 0.8]),
+            (PlaneFamily::Coronal, [0.7, 0.25, 0.6], [0.65, 0.15]),
+            (PlaneFamily::Sagittal, [0.15, 0.8, 0.55], [0.4, 0.3]),
+        ] {
+            let plane = orthogonal_plane_from_volume_uv(family, cursor_uv, geometry).unwrap();
+            let local = viewport_uv_to_plane_local_mm(click_uv, plane, geometry, mapping).unwrap();
+            let click_roundtrip =
+                plane_local_mm_to_viewport_uv(local, plane, geometry, mapping).unwrap();
+            assert!(approx_eq2(click_roundtrip, click_uv, 1e-5));
         }
     }
 

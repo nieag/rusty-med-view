@@ -1,4 +1,7 @@
 use crate::app::components::*;
+#[cfg(test)]
+use crate::convert::PlaneDefinition;
+use crate::convert::PlaneFamily;
 use hecs::World;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,6 +16,19 @@ pub struct RoiCacheStatus {
 pub struct VoxelRoiStats {
     pub occupied_voxels: u64,
     pub volume_mm3: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContourPlaneFamilySwitchError {
+    MissingRoi,
+    NotContourRoi,
+    RequiresConversion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContourMutationError {
+    MissingRoi,
+    NotContourRoi,
 }
 
 pub const MAX_SIMULTANEOUS_ROI_OVERLAYS: usize = 2;
@@ -122,6 +138,56 @@ pub fn can_enable_roi_visibility(world: &World, roi_entity: hecs::Entity) -> boo
     visible_roi_count(world) < MAX_SIMULTANEOUS_ROI_OVERLAYS
 }
 
+pub fn set_active_contour_plane_family(
+    world: &mut World,
+    roi_entity: hecs::Entity,
+    family: PlaneFamily,
+) -> Result<(), ContourPlaneFamilySwitchError> {
+    let mut roi = world
+        .get::<&mut Roi>(roi_entity)
+        .map_err(|_| ContourPlaneFamilySwitchError::MissingRoi)?;
+
+    let contour = match &mut roi.authoritative_data {
+        RoiAuthoritativeData::Contour(contour) => contour,
+        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Mesh => {
+            return Err(ContourPlaneFamilySwitchError::NotContourRoi);
+        }
+    };
+
+    if contour.active_plane_family == family {
+        return Ok(());
+    }
+
+    if contour.has_loops() {
+        return Err(ContourPlaneFamilySwitchError::RequiresConversion);
+    }
+
+    contour.active_plane_family = family;
+    roi.mark_contour_authoritative_changed();
+    Ok(())
+}
+
+pub fn replace_contour_data(
+    world: &mut World,
+    roi_entity: hecs::Entity,
+    contour_data: ContourData,
+) -> Result<(), ContourMutationError> {
+    let mut roi = world
+        .get::<&mut Roi>(roi_entity)
+        .map_err(|_| ContourMutationError::MissingRoi)?;
+
+    match &mut roi.authoritative_data {
+        RoiAuthoritativeData::Contour(existing) => *existing = contour_data,
+        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Mesh => {
+            return Err(ContourMutationError::NotContourRoi);
+        }
+    }
+
+    roi.mark_contour_authoritative_changed();
+    roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
+    Ok(())
+}
+
 fn approx_eq_slice<const N: usize>(lhs: [f32; N], rhs: [f32; N], epsilon: f32) -> bool {
     lhs.into_iter()
         .zip(rhs)
@@ -214,6 +280,37 @@ pub fn create_voxel_roi_from_label(
     Ok(entity)
 }
 
+pub fn create_empty_contour_roi(
+    world: &mut World,
+    editor_entity: hecs::Entity,
+    active_plane_family: PlaneFamily,
+) -> Result<hecs::Entity, String> {
+    if world.get::<&EditorState>(editor_entity).is_err() {
+        return Err("Missing editor state; contour ROI was not created.".to_string());
+    }
+
+    let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
+    let roi_name = format!("Contour ROI {}", next_roi_id);
+    let entity = world.spawn((
+        Roi::new_contour(
+            RoiId(next_roi_id),
+            roi_name,
+            ContourData {
+                active_plane_family,
+                slices: Vec::new(),
+            },
+        ),
+        LayerSettings { opacity: 0.5 },
+        RoiTag,
+    ));
+
+    let mut editor = world
+        .get::<&mut EditorState>(editor_entity)
+        .map_err(|_| "Missing editor state; contour ROI was not created.".to_string())?;
+    editor.active_roi = Some(entity);
+    Ok(entity)
+}
+
 pub fn cache_status(
     world: &World,
     roi_entity: hecs::Entity,
@@ -261,7 +358,7 @@ pub fn voxel_roi_stats(world: &World, roi_entity: hecs::Entity) -> Option<VoxelR
     let roi = world.get::<&Roi>(roi_entity).ok()?;
     let voxel_data = match &roi.authoritative_data {
         RoiAuthoritativeData::Voxel(voxel) => voxel,
-        RoiAuthoritativeData::Contour | RoiAuthoritativeData::Mesh => return None,
+        RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh => return None,
     };
 
     let occupied_voxels = voxel_data
@@ -319,6 +416,53 @@ mod tests {
             },
             MainVolumeTag,
         ));
+    }
+
+    fn test_plane_definition(family: PlaneFamily) -> PlaneDefinition {
+        PlaneDefinition {
+            family,
+            origin_mm: [0.0, 0.0, 0.0],
+            u_axis_mm: [1.0, 0.0, 0.0],
+            v_axis_mm: [0.0, 1.0, 0.0],
+            normal_mm: [0.0, 0.0, 1.0],
+        }
+    }
+
+    fn spawn_test_contour_roi(
+        world: &mut World,
+        family: PlaneFamily,
+        with_loops: bool,
+    ) -> hecs::Entity {
+        let slices = if with_loops {
+            vec![ContourSlice {
+                plane: test_plane_definition(family),
+                loops: vec![ContourLoop {
+                    points: vec![
+                        ContourPoint {
+                            local_mm: [0.0, 0.0],
+                        },
+                        ContourPoint {
+                            local_mm: [1.0, 0.0],
+                        },
+                        ContourPoint {
+                            local_mm: [0.0, 1.0],
+                        },
+                    ],
+                    is_closed: true,
+                }],
+            }]
+        } else {
+            Vec::new()
+        };
+
+        world.spawn((Roi::new_contour(
+            RoiId(100),
+            "Contour".to_string(),
+            ContourData {
+                active_plane_family: family,
+                slices,
+            },
+        ),))
     }
 
     #[test]
@@ -463,5 +607,203 @@ mod tests {
         assert_eq!(import_spec.geometry.spacing, [0.75, 0.8, 1.25]);
         assert_eq!(import_spec.geometry.origin, [-2.0, 4.5, 6.0]);
         assert_eq!(import_spec.geometry.orientation, [0.0, 0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn test_create_empty_contour_roi_creates_contour_primary_with_requested_plane_family() {
+        let mut world = World::new();
+        let editor = world.spawn((EditorState::default(),));
+
+        let entity = create_empty_contour_roi(&mut world, editor, PlaneFamily::Coronal).unwrap();
+
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert_eq!(roi.primary_representation, PrimaryRepresentation::Contour);
+        let contour_data = roi.contour_data().expect("expected contour roi");
+        assert_eq!(contour_data.active_plane_family, PlaneFamily::Coronal);
+        assert!(contour_data.slices.is_empty());
+    }
+
+    #[test]
+    fn test_create_empty_contour_roi_sets_active_roi_to_new_entity() {
+        let mut world = World::new();
+        let editor = world.spawn((EditorState::default(),));
+
+        let entity = create_empty_contour_roi(&mut world, editor, PlaneFamily::Axial).unwrap();
+
+        let editor_state = world.get::<&EditorState>(editor).unwrap();
+        assert_eq!(editor_state.active_roi, Some(entity));
+    }
+
+    #[test]
+    fn test_set_active_contour_plane_family_updates_empty_contour_and_marks_derived_dirty() {
+        let mut world = World::new();
+        let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+        {
+            let mut roi = world.get::<&mut Roi>(entity).unwrap();
+            roi.dirty_state.authoritative_dirty = false;
+            roi.dirty_state.voxel_cache_dirty = false;
+            roi.dirty_state.contour_cache_dirty = false;
+            roi.dirty_state.mesh_cache_dirty = false;
+            roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+            roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
+            roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        }
+
+        let result = set_active_contour_plane_family(&mut world, entity, PlaneFamily::Coronal);
+        assert_eq!(result, Ok(()));
+
+        let roi = world.get::<&Roi>(entity).unwrap();
+        let contour = roi.contour_data().unwrap();
+        assert_eq!(contour.active_plane_family, PlaneFamily::Coronal);
+        assert!(roi.dirty_state.authoritative_dirty);
+        assert_eq!(roi.dirty_state.generations.authoritative, 2);
+        assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert!(!roi.is_cache_dirty(RoiCacheKind::Contour));
+        assert!(roi.is_cache_dirty(RoiCacheKind::Mesh));
+    }
+
+    #[test]
+    fn test_set_active_contour_plane_family_is_noop_when_unchanged() {
+        let mut world = World::new();
+        let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Sagittal, false);
+        {
+            let mut roi = world.get::<&mut Roi>(entity).unwrap();
+            roi.dirty_state.authoritative_dirty = false;
+            roi.dirty_state.voxel_cache_dirty = false;
+            roi.dirty_state.contour_cache_dirty = false;
+            roi.dirty_state.mesh_cache_dirty = false;
+            roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+            roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
+            roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        }
+
+        let result = set_active_contour_plane_family(&mut world, entity, PlaneFamily::Sagittal);
+        assert_eq!(result, Ok(()));
+
+        let roi = world.get::<&Roi>(entity).unwrap();
+        let contour = roi.contour_data().unwrap();
+        assert_eq!(contour.active_plane_family, PlaneFamily::Sagittal);
+        assert!(!roi.dirty_state.authoritative_dirty);
+        assert_eq!(roi.dirty_state.generations.authoritative, 1);
+        assert!(!roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert!(!roi.is_cache_dirty(RoiCacheKind::Contour));
+        assert!(!roi.is_cache_dirty(RoiCacheKind::Mesh));
+    }
+
+    #[test]
+    fn test_set_active_contour_plane_family_rejects_non_empty_contour() {
+        let mut world = World::new();
+        let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+
+        let result = set_active_contour_plane_family(&mut world, entity, PlaneFamily::Coronal);
+        assert_eq!(
+            result,
+            Err(ContourPlaneFamilySwitchError::RequiresConversion)
+        );
+
+        let roi = world.get::<&Roi>(entity).unwrap();
+        let contour = roi.contour_data().unwrap();
+        assert_eq!(contour.active_plane_family, PlaneFamily::Axial);
+    }
+
+    #[test]
+    fn test_set_active_contour_plane_family_rejects_voxel_roi() {
+        let mut world = World::new();
+        let entity = spawn_test_roi(&mut world);
+
+        let result = set_active_contour_plane_family(&mut world, entity, PlaneFamily::Oblique);
+        assert_eq!(result, Err(ContourPlaneFamilySwitchError::NotContourRoi));
+    }
+
+    #[test]
+    fn test_replace_contour_data_updates_authoritative_state_and_queues_voxel_rebuild() {
+        let mut world = World::new();
+        let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+        {
+            let mut roi = world.get::<&mut Roi>(entity).unwrap();
+            roi.dirty_state.authoritative_dirty = false;
+            roi.dirty_state.voxel_cache_dirty = false;
+            roi.dirty_state.contour_cache_dirty = false;
+            roi.dirty_state.mesh_cache_dirty = false;
+            roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+            roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
+            roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        }
+
+        let replacement = ContourData {
+            active_plane_family: PlaneFamily::Coronal,
+            slices: vec![ContourSlice {
+                plane: test_plane_definition(PlaneFamily::Coronal),
+                loops: vec![ContourLoop {
+                    points: vec![
+                        ContourPoint {
+                            local_mm: [0.0, 0.0],
+                        },
+                        ContourPoint {
+                            local_mm: [2.0, 0.0],
+                        },
+                        ContourPoint {
+                            local_mm: [0.0, 2.0],
+                        },
+                    ],
+                    is_closed: true,
+                }],
+            }],
+        };
+
+        let result = replace_contour_data(&mut world, entity, replacement.clone());
+        assert_eq!(result, Ok(()));
+
+        {
+            let roi = world.get::<&Roi>(entity).unwrap();
+            assert_eq!(roi.contour_data(), Some(&replacement));
+            assert!(roi.dirty_state.authoritative_dirty);
+            assert_eq!(roi.dirty_state.generations.authoritative, 2);
+            assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
+            assert!(!roi.is_cache_dirty(RoiCacheKind::Contour));
+            assert!(roi.is_cache_dirty(RoiCacheKind::Mesh));
+            assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+        }
+
+        assert_eq!(
+            begin_next_job(&mut world, entity),
+            Some(RoiJobKind::RebuildVoxelCache)
+        );
+
+        let status_after_begin = cache_status(&world, entity, RoiCacheKind::Voxel).unwrap();
+        assert!(status_after_begin.is_dirty);
+        assert!(!status_after_begin.is_current);
+    }
+
+    #[test]
+    fn test_replace_contour_data_rejects_voxel_roi() {
+        let mut world = World::new();
+        let entity = spawn_test_roi(&mut world);
+
+        let result = replace_contour_data(
+            &mut world,
+            entity,
+            ContourData {
+                active_plane_family: PlaneFamily::Axial,
+                slices: Vec::new(),
+            },
+        );
+        assert_eq!(result, Err(ContourMutationError::NotContourRoi));
+    }
+
+    #[test]
+    fn test_replace_contour_data_rejects_missing_roi() {
+        let mut world = World::new();
+        let missing = hecs::Entity::DANGLING;
+
+        let result = replace_contour_data(
+            &mut world,
+            missing,
+            ContourData {
+                active_plane_family: PlaneFamily::Axial,
+                slices: Vec::new(),
+            },
+        );
+        assert_eq!(result, Err(ContourMutationError::MissingRoi));
     }
 }

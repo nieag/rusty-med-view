@@ -1,7 +1,43 @@
 use crate::components::*;
+use crate::io::handlers;
 use crate::{file_dialog, nifti_loader, AppEvent};
 use hecs::World;
 use winit::event_loop::EventLoopProxy;
+
+fn set_editor_tool(
+    world: &mut World,
+    entities: &AppEntities,
+    requested_tool: EditorTool,
+) -> Result<(), String> {
+    if requested_tool == EditorTool::Navigation {
+        let mut editor = world
+            .get::<&mut EditorState>(entities.editor)
+            .map_err(|_| "Missing editor state".to_string())?;
+        editor.active_tool = EditorTool::Navigation;
+        return Ok(());
+    }
+
+    let active_roi = world
+        .get::<&EditorState>(entities.editor)
+        .map_err(|_| "Missing editor state".to_string())?
+        .active_roi
+        .ok_or_else(|| "Select a contour ROI before using contour tools.".to_string())?;
+
+    let roi = world
+        .get::<&Roi>(active_roi)
+        .map_err(|_| "Active ROI is missing from the scene.".to_string())?;
+    if roi.primary_representation != PrimaryRepresentation::Contour {
+        return Err(
+            "Active ROI is not contour-primary. Create/select a contour ROI first.".to_string(),
+        );
+    }
+
+    let mut editor = world
+        .get::<&mut EditorState>(entities.editor)
+        .map_err(|_| "Missing editor state".to_string())?;
+    editor.active_tool = requested_tool;
+    Ok(())
+}
 
 pub fn draw_toolbar(
     _ctx: &egui::Context,
@@ -70,6 +106,26 @@ pub fn draw_toolbar(
                 if ui.small_button("Bone").clicked() {
                     windowing.center = 400.0;
                     windowing.width = 2000.0;
+                }
+            }
+        }
+
+        ui.separator();
+        ui.label("Tool:");
+        let active_tool = world
+            .get::<&EditorState>(entities.editor)
+            .map(|editor| editor.active_tool)
+            .unwrap_or(EditorTool::Navigation);
+
+        for (label, tool) in [
+            ("Nav", EditorTool::Navigation),
+            ("Contour Select", EditorTool::ContourSelect),
+            ("Contour Draw", EditorTool::ContourDraw),
+            ("Contour Move", EditorTool::ContourPointMove),
+        ] {
+            if ui.selectable_label(active_tool == tool, label).clicked() {
+                if let Err(message) = set_editor_tool(world, entities, tool) {
+                    handlers::set_status_message(world, entities, message);
                 }
             }
         }

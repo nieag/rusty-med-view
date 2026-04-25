@@ -1,3 +1,4 @@
+pub mod contours;
 pub mod geometry;
 pub mod pipeline;
 pub mod protocols;

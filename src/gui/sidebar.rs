@@ -1,4 +1,5 @@
 use crate::components::*;
+use crate::convert::PlaneFamily;
 use crate::AppEvent;
 use hecs::World;
 use winit::event_loop::EventLoopProxy;
@@ -117,6 +118,85 @@ pub fn draw_sidebar(
             .ok()
             .and_then(|e| e.active_roi);
         let mut new_active_roi = active_roi;
+
+        ui.horizontal(|ui| {
+            ui.label("Create contour ROI:");
+            for (label, family) in [
+                ("Axial", PlaneFamily::Axial),
+                ("Coronal", PlaneFamily::Coronal),
+                ("Sagittal", PlaneFamily::Sagittal),
+                ("Oblique", PlaneFamily::Oblique),
+            ] {
+                if ui.small_button(label).clicked() {
+                    match roi_runtime::create_empty_contour_roi(world, entities.editor, family) {
+                        Ok(entity) => {
+                            new_active_roi = Some(entity);
+                            handlers::set_status_message(
+                                world,
+                                entities,
+                                format!("Created contour ROI ({family:?})"),
+                            );
+                            let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
+                        }
+                        Err(err) => {
+                            handlers::set_status_message(world, entities, err);
+                        }
+                    }
+                }
+            }
+        });
+
+        let mut active_contour_plane_family = new_active_roi.and_then(|entity| {
+            world
+                .get::<&Roi>(entity)
+                .ok()
+                .and_then(|roi| roi.contour_data().map(|contour| contour.active_plane_family))
+        });
+
+        if let (Some(entity), Some(current_family)) = (new_active_roi, active_contour_plane_family) {
+            ui.horizontal(|ui| {
+                ui.label("Contour plane family:");
+                egui::ComboBox::from_id_salt("contour_plane_family")
+                    .selected_text(format!("{current_family:?}"))
+                    .show_ui(ui, |ui| {
+                        for family in [
+                            PlaneFamily::Axial,
+                            PlaneFamily::Coronal,
+                            PlaneFamily::Sagittal,
+                            PlaneFamily::Oblique,
+                        ] {
+                            ui.selectable_value(
+                                &mut active_contour_plane_family,
+                                Some(family),
+                                format!("{family:?}"),
+                            );
+                        }
+                    });
+            });
+
+            if active_contour_plane_family != Some(current_family) {
+                if let Some(new_family) = active_contour_plane_family {
+                    if let Err(err) =
+                        roi_runtime::set_active_contour_plane_family(world, entity, new_family)
+                    {
+                        let message = match err {
+                            roi_runtime::ContourPlaneFamilySwitchError::MissingRoi => {
+                                "Cannot set contour plane family: active ROI is missing.".to_string()
+                            }
+                            roi_runtime::ContourPlaneFamilySwitchError::NotContourRoi => {
+                                "Cannot set contour plane family: active ROI is not contour-primary."
+                                    .to_string()
+                            }
+                            roi_runtime::ContourPlaneFamilySwitchError::RequiresConversion => {
+                                "Cannot switch contour plane family when contour loops already exist."
+                                    .to_string()
+                            }
+                        };
+                        handlers::set_status_message(world, entities, message);
+                    }
+                }
+            }
+        }
 
         for (entity, name, mut visible, mut opacity, stats) in layers {
             ui.group(|ui| {

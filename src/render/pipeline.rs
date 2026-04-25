@@ -6,7 +6,7 @@ use crate::app::context::{GpuState, Pipelines, SceneState, VolumeResources};
 use crate::components::*;
 use crate::gui;
 use crate::overlay::OverlayPrimitive;
-use crate::render::geometry;
+use crate::render::{contours, geometry};
 use crate::systems;
 use hecs::World;
 use std::sync::Arc;
@@ -452,6 +452,15 @@ pub fn render_frame(
         &pipelines.render,
         &viewports,
     );
+
+    let contour_data = contours::prepare_contour_render_data(&scene.world, &scene.entities);
+    contours::upload_contour_render_data(
+        &gpu.device,
+        &gpu.queue,
+        &mut pipelines.contour_overlay,
+        &contour_data,
+    );
+    contours::render_contours(&mut encoder, &view, &pipelines.contour_overlay);
 
     let screen_descriptor = egui_wgpu::ScreenDescriptor {
         size_in_pixels: [gpu.config.width, gpu.config.height],

@@ -187,24 +187,36 @@ Acceptance:
 Purpose:
 - define contour-authoritative ROI behavior before editing tools are added
 
+Implementation note:
+- concrete implementer guidance lives in [docs/subplan-5-contour-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-5-contour-handoff.md:1)
+
 Deliver:
 - contour slice storage
 - contour loop representation
 - active contour plane-family ownership
-- contour-derived voxel generation
-- contour regeneration rules for non-authoritative planes
+- contour-authoritative ROI construction and runtime accessors
+- contour-derived voxel rebuild contract and scheduling hooks
+- explicit invalidation and rejection rules for plane-family changes that would require missing conversion algorithms
 
 Acceptance:
 - contour-authoritative ROIs can exist without authoring tools yet
-- voxel volume can be regenerated from contour state
-- plane-family switching has explicit invalidation rules
+- orthogonal and oblique contour slices can be stored using the shared `PlaneDefinition` model
+- contour mutations and allowed plane-family changes have explicit cache invalidation and rebuild scheduling rules
+- no contour editing UI or contour-to-voxel rasterization algorithm is required for this checkpoint
 
 ### 6. Contour Editing V1
 
 Purpose:
 - implement actual contour authoring on the contour architecture
 
+Implementation note:
+- concrete implementer guidance lives in [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1)
+
 Deliver:
+- explicit contour edit mode/tool plumbing
+- empty contour-authoritative ROI creation
+- viewport-to-plane-local editing coordinate helpers
+- native read-only contour rendering
 - create/select/move/delete workflows
 - viewport integration for axial/coronal/sagittal/oblique editing
 - explicit switch into contour-primary mode
@@ -321,9 +333,10 @@ Voxel baseline tests:
 
 Contour tests:
 
-- contour-authoritative ROI regeneration to voxels
+- contour-authoritative ROI creation and storage
+- contour-derived voxel rebuild scheduling without requiring rasterization yet
 - orthogonal and oblique contour storage correctness
-- plane-family switching without state drift
+- plane-family switching rejection when conversion would be required
 
 Mesh tests:
 
@@ -347,7 +360,7 @@ Transform and parity tests:
 ## Implementation Status
 
 Current Phase:
-- `Subplan 4: Transform, Plane, and Geometry Context`
+- `Subplan 6: Contour Editing V1`
 
 Completed:
 - `1453511` Baseline: remove legacy segmentation stack
@@ -394,6 +407,46 @@ Completed:
   - route projection and overlay mapping through `ViewMode -> SlicePlane` adapters in shared conversion flows
   - keep viewport-index handling only at UI/runtime boundary points
   - retain compatibility adapter `SlicePlane::from_viewport` only at the orientation boundary
+- define `Subplan 5: Contour Representation Architecture` implementation breakdown in [docs/subplan-5-contour-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-5-contour-handoff.md:1)
+- complete `Subplan 5 Step 5A` from [docs/subplan-5-contour-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-5-contour-handoff.md:1):
+  - add `ContourPoint`, `ContourLoop`, `ContourSlice`, and `ContourData` in the ROI core model
+  - change `RoiAuthoritativeData::Contour` to `RoiAuthoritativeData::Contour(ContourData)`
+  - add Step 5A contour data-model tests for plane-family ownership, plane-definition preservation, and closed-loop validation
+- complete `Subplan 5 Step 5B` from [docs/subplan-5-contour-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-5-contour-handoff.md:1):
+  - add `Roi::new_contour(...)` for contour-authoritative ROI construction
+  - add `Roi::contour_data(&self)` accessor for authoritative contour state
+  - add Step 5B tests for contour-primary ROI initialization, missing voxel-cache current state, and voxel-ROI accessor rejection
+- complete `Subplan 5 Step 5C` from [docs/subplan-5-contour-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-5-contour-handoff.md:1):
+  - add `set_active_contour_plane_family(...)` runtime API with `MissingRoi`, `NotContourRoi`, and `RequiresConversion` errors
+  - allow switching only for empty contour-authoritative ROI data and no-op unchanged family requests
+  - mark authoritative generation and derived cache states dirty on successful switches
+  - add Step 5C runtime tests for success, no-op, and rejection paths
+- complete `Subplan 5 Step 5D` from [docs/subplan-5-contour-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-5-contour-handoff.md:1):
+  - add `replace_contour_data(...)` runtime API with `MissingRoi` and `NotContourRoi` mutation errors
+  - add contour-authoritative invalidation helper to dirty derived caches and preserve contour cache cleanliness unless a derived contour cache exists
+  - enqueue `RebuildVoxelCache` on contour-authoritative data replacement without requiring contour-to-voxel rasterization yet
+  - add Step 5D runtime tests for mutation success, queued rebuild job contract, and rejection paths
+- complete `Subplan 5 Step 5E` from [docs/subplan-5-contour-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-5-contour-handoff.md:1):
+  - confirm Steps 5A through 5D are implemented and validated (`cargo test -q`, `cargo check --target wasm32-unknown-unknown -q`, `cargo fmt --all`)
+  - mark `Subplan 5: Contour Representation Architecture` complete and move the active phase to contour editing
+- define `Subplan 6: Contour Editing V1` implementation breakdown in [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1)
+- complete `Subplan 6 Step 6A` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1):
+  - add `EditorTool::{ContourSelect, ContourDraw, ContourPointMove}` while keeping `Navigation` as default
+  - add runtime helper `create_empty_contour_roi(...)` that creates contour-primary empty ROI state and sets `EditorState.active_roi`
+  - add sidebar controls for creating empty contour ROIs and selecting contour active plane family
+  - add toolbar tool-mode controls with invalid-action status messaging for missing/non-contour active ROI
+  - keep contour ROIs non-renderable through the voxel overlay path until a contour render path exists
+- complete `Subplan 6 Step 6B` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1):
+  - add shared helpers to convert `ViewportUv <-> PlaneLocalMm` through `PlaneDefinition` and existing volume/world mapping APIs
+  - add contour edit viewport resolver that rejects 3D mode, enforces contour/viewport plane-family match, and supports oblique through `PlaneDefinition`
+  - add Step 6B tests for orthogonal click roundtrips, viewport-family mismatch rejection, 3D rejection, and oblique plane-definition path roundtrip
+- complete `Subplan 6 Step 6C` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1):
+  - add native contour render module with dedicated contour vertex format and WGPU pipeline ownership
+  - add CPU thick-line polyline triangle generation helper for WebGPU-portable contour line rendering
+  - add contour renderer vertex-buffer upload path with explicit empty-data no-op behavior
+  - add contour render pass ordering after the volume pass and before `Gui::render(...)`
+  - keep Step 6C contour render data preparation empty so current voxel/image viewer behavior remains unchanged
+  - add Step 6C tests for thick-line triangle stability and empty render payload no-op behavior
 
 Pending:
-- begin `Subplan 5: Contour Representation Architecture` using the same coordinate and plane abstractions from Subplan 4
+- implement `Subplan 6 Step 6D` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1): render stored contour loops
