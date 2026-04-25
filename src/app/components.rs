@@ -165,7 +165,6 @@ pub enum EditorTool {
     Navigation,
     ContourSelect,
     ContourDraw,
-    ContourPointMove,
 }
 
 #[derive(Default)]
@@ -174,6 +173,7 @@ pub struct EditorState {
     pub active_tool: EditorTool,
     pub contour_draft: Option<ContourDraft>,
     pub contour_selection: Option<ContourSelection>,
+    pub contour_move_preview: Option<ContourMovePreview>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -265,6 +265,12 @@ pub struct ContourSelection {
     pub slice_index: usize,
     pub loop_index: usize,
     pub point_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContourMovePreview {
+    pub roi_entity: hecs::Entity,
+    pub contour_data: ContourData,
 }
 
 pub enum RoiAuthoritativeData {

@@ -313,6 +313,7 @@ fn draw_annotations(
         rotation: view.user_rotation,
         aspect_ratios,
         geometry,
+        cursor_pos: cursor_pos.to_array(),
     };
 
     if vol.dimensions[0] == 0 {
@@ -336,6 +337,28 @@ fn draw_annotations(
             let current_depth = cursor_pos[axis];
 
             if (ann_depth - current_depth).abs() > 0.005 {
+                continue;
+            }
+        } else if mode == ViewMode::Oblique {
+            let Some(plane) = crate::convert::oblique_plane_from_view_rotation(
+                cursor_pos.to_array(),
+                view.user_rotation,
+                geometry,
+            ) else {
+                continue;
+            };
+            let ann_world = glam::Vec3::from_array(crate::convert::volume_uv_to_world_mm(
+                ann.world_pos.to_array(),
+                geometry,
+            ));
+            let plane_origin = glam::Vec3::from_array(plane.origin_mm);
+            let plane_normal = glam::Vec3::from_array(plane.normal_mm).normalize_or_zero();
+            let distance_mm = (ann_world - plane_origin).dot(plane_normal).abs();
+            let tolerance_mm = vol.spacing[0]
+                .min(vol.spacing[1])
+                .min(vol.spacing[2])
+                .max(0.5);
+            if distance_mm > tolerance_mm {
                 continue;
             }
         }
@@ -373,28 +396,35 @@ fn draw_annotations(
 
                     overlay.mouse_screen_uv = [ndc_x, ndc_y];
 
-                    if let Some(plane) = crate::util::orientation::SlicePlane::from_mode(mode) {
-                        if let Some(plane_definition) =
+                    let plane_definition = if mode == ViewMode::Oblique {
+                        crate::convert::oblique_plane_from_view_rotation(
+                            cursor_pos.to_array(),
+                            view.user_rotation,
+                            geometry,
+                        )
+                    } else {
+                        crate::util::orientation::SlicePlane::from_mode(mode).and_then(|plane| {
                             crate::convert::orthogonal_plane_from_volume_uv(
                                 plane.to_plane_family(),
                                 ann.world_pos.to_array(),
                                 geometry,
                             )
-                        {
-                            let mapping = crate::convert::ViewportMapping {
-                                zoom: proj.zoom,
-                                pan: proj.pan,
-                                pivot: proj.pivot,
-                                screen_aspect,
-                            };
-                            if let Some(vol_pos) = crate::convert::viewport_uv_to_volume_uv(
-                                [ndc_x, ndc_y],
-                                plane_definition,
-                                geometry,
-                                mapping,
-                            ) {
-                                ann.world_pos = glam::Vec3::from(vol_pos);
-                            }
+                        })
+                    };
+                    if let Some(plane_definition) = plane_definition {
+                        let mapping = crate::convert::ViewportMapping {
+                            zoom: proj.zoom,
+                            pan: proj.pan,
+                            pivot: proj.pivot,
+                            screen_aspect,
+                        };
+                        if let Some(vol_pos) = crate::convert::viewport_uv_to_volume_uv(
+                            [ndc_x, ndc_y],
+                            plane_definition,
+                            geometry,
+                            mapping,
+                        ) {
+                            ann.world_pos = glam::Vec3::from(vol_pos);
                         }
                     }
 

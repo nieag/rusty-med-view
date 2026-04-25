@@ -297,16 +297,19 @@ fn viewport_uv_to_ndc(
 }
 
 pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> ContourRenderData {
-    let (active_roi, contour_draft, contour_selection) =
+    let (active_roi, contour_draft, contour_selection, contour_move_preview) =
         match world.get::<&EditorState>(entities.editor).map(|editor| {
             (
                 editor.active_roi,
                 editor.contour_draft.clone(),
                 editor.contour_selection.clone(),
+                editor.contour_move_preview.clone(),
             )
         }) {
-            Ok((Some(active_roi), draft, selection)) => (active_roi, draft, selection),
-            Err(_) | Ok((None, _, _)) => return ContourRenderData::default(),
+            Ok((Some(active_roi), draft, selection, preview)) => {
+                (active_roi, draft, selection, preview)
+            }
+            Err(_) | Ok((None, _, _, _)) => return ContourRenderData::default(),
         };
 
     let roi = match world.get::<&Roi>(active_roi) {
@@ -316,7 +319,11 @@ pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> Con
     if !roi.metadata.is_visible {
         return ContourRenderData::default();
     }
-    let Some(contour_data) = roi.contour_data() else {
+    let preview_contour_data = contour_move_preview
+        .as_ref()
+        .filter(|preview| preview.roi_entity == active_roi)
+        .map(|preview| &preview.contour_data);
+    let Some(contour_data) = preview_contour_data.or_else(|| roi.contour_data()) else {
         return ContourRenderData::default();
     };
 
@@ -678,6 +685,7 @@ mod tests {
             active_tool: EditorTool::Navigation,
             contour_draft: None,
             contour_selection: None,
+            contour_move_preview: None,
         },));
         let viewport = world.spawn((
             Viewport {

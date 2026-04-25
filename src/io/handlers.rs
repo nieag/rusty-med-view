@@ -9,6 +9,11 @@ use crate::nifti_loader::LoadedVolume;
 use crate::volume;
 use hecs::World;
 
+pub struct LabelLoadOutcome {
+    pub entity: hecs::Entity,
+    pub dimensions: [u32; 3],
+}
+
 /// Handle a successfully loaded volume, updating ECS components and GPU resources.
 ///
 /// Returns the dimensions of the loaded volume for status message construction.
@@ -61,11 +66,21 @@ pub fn handle_label_load(
     queue: &wgpu::Queue,
     world: &mut World,
     loaded_label: &LoadedLabel,
-) -> Result<(hecs::Entity, [u32; 3]), String> {
+) -> Result<LabelLoadOutcome, String> {
     log::info!("Labelmap loaded: {:?} dimensions", loaded_label.dimensions);
-    let entity = roi_runtime::create_voxel_roi_from_label(device, queue, world, loaded_label)?;
+    let import_spec = roi_runtime::prepare_voxel_roi_import(world, loaded_label)?;
+    let entity = roi_runtime::create_voxel_roi_from_label_with_spec(
+        device,
+        queue,
+        world,
+        loaded_label,
+        import_spec,
+    )?;
 
-    Ok((entity, loaded_label.dimensions))
+    Ok(LabelLoadOutcome {
+        entity,
+        dimensions: loaded_label.dimensions,
+    })
 }
 
 /// Update GUI status message

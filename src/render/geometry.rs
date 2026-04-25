@@ -64,6 +64,7 @@ pub struct ViewProjection {
     pub rotation: [f32; 4],
     pub aspect_ratios: [f32; 3],
     pub geometry: VoxelGeometry,
+    pub cursor_pos: [f32; 3],
 }
 
 /// Project a world position (0..1) to Normalized Device Coordinates (0..1 relative to viewport)
@@ -75,6 +76,26 @@ pub fn world_to_ndc(
 ) -> Option<[f32; 2]> {
     if view_mode != crate::components::ViewMode::ThreeD {
         // --- 2D Viewports ---
+        if view_mode == crate::components::ViewMode::Oblique {
+            let plane = crate::convert::oblique_plane_from_view_rotation(
+                proj.cursor_pos,
+                proj.rotation,
+                proj.geometry,
+            )?;
+            let mapping = crate::convert::ViewportMapping {
+                zoom: proj.zoom,
+                pan: proj.pan,
+                pivot: proj.pivot,
+                screen_aspect,
+            };
+            return crate::convert::volume_uv_to_viewport_uv(
+                pos.into(),
+                plane,
+                proj.geometry,
+                mapping,
+            );
+        }
+
         let plane = crate::util::orientation::SlicePlane::from_mode(view_mode)?;
         if let Some(plane_definition) = crate::convert::orthogonal_plane_from_volume_uv(
             plane.to_plane_family(),
@@ -115,5 +136,38 @@ pub fn world_to_ndc(
             proj.pan,
             screen_aspect,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::{ViewMode, VoxelGeometry};
+
+    fn test_projection() -> ViewProjection {
+        ViewProjection {
+            zoom: 1.0,
+            pan: [0.0, 0.0],
+            pivot: [0.5, 0.5],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            aspect_ratios: [1.0, 1.0, 1.0],
+            geometry: VoxelGeometry {
+                dimensions: [64, 64, 64],
+                spacing: [1.0, 1.0, 1.0],
+                origin: [0.0, 0.0, 0.0],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
+            cursor_pos: [0.5, 0.5, 0.5],
+        }
+    }
+
+    #[test]
+    fn test_oblique_world_to_ndc_projects_cursor_center() {
+        let proj = test_projection();
+        let ndc = world_to_ndc(Vec3::new(0.5, 0.5, 0.5), ViewMode::Oblique, &proj, 1.0)
+            .expect("expected oblique projection");
+
+        assert!((ndc[0] - 0.5).abs() < 1e-6);
+        assert!((ndc[1] - 0.5).abs() < 1e-6);
     }
 }

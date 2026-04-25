@@ -1,8 +1,8 @@
 use crate::app::roi_runtime;
 use crate::components::{
-    AppEntities, ContourData, ContourDraft, ContourLoop, ContourPoint, ContourSelection,
-    ContourSlice, EditorState, EditorTool, InputState, MainVolumeTag, Roi, RoiCacheKind,
-    RoiJobKind, Transform, ViewMode, Viewport, VoxelGeometry,
+    AppEntities, ContourData, ContourDraft, ContourLoop, ContourMovePreview, ContourPoint,
+    ContourSelection, ContourSlice, EditorState, EditorTool, InputState, MainVolumeTag, Roi,
+    Transform, ViewMode, Viewport, VoxelGeometry,
 };
 use crate::convert::{
     oblique_plane_from_view_rotation, orthogonal_plane_from_volume_uv,
@@ -210,6 +210,7 @@ pub fn clear_contour_draft_for_roi_change(
     if let Ok(mut editor) = world.get::<&mut EditorState>(editor_entity) {
         if editor.active_roi != new_active_roi {
             editor.contour_draft = None;
+            editor.contour_move_preview = None;
         }
     }
 }
@@ -222,6 +223,7 @@ pub fn clear_contour_selection_for_roi_change(
     if let Ok(mut editor) = world.get::<&mut EditorState>(editor_entity) {
         if editor.active_roi != new_active_roi {
             editor.contour_selection = None;
+            editor.contour_move_preview = None;
         }
     }
 }
@@ -230,6 +232,7 @@ pub fn clear_contour_selection_if_inactive(world: &mut World, editor_entity: hec
     if let Ok(mut editor) = world.get::<&mut EditorState>(editor_entity) {
         if editor.active_tool != EditorTool::ContourSelect {
             editor.contour_selection = None;
+            editor.contour_move_preview = None;
         }
     }
 }
@@ -613,7 +616,10 @@ pub fn move_selected_point(
     entities: &AppEntities,
     viewport_uv: [f32; 2],
 ) -> Result<(), ContourEditOperationError> {
-    move_selected_point_internal(world, entities, viewport_uv, true)
+    let (selection, mut contour_data, viewport) = selected_context(world, entities)?;
+    update_selected_point_in_data(&selection, &mut contour_data, viewport, viewport_uv)?;
+    roi_runtime::replace_contour_data(world, selection.roi_entity, contour_data)
+        .map_err(|_| ContourEditOperationError::ReplaceFailed)
 }
 
 pub fn move_selected_point_preview(
@@ -621,30 +627,30 @@ pub fn move_selected_point_preview(
     entities: &AppEntities,
     viewport_uv: [f32; 2],
 ) -> Result<(), ContourEditOperationError> {
-    move_selected_point_internal(world, entities, viewport_uv, false)
+    let (selection, mut contour_data, viewport) = selected_context(world, entities)?;
+    update_selected_point_in_data(&selection, &mut contour_data, viewport, viewport_uv)?;
+    if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
+        editor.contour_move_preview = Some(ContourMovePreview {
+            roi_entity: selection.roi_entity,
+            contour_data,
+        });
+    }
+    Ok(())
 }
 
-fn move_selected_point_internal(
-    world: &mut World,
-    entities: &AppEntities,
+fn update_selected_point_in_data(
+    selection: &ContourSelection,
+    contour_data: &mut ContourData,
+    viewport: ContourEditViewport,
     viewport_uv: [f32; 2],
-    queue_rebuild: bool,
 ) -> Result<(), ContourEditOperationError> {
-    let (selection, _contour_data, viewport) = selected_context(world, entities)?;
     let point_index = selection
         .point_index
         .ok_or(ContourEditOperationError::InvalidSelection)?;
     let local_mm = viewport_uv_to_contour_plane_local_mm(viewport_uv, viewport)
         .ok_or(ContourEditOperationError::ProjectionFailed)?;
 
-    let mut roi = world
-        .get::<&mut Roi>(selection.roi_entity)
-        .map_err(|_| ContourEditOperationError::ActiveRoiNotContour)?;
-    let contour = match &mut roi.authoritative_data {
-        crate::components::RoiAuthoritativeData::Contour(contour) => contour,
-        _ => return Err(ContourEditOperationError::ActiveRoiNotContour),
-    };
-    let slice = contour
+    let slice = contour_data
         .slices
         .get_mut(selection.slice_index)
         .ok_or(ContourEditOperationError::InvalidSelection)?;
@@ -657,11 +663,6 @@ fn move_selected_point_internal(
         .get_mut(point_index)
         .ok_or(ContourEditOperationError::InvalidSelection)?;
     point.local_mm = local_mm;
-
-    roi.mark_contour_authoritative_changed();
-    if queue_rebuild {
-        roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
-    }
     Ok(())
 }
 
@@ -669,15 +670,17 @@ pub fn finalize_selected_point_move(
     world: &mut World,
     entities: &AppEntities,
 ) -> Result<(), ContourEditOperationError> {
-    let (selection, _, _) = selected_context(world, entities)?;
-    let mut roi = world
-        .get::<&mut Roi>(selection.roi_entity)
-        .map_err(|_| ContourEditOperationError::ActiveRoiNotContour)?;
-    if !roi.is_cache_dirty(RoiCacheKind::Voxel) {
-        roi.mark_cache_dirty(RoiCacheKind::Voxel);
-    }
-    roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
-    Ok(())
+    let preview = {
+        let mut editor = world
+            .get::<&mut EditorState>(entities.editor)
+            .map_err(|_| ContourEditOperationError::MissingSelection)?;
+        editor
+            .contour_move_preview
+            .take()
+            .ok_or(ContourEditOperationError::MissingSelection)?
+    };
+    roi_runtime::replace_contour_data(world, preview.roi_entity, preview.contour_data)
+        .map_err(|_| ContourEditOperationError::ReplaceFailed)
 }
 
 pub fn insert_point_into_selected_loop(
@@ -1113,6 +1116,7 @@ mod tests {
                 points: vec![],
             }),
             contour_selection: None,
+            contour_move_preview: None,
         },));
 
         clear_contour_draft_if_inactive(&mut world, editor);
@@ -1224,6 +1228,59 @@ mod tests {
         assert_eq!(after_points[0].local_mm, before_points[0].local_mm);
         assert_eq!(after_points[2].local_mm, before_points[2].local_mm);
         assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+    }
+
+    #[test]
+    fn test_move_selected_point_preview_defers_authoritative_commit_until_finalize() {
+        let mut world = World::new();
+        let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+        let roi_entity = spawn_test_contour_roi_with_loop(&mut world, PlaneFamily::Axial);
+        let before_points = world
+            .get::<&Roi>(roi_entity)
+            .unwrap()
+            .contour_data()
+            .unwrap()
+            .slices[0]
+            .loops[0]
+            .points
+            .clone();
+        {
+            let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+            editor.active_roi = Some(roi_entity);
+            editor.active_tool = EditorTool::ContourSelect;
+            editor.contour_selection = Some(ContourSelection {
+                roi_entity,
+                slice_index: 0,
+                loop_index: 0,
+                point_index: Some(1),
+            });
+        }
+
+        move_selected_point_preview(&mut world, &entities, [0.6, 0.55]).unwrap();
+
+        {
+            let roi = world.get::<&Roi>(roi_entity).unwrap();
+            let authoritative_points = &roi.contour_data().unwrap().slices[0].loops[0].points;
+            assert_eq!(authoritative_points, &before_points);
+            assert_eq!(roi.job_state.queued, None);
+        }
+        assert!(world
+            .get::<&EditorState>(entities.editor)
+            .unwrap()
+            .contour_move_preview
+            .is_some());
+
+        finalize_selected_point_move(&mut world, &entities).unwrap();
+
+        let roi = world.get::<&Roi>(roi_entity).unwrap();
+        let after_points = &roi.contour_data().unwrap().slices[0].loops[0].points;
+        assert_ne!(after_points[1].local_mm, before_points[1].local_mm);
+        assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+        assert!(world
+            .get::<&EditorState>(entities.editor)
+            .unwrap()
+            .contour_move_preview
+            .is_none());
     }
 
     #[test]

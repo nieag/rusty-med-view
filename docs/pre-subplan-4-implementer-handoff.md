@@ -60,6 +60,7 @@ If label geometry differs from the current main volume geometry:
 
 - still create the ROI using the label file's geometry
 - log a warning describing the mismatch
+- do not hide or block the ROI solely because its grid differs from the main volume
 
 If no main volume resource exists for rendering:
 
@@ -158,13 +159,13 @@ In `src/app/roi_runtime.rs`:
 
 - add `MAX_SIMULTANEOUS_ROI_OVERLAYS: usize = 2`
 - add helpers for:
-  - counting visible ROIs
-  - checking whether another ROI may become visible
+  - listing/counting renderable voxel overlay ROIs
+  - checking whether another voxel ROI may become visible without exceeding renderer texture slots
 
 Suggested shapes:
 
 ```rust
-pub fn visible_roi_count(world: &World) -> usize
+pub fn visible_voxel_overlay_count(world: &World) -> usize
 pub fn can_enable_roi_visibility(world: &World, roi_entity: hecs::Entity) -> bool
 ```
 

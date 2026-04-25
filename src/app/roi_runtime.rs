@@ -33,6 +33,12 @@ pub enum ContourMutationError {
 
 pub const MAX_SIMULTANEOUS_ROI_OVERLAYS: usize = 2;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RenderableVoxelOverlay {
+    pub entity: hecs::Entity,
+    pub opacity: f32,
+}
+
 /// GPU handles needed to rebuild scene bind groups after ROI or volume updates.
 pub struct BindGroupResources<'a> {
     pub layout: &'a wgpu::BindGroupLayout,
@@ -54,6 +60,7 @@ pub fn recreate_scene_bind_groups(
     active_roi: Option<hecs::Entity>,
 ) {
     let main_view: Option<wgpu::TextureView>;
+    let overlay_entities = renderable_voxel_overlay_rois(world, active_roi);
     let mut overlay_views = Vec::new();
 
     {
@@ -62,20 +69,8 @@ pub fn recreate_scene_bind_groups(
         main_view = with_tag.iter().next().map(|(_, res)| res.view.clone());
     }
 
-    {
-        if let Some(active) = active_roi {
-            if let Ok(roi) = world.get::<&Roi>(active) {
-                if let Some(res) = roi.renderable_voxel_cache() {
-                    overlay_views.push(res.view.clone());
-                }
-            }
-        }
-
-        let mut query = world.query::<&Roi>();
-        for (entity, roi) in query.iter() {
-            if Some(entity) == active_roi {
-                continue;
-            }
+    for overlay in &overlay_entities {
+        if let Ok(roi) = world.get::<&Roi>(overlay.entity) {
             if let Some(res) = roi.renderable_voxel_cache() {
                 overlay_views.push(res.view.clone());
             }
@@ -120,12 +115,49 @@ pub fn main_volume_voxel_geometry(world: &World) -> Option<VoxelGeometry> {
     })
 }
 
-pub fn visible_roi_count(world: &World) -> usize {
-    world
-        .query::<&Roi>()
-        .iter()
-        .filter(|(_, roi)| roi.metadata.is_visible)
-        .count()
+pub fn renderable_voxel_overlay_rois(
+    world: &World,
+    active_roi: Option<hecs::Entity>,
+) -> Vec<RenderableVoxelOverlay> {
+    let mut overlays = Vec::new();
+
+    if let Some(active) = active_roi {
+        if let (Ok(roi), Ok(settings)) = (
+            world.get::<&Roi>(active),
+            world.get::<&LayerSettings>(active),
+        ) {
+            if roi.renderable_voxel_cache().is_some() {
+                overlays.push(RenderableVoxelOverlay {
+                    entity: active,
+                    opacity: settings.opacity,
+                });
+            }
+        }
+    }
+
+    let mut query = world.query::<(&Roi, &LayerSettings)>();
+    for (entity, (roi, settings)) in query.iter() {
+        if Some(entity) == active_roi {
+            continue;
+        }
+        if roi.renderable_voxel_cache().is_none() {
+            continue;
+        }
+        overlays.push(RenderableVoxelOverlay {
+            entity,
+            opacity: settings.opacity,
+        });
+        if overlays.len() >= MAX_SIMULTANEOUS_ROI_OVERLAYS {
+            break;
+        }
+    }
+
+    overlays.truncate(MAX_SIMULTANEOUS_ROI_OVERLAYS);
+    overlays
+}
+
+pub fn visible_voxel_overlay_count(world: &World) -> usize {
+    renderable_voxel_overlay_rois(world, None).len()
 }
 
 pub fn can_enable_roi_visibility(world: &World, roi_entity: hecs::Entity) -> bool {
@@ -133,9 +165,12 @@ pub fn can_enable_roi_visibility(world: &World, roi_entity: hecs::Entity) -> boo
         if roi.metadata.is_visible {
             return true;
         }
+        if !matches!(roi.authoritative_data, RoiAuthoritativeData::Voxel(_)) {
+            return true;
+        }
     }
 
-    visible_roi_count(world) < MAX_SIMULTANEOUS_ROI_OVERLAYS
+    visible_voxel_overlay_count(world) < MAX_SIMULTANEOUS_ROI_OVERLAYS
 }
 
 pub fn set_active_contour_plane_family(
@@ -198,20 +233,21 @@ fn approx_eq_slice<const N: usize>(lhs: [f32; N], rhs: [f32; N], epsilon: f32) -
 pub struct VoxelRoiImportSpec {
     pub geometry: VoxelGeometry,
     pub start_visible: bool,
+    pub geometry_matches_main: bool,
 }
 
 pub fn prepare_voxel_roi_import(
     world: &World,
     loaded_label: &LoadedLabel,
 ) -> Result<VoxelRoiImportSpec, String> {
-    if let Some(main_geometry) = main_volume_voxel_geometry(world) {
-        if main_geometry.dimensions != loaded_label.dimensions
+    let geometry_matches_main = if let Some(main_geometry) = main_volume_voxel_geometry(world) {
+        let differs = main_geometry.dimensions != loaded_label.dimensions
             || !approx_eq_slice(main_geometry.spacing, loaded_label.spacing, 1e-5)
             || !approx_eq_slice(main_geometry.origin, loaded_label.origin, 1e-5)
-            || !approx_eq_slice(main_geometry.orientation, loaded_label.orientation, 1e-5)
-        {
+            || !approx_eq_slice(main_geometry.orientation, loaded_label.orientation, 1e-5);
+        if differs {
             log::warn!(
-                "Loaded label geometry differs from main volume geometry; label dims={:?} spacing={:?} origin={:?} orientation={:?}, main dims={:?} spacing={:?} origin={:?} orientation={:?}",
+                "Loaded label geometry differs from main volume geometry; preserving label-owned geometry. label dims={:?} spacing={:?} origin={:?} orientation={:?}, main dims={:?} spacing={:?} origin={:?} orientation={:?}",
                 loaded_label.dimensions,
                 loaded_label.spacing,
                 loaded_label.origin,
@@ -222,7 +258,10 @@ pub fn prepare_voxel_roi_import(
                 main_geometry.orientation
             );
         }
-    }
+        !differs
+    } else {
+        true
+    };
 
     Ok(VoxelRoiImportSpec {
         geometry: VoxelGeometry {
@@ -231,7 +270,8 @@ pub fn prepare_voxel_roi_import(
             origin: loaded_label.origin,
             orientation: loaded_label.orientation,
         },
-        start_visible: visible_roi_count(world) < MAX_SIMULTANEOUS_ROI_OVERLAYS,
+        start_visible: visible_voxel_overlay_count(world) < MAX_SIMULTANEOUS_ROI_OVERLAYS,
+        geometry_matches_main,
     })
 }
 
@@ -242,6 +282,16 @@ pub fn create_voxel_roi_from_label(
     loaded_label: &LoadedLabel,
 ) -> Result<hecs::Entity, String> {
     let import_spec = prepare_voxel_roi_import(world, loaded_label)?;
+    create_voxel_roi_from_label_with_spec(device, queue, world, loaded_label, import_spec)
+}
+
+pub fn create_voxel_roi_from_label_with_spec(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    world: &mut World,
+    loaded_label: &LoadedLabel,
+    import_spec: VoxelRoiImportSpec,
+) -> Result<hecs::Entity, String> {
     let (new_texture, new_view, new_sampler) =
         crate::io::volume::create_texture_from_labelmap(device, queue, loaded_label);
 
@@ -544,11 +594,11 @@ mod tests {
     }
 
     #[test]
-    fn test_visible_roi_count_and_visibility_gate_respect_overlay_cap() {
+    fn test_visible_voxel_overlay_count_ignores_non_renderable_rois() {
         let mut world = World::new();
         let first = spawn_test_roi(&mut world);
         let second = spawn_test_roi(&mut world);
-        let third = spawn_test_roi(&mut world);
+        let contour = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
 
         {
             let mut roi = world.get::<&mut Roi>(first).unwrap();
@@ -559,14 +609,13 @@ mod tests {
             roi.metadata.is_visible = true;
         }
         {
-            let mut roi = world.get::<&mut Roi>(third).unwrap();
-            roi.metadata.is_visible = false;
+            let mut roi = world.get::<&mut Roi>(contour).unwrap();
+            roi.metadata.is_visible = true;
         }
 
-        assert_eq!(visible_roi_count(&world), 2);
-        assert!(can_enable_roi_visibility(&world, first));
-        assert!(can_enable_roi_visibility(&world, second));
-        assert!(!can_enable_roi_visibility(&world, third));
+        assert_eq!(visible_voxel_overlay_count(&world), 0);
+        assert!(renderable_voxel_overlay_rois(&world, Some(contour)).is_empty());
+        assert!(can_enable_roi_visibility(&world, contour));
     }
 
     #[test]
@@ -586,6 +635,8 @@ mod tests {
         assert_eq!(import_spec.geometry.spacing, [1.25, 1.5, 2.0]);
         assert_eq!(import_spec.geometry.origin, [5.0, 6.0, 7.0]);
         assert_eq!(import_spec.geometry.orientation, [0.0, 0.0, 0.0, 1.0]);
+        assert!(import_spec.geometry_matches_main);
+        assert!(import_spec.start_visible);
     }
 
     #[test]
@@ -607,6 +658,8 @@ mod tests {
         assert_eq!(import_spec.geometry.spacing, [0.75, 0.8, 1.25]);
         assert_eq!(import_spec.geometry.origin, [-2.0, 4.5, 6.0]);
         assert_eq!(import_spec.geometry.orientation, [0.0, 0.0, 1.0, 0.0]);
+        assert!(!import_spec.geometry_matches_main);
+        assert!(import_spec.start_visible);
     }
 
     #[test]

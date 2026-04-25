@@ -72,19 +72,17 @@ pub fn sys_prepare_render_data(
     // 6. Get Overlay Info
     let mut overlay_flags = 0u32;
     let mut overlay_opacities = [0.0f32; 4];
-    let mut layer_count = 0;
-
-    for (_, (roi, settings)) in world.query::<(&Roi, &LayerSettings)>().iter() {
-        if !roi.metadata.is_visible {
-            continue;
-        }
-        if layer_count >= 4 {
-            break;
-        }
-
+    let active_roi = world
+        .get::<&EditorState>(entities.editor)
+        .ok()
+        .and_then(|editor| editor.active_roi);
+    for (layer_count, overlay) in
+        crate::app::roi_runtime::renderable_voxel_overlay_rois(world, active_roi)
+            .into_iter()
+            .enumerate()
+    {
         overlay_flags |= 1 << layer_count;
-        overlay_opacities[layer_count] = settings.opacity;
-        layer_count += 1;
+        overlay_opacities[layer_count] = overlay.opacity;
     }
 
     // 7. Get Windowing Info (HU-based)

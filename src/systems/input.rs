@@ -64,11 +64,12 @@ pub fn sys_handle_mouse_button(
     let mut finalize_contour_move = false;
 
     if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
-        if input.egui_wants_input {
-            return;
-        }
         active_vp = input.active_viewport;
         alt_pressed = input.modifiers.alt_key();
+
+        if input.egui_wants_input && state == ElementState::Pressed {
+            return;
+        }
 
         if state == ElementState::Pressed {
             input.is_dragging = true;

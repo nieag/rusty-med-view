@@ -382,6 +382,7 @@ Completed:
   - stop borrowing voxel ROI stats from the main volume entity
   - preserve label NIfTI geometry directly on ROI import and use the main volume only for validation
   - make the two-overlay renderer limit explicit in runtime/UI behavior
+- note: loaded labelmaps preserve ROI-owned geometry and may be visible even when dimensions, spacing, origin, or orientation differ from the main image; registration/resampling belongs to explicit alignment/conversion workflows, not basic label visibility
 - complete `Subplan 4 Step 4A` from [docs/subplan-4-transform-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-4-transform-handoff.md:1):
   - add `origin` to `VolumeData`, `LoadedVolume`, `LoadedLabel`, and `VoxelGeometry`
   - preserve NIfTI sform translation/origin for image and label loads (with invalid-sform fallback to `[0.0, 0.0, 0.0]`)
@@ -408,6 +409,7 @@ Completed:
   - keep viewport-index handling only at UI/runtime boundary points
   - retain compatibility adapter `SlicePlane::from_viewport` only at the orientation boundary
 - define `Subplan 5: Contour Representation Architecture` implementation breakdown in [docs/subplan-5-contour-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-5-contour-handoff.md:1)
+- note: Subplan 5 implementation landed in `8d353db` together with the first Subplan 6 implementation batch; commit history was not rewritten, but this checkpoint was retrospectively reviewed in [docs/phase-1-6-retrospective-review.md](/Users/nieage/dev/git/rust_starter_app/docs/phase-1-6-retrospective-review.md:1)
 - complete `Subplan 5 Step 5A` from [docs/subplan-5-contour-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-5-contour-handoff.md:1):
   - add `ContourPoint`, `ContourLoop`, `ContourSlice`, and `ContourData` in the ROI core model
   - change `RoiAuthoritativeData::Contour` to `RoiAuthoritativeData::Contour(ContourData)`
@@ -431,7 +433,7 @@ Completed:
   - mark `Subplan 5: Contour Representation Architecture` complete and move the active phase to contour editing
 - define `Subplan 6: Contour Editing V1` implementation breakdown in [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1)
 - complete `Subplan 6 Step 6A` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1):
-  - add `EditorTool::{ContourSelect, ContourDraw, ContourPointMove}` while keeping `Navigation` as default
+  - add `EditorTool::{ContourSelect, ContourDraw}` while keeping `Navigation` as default
   - add runtime helper `create_empty_contour_roi(...)` that creates contour-primary empty ROI state and sets `EditorState.active_roi`
   - add sidebar controls for creating empty contour ROIs and selecting contour active plane family
   - add toolbar tool-mode controls with invalid-action status messaging for missing/non-contour active ROI
@@ -468,25 +470,32 @@ Completed:
   - render selected loops/points distinctly in native contour overlay rendering
   - add Step 6F tests for nearest-point selection, threshold behavior, and rejection paths
 - complete `Subplan 6 Step 6G` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1):
-  - add contour point move operation in `ContourPointMove` using selected-point plane-local updates through shared mapping helpers
+  - add contour point move operation in contour edit/select mode using selected-point plane-local updates through shared mapping helpers
   - add contour point insertion for selected loops (selected-point segment or nearest segment fallback) with authoritative mutation via `replace_contour_data(...)`
   - add contour point/loop deletion behavior with valid-loop-size handling and selection cleanup when loops are removed
   - route all committed edit operations through runtime contour replacement so `RebuildVoxelCache` queueing remains consistent
   - add UI command buttons for insert/delete actions and preserve navigation behavior outside active edit operations
   - add Step 6G tests for move, insert, delete, loop-removal-at-min-size, and rebuild-queue contract
 - complete `Subplan 6 Step 6H` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1):
-  - finalize Subplan 6 implementation across commits `8d353db`, `1764ee2`, `de35bab`, `a4031eb`, and `3b632e4`
+  - finalize Subplan 6 implementation across commits `8d353db`, `1764ee2`, `de35bab`, `a4031eb`, `3b632e4`, and `87be697`
   - rerun required verification commands: `cargo test -q`, `cargo check --target wasm32-unknown-unknown -q`, and `cargo fmt --all`
   - manual regression checks completed:
-    - loading data: image NIfTI load and voxel label NIfTI load expected to preserve existing baseline behavior; observed pass
-    - visibility: image + voxel label rendering expected to remain stable in 2D and 3D views; observed pass
-    - interaction: contour draw/select/move/insert/delete expected to function on supported 2D plane families; observed pass
-    - regressions: 2D navigation, slice scrolling, and 3D viewer behavior expected unchanged outside contour edit actions; observed pass
+    - action: load image NIfTI and voxel label NIfTI; expected: both load and existing image/label baseline behavior is preserved; observed: pass
+    - action: inspect image plus voxel label in 2D and 3D views; expected: visible overlays remain stable; observed: pass
+    - action: create contour ROI, draw a loop, select point/loop, move point, insert point, and delete point/loop on supported 2D plane families; expected: contour editing works without voxel rasterization; observed: pass
+    - action: pan/zoom/slice scroll and inspect 3D viewer outside contour edit actions; expected: navigation and 3D behavior remain unchanged; observed: pass
   - deferred limitations documented and accepted for Subplan 6 scope:
     - no contour rasterization or contour-to-voxel conversion algorithm yet
     - no contour interpolation/smoothing/boolean/margin toolset yet
     - no mesh representation/deformation work yet
     - no renderer expansion/import-export/registration-resampling yet
+- complete retrospective review and fixup pass from [docs/phase-1-6-retrospective-review.md](/Users/nieage/dev/git/rust_starter_app/docs/phase-1-6-retrospective-review.md:1):
+  - confirm Phase 1 is aligned with the plan and requires no Phase 1-specific fixup
+  - use a shared renderable voxel overlay view model for visibility slot accounting, render prep, and bind-group ordering
+  - preserve label-owned geometry without hiding valid non-identical label grids
+  - route oblique annotation/render projection through the shared oblique plane path
+  - keep contour drag preview in editor preview state and commit through `replace_contour_data(...)` on release
+  - remove stale separate point-move tool naming after unifying contour select/move behavior
 
 Pending:
 - define `Subplan 7: Mesh Representation Architecture` implementer handoff document

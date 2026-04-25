@@ -16,6 +16,7 @@ fn set_editor_tool(
         editor.active_tool = EditorTool::Navigation;
         editor.contour_draft = None;
         editor.contour_selection = None;
+        editor.contour_move_preview = None;
         return Ok(());
     }
 
@@ -43,6 +44,7 @@ fn set_editor_tool(
     }
     if requested_tool != EditorTool::ContourSelect {
         editor.contour_selection = None;
+        editor.contour_move_preview = None;
     }
     Ok(())
 }

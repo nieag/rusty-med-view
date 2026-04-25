@@ -217,14 +217,15 @@ impl ApplicationHandler<AppEvent> for App {
                                     &mut ctx.scene.world,
                                     loaded_label,
                                 ) {
-                                    Ok((new_entity, dims)) => {
+                                    Ok(outcome) => {
                                         if let Ok(mut editor) = ctx
                                             .scene
                                             .world
                                             .get::<&mut EditorState>(ctx.scene.entities.editor)
                                         {
-                                            editor.active_roi = Some(new_entity);
+                                            editor.active_roi = Some(outcome.entity);
                                         }
+                                        let dims = outcome.dimensions;
                                         handlers::set_status_message(
                                             &mut ctx.scene.world,
                                             &ctx.scene.entities,

@@ -55,13 +55,14 @@ pub enum EditorTool {
     Navigation,
     ContourSelect,
     ContourDraw,
-    ContourPointMove,
 }
 ```
 
 Use `Navigation` as the default. Existing pan, rotate, zoom, slice scroll, and crosshair behavior must remain unchanged when `active_tool == Navigation`.
 
 Contour tools must only consume left-click/drag interactions that they own. Middle-click panning, right-click rotation, and modifier-based navigation should keep working unless a later explicit UX decision changes that.
+
+Retrospective update: point selection and point movement are unified in `ContourSelect` / `Contour Edit`. Do not reintroduce a separate point-move tool unless the UX is deliberately split again.
 
 ### 2. Authoritative edit path
 
@@ -215,7 +216,7 @@ Files expected:
 
 Required work:
 
-- add `EditorTool::{ContourSelect, ContourDraw, ContourPointMove}` while preserving `Navigation` default
+- add `EditorTool::{ContourSelect, ContourDraw}` while preserving `Navigation` default
 - add runtime helper for creating an empty contour ROI with `ContourData { active_plane_family, slices: vec![] }`
 - set the new contour ROI as `EditorState.active_roi`
 - keep empty contour ROIs invisible in voxel overlay rendering unless a future contour overlay is drawn
@@ -473,7 +474,7 @@ Files expected:
 
 Required work:
 
-- in `ContourPointMove`, drag selected points in plane-local space
+- in contour edit/select mode, drag selected points in plane-local space
 - add point insertion on selected or nearest segment
 - add point deletion for selected points
 - delete the loop if deletion would leave fewer than three valid closed-loop points
