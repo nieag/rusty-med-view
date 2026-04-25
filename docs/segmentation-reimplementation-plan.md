@@ -59,6 +59,43 @@ Core runtime concepts to introduce:
 
 The current `util/orientation.rs` module should be treated as the seed of the future shared transform layer, not bypassed by ad hoc math in tools or rendering code.
 
+## Representation and Conversion Strategy
+
+The representation model is intentionally asymmetric:
+
+- the authoritative representation is the editable source of truth for an ROI
+- derived representations are session caches and may be discarded/rebuilt
+- conversion jobs must be explicit, observable through ROI runtime state, and never hidden inside render passes
+- conversions are allowed to be lossy, but the loss/quality tradeoff must be owned by the conversion step and documented in the handoff for that step
+
+Primary representations:
+
+- `Voxel`: discrete label/occupancy data with ROI-owned grid geometry; primary source for labelmap compatibility and volume computation
+- `Contour`: planar closed loops stored in patient/world plane-local millimeters; primary source for slice-based authoring
+- `Mesh`: future surface state for 3D visualization and deformation workflows
+
+Derived/session representations:
+
+- voxel cache: rebuilt from contour or mesh primary data when volume, voxel overlay, or labelmap-compatible behavior is needed
+- contour cache: rebuilt from voxel or mesh primary data when slice-facing contour inspection/edit initialization is needed
+- mesh cache: rebuilt from voxel or contour primary data when 3D surface viewing or mesh-primary transition support is needed
+- distance-field cache: optional future SDF/TSDF-style working cache for smoothing, margins, boolean operations, robust mesh regeneration, and mesh deformation support
+
+Initial conversion order:
+
+- `Contour -> Voxel` comes before mesh work because contour editing now exists, but contour ROIs cannot yet produce voxel-derived volume or voxel overlay caches
+- `Voxel -> Contour` follows immediately after the first contour-derived voxel loop because loaded voxel labelmaps are the current practical test/import data and need a path into editable contours
+- `Voxel -> Mesh` follows once voxel caches are reliable enough to support surface extraction
+- `Mesh -> Voxel` follows mesh deformation so edited meshes can return to voxel-derived volume/label behavior
+- `Mesh -> Contour` supports slice-facing inspection/editing after mesh deformation
+- `Contour -> Mesh` should be deferred until a specific workflow requires it; the first practical route may be indirect through `Contour -> Voxel -> Mesh`
+
+SDF/TSDF position:
+
+- SDF/TSDF should not become the first core authoritative representation
+- SDF/TSDF may be introduced later as a derived working cache once mesh deformation, smoothing, margin, boolean, or higher-quality surface reconstruction workflows need it
+- any SDF/TSDF cache must be tied to explicit source generation, grid geometry, truncation/threshold semantics, and rebuild invalidation rules
+
 ## Subplans
 
 ### 0. Baseline Wrap-Up
@@ -227,6 +264,63 @@ Acceptance:
 - oblique editing works through the same model
 - repeated switching does not drift state
 
+### 6.5. Contour-to-Voxel Conversion V1
+
+Purpose:
+- close the first practical representation loop by converting contour-authoritative ROIs into voxel-derived caches
+- make contour-edited ROIs usable for voxel-derived volume, voxel overlay behavior, and later labelmap-compatible export
+- exercise the existing ROI runtime job scaffold with a real conversion algorithm before mesh architecture adds more conversion contracts
+
+Implementation note:
+- concrete implementer guidance lives in [docs/subplan-6-5-contour-to-voxel-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-5-contour-to-voxel-handoff.md:1)
+- keep the first implementation deliberately conservative and testable
+- do not introduce mesh, SDF/TSDF, smoothing, interpolation, margins, boolean operations, registration/resampling, or renderer expansion in this phase
+
+Deliver:
+- target voxel-grid selection policy for contour-derived voxel caches
+  - first option should be explicit and deterministic, such as using the current main volume grid or a stored ROI/reference grid selected at conversion time
+  - the selected grid must be stored with the derived voxel cache and must not be inferred later from the currently loaded main volume
+- contour loop rasterization for closed loops on matching contour slice planes
+- inside/outside fill rules for multiple loops on the same slice, including hole handling or an explicitly documented first-pass limitation
+- voxel cache rebuild job path that consumes queued `RebuildVoxelCache` work for contour-primary ROIs
+- voxel-derived volume update after successful contour rasterization
+- safe failure/status behavior when contour data cannot be rasterized into the selected grid
+- tests for geometry mapping, loop fill, cache generation, runtime job completion, and no-render-regression behavior
+
+Acceptance:
+- editing a contour ROI can rebuild a voxel-derived cache through the runtime boundary
+- contour-derived voxel volume is available after rebuild
+- contour ROIs can produce voxel overlay data without making contour data non-authoritative
+- conversion behavior is deterministic across native and WASM-compatible execution
+- registration/resampling and advanced interpolation remain explicitly deferred
+
+### 6.6. Voxel-to-Contour Extraction V1
+
+Purpose:
+- make loaded voxel labelmaps usable as editable contour-primary ROIs
+- provide real-data contour test inputs from existing labelmap datasets
+- complete the first bidirectional voxel/contour workflow before mesh architecture begins
+
+Implementation note:
+- create a dedicated implementer handoff after Subplan 6.5 is complete or when this phase is pulled forward
+- keep the first implementation deliberately conservative and slice-based
+- do not introduce mesh, SDF/TSDF, smoothing, interpolation, boolean operations, registration/resampling, or import/export in this phase
+
+Deliver:
+- extraction from voxel-primary ROI data into contour slices for a selected `PlaneFamily`
+- deterministic 2D boundary extraction on voxel slices
+- contour loop construction in `PlaneLocalMm` using the shared geometry/plane APIs
+- explicit handling of multiple disconnected components and holes, or a documented V1 limitation
+- UI/runtime action for converting or initializing an editable contour ROI from a loaded voxel labelmap
+- tests using synthetic voxel labelmaps so behavior does not depend on external datasets
+
+Acceptance:
+- a loaded voxel labelmap can initialize contour-authoritative data for editing
+- extracted contours preserve spatial placement through ROI-owned voxel geometry and shared transforms
+- voxel authoritative data is not mutated by extraction
+- unsupported extraction cases fail safely with status/log messaging
+- contour editing still works on extracted loops
+
 ### 7. Mesh Representation Architecture
 
 Purpose:
@@ -303,15 +397,18 @@ Required implementation order:
 6. Plane and geometry context
 7. Contour representation architecture
 8. Contour editing v1
-9. Mesh representation architecture
-10. Mesh deform workflow
-11. Rendering integration layer
-12. Performance and cache strategy
+9. Contour-to-voxel conversion v1
+10. Voxel-to-contour extraction v1
+11. Mesh representation architecture
+12. Mesh deform workflow
+13. Rendering integration layer
+14. Performance and cache strategy
 
 Rules:
 
 - `1-5` must land before contour or mesh feature work
 - contour editing must not begin before contour architecture exists
+- mesh architecture should not begin until the first bidirectional voxel/contour conversion loop exists
 - mesh deformation must not begin before mesh-primary rules exist
 - performance work must not drive early architecture choices
 
@@ -337,6 +434,11 @@ Contour tests:
 - contour-derived voxel rebuild scheduling without requiring rasterization yet
 - orthogonal and oblique contour storage correctness
 - plane-family switching rejection when conversion would be required
+- contour-to-voxel rasterization maps plane-local contour loops into the selected voxel grid deterministically
+- contour-derived voxel cache generation and voxel-derived volume update after rebuild
+- invalid or unsupported contour conversion inputs fail safely without corrupting authoritative contour data
+- voxel-to-contour extraction produces editable contour loops from synthetic voxel labelmaps
+- extracted contour loops roundtrip through shared voxel/world/plane-local geometry without screen-space assumptions
 
 Mesh tests:
 
@@ -360,7 +462,7 @@ Transform and parity tests:
 ## Implementation Status
 
 Current Phase:
-- `Subplan 7: Mesh Representation Architecture` (planning/handoff)
+- `Subplan 6.5: Contour-to-Voxel Conversion V1` (planning/handoff)
 
 Completed:
 - `1453511` Baseline: remove legacy segmentation stack
@@ -498,5 +600,7 @@ Completed:
   - remove stale separate point-move tool naming after unifying contour select/move behavior
 
 Pending:
-- define `Subplan 7: Mesh Representation Architecture` implementer handoff document
-- start `Subplan 7` implementation after handoff is approved
+- review and approve [docs/subplan-6-5-contour-to-voxel-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-5-contour-to-voxel-handoff.md:1)
+- start `Subplan 6.5 Step 6.5A` implementation after handoff is approved
+- define `Subplan 6.6: Voxel-to-Contour Extraction V1` implementer handoff after or alongside Subplan 6.5
+- defer `Subplan 7: Mesh Representation Architecture` until bidirectional voxel/contour conversion exists
