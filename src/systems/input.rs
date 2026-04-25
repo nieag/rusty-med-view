@@ -61,6 +61,7 @@ pub fn sys_handle_mouse_button(
 
     let mut active_vp = None;
     let mut alt_pressed = false;
+    let mut finalize_contour_move = false;
 
     if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
         if input.egui_wants_input {
@@ -98,7 +99,15 @@ pub fn sys_handle_mouse_button(
             input.is_dragging = false;
             input.is_panning = false;
             input.is_rotating = false;
+            if input.contour_move_pending_commit {
+                finalize_contour_move = true;
+                input.contour_move_pending_commit = false;
+            }
         }
+    }
+
+    if finalize_contour_move {
+        let _ = crate::systems::finalize_selected_point_move(world, entities);
     }
 
     let ctrl_pressed = if let Ok(input) = world.get::<&InputState>(entities.input) {
@@ -347,6 +356,7 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
     }
 
     let mut crosshair_update = None;
+    let mut contour_move_update = None;
 
     if let (Ok(vp), Ok(mut vs)) = (
         world.get::<&Viewport>(avp),
@@ -371,8 +381,12 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
                 .get::<&EditorState>(entities.editor)
                 .map(|editor| editor.active_tool)
                 .unwrap_or(EditorTool::Navigation);
-            if is_dragging && !is_panning && !is_rotating && active_tool == EditorTool::Navigation {
-                crosshair_update = Some((avp, input.mouse_uv));
+            if is_dragging && !is_panning && !is_rotating {
+                if active_tool == EditorTool::Navigation {
+                    crosshair_update = Some((avp, input.mouse_uv));
+                } else if active_tool == EditorTool::ContourSelect {
+                    contour_move_update = Some(input.mouse_uv);
+                }
             }
         }
 
@@ -425,6 +439,14 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
         if let Some(target_pos) = get_voxel_at_mouse(world, entities, avp, uv) {
             if let Ok(mut t) = world.get::<&mut Transform>(entities.cursor) {
                 t.position = target_pos;
+            }
+        }
+    }
+
+    if let Some(uv) = contour_move_update {
+        if crate::systems::move_selected_point_preview(world, entities, uv).is_ok() {
+            if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+                input.contour_move_pending_commit = true;
             }
         }
     }

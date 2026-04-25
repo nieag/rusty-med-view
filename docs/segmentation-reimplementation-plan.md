@@ -467,6 +467,13 @@ Completed:
   - clear selection when leaving select mode and when active ROI changes
   - render selected loops/points distinctly in native contour overlay rendering
   - add Step 6F tests for nearest-point selection, threshold behavior, and rejection paths
+- complete `Subplan 6 Step 6G` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1):
+  - add contour point move operation in `ContourPointMove` using selected-point plane-local updates through shared mapping helpers
+  - add contour point insertion for selected loops (selected-point segment or nearest segment fallback) with authoritative mutation via `replace_contour_data(...)`
+  - add contour point/loop deletion behavior with valid-loop-size handling and selection cleanup when loops are removed
+  - route all committed edit operations through runtime contour replacement so `RebuildVoxelCache` queueing remains consistent
+  - add UI command buttons for insert/delete actions and preserve navigation behavior outside active edit operations
+  - add Step 6G tests for move, insert, delete, loop-removal-at-min-size, and rebuild-queue contract
 
 Pending:
-- implement `Subplan 6 Step 6G` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1): point move, insert, and delete operations
+- implement `Subplan 6 Step 6H` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1): Subplan 6 status closure and regression pass

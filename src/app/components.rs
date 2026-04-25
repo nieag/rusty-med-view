@@ -88,6 +88,7 @@ pub struct InputState {
     pub rotation_start_val: [f32; 4],
     pub egui_wants_input: bool,
     pub scroll_accumulator: [f32; 4], // Accumulate sub-slice deltas per viewport
+    pub contour_move_pending_commit: bool,
 }
 
 // --- Volume Data ---

@@ -362,6 +362,57 @@ pub fn draw_sidebar(
                     Err(message) => handlers::set_status_message(world, entities, message),
                 }
             }
+
+            ui.horizontal(|ui| {
+                if ui
+                    .small_button("Insert Point")
+                    .on_hover_text("Insert a point in the selected loop.")
+                    .clicked()
+                {
+                    let mouse_uv = world
+                        .get::<&InputState>(entities.input)
+                        .map(|input| input.mouse_uv)
+                        .unwrap_or([0.5, 0.5]);
+                    match crate::systems::insert_point_into_selected_loop(world, entities, mouse_uv)
+                    {
+                        Ok(()) => {
+                            handlers::set_status_message(
+                                world,
+                                entities,
+                                "Inserted contour point.".to_string(),
+                            );
+                            ctx.request_repaint();
+                        }
+                        Err(err) => handlers::set_status_message(
+                            world,
+                            entities,
+                            format!("Insert point failed: {err:?}"),
+                        ),
+                    }
+                }
+
+                if ui
+                    .small_button("Delete Selected")
+                    .on_hover_text("Delete selected point or loop.")
+                    .clicked()
+                {
+                    match crate::systems::delete_selected_contour_element(world, entities) {
+                        Ok(()) => {
+                            handlers::set_status_message(
+                                world,
+                                entities,
+                                "Deleted selected contour element.".to_string(),
+                            );
+                            ctx.request_repaint();
+                        }
+                        Err(err) => handlers::set_status_message(
+                            world,
+                            entities,
+                            format!("Delete failed: {err:?}"),
+                        ),
+                    }
+                }
+            });
         }
 
         if new_active_roi != active_roi {

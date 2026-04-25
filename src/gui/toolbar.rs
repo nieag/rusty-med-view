@@ -127,9 +127,8 @@ pub fn draw_toolbar(
 
         for (label, tool) in [
             ("Nav", EditorTool::Navigation),
-            ("Contour Select", EditorTool::ContourSelect),
+            ("Contour Edit", EditorTool::ContourSelect),
             ("Contour Draw", EditorTool::ContourDraw),
-            ("Contour Move", EditorTool::ContourPointMove),
         ] {
             if ui.selectable_label(active_tool == tool, label).clicked() {
                 if let Err(message) = set_editor_tool(world, entities, tool) {
