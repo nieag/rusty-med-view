@@ -460,6 +460,13 @@ Completed:
   - clear draft when leaving draw mode or switching active ROI
   - render in-progress draft points/segments through the native contour renderer
   - add Step 6E tests for draft append behavior, closure rejection for fewer than three points, successful loop commit/rebuild queue contract, and draft-clear rule
+- complete `Subplan 6 Step 6F` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1):
+  - add `ContourSelection` editor state with ROI/slice/loop/optional-point identity
+  - add deterministic screen-space hit testing helpers for nearest point and nearest loop segment selection
+  - route `ContourSelect` left-click interactions through contour-aware selection mapping and reject non-contour/mismatched-family cases
+  - clear selection when leaving select mode and when active ROI changes
+  - render selected loops/points distinctly in native contour overlay rendering
+  - add Step 6F tests for nearest-point selection, threshold behavior, and rejection paths
 
 Pending:
-- implement `Subplan 6 Step 6F` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1): point and loop selection
+- implement `Subplan 6 Step 6G` from [docs/subplan-6-contour-editing-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-contour-editing-handoff.md:1): point move, insert, and delete operations

@@ -1,16 +1,18 @@
 use crate::app::roi_runtime;
 use crate::components::{
-    AppEntities, ContourData, ContourDraft, ContourLoop, ContourPoint, ContourSlice, EditorState,
-    EditorTool, InputState, MainVolumeTag, Roi, Transform, ViewMode, Viewport, VoxelGeometry,
+    AppEntities, ContourData, ContourDraft, ContourLoop, ContourPoint, ContourSelection,
+    ContourSlice, EditorState, EditorTool, InputState, MainVolumeTag, Roi, Transform, ViewMode,
+    Viewport, VoxelGeometry,
 };
 use crate::convert::{
     oblique_plane_from_view_rotation, orthogonal_plane_from_volume_uv,
-    plane_local_mm_to_viewport_uv, viewport_uv_to_plane_local_mm, PlaneDefinition, PlaneFamily,
-    ViewportMapping,
+    plane_local_mm_to_viewport_uv, plane_local_mm_to_world_mm, viewport_uv_to_plane_local_mm,
+    volume_uv_to_viewport_uv, world_mm_to_volume_uv, PlaneDefinition, PlaneFamily, ViewportMapping,
 };
 use hecs::World;
 
 const LOOP_CLOSE_RADIUS_PX: f32 = 10.0;
+const SELECTION_RADIUS_PX: f32 = 10.0;
 const SLICE_MATCH_DISTANCE_MM: f32 = 0.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,6 +214,26 @@ pub fn clear_contour_draft_for_roi_change(
     }
 }
 
+pub fn clear_contour_selection_for_roi_change(
+    world: &mut World,
+    editor_entity: hecs::Entity,
+    new_active_roi: Option<hecs::Entity>,
+) {
+    if let Ok(mut editor) = world.get::<&mut EditorState>(editor_entity) {
+        if editor.active_roi != new_active_roi {
+            editor.contour_selection = None;
+        }
+    }
+}
+
+pub fn clear_contour_selection_if_inactive(world: &mut World, editor_entity: hecs::Entity) {
+    if let Ok(mut editor) = world.get::<&mut EditorState>(editor_entity) {
+        if editor.active_tool != EditorTool::ContourSelect {
+            editor.contour_selection = None;
+        }
+    }
+}
+
 pub fn handle_contour_draw_click(
     world: &mut World,
     entities: &AppEntities,
@@ -262,8 +284,14 @@ pub fn handle_contour_draw_click(
             .as_mut()
             .ok_or(ContourDrawClickError::ToolNotActive)?;
         let near_first = if let Some(first) = draft.points.first() {
-            if let Some(first_uv) = contour_plane_local_mm_to_viewport_uv(first.local_mm, viewport)
-            {
+            let first_world = plane_local_mm_to_world_mm(first.local_mm, draft.plane);
+            let first_volume_uv = world_mm_to_volume_uv(first_world, viewport.geometry);
+            if let Some(first_uv) = volume_uv_to_viewport_uv(
+                first_volume_uv,
+                viewport.plane,
+                viewport.geometry,
+                viewport.mapping,
+            ) {
                 let dx = (viewport_uv[0] - first_uv[0]) * viewport_rect[2];
                 let dy = (viewport_uv[1] - first_uv[1]) * viewport_rect[3];
                 (dx * dx + dy * dy).sqrt() <= LOOP_CLOSE_RADIUS_PX
@@ -316,6 +344,183 @@ pub fn handle_contour_draw_click(
     } else {
         Err(ContourDrawClickError::ToolNotActive)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContourSelectClickError {
+    ToolNotActive,
+    MissingActiveRoi,
+    ActiveRoiNotContour,
+    Mapping(ContourEditMappingError),
+}
+
+impl From<ContourEditMappingError> for ContourSelectClickError {
+    fn from(value: ContourEditMappingError) -> Self {
+        ContourSelectClickError::Mapping(value)
+    }
+}
+
+fn nearest_point_hit(
+    candidate_points_uv: &[(usize, usize, usize, [f32; 2])],
+    click_uv: [f32; 2],
+    viewport_px: [f32; 2],
+    threshold_px: f32,
+) -> Option<(usize, usize, usize)> {
+    let mut best: Option<(usize, usize, usize, f32)> = None;
+    for (slice_idx, loop_idx, point_idx, uv) in candidate_points_uv {
+        let dx = (click_uv[0] - uv[0]) * viewport_px[0];
+        let dy = (click_uv[1] - uv[1]) * viewport_px[1];
+        let dist = (dx * dx + dy * dy).sqrt();
+        if dist > threshold_px {
+            continue;
+        }
+        match best {
+            Some((_, _, _, best_dist)) if dist >= best_dist => {}
+            _ => best = Some((*slice_idx, *loop_idx, *point_idx, dist)),
+        }
+    }
+    best.map(|(slice, loop_idx, point, _)| (slice, loop_idx, point))
+}
+
+fn nearest_loop_hit(
+    candidate_loops_uv: &[(usize, usize, Vec<[f32; 2]>, bool)],
+    click_uv: [f32; 2],
+    viewport_px: [f32; 2],
+    threshold_px: f32,
+) -> Option<(usize, usize)> {
+    let mut best: Option<(usize, usize, f32)> = None;
+    for (slice_idx, loop_idx, points, is_closed) in candidate_loops_uv {
+        if points.len() < 2 {
+            continue;
+        }
+        let mut local_best: Option<f32> = None;
+        for window in points.windows(2) {
+            let dist = point_to_segment_distance_px(click_uv, window[0], window[1], viewport_px);
+            if dist <= threshold_px {
+                local_best = Some(local_best.map_or(dist, |b| b.min(dist)));
+            }
+        }
+        if *is_closed {
+            let dist = point_to_segment_distance_px(
+                click_uv,
+                points[points.len() - 1],
+                points[0],
+                viewport_px,
+            );
+            if dist <= threshold_px {
+                local_best = Some(local_best.map_or(dist, |b| b.min(dist)));
+            }
+        }
+        if let Some(local_dist) = local_best {
+            match best {
+                Some((_, _, best_dist)) if local_dist >= best_dist => {}
+                _ => best = Some((*slice_idx, *loop_idx, local_dist)),
+            }
+        }
+    }
+    best.map(|(slice, loop_idx, _)| (slice, loop_idx))
+}
+
+fn point_to_segment_distance_px(
+    p_uv: [f32; 2],
+    a_uv: [f32; 2],
+    b_uv: [f32; 2],
+    viewport_px: [f32; 2],
+) -> f32 {
+    let p = glam::Vec2::new(p_uv[0] * viewport_px[0], p_uv[1] * viewport_px[1]);
+    let a = glam::Vec2::new(a_uv[0] * viewport_px[0], a_uv[1] * viewport_px[1]);
+    let b = glam::Vec2::new(b_uv[0] * viewport_px[0], b_uv[1] * viewport_px[1]);
+    let ab = b - a;
+    let ab_len_sq = ab.length_squared();
+    if ab_len_sq <= 1e-12 {
+        return (p - a).length();
+    }
+    let t = ((p - a).dot(ab) / ab_len_sq).clamp(0.0, 1.0);
+    let closest = a + ab * t;
+    (p - closest).length()
+}
+
+pub fn handle_contour_select_click(
+    world: &mut World,
+    entities: &AppEntities,
+    viewport_uv: [f32; 2],
+) -> Result<Option<ContourSelection>, ContourSelectClickError> {
+    let (active_tool, active_roi) = world
+        .get::<&EditorState>(entities.editor)
+        .map(|editor| (editor.active_tool, editor.active_roi))
+        .map_err(|_| ContourSelectClickError::ToolNotActive)?;
+    if active_tool != EditorTool::ContourSelect {
+        return Err(ContourSelectClickError::ToolNotActive);
+    }
+    let roi_entity = active_roi.ok_or(ContourSelectClickError::MissingActiveRoi)?;
+
+    let contour_data = contour_data_for_active_roi(world, roi_entity)
+        .ok_or(ContourSelectClickError::ActiveRoiNotContour)?;
+    let viewport = resolve_active_contour_edit_viewport(world, entities, &contour_data)?;
+    let viewport_rect = world
+        .get::<&Viewport>(viewport.viewport_entity)
+        .map(|vp| vp.rect)
+        .map_err(|_| ContourSelectClickError::Mapping(ContourEditMappingError::MissingViewport))?;
+    let viewport_px = [viewport_rect[2], viewport_rect[3]];
+
+    let mut candidate_points = Vec::new();
+    let mut candidate_loops = Vec::new();
+    for (slice_idx, slice) in contour_data.slices.iter().enumerate() {
+        if !planes_match_for_slice(slice.plane, viewport.plane) {
+            continue;
+        }
+        for (loop_idx, contour_loop) in slice.loops.iter().enumerate() {
+            let mut loop_points_uv = Vec::new();
+            for (point_idx, point) in contour_loop.points.iter().enumerate() {
+                let world_mm = plane_local_mm_to_world_mm(point.local_mm, slice.plane);
+                let volume_uv = world_mm_to_volume_uv(world_mm, viewport.geometry);
+                let Some(point_uv) = volume_uv_to_viewport_uv(
+                    volume_uv,
+                    viewport.plane,
+                    viewport.geometry,
+                    viewport.mapping,
+                ) else {
+                    continue;
+                };
+                candidate_points.push((slice_idx, loop_idx, point_idx, point_uv));
+                loop_points_uv.push(point_uv);
+            }
+            candidate_loops.push((slice_idx, loop_idx, loop_points_uv, contour_loop.is_closed));
+        }
+    }
+
+    let selection = if let Some((slice_idx, loop_idx, point_idx)) = nearest_point_hit(
+        &candidate_points,
+        viewport_uv,
+        viewport_px,
+        SELECTION_RADIUS_PX,
+    ) {
+        Some(ContourSelection {
+            roi_entity,
+            slice_index: slice_idx,
+            loop_index: loop_idx,
+            point_index: Some(point_idx),
+        })
+    } else if let Some((slice_idx, loop_idx)) = nearest_loop_hit(
+        &candidate_loops,
+        viewport_uv,
+        viewport_px,
+        SELECTION_RADIUS_PX,
+    ) {
+        Some(ContourSelection {
+            roi_entity,
+            slice_index: slice_idx,
+            loop_index: loop_idx,
+            point_index: None,
+        })
+    } else {
+        None
+    };
+
+    if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
+        editor.contour_selection = selection.clone();
+    }
+    Ok(selection)
 }
 
 #[cfg(test)]
@@ -581,6 +786,7 @@ mod tests {
                 },
                 points: vec![],
             }),
+            contour_selection: None,
         },));
 
         clear_contour_draft_if_inactive(&mut world, editor);
@@ -589,5 +795,72 @@ mod tests {
             .unwrap()
             .contour_draft
             .is_none());
+    }
+
+    #[test]
+    fn test_nearest_point_hit_selects_closest_point() {
+        let candidates = vec![
+            (0usize, 0usize, 0usize, [0.4, 0.4]),
+            (0usize, 0usize, 1usize, [0.42, 0.4]),
+            (0usize, 1usize, 0usize, [0.8, 0.8]),
+        ];
+        let result = nearest_point_hit(&candidates, [0.421, 0.401], [800.0, 600.0], 10.0);
+        assert_eq!(result, Some((0, 0, 1)));
+    }
+
+    #[test]
+    fn test_nearest_point_hit_respects_threshold() {
+        let candidates = vec![(0usize, 0usize, 0usize, [0.4, 0.4])];
+        let result = nearest_point_hit(&candidates, [0.6, 0.6], [800.0, 600.0], 5.0);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_contour_selection_rejects_non_contour_active_roi() {
+        let mut world = World::new();
+        let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+        let voxel_roi = world.spawn((Roi::new_voxel_with_cache(
+            crate::components::RoiId(1),
+            "Voxel".to_string(),
+            VoxelGeometry {
+                dimensions: [8, 8, 8],
+                spacing: [1.0, 1.0, 1.0],
+                origin: [0.0, 0.0, 0.0],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
+            vec![0; 512],
+            None,
+        ),));
+        {
+            let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+            editor.active_roi = Some(voxel_roi);
+            editor.active_tool = EditorTool::ContourSelect;
+        }
+
+        let result = handle_contour_select_click(&mut world, &entities, [0.5, 0.5]);
+        assert_eq!(result, Err(ContourSelectClickError::ActiveRoiNotContour));
+    }
+
+    #[test]
+    fn test_contour_selection_rejects_mismatched_plane_family() {
+        let mut world = World::new();
+        let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+        let roi_entity = spawn_test_contour_roi(&mut world, PlaneFamily::Coronal);
+        {
+            let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+            editor.active_roi = Some(roi_entity);
+            editor.active_tool = EditorTool::ContourSelect;
+        }
+
+        let result = handle_contour_select_click(&mut world, &entities, [0.5, 0.5]);
+        assert_eq!(
+            result,
+            Err(ContourSelectClickError::Mapping(
+                ContourEditMappingError::PlaneFamilyMismatch {
+                    contour_family: PlaneFamily::Coronal,
+                    viewport_family: PlaneFamily::Axial,
+                }
+            ))
+        );
     }
 }

@@ -56,6 +56,9 @@ pub fn sys_handle_mouse_button(
     button: MouseButton,
     state: ElementState,
 ) {
+    crate::systems::clear_contour_draft_if_inactive(world, entities.editor);
+    crate::systems::clear_contour_selection_if_inactive(world, entities.editor);
+
     let mut active_vp = None;
     let mut alt_pressed = false;
 
@@ -152,6 +155,45 @@ pub fn sys_handle_mouse_button(
                 }
                 Err(crate::systems::ContourDrawClickError::Mapping(error)) => {
                     set_status_message(world, entities, format!("Contour draw blocked: {error:?}"));
+                }
+                Err(_) => {}
+            }
+            return;
+        }
+        if active_tool == EditorTool::ContourSelect {
+            let click_pos = world
+                .get::<&InputState>(entities.input)
+                .map(|input| input.mouse_uv)
+                .unwrap_or([0.5, 0.5]);
+            match crate::systems::handle_contour_select_click(world, entities, click_pos) {
+                Ok(Some(selection)) => {
+                    if selection.point_index.is_some() {
+                        set_status_message(world, entities, "Selected contour point.".to_string());
+                    } else {
+                        set_status_message(world, entities, "Selected contour loop.".to_string());
+                    }
+                }
+                Ok(None) => {}
+                Err(crate::systems::ContourSelectClickError::MissingActiveRoi) => {
+                    set_status_message(
+                        world,
+                        entities,
+                        "Select a contour ROI before selecting contours.".to_string(),
+                    );
+                }
+                Err(crate::systems::ContourSelectClickError::ActiveRoiNotContour) => {
+                    set_status_message(
+                        world,
+                        entities,
+                        "Active ROI is not contour-primary.".to_string(),
+                    );
+                }
+                Err(crate::systems::ContourSelectClickError::Mapping(error)) => {
+                    set_status_message(
+                        world,
+                        entities,
+                        format!("Contour selection blocked: {error:?}"),
+                    );
                 }
                 Err(_) => {}
             }

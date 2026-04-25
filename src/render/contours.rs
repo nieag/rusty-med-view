@@ -297,13 +297,17 @@ fn viewport_uv_to_ndc(
 }
 
 pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> ContourRenderData {
-    let (active_roi, contour_draft) = match world
-        .get::<&EditorState>(entities.editor)
-        .map(|editor| (editor.active_roi, editor.contour_draft.clone()))
-    {
-        Ok((Some(active_roi), draft)) => (active_roi, draft),
-        Err(_) | Ok((None, _)) => return ContourRenderData::default(),
-    };
+    let (active_roi, contour_draft, contour_selection) =
+        match world.get::<&EditorState>(entities.editor).map(|editor| {
+            (
+                editor.active_roi,
+                editor.contour_draft.clone(),
+                editor.contour_selection.clone(),
+            )
+        }) {
+            Ok((Some(active_roi), draft, selection)) => (active_roi, draft, selection),
+            Err(_) | Ok((None, _, _)) => return ContourRenderData::default(),
+        };
 
     let roi = match world.get::<&Roi>(active_roi) {
         Ok(roi) => roi,
@@ -374,12 +378,12 @@ pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> Con
             },
         };
 
-        for contour_slice in &contour_data.slices {
+        for (slice_idx, contour_slice) in contour_data.slices.iter().enumerate() {
             if !planes_are_slice_compatible(displayed_plane, contour_slice.plane) {
                 continue;
             }
 
-            for contour_loop in &contour_slice.loops {
+            for (loop_idx, contour_loop) in contour_slice.loops.iter().enumerate() {
                 let mut loop_ndc_points = Vec::with_capacity(contour_loop.points.len());
                 for point in &contour_loop.points {
                     let world_mm = plane_local_mm_to_world_mm(point.local_mm, contour_slice.plane);
@@ -403,10 +407,21 @@ pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> Con
                     continue;
                 }
 
+                let is_selected_loop = contour_selection.as_ref().is_some_and(|selection| {
+                    selection.roi_entity == active_roi
+                        && selection.slice_index == slice_idx
+                        && selection.loop_index == loop_idx
+                });
+                let loop_color = if is_selected_loop {
+                    [1.0, 0.9, 0.2, 1.0]
+                } else {
+                    roi_color
+                };
+
                 vertices.extend(build_polyline_triangles_ndc(
                     &loop_ndc_points,
                     line_width_ndc,
-                    roi_color,
+                    loop_color,
                 ));
                 if contour_loop.is_closed {
                     let closing = [
@@ -416,15 +431,29 @@ pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> Con
                     vertices.extend(build_polyline_triangles_ndc(
                         &closing,
                         line_width_ndc,
-                        roi_color,
+                        loop_color,
                     ));
                 }
 
-                for point_ndc in loop_ndc_points {
+                for (point_idx, point_ndc) in loop_ndc_points.into_iter().enumerate() {
+                    let is_selected_point = contour_selection.as_ref().is_some_and(|selection| {
+                        selection.roi_entity == active_roi
+                            && selection.slice_index == slice_idx
+                            && selection.loop_index == loop_idx
+                            && selection.point_index == Some(point_idx)
+                    });
                     vertices.extend(build_point_marker_triangles_ndc(
                         point_ndc,
-                        point_size_ndc,
-                        roi_color,
+                        if is_selected_point {
+                            point_size_ndc * 1.4
+                        } else {
+                            point_size_ndc
+                        },
+                        if is_selected_point {
+                            [1.0, 1.0, 0.0, 1.0]
+                        } else {
+                            loop_color
+                        },
                     ));
                 }
             }
@@ -648,6 +677,7 @@ mod tests {
             active_roi: None,
             active_tool: EditorTool::Navigation,
             contour_draft: None,
+            contour_selection: None,
         },));
         let viewport = world.spawn((
             Viewport {

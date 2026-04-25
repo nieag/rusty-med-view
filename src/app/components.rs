@@ -172,6 +172,7 @@ pub struct EditorState {
     pub active_roi: Option<hecs::Entity>,
     pub active_tool: EditorTool,
     pub contour_draft: Option<ContourDraft>,
+    pub contour_selection: Option<ContourSelection>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -255,6 +256,14 @@ pub struct ContourDraft {
     pub roi_entity: hecs::Entity,
     pub plane: PlaneDefinition,
     pub points: Vec<ContourPoint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContourSelection {
+    pub roi_entity: hecs::Entity,
+    pub slice_index: usize,
+    pub loop_index: usize,
+    pub point_index: Option<usize>,
 }
 
 pub enum RoiAuthoritativeData {

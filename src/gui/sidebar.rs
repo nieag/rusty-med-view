@@ -365,7 +365,16 @@ pub fn draw_sidebar(
         }
 
         if new_active_roi != active_roi {
-            crate::systems::clear_contour_draft_for_roi_change(world, entities.editor, new_active_roi);
+            crate::systems::clear_contour_draft_for_roi_change(
+                world,
+                entities.editor,
+                new_active_roi,
+            );
+            crate::systems::clear_contour_selection_for_roi_change(
+                world,
+                entities.editor,
+                new_active_roi,
+            );
             if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
                 editor.active_roi = new_active_roi;
                 let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
