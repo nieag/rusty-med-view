@@ -205,6 +205,12 @@ pub struct VoxelData {
     pub raw_data: Vec<u8>,
 }
 
+#[derive(Clone)]
+pub struct VoxelCache {
+    pub data: VoxelData,
+    pub gpu_resources: Option<GpuVolumeResources>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VoxelGeometry {
     pub dimensions: [u32; 3],
@@ -281,7 +287,7 @@ pub enum RoiAuthoritativeData {
 
 #[derive(Default)]
 pub struct RoiSessionCaches {
-    pub voxel: Option<GpuVolumeResources>,
+    pub voxel: Option<VoxelCache>,
     pub contour: Option<ContourCache>,
     pub mesh: Option<MeshCache>,
 }
@@ -365,7 +371,8 @@ impl Roi {
         raw_data: Vec<u8>,
         gpu_resources: Option<GpuVolumeResources>,
     ) -> Self {
-        let has_voxel_cache = gpu_resources.is_some();
+        let has_voxel_gpu_cache = gpu_resources.is_some();
+        let voxel_data = VoxelData { geometry, raw_data };
         Self {
             metadata: RoiMetadata {
                 roi_id,
@@ -375,16 +382,19 @@ impl Roi {
                 color: [1.0, 0.2, 0.2, 1.0],
             },
             primary_representation: PrimaryRepresentation::Voxel,
-            authoritative_data: RoiAuthoritativeData::Voxel(VoxelData { geometry, raw_data }),
+            authoritative_data: RoiAuthoritativeData::Voxel(voxel_data.clone()),
             session_caches: RoiSessionCaches {
-                voxel: gpu_resources,
+                voxel: Some(VoxelCache {
+                    data: voxel_data,
+                    gpu_resources,
+                }),
                 contour: None,
                 mesh: None,
             },
             dirty_state: RoiDirtyState {
-                voxel_cache_dirty: !has_voxel_cache,
+                voxel_cache_dirty: !has_voxel_gpu_cache,
                 generations: CacheGeneration {
-                    voxel: if has_voxel_cache { 1 } else { 0 },
+                    voxel: if has_voxel_gpu_cache { 1 } else { 0 },
                     ..CacheGeneration::default()
                 },
                 ..RoiDirtyState::default()
@@ -424,12 +434,20 @@ impl Roi {
         }
     }
 
-    pub fn voxel_cache(&self) -> Option<&GpuVolumeResources> {
+    pub fn voxel_cache(&self) -> Option<&VoxelCache> {
         self.session_caches.voxel.as_ref()
     }
 
-    pub fn voxel_cache_mut(&mut self) -> Option<&mut GpuVolumeResources> {
+    pub fn voxel_cache_mut(&mut self) -> Option<&mut VoxelCache> {
         self.session_caches.voxel.as_mut()
+    }
+
+    pub fn voxel_gpu_cache(&self) -> Option<&GpuVolumeResources> {
+        self.voxel_cache()?.gpu_resources.as_ref()
+    }
+
+    pub fn voxel_gpu_cache_mut(&mut self) -> Option<&mut GpuVolumeResources> {
+        self.voxel_cache_mut()?.gpu_resources.as_mut()
     }
 
     pub fn cache_generation(&self, kind: RoiCacheKind) -> u64 {
@@ -525,14 +543,14 @@ impl Roi {
 
     pub fn renderable_voxel_cache(&self) -> Option<&GpuVolumeResources> {
         if self.metadata.is_visible && self.is_cache_current(RoiCacheKind::Voxel) {
-            self.voxel_cache()
+            self.voxel_gpu_cache()
         } else {
             None
         }
     }
 
     pub fn update_voxel_bind_group(&mut self, bind_group: wgpu::BindGroup) {
-        if let Some(resources) = self.voxel_cache_mut() {
+        if let Some(resources) = self.voxel_gpu_cache_mut() {
             resources.bind_group = bind_group;
         }
     }
@@ -697,11 +715,16 @@ mod tests {
                 ..
             })
         ));
-        assert!(roi.voxel_cache().is_none());
+        let voxel_cache = roi.voxel_cache().expect("voxel cache should exist");
+        assert_eq!(voxel_cache.data.raw_data.len(), 16 * 16 * 8);
+        assert_eq!(voxel_cache.data.geometry.dimensions, [16, 16, 8]);
+        assert!(voxel_cache.gpu_resources.is_none());
+        assert!(roi.voxel_gpu_cache().is_none());
         assert!(roi.session_caches.contour.is_none());
         assert!(roi.session_caches.mesh.is_none());
         assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
         assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
+        assert!(roi.renderable_voxel_cache().is_none());
     }
 
     #[test]
@@ -739,6 +762,62 @@ mod tests {
 
         assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
         assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
+        assert!(roi.voxel_cache().is_some());
+        assert!(roi.voxel_gpu_cache().is_none());
+    }
+
+    #[test]
+    fn test_new_voxel_roi_copies_authoritative_data_into_session_voxel_cache() {
+        let geometry = VoxelGeometry {
+            dimensions: [6, 5, 4],
+            spacing: [0.9, 1.1, 1.3],
+            origin: [1.0, 2.0, 3.0],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+        let raw_data = vec![0, 1, 0, 1, 1, 0, 1, 0];
+        let roi = Roi::new_voxel_with_cache(
+            RoiId(77),
+            "Cache Copy".to_string(),
+            geometry,
+            raw_data.clone(),
+            None,
+        );
+
+        let authoritative = match &roi.authoritative_data {
+            RoiAuthoritativeData::Voxel(voxel) => voxel,
+            RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh => {
+                panic!("expected voxel-authoritative ROI");
+            }
+        };
+        let cached = roi.voxel_cache().expect("voxel cache should exist");
+
+        assert_eq!(cached.data.geometry, authoritative.geometry);
+        assert_eq!(cached.data.raw_data, authoritative.raw_data);
+        assert_eq!(cached.data.raw_data, raw_data);
+    }
+
+    #[test]
+    fn test_renderable_voxel_cache_requires_gpu_resources_even_when_cache_current() {
+        let mut roi = Roi::new_voxel_with_cache(
+            RoiId(88),
+            "No GPU".to_string(),
+            VoxelGeometry {
+                dimensions: [4, 4, 4],
+                spacing: [1.0, 1.0, 1.0],
+                origin: [0.0, 0.0, 0.0],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
+            vec![1; 64],
+            None,
+        );
+
+        roi.metadata.is_visible = true;
+        roi.dirty_state.voxel_cache_dirty = false;
+        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+
+        assert!(roi.is_cache_current(RoiCacheKind::Voxel));
+        assert!(roi.voxel_gpu_cache().is_none());
+        assert!(roi.renderable_voxel_cache().is_none());
     }
 
     #[test]

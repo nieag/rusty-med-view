@@ -48,6 +48,10 @@ pub fn handle_volume_load(
         gpu_res.sampler = new_sampler;
     }
 
+    // Contour-derived voxel caches are rebuilt against the current main-volume grid.
+    // Any main-volume geometry change invalidates those derived caches.
+    roi_runtime::invalidate_contour_voxel_caches_for_main_volume_change(world);
+
     // Reset user rotation when loading new volume
     for (_, (vp, vs)) in world.query_mut::<(&Viewport, &mut ViewportState)>() {
         if vp.mode == ViewMode::ThreeD {

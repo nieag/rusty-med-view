@@ -1,7 +1,7 @@
 use crate::app::components::*;
 #[cfg(test)]
 use crate::convert::PlaneDefinition;
-use crate::convert::PlaneFamily;
+use crate::convert::{rasterize_contours_to_voxel_data, PlaneFamily};
 use hecs::World;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -404,11 +404,243 @@ pub fn complete_cache_rebuild(
     true
 }
 
+pub fn invalidate_contour_voxel_caches_for_main_volume_change(world: &mut World) {
+    for (_, roi) in world.query_mut::<&mut Roi>() {
+        if !matches!(roi.authoritative_data, RoiAuthoritativeData::Contour(_)) {
+            continue;
+        }
+
+        // Derived contour voxel caches target the current main-volume grid, so they
+        // must be invalidated whenever that reference grid changes.
+        roi.session_caches.voxel = None;
+        roi.finish_job(RoiJobKind::RebuildVoxelCache);
+        roi.mark_cache_dirty(RoiCacheKind::Voxel);
+        roi.job_state.queued = Some(RoiJobKind::RebuildVoxelCache);
+    }
+}
+
+pub fn process_contour_voxel_rebuild_jobs(world: &mut World) {
+    let _ = process_contour_voxel_rebuild_jobs_with_hook(world, |_world, _entity| {}, None);
+}
+
+pub fn process_contour_voxel_rebuild_jobs_with_gpu(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    world: &mut World,
+    resources: &BindGroupResources<'_>,
+    active_roi: Option<hecs::Entity>,
+) {
+    let rebuilt_any = process_contour_voxel_rebuild_jobs_with_hook(
+        world,
+        |_world, _entity| {},
+        Some((device, queue)),
+    );
+    if rebuilt_any {
+        recreate_scene_bind_groups(device, world, resources, active_roi);
+    }
+}
+
+fn process_contour_voxel_rebuild_jobs_with_hook(
+    world: &mut World,
+    mut before_commit: impl FnMut(&mut World, hecs::Entity),
+    upload_context: Option<(&wgpu::Device, &wgpu::Queue)>,
+) -> bool {
+    let mut rebuilt_any = false;
+    let mut rebuild_entities = Vec::new();
+    for (entity, roi) in world.query::<&Roi>().iter() {
+        if !matches!(roi.authoritative_data, RoiAuthoritativeData::Contour(_)) {
+            continue;
+        }
+        if roi.job_state.running.is_none()
+            && roi.job_state.queued == Some(RoiJobKind::RebuildVoxelCache)
+        {
+            rebuild_entities.push(entity);
+        }
+    }
+
+    for entity in rebuild_entities {
+        rebuilt_any |= process_contour_voxel_rebuild_for_entity(
+            world,
+            entity,
+            &mut before_commit,
+            upload_context,
+        );
+    }
+    rebuilt_any
+}
+
+fn process_contour_voxel_rebuild_for_entity(
+    world: &mut World,
+    roi_entity: hecs::Entity,
+    before_commit: &mut impl FnMut(&mut World, hecs::Entity),
+    upload_context: Option<(&wgpu::Device, &wgpu::Queue)>,
+) -> bool {
+    let (authoritative_generation, contour_data) = {
+        let Ok(roi) = world.get::<&Roi>(roi_entity) else {
+            return false;
+        };
+        let RoiAuthoritativeData::Contour(contour_data) = &roi.authoritative_data else {
+            return false;
+        };
+        (
+            roi.dirty_state.generations.authoritative,
+            contour_data.clone(),
+        )
+    };
+
+    if begin_next_job(world, roi_entity) != Some(RoiJobKind::RebuildVoxelCache) {
+        return false;
+    }
+
+    let Some(target_geometry) = main_volume_voxel_geometry(world) else {
+        log::warn!(
+            "Skipping contour voxel rebuild for ROI {:?}: missing main volume geometry",
+            roi_entity
+        );
+        set_runtime_status_message(
+            world,
+            "Contour voxel rebuild failed: main volume geometry is unavailable.".to_string(),
+        );
+        fail_contour_voxel_rebuild(world, roi_entity);
+        return false;
+    };
+
+    let voxel_data = match rasterize_contours_to_voxel_data(&contour_data, target_geometry) {
+        Ok(voxel_data) => voxel_data,
+        Err(err) => {
+            log::warn!(
+                "Skipping contour voxel rebuild for ROI {:?}: rasterization failed: {:?}",
+                roi_entity,
+                err
+            );
+            set_runtime_status_message(
+                world,
+                format!("Contour voxel rebuild failed: rasterization error ({err:?})."),
+            );
+            fail_contour_voxel_rebuild(world, roi_entity);
+            return false;
+        }
+    };
+
+    before_commit(world, roi_entity);
+
+    let is_stale = match world.get::<&Roi>(roi_entity) {
+        Ok(roi) => roi.dirty_state.generations.authoritative != authoritative_generation,
+        Err(_) => return false,
+    };
+    if is_stale {
+        log::info!(
+            "Discarding stale contour voxel rebuild for ROI {:?}: generation changed from {}",
+            roi_entity,
+            authoritative_generation,
+        );
+        requeue_contour_voxel_rebuild(world, roi_entity);
+        return false;
+    }
+
+    let gpu_resources = if let Some((device, queue)) = upload_context {
+        let Some(placeholder_bg) = main_volume_bind_group(world) else {
+            log::warn!(
+                "Skipping contour voxel rebuild GPU upload for ROI {:?}: missing main volume bind group",
+                roi_entity
+            );
+            requeue_contour_voxel_rebuild(world, roi_entity);
+            set_runtime_status_message(
+                world,
+                "Contour voxel rebuild failed: main volume bind-group is unavailable.".to_string(),
+            );
+            fail_contour_voxel_rebuild(world, roi_entity);
+            return false;
+        };
+
+        let (texture, view, sampler) =
+            match crate::io::volume::create_texture_from_voxel_data(device, queue, &voxel_data) {
+                Ok(gpu_tuple) => gpu_tuple,
+                Err(err) => {
+                    log::warn!(
+                        "Skipping contour voxel rebuild for ROI {:?}: GPU upload failed: {}",
+                        roi_entity,
+                        err
+                    );
+                    set_runtime_status_message(
+                        world,
+                        format!("Contour voxel rebuild failed: GPU upload error ({err})."),
+                    );
+                    fail_contour_voxel_rebuild(world, roi_entity);
+                    return false;
+                }
+            };
+
+        Some(GpuVolumeResources {
+            texture,
+            view,
+            sampler,
+            bind_group: placeholder_bg,
+        })
+    } else {
+        None
+    };
+
+    let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) else {
+        return false;
+    };
+
+    roi.session_caches.voxel = Some(VoxelCache {
+        data: voxel_data,
+        gpu_resources,
+    });
+    roi.finish_cache_rebuild(RoiCacheKind::Voxel);
+    drop(roi);
+    set_runtime_status_message(world, "Contour voxel cache rebuilt.".to_string());
+    true
+}
+
+fn requeue_contour_voxel_rebuild(world: &mut World, roi_entity: hecs::Entity) {
+    if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
+        roi.finish_job(RoiJobKind::RebuildVoxelCache);
+        roi.mark_cache_dirty(RoiCacheKind::Voxel);
+        roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
+    }
+}
+
+fn fail_contour_voxel_rebuild(world: &mut World, roi_entity: hecs::Entity) {
+    if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
+        roi.finish_job(RoiJobKind::RebuildVoxelCache);
+        roi.mark_cache_dirty(RoiCacheKind::Voxel);
+    }
+}
+
+fn main_volume_bind_group(world: &World) -> Option<wgpu::BindGroup> {
+    let query = world.query::<&GpuVolumeResources>();
+    let mut with_tag = query.with::<&MainVolumeTag>();
+    with_tag
+        .iter()
+        .next()
+        .map(|(_, res)| res.bind_group.clone())
+}
+
+fn set_runtime_status_message(world: &mut World, message: String) {
+    if let Some((_, gui_state)) = world.query_mut::<&mut GuiState>().into_iter().next() {
+        gui_state.status_message = Some(message);
+    }
+}
+
 pub fn voxel_roi_stats(world: &World, roi_entity: hecs::Entity) -> Option<VoxelRoiStats> {
+    roi_voxel_stats(world, roi_entity)
+}
+
+pub fn roi_voxel_stats(world: &World, roi_entity: hecs::Entity) -> Option<VoxelRoiStats> {
     let roi = world.get::<&Roi>(roi_entity).ok()?;
-    let voxel_data = match &roi.authoritative_data {
-        RoiAuthoritativeData::Voxel(voxel) => voxel,
-        RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh => return None,
+    let voxel_data = match (&roi.primary_representation, &roi.authoritative_data) {
+        (PrimaryRepresentation::Contour, RoiAuthoritativeData::Contour(_)) => {
+            if !roi.is_cache_current(RoiCacheKind::Voxel) {
+                return None;
+            }
+            &roi.voxel_cache()?.data
+        }
+        (_, RoiAuthoritativeData::Contour(_)) => return None,
+        (_, RoiAuthoritativeData::Voxel(voxel)) => voxel,
+        (_, RoiAuthoritativeData::Mesh) => return None,
     };
 
     let occupied_voxels = voxel_data
@@ -438,6 +670,7 @@ fn cache_kind_to_job_kind(kind: RoiCacheKind) -> RoiJobKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::convert::orthogonal_plane_from_volume_uv;
 
     fn spawn_test_roi(world: &mut World) -> hecs::Entity {
         world.spawn((Roi::new_voxel_with_cache(
@@ -515,6 +748,35 @@ mod tests {
         ),))
     }
 
+    fn square_contour_data_for_main_volume(world: &World, half_extent: f32) -> ContourData {
+        let geometry = main_volume_voxel_geometry(world).expect("main volume geometry must exist");
+        let plane = orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry)
+            .expect("axial plane should resolve");
+        ContourData {
+            active_plane_family: PlaneFamily::Axial,
+            slices: vec![ContourSlice {
+                plane,
+                loops: vec![ContourLoop {
+                    points: vec![
+                        ContourPoint {
+                            local_mm: [-half_extent, -half_extent],
+                        },
+                        ContourPoint {
+                            local_mm: [half_extent, -half_extent],
+                        },
+                        ContourPoint {
+                            local_mm: [half_extent, half_extent],
+                        },
+                        ContourPoint {
+                            local_mm: [-half_extent, half_extent],
+                        },
+                    ],
+                    is_closed: true,
+                }],
+            }],
+        }
+    }
+
     #[test]
     fn test_request_cache_rebuild_marks_cache_dirty_and_queues_job() {
         let mut world = World::new();
@@ -578,6 +840,39 @@ mod tests {
 
         assert_eq!(stats.occupied_voxels, 4);
         assert!((stats.volume_mm3 - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_roi_voxel_stats_contour_primary_returns_none_before_rebuild() {
+        let mut world = World::new();
+        let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+        let stats = roi_voxel_stats(&world, entity);
+        assert!(stats.is_none());
+    }
+
+    #[test]
+    fn test_roi_voxel_stats_contour_primary_returns_derived_stats_after_rebuild() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+        let replacement = square_contour_data_for_main_volume(&world, 1.4);
+        replace_contour_data(&mut world, entity, replacement).unwrap();
+        process_contour_voxel_rebuild_jobs(&mut world);
+
+        let expected_occupied = {
+            let roi = world.get::<&Roi>(entity).unwrap();
+            roi.voxel_cache()
+                .expect("expected derived voxel cache")
+                .data
+                .raw_data
+                .iter()
+                .filter(|v| **v != 0)
+                .count() as u64
+        };
+        let stats = roi_voxel_stats(&world, entity).expect("expected derived stats");
+        assert!(expected_occupied > 0);
+        assert_eq!(stats.occupied_voxels, expected_occupied);
+        assert!((stats.volume_mm3 - expected_occupied as f32).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -858,5 +1153,174 @@ mod tests {
             },
         );
         assert_eq!(result, Err(ContourMutationError::MissingRoi));
+    }
+
+    #[test]
+    fn test_process_contour_voxel_rebuild_jobs_builds_current_voxel_cache_for_contour_roi() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+        let replacement = square_contour_data_for_main_volume(&world, 1.4);
+        replace_contour_data(&mut world, entity, replacement.clone()).unwrap();
+
+        process_contour_voxel_rebuild_jobs(&mut world);
+
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert_eq!(roi.contour_data(), Some(&replacement));
+        assert!(roi.is_cache_current(RoiCacheKind::Voxel));
+        assert_eq!(roi.job_state.running, None);
+        assert_eq!(roi.job_state.queued, None);
+        let voxel_cache = roi.voxel_cache().expect("voxel cache should exist");
+        assert_eq!(voxel_cache.data.geometry.dimensions, [4, 4, 4]);
+        assert!(voxel_cache.data.raw_data.iter().any(|v| *v != 0));
+        assert!(voxel_cache.gpu_resources.is_none());
+    }
+
+    #[test]
+    fn test_process_contour_voxel_rebuild_jobs_missing_main_volume_requeues_without_mutation() {
+        let mut world = World::new();
+        let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+        let contour_before = world
+            .get::<&Roi>(entity)
+            .unwrap()
+            .contour_data()
+            .unwrap()
+            .clone();
+        {
+            let mut roi = world.get::<&mut Roi>(entity).unwrap();
+            roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
+        }
+
+        process_contour_voxel_rebuild_jobs(&mut world);
+
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert_eq!(roi.contour_data(), Some(&contour_before));
+        assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
+        assert_eq!(roi.job_state.running, None);
+        assert_eq!(roi.job_state.queued, None);
+    }
+
+    #[test]
+    fn test_process_contour_voxel_rebuild_jobs_discards_stale_generation_results() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+        let replacement = square_contour_data_for_main_volume(&world, 1.2);
+        replace_contour_data(&mut world, entity, replacement).unwrap();
+
+        process_contour_voxel_rebuild_jobs_with_hook(
+            &mut world,
+            |world, hook_entity| {
+                if hook_entity != entity {
+                    return;
+                }
+                let mut roi = world.get::<&mut Roi>(hook_entity).unwrap();
+                if let RoiAuthoritativeData::Contour(contour) = &mut roi.authoritative_data {
+                    contour.slices.clear();
+                }
+                roi.mark_contour_authoritative_changed();
+            },
+            None,
+        );
+
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
+        assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert_eq!(roi.job_state.running, None);
+        assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+    }
+
+    #[test]
+    fn test_process_contour_voxel_rebuild_jobs_clears_running_state_on_success() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+        let replacement = square_contour_data_for_main_volume(&world, 1.0);
+        replace_contour_data(&mut world, entity, replacement).unwrap();
+
+        process_contour_voxel_rebuild_jobs(&mut world);
+
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert_eq!(roi.job_state.running, None);
+        assert_eq!(roi.job_state.queued, None);
+        assert!(roi.is_cache_current(RoiCacheKind::Voxel));
+        assert_eq!(
+            roi.cache_generation(RoiCacheKind::Voxel),
+            roi.dirty_state.generations.authoritative
+        );
+    }
+
+    #[test]
+    fn test_process_contour_voxel_rebuild_jobs_hard_raster_failure_does_not_requeue() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+
+        let invalid_contour = ContourData {
+            active_plane_family: PlaneFamily::Axial,
+            slices: vec![ContourSlice {
+                plane: PlaneDefinition {
+                    family: PlaneFamily::Axial,
+                    origin_mm: [0.0, 0.0, 0.0],
+                    u_axis_mm: [1.0, 0.0, 0.0],
+                    v_axis_mm: [0.0, 1.0, 0.0],
+                    normal_mm: [0.0, 0.0, 0.0],
+                },
+                loops: vec![ContourLoop {
+                    points: vec![
+                        ContourPoint {
+                            local_mm: [0.0, 0.0],
+                        },
+                        ContourPoint {
+                            local_mm: [1.0, 0.0],
+                        },
+                        ContourPoint {
+                            local_mm: [0.0, 1.0],
+                        },
+                    ],
+                    is_closed: true,
+                }],
+            }],
+        };
+        replace_contour_data(&mut world, entity, invalid_contour).unwrap();
+
+        process_contour_voxel_rebuild_jobs(&mut world);
+
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert_eq!(roi.job_state.running, None);
+        assert_eq!(roi.job_state.queued, None);
+    }
+
+    #[test]
+    fn test_invalidate_contour_voxel_caches_for_main_volume_change_dirties_and_queues() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        let contour_entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+        let voxel_entity = spawn_test_roi(&mut world);
+        let replacement = square_contour_data_for_main_volume(&world, 1.2);
+        replace_contour_data(&mut world, contour_entity, replacement).unwrap();
+        process_contour_voxel_rebuild_jobs(&mut world);
+
+        {
+            let contour_roi = world.get::<&Roi>(contour_entity).unwrap();
+            assert!(contour_roi.is_cache_current(RoiCacheKind::Voxel));
+            assert!(contour_roi.voxel_cache().is_some());
+        }
+
+        invalidate_contour_voxel_caches_for_main_volume_change(&mut world);
+
+        let contour_roi = world.get::<&Roi>(contour_entity).unwrap();
+        assert!(contour_roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert!(!contour_roi.is_cache_current(RoiCacheKind::Voxel));
+        assert!(contour_roi.voxel_cache().is_none());
+        assert_eq!(
+            contour_roi.job_state.queued,
+            Some(RoiJobKind::RebuildVoxelCache)
+        );
+
+        let voxel_roi = world.get::<&Roi>(voxel_entity).unwrap();
+        assert_eq!(voxel_roi.job_state.queued, None);
     }
 }

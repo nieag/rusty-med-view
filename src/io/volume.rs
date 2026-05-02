@@ -1,4 +1,4 @@
-use crate::components::VolumeData;
+use crate::components::{VolumeData, VoxelData};
 use crate::nifti_loader::LoadedVolume;
 
 /// Create a 3D texture from float intensity data (R32Float format)
@@ -214,20 +214,36 @@ pub fn create_default_colormap(
     (texture, view)
 }
 
-/// Creates a GPU texture from loaded Labelmap data (R8Uint)
-pub fn create_texture_from_labelmap(
+/// Create an `R8Uint` 3D texture from raw label bytes.
+pub fn create_r8_texture_from_label_bytes(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    label_data: &crate::components::LoadedLabel,
-) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler) {
+    dimensions: [u32; 3],
+    bytes: &[u8],
+    label: &'static str,
+) -> Result<(wgpu::Texture, wgpu::TextureView, wgpu::Sampler), String> {
+    let [width, height, depth] = dimensions;
+    let expected_len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|xy| xy.checked_mul(depth as usize))
+        .ok_or_else(|| format!("{} dimensions overflow texture size", label))?;
+    if bytes.len() != expected_len {
+        return Err(format!(
+            "{} byte count mismatch: expected {}, got {}",
+            label,
+            expected_len,
+            bytes.len()
+        ));
+    }
+
     let size = wgpu::Extent3d {
-        width: label_data.dimensions[0],
-        height: label_data.dimensions[1],
-        depth_or_array_layers: label_data.dimensions[2],
+        width,
+        height,
+        depth_or_array_layers: depth,
     };
 
     let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("NIfTI Labelmap"),
+        label: Some(label),
         size,
         mip_level_count: 1,
         sample_count: 1,
@@ -238,7 +254,6 @@ pub fn create_texture_from_labelmap(
     });
 
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         address_mode_u: wgpu::AddressMode::ClampToEdge,
         address_mode_v: wgpu::AddressMode::ClampToEdge,
@@ -255,16 +270,47 @@ pub fn create_texture_from_labelmap(
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        &label_data.data,
+        bytes,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(label_data.dimensions[0]),
-            rows_per_image: Some(label_data.dimensions[1]),
+            bytes_per_row: Some(width),
+            rows_per_image: Some(height),
         },
         size,
     );
 
-    (texture, view, sampler)
+    Ok((texture, view, sampler))
+}
+
+/// Creates a GPU texture from authoritative or derived voxel data (`R8Uint`).
+pub fn create_texture_from_voxel_data(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    voxel_data: &VoxelData,
+) -> Result<(wgpu::Texture, wgpu::TextureView, wgpu::Sampler), String> {
+    create_r8_texture_from_label_bytes(
+        device,
+        queue,
+        voxel_data.geometry.dimensions,
+        &voxel_data.raw_data,
+        "Voxel Labelmap",
+    )
+}
+
+/// Creates a GPU texture from loaded Labelmap data (R8Uint)
+pub fn create_texture_from_labelmap(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label_data: &crate::components::LoadedLabel,
+) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler) {
+    create_r8_texture_from_label_bytes(
+        device,
+        queue,
+        label_data.dimensions,
+        &label_data.data,
+        "NIfTI Labelmap",
+    )
+    .expect("loaded label bytes must match declared dimensions")
 }
 
 /// Create a blank labelmap of given dimensions initialized to 0.

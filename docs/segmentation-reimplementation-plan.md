@@ -462,7 +462,7 @@ Transform and parity tests:
 ## Implementation Status
 
 Current Phase:
-- `Subplan 6.5: Contour-to-Voxel Conversion V1` (planning/handoff)
+- `Subplan 6.5: Contour-to-Voxel Conversion V1` (post-review hardening complete; Subplan 6.6 planning/handoff pending)
 
 Completed:
 - `1453511` Baseline: remove legacy segmentation stack
@@ -598,9 +598,75 @@ Completed:
   - route oblique annotation/render projection through the shared oblique plane path
   - keep contour drag preview in editor preview state and commit through `replace_contour_data(...)` on release
   - remove stale separate point-move tool naming after unifying contour select/move behavior
+- complete `Subplan 6.5 Step 6.5A` from [docs/subplan-6-5-contour-to-voxel-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-5-contour-to-voxel-handoff.md:1):
+  - add CPU-backed `VoxelCache { data: VoxelData, gpu_resources: Option<GpuVolumeResources> }` in ROI components
+  - change `RoiSessionCaches::voxel` to `Option<VoxelCache>`
+  - keep voxel-authoritative ROI constructors populating session voxel cache data while preserving render behavior
+  - add `Roi` accessors `voxel_cache`, `voxel_gpu_cache`, and keep `renderable_voxel_cache` rendering against current GPU resources only
+  - update bind-group update path to target cached GPU resources through the new cache shape
+  - add Step 6.5A tests for voxel cache data mirroring and no-GPU renderable behavior gating
+  - rerun required verification commands: `cargo fmt --all`, `cargo test -q`, and `cargo check --target wasm32-unknown-unknown -q`
+- complete `Subplan 6.5 Step 6.5B` from [docs/subplan-6-5-contour-to-voxel-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-5-contour-to-voxel-handoff.md:1):
+  - add pure contour raster conversion module at `src/convert/contour_raster.rs`
+  - add `rasterize_contours_to_voxel_data(contour, target_geometry) -> Result<VoxelData, ContourRasterizationError>`
+  - implement deterministic voxel-center evaluation with plane-distance slab tolerance and even-odd multi-loop fill
+  - skip invalid loops (`!is_closed` or fewer than three points) deterministically
+  - keep result geometry equal to the requested target voxel grid
+  - add Step 6.5B unit tests for simple axial square fill, empty contour result behavior, invalid open-loop skip, even-odd loop behavior, and geometry preservation
+  - export the raster API from `src/convert/mod.rs`
+  - rerun required verification commands: `cargo fmt --all`, `cargo test -q`, and `cargo check --target wasm32-unknown-unknown -q`
+- complete `Subplan 6.5 Step 6.5C` from [docs/subplan-6-5-contour-to-voxel-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-5-contour-to-voxel-handoff.md:1):
+  - add runtime contour voxel rebuild executor in `src/app/roi_runtime.rs` that consumes queued contour-primary `RebuildVoxelCache` jobs
+  - select target grid from `main_volume_voxel_geometry(world)` and fail safely with log + requeue when main geometry is unavailable
+  - capture authoritative generation and contour snapshot before conversion, run rasterization via `rasterize_contours_to_voxel_data`, and store derived CPU voxel cache data in `RoiSessionCaches::voxel`
+  - discard stale conversion results when authoritative generation changes before commit, leaving voxel cache dirty and requeued
+  - mark voxel cache current only for non-stale successful rebuilds
+  - run the contour voxel rebuild executor in frame systems to connect runtime queueing to execution without adding async workers
+  - add Step 6.5C tests for successful queued rebuild, missing-main-volume failure behavior, stale-generation discard behavior, and running/queued cleanup on success
+  - rerun required verification commands: `cargo fmt --all`, `cargo test -q`, and `cargo check --target wasm32-unknown-unknown -q`
+- complete `Subplan 6.5 Step 6.5D` from [docs/subplan-6-5-contour-to-voxel-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-5-contour-to-voxel-handoff.md:1):
+  - add reusable `R8Uint` upload helpers in `src/io/volume.rs` for raw label bytes and `VoxelData`
+  - upload contour-derived voxel cache bytes to a 3D texture on successful rebuild and store GPU resources in `VoxelCache.gpu_resources`
+  - keep `renderable_voxel_cache()` gated on current voxel cache state and GPU resource presence
+  - integrate GPU-aware contour rebuild execution into frame prep and recreate scene bind groups after successful contour voxel rebuilds
+  - preserve existing overlay selection/cap behavior by reusing the same overlay/runtime bind-group path
+  - add Step 6.5D accessor/cache-state coverage for current-cache-without-GPU renderability rejection
+  - rerun required verification commands: `cargo fmt --all`, `cargo test -q`, and `cargo check --target wasm32-unknown-unknown -q`
+- complete `Subplan 6.5 Step 6.5E` from [docs/subplan-6-5-contour-to-voxel-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-5-contour-to-voxel-handoff.md:1):
+  - add `roi_voxel_stats(world, roi_entity)` supporting voxel-primary authoritative data and contour-primary current derived voxel caches
+  - keep contour-primary stats returning `None` when no current derived voxel cache exists
+  - add runtime status messages for contour voxel rebuild success and failure paths (missing geometry, rasterization failure, missing bind-group, GPU upload failure)
+  - preserve contour edit queueing behavior through existing `replace_contour_data(...) -> RebuildVoxelCache` flow
+  - keep V1 rebuild processing in the frame/update tick path (synchronous runtime helper; no worker/progress/cancel path added)
+  - add Step 6.5E tests for contour-primary stats `None` before rebuild and non-empty derived stats after rebuild, while preserving voxel-primary stats coverage
+  - rerun required verification commands: `cargo fmt --all`, `cargo test -q`, and `cargo check --target wasm32-unknown-unknown -q`
+- complete `Subplan 6.5 Step 6.5F` from [docs/subplan-6-5-contour-to-voxel-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-5-contour-to-voxel-handoff.md:1):
+  - confirm Steps `6.5A` through `6.5E` are implemented and validated
+  - final verification commands run:
+    - `cargo test -q`
+    - `cargo check --target wasm32-unknown-unknown -q`
+    - `cargo fmt --all`
+    - `cargo clippy --all-targets --all-features -- -D warnings`
+  - manual regression checklist completed:
+    - action: load image NIfTI and voxel label NIfTI; expected: existing image/label behavior preserved; observed: pass
+    - action: create contour ROI, draw closed loop, and wait for runtime rebuild; expected: contour-derived voxel overlay appears via existing voxel overlay path; observed: pass
+    - action: edit contour points after rebuild; expected: contour remains authoritative/editable and derived voxel overlay/stats update after rebuild; observed: pass
+    - action: inspect neighboring slices after single-slice contour draw; expected: V1 slab-tolerance can include adjacent-slice voxels; observed: pass (multi-slice thickness observed, expected by V1 semantics)
+    - action: pan/zoom/slice scroll/3D viewer checks; expected: existing navigation and 3D behavior preserved; observed: pass
+  - deferred limitations explicitly retained for post-6.5 work:
+    - no interpolation between contour slices
+    - no partial-volume calculation
+    - no smoothing/margins/booleans
+    - no mesh/SDF/TSDF integration
+    - no registration/resampling
+    - no import/export
+- complete post-review fixes for Subplan 6.5 runtime safety:
+  - invalidate contour-derived voxel caches when main volume geometry changes and queue contour voxel rebuilds against the new reference grid
+  - stop automatic per-frame hard-failure requeue loops for missing-main-volume/rasterization/upload failures; keep retry behavior event-driven
+  - retain stale-generation requeue behavior for superseded rebuild results
+  - add tests for main-volume-change invalidation and hard-failure no-requeue behavior
+  - rerun verification commands: `cargo fmt --all`, `cargo test -q`, `cargo check --target wasm32-unknown-unknown -q`, and `cargo clippy --all-targets --all-features -- -D warnings`
 
 Pending:
-- review and approve [docs/subplan-6-5-contour-to-voxel-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-5-contour-to-voxel-handoff.md:1)
-- start `Subplan 6.5 Step 6.5A` implementation after handoff is approved
 - define `Subplan 6.6: Voxel-to-Contour Extraction V1` implementer handoff after or alongside Subplan 6.5
 - defer `Subplan 7: Mesh Representation Architecture` until bidirectional voxel/contour conversion exists

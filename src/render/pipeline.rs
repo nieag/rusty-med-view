@@ -286,9 +286,29 @@ fn run_frame_systems(
     scene: &mut SceneState,
     gui: &mut gui::Gui,
     gpu: &GpuState,
+    volume_res: &VolumeResources,
     window: &Arc<Window>,
     event_proxy: winit::event_loop::EventLoopProxy<crate::AppEvent>,
 ) {
+    let active_roi = scene
+        .world
+        .get::<&EditorState>(scene.entities.editor)
+        .ok()
+        .and_then(|editor| editor.active_roi);
+    crate::app::roi_runtime::process_contour_voxel_rebuild_jobs_with_gpu(
+        &gpu.device,
+        &gpu.queue,
+        &mut scene.world,
+        &crate::app::roi_runtime::BindGroupResources {
+            layout: &volume_res.texture_bind_group_layout,
+            uniform_buffer: &volume_res.uniform_buffer,
+            dummy_view: &volume_res.dummy_r8.1,
+            dummy_sampler: &volume_res.dummy_r8.2,
+            default_lut_view: &volume_res.default_lut.1,
+            overlay_buffer: &volume_res.overlay_buffer,
+        },
+        active_roi,
+    );
     systems::sys_handle_mouse_drag(&mut scene.world, &scene.entities);
     gui.prepare(window, &mut scene.world, &scene.entities, event_proxy);
     systems::sys_sync_annotations_to_overlay(&mut scene.world, &scene.entities);
@@ -298,7 +318,6 @@ fn run_frame_systems(
     {
         overlay.rebuild_primitives();
     }
-    let _ = gpu;
 }
 
 /// Write overlay and per-viewport uniforms to GPU buffers. Returns viewport list.
@@ -428,7 +447,7 @@ pub fn render_frame(
         return std::time::Duration::MAX;
     }
 
-    run_frame_systems(scene, gui, gpu, window, event_proxy);
+    run_frame_systems(scene, gui, gpu, volume_res, window, event_proxy);
     let viewports = prepare_uniforms(scene, gpu, volume_res);
 
     let frame = match acquire_surface_texture(&gpu.surface, &gpu.device, &gpu.config) {
