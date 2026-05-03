@@ -43,6 +43,15 @@ pub enum VoxelContourCreationError {
 
 pub const MAX_SIMULTANEOUS_ROI_OVERLAYS: usize = 2;
 
+fn plane_family_label(family: PlaneFamily) -> &'static str {
+    match family {
+        PlaneFamily::Axial => "Axial",
+        PlaneFamily::Coronal => "Coronal",
+        PlaneFamily::Sagittal => "Sagittal",
+        PlaneFamily::Oblique => "Oblique",
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RenderableVoxelOverlay {
     pub entity: hecs::Entity,
@@ -397,7 +406,7 @@ pub fn create_contour_roi_from_voxel_roi(
         .ok()
         .map(|roi| roi.metadata.name.clone())
         .unwrap_or_else(|| "Voxel ROI".to_string());
-    let new_name = format!("{source_name} (Contour)");
+    let new_name = format!("{source_name} ({} Contour)", plane_family_label(family));
 
     let entity = world.spawn((
         Roi::new_contour(RoiId(next_roi_id), new_name, extracted),
@@ -1091,6 +1100,7 @@ mod tests {
             roi.authoritative_data,
             RoiAuthoritativeData::Contour(_)
         ));
+        assert_eq!(roi.metadata.name, "Test (Axial Contour)");
     }
 
     #[test]

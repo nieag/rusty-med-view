@@ -322,10 +322,33 @@ Acceptance:
 - unsupported extraction cases fail safely with status/log messaging
 - contour editing still works on extracted loops
 
+### 6.7. Post-6.6 Consolidation
+
+Purpose:
+- verify that the first bidirectional voxel/contour workflow is coherent on representative data before mesh expansion begins
+- close obvious workflow, status, and responsiveness gaps exposed by real labelmap-driven editing
+
+Implementation note:
+- concrete implementer guidance lives in [docs/subplan-6-7-post-6-6-consolidation-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-7-post-6-6-consolidation-handoff.md:1)
+
+Deliver:
+- manual verification pass for `label load -> contour extraction -> contour edit -> contour-derived voxel rebuild`
+- clarified ROI workflow/status behavior for source voxel ROI vs extracted contour ROI
+- documented findings on contour-derived voxel rebuild responsiveness on extracted data
+- targeted fixups for issues that block reliable day-to-day use of the current voxel/contour workflow
+
+Acceptance:
+- the voxel/contour roundtrip is usable on real datasets without representation ambiguity
+- known limitations are documented explicitly rather than surfacing as silent behavior
+- any remaining issues are either fixed or captured as concrete follow-up work before mesh implementation starts
+
 ### 7. Mesh Representation Architecture
 
 Purpose:
 - define mesh as a representation family with explicit primary-state rules
+
+Implementation note:
+- concrete implementer guidance lives in [docs/subplan-7-mesh-architecture-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-7-mesh-architecture-handoff.md:1)
 
 Deliver:
 - mesh-authoritative ROI state
@@ -400,16 +423,18 @@ Required implementation order:
 8. Contour editing v1
 9. Contour-to-voxel conversion v1
 10. Voxel-to-contour extraction v1
-11. Mesh representation architecture
-12. Mesh deform workflow
-13. Rendering integration layer
-14. Performance and cache strategy
+11. Post-6.6 consolidation
+12. Mesh representation architecture
+13. Mesh deform workflow
+14. Rendering integration layer
+15. Performance and cache strategy
 
 Rules:
 
 - `1-5` must land before contour or mesh feature work
 - contour editing must not begin before contour architecture exists
 - mesh architecture should not begin until the first bidirectional voxel/contour conversion loop exists
+- mesh implementation should be preceded by a short consolidation pass on the voxel/contour workflow
 - mesh deformation must not begin before mesh-primary rules exist
 - performance work must not drive early architecture choices
 
@@ -463,7 +488,8 @@ Transform and parity tests:
 ## Implementation Status
 
 Current Phase:
-- `Subplan 6.6: Voxel-to-Contour Extraction V1` complete (Steps 6.6A-6.6F complete; proceed to Subplan 7 when scheduled)
+- `Subplan 6.7: Post-6.6 Consolidation` complete
+- next checkpoint: `Subplan 7: Mesh Representation Architecture`
 
 Completed:
 - `1453511` Baseline: remove legacy segmentation stack
@@ -727,6 +753,30 @@ Completed:
     - no mesh/SDF/TSDF integration
     - no registration/resampling
     - no import/export
+- begin `Subplan 6.7: Post-6.6 Consolidation`:
+  - review the voxel/contour workflow for post-6.6 usability and readiness-to-mesh concerns
+  - improve extracted contour ROI naming so derived contour ROIs carry explicit family context
+  - improve extraction success messaging so source voxel ROI vs created contour ROI is explicit in the status text
+  - preserve current representation boundaries and runtime behavior while making the workflow easier to interpret
+  - rerun developer-side validation commands before requesting a fresh manual verification pass
+- complete `Subplan 6.7: Post-6.6 Consolidation`:
+  - confirm the updated voxel/contour workflow remains coherent on real data
+  - manual verification completed:
+    - action: load image NIfTI and voxel label NIfTI; expected: baseline image/label behavior preserved; observed: pass
+    - action: extract contours from loaded voxel ROI; expected: the derived contour ROI is created with clear source-vs-derived naming/status messaging; observed: pass
+    - action: edit extracted contour ROI and trigger contour-derived voxel rebuild; expected: contour-authoritative editing remains intact and rebuild behavior stays coherent; observed: pass
+    - action: inspect normal navigation and viewer behavior; expected: 2D navigation and 3D viewing remain stable; observed: pass
+  - developer-side validation rerun successfully:
+    - `cargo fmt --all`
+    - `cargo test -q`
+    - `cargo check --target wasm32-unknown-unknown -q`
+    - `cargo clippy --all-targets --all-features -- -D warnings`
+  - retain deferred scope boundaries:
+    - no mesh implementation yet
+    - no oblique extraction expansion
+    - no smoothing/simplification/interpolation/boolean operations
+    - no registration/resampling
+    - no import/export
 
 Pending:
-- defer `Subplan 7: Mesh Representation Architecture` until bidirectional voxel/contour conversion exists
+- implement `Subplan 7: Mesh Representation Architecture`

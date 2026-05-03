@@ -327,10 +327,22 @@ pub fn draw_sidebar(
                         Ok(new_entity) => {
                             new_active_roi = Some(new_entity);
                             focus_cursor_on_first_extracted_slice(world, entities, new_entity);
+                            let source_name = world
+                                .get::<&Roi>(source_roi)
+                                .ok()
+                                .map(|roi| roi.metadata.name.clone())
+                                .unwrap_or_else(|| "Voxel ROI".to_string());
+                            let new_name = world
+                                .get::<&Roi>(new_entity)
+                                .ok()
+                                .map(|roi| roi.metadata.name.clone())
+                                .unwrap_or_else(|| "Contour ROI".to_string());
                             handlers::set_status_message(
                                 world,
                                 entities,
-                                format!("Created contour ROI from active voxel ROI ({family:?})."),
+                                format!(
+                                    "Extracted contour ROI '{new_name}' from voxel ROI '{source_name}'."
+                                ),
                             );
                         }
                         Err(roi_runtime::VoxelContourCreationError::MissingRoi) => {
