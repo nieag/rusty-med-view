@@ -302,7 +302,7 @@ Purpose:
 - complete the first bidirectional voxel/contour workflow before mesh architecture begins
 
 Implementation note:
-- create a dedicated implementer handoff after Subplan 6.5 is complete or when this phase is pulled forward
+- concrete implementer guidance lives in [docs/subplan-6-6-voxel-to-contour-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-6-voxel-to-contour-handoff.md:1)
 - keep the first implementation deliberately conservative and slice-based
 - do not introduce mesh, SDF/TSDF, smoothing, interpolation, boolean operations, registration/resampling, or import/export in this phase
 
@@ -312,6 +312,7 @@ Deliver:
 - contour loop construction in `PlaneLocalMm` using the shared geometry/plane APIs
 - explicit handling of multiple disconnected components and holes, or a documented V1 limitation
 - UI/runtime action for converting or initializing an editable contour ROI from a loaded voxel labelmap
+  - this action should live directly in the label/ROI workflow so loaded labelmaps become the primary real-data test path for `6.6`
 - tests using synthetic voxel labelmaps so behavior does not depend on external datasets
 
 Acceptance:
@@ -462,7 +463,7 @@ Transform and parity tests:
 ## Implementation Status
 
 Current Phase:
-- `Subplan 6.5: Contour-to-Voxel Conversion V1` (post-review hardening complete; Subplan 6.6 planning/handoff pending)
+- `Subplan 6.6: Voxel-to-Contour Extraction V1` complete (Steps 6.6A-6.6F complete; proceed to Subplan 7 when scheduled)
 
 Completed:
 - `1453511` Baseline: remove legacy segmentation stack
@@ -666,7 +667,66 @@ Completed:
   - retain stale-generation requeue behavior for superseded rebuild results
   - add tests for main-volume-change invalidation and hard-failure no-requeue behavior
   - rerun verification commands: `cargo fmt --all`, `cargo test -q`, `cargo check --target wasm32-unknown-unknown -q`, and `cargo clippy --all-targets --all-features -- -D warnings`
+- complete `Subplan 6.6 Step 6.6A` from [docs/subplan-6-6-voxel-to-contour-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-6-voxel-to-contour-handoff.md:1):
+  - add pure extraction module `src/convert/voxel_contour_extract.rs` with `VoxelContourExtractionError` and
+    `extract_contours_from_voxel_data(voxel_data, family) -> Result<ContourData, ...>`
+  - keep Step 6.6A boundary pure (no ECS, no runtime wiring, no UI integration)
+  - implement deterministic V1 extraction support for axial family and explicit unsupported-family handling for out-of-scope families
+  - extract closed contour loops slice-by-slice from voxel occupancy via deterministic connected-component + boundary edge stitching
+  - populate contour points in `PlaneLocalMm` using ROI-owned `VoxelData.geometry` transform helpers
+  - add Step 6.6A unit tests for empty data, single component, multiple components, active-plane-family propagation, and unsupported family rejection
+  - run verification commands: `cargo test -q`, `cargo check --target wasm32-unknown-unknown -q`, and `cargo fmt --all`
+- complete `Subplan 6.6 Step 6.6B` from [docs/subplan-6-6-voxel-to-contour-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-6-voxel-to-contour-handoff.md:1):
+  - expand pure extraction to orthogonal families (`Axial`, `Coronal`, `Sagittal`) while keeping `Oblique` explicitly unsupported for V1
+  - add reusable orthogonal-family helpers for mask extraction, family-axis indexing, per-slice plane selection, and family-aware voxel/index vertex mapping
+  - preserve deterministic boundary edge stitching and closed-loop construction across all orthogonal families
+  - add Step 6.6B tests for axial/coronal/sagittal extraction geometry plus origin/spacing preservation through extracted contour placement
+  - run verification commands: `cargo test -q`, `cargo check --target wasm32-unknown-unknown -q`, and `cargo fmt --all`
+- complete `Subplan 6.6 Step 6.6C` from [docs/subplan-6-6-voxel-to-contour-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-6-voxel-to-contour-handoff.md:1):
+  - add runtime helper `create_contour_roi_from_voxel_roi(world, source_roi, family) -> Result<hecs::Entity, VoxelContourCreationError>` in `src/app/roi_runtime.rs`
+  - validate source ROI existence and voxel-authoritative type before extraction
+  - clone source `VoxelData` and run pure conversion via `extract_contours_from_voxel_data(...)`
+  - create a new contour-authoritative ROI from extracted `ContourData` while keeping source voxel ROI unchanged
+  - add Step 6.6C tests for unchanged source voxel ROI, new contour-primary ROI creation, extracted contour presence/editability (`ContourData` with loops), invalid source rejection, missing ROI rejection, and extraction-error propagation
+  - run verification commands: `cargo test -q`, `cargo check --target wasm32-unknown-unknown -q`, and `cargo fmt --all`
+- complete `Subplan 6.6 Step 6.6D` from [docs/subplan-6-6-voxel-to-contour-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-6-voxel-to-contour-handoff.md:1):
+  - add explicit sidebar action in `src/gui/sidebar.rs` to extract contours from the active voxel ROI without auto-conversion on label load
+  - place extraction controls directly in the ROI/layer workflow with explicit orthogonal family selection (`Axial`, `Coronal`, `Sagittal`) for immediate post-label-load use
+  - surface clear runtime status messages for:
+    - missing active ROI
+    - non-voxel active ROI
+    - extraction success (new contour ROI created and selected)
+    - extraction failure (propagated extraction/runtime error)
+  - keep existing label loading behavior unchanged and preserve existing contour editing paths after creation by reusing `create_contour_roi_from_voxel_roi(...)`
+  - run verification commands: `cargo test -q`, `cargo check --target wasm32-unknown-unknown -q`, and `cargo fmt --all`
+- complete `Subplan 6.6 Step 6.6E` from [docs/subplan-6-6-voxel-to-contour-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-6-voxel-to-contour-handoff.md:1):
+  - add focused interop regressions in `src/app/roi_runtime.rs` verifying extracted contour ROIs are fully compatible with existing contour edit and `6.5` rebuild flow
+  - verify extracted contour ROIs can be edited through `replace_contour_data(...)`
+  - verify edits on extracted contour ROIs queue `RoiJobKind::RebuildVoxelCache`
+  - verify extracted contour ROIs remain contour-authoritative and valid after one edit + contour-to-voxel rebuild cycle (`process_contour_voxel_rebuild_jobs`)
+  - retain source voxel ROI unchanged and keep extraction/edit/rebuild representation boundaries explicit
+  - run verification commands: `cargo test -q`, `cargo check --target wasm32-unknown-unknown -q`, and `cargo fmt --all`
+- complete `Subplan 6.6 Step 6.6F` from [docs/subplan-6-6-voxel-to-contour-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-6-voxel-to-contour-handoff.md:1):
+  - verify Step `6.6A` through `6.6E` acceptance with geometry-correct extraction baseline retained (no rollback/rework without new failing regression)
+  - complete final verification commands:
+    - `cargo test -q`
+    - `cargo check --target wasm32-unknown-unknown -q`
+    - `cargo fmt --all`
+    - `cargo clippy --all-targets --all-features -- -D warnings`
+  - manual regression checklist completed:
+    - action: load image NIfTI and voxel label NIfTI; expected: baseline image/label behavior preserved; observed: pass
+    - action: extract contours from loaded voxel ROI; expected: new contour ROI is created and stays contour-authoritative while source voxel ROI remains unchanged; observed: pass
+    - action: scroll through extracted slices; expected: extracted contours remain visible across the represented slice range (no early-slice truncation); observed: pass after slice UV/index mapping unification fixes
+    - action: compare extracted contour placement against source voxel label; expected: spatial alignment without half-voxel offset; observed: pass after node-based slice mapping and ROI-geometry render reference fixes
+    - action: edit extracted contour ROI (select/move/insert/delete paths); expected: existing contour editing behavior preserved; observed: pass (validated by runtime interop regressions + manual edit checks)
+    - action: rebuild extracted contour ROI through 6.5 contour-to-voxel path; expected: `RebuildVoxelCache` queue + rebuild cycle succeeds and ROI remains editable; observed: pass
+    - action: pan/zoom/slice scroll/3D view checks; expected: existing navigation and 3D behavior preserved; observed: pass
+  - document deferred V1 limitations retained for post-6.6 work:
+    - no oblique extraction support
+    - no smoothing/simplification/interpolation/boolean operations
+    - no mesh/SDF/TSDF integration
+    - no registration/resampling
+    - no import/export
 
 Pending:
-- define `Subplan 6.6: Voxel-to-Contour Extraction V1` implementer handoff after or alongside Subplan 6.5
 - defer `Subplan 7: Mesh Representation Architecture` until bidirectional voxel/contour conversion exists

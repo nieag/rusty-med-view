@@ -1,7 +1,10 @@
 use crate::app::components::*;
 #[cfg(test)]
 use crate::convert::PlaneDefinition;
-use crate::convert::{rasterize_contours_to_voxel_data, PlaneFamily};
+use crate::convert::{
+    extract_contours_from_voxel_data, rasterize_contours_to_voxel_data, PlaneFamily,
+    VoxelContourExtractionError,
+};
 use hecs::World;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +32,13 @@ pub enum ContourPlaneFamilySwitchError {
 pub enum ContourMutationError {
     MissingRoi,
     NotContourRoi,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoxelContourCreationError {
+    MissingRoi,
+    NotVoxelRoi,
+    ExtractionFailed(VoxelContourExtractionError),
 }
 
 pub const MAX_SIMULTANEOUS_ROI_OVERLAYS: usize = 2;
@@ -361,6 +371,51 @@ pub fn create_empty_contour_roi(
     Ok(entity)
 }
 
+pub fn create_contour_roi_from_voxel_roi(
+    world: &mut World,
+    source_roi: hecs::Entity,
+    family: PlaneFamily,
+) -> Result<hecs::Entity, VoxelContourCreationError> {
+    let source_voxel = {
+        let roi = world
+            .get::<&Roi>(source_roi)
+            .map_err(|_| VoxelContourCreationError::MissingRoi)?;
+        match &roi.authoritative_data {
+            RoiAuthoritativeData::Voxel(voxel) => voxel.clone(),
+            RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh => {
+                return Err(VoxelContourCreationError::NotVoxelRoi);
+            }
+        }
+    };
+
+    let extracted = extract_contours_from_voxel_data(&source_voxel, family)
+        .map_err(VoxelContourCreationError::ExtractionFailed)?;
+
+    let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
+    let source_name = world
+        .get::<&Roi>(source_roi)
+        .ok()
+        .map(|roi| roi.metadata.name.clone())
+        .unwrap_or_else(|| "Voxel ROI".to_string());
+    let new_name = format!("{source_name} (Contour)");
+
+    let entity = world.spawn((
+        Roi::new_contour(RoiId(next_roi_id), new_name, extracted),
+        LayerSettings { opacity: 0.5 },
+        RoiTag,
+    ));
+    if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
+        // Preserve source voxel geometry as the initial contour reference frame.
+        // This keeps extracted contour projection/edit mapping aligned before any
+        // contour->voxel rebuild retargets caches to main-volume geometry.
+        roi.session_caches.voxel = Some(VoxelCache {
+            data: source_voxel,
+            gpu_resources: None,
+        });
+    }
+    Ok(entity)
+}
+
 pub fn cache_status(
     world: &World,
     roi_entity: hecs::Entity,
@@ -687,6 +742,23 @@ mod tests {
         ),))
     }
 
+    fn spawn_sparse_voxel_roi(world: &mut World) -> hecs::Entity {
+        let mut raw = vec![0_u8; 64];
+        raw[(2 * 4 + 1) * 4 + 1] = 1;
+        world.spawn((Roi::new_voxel_with_cache(
+            RoiId(2),
+            "Sparse".to_string(),
+            VoxelGeometry {
+                dimensions: [4, 4, 4],
+                spacing: [1.0, 1.0, 1.0],
+                origin: [0.0, 0.0, 0.0],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
+            raw,
+            None,
+        ),))
+    }
+
     fn spawn_main_volume(world: &mut World, spacing: [f32; 3], origin: [f32; 3]) {
         world.spawn((
             VolumeData {
@@ -980,6 +1052,201 @@ mod tests {
 
         let editor_state = world.get::<&EditorState>(editor).unwrap();
         assert_eq!(editor_state.active_roi, Some(entity));
+    }
+
+    #[test]
+    fn test_create_contour_roi_from_voxel_roi_keeps_source_unchanged() {
+        let mut world = World::new();
+        let source = spawn_test_roi(&mut world);
+        let source_before = {
+            let roi = world.get::<&Roi>(source).unwrap();
+            let RoiAuthoritativeData::Voxel(voxel) = &roi.authoritative_data else {
+                panic!("expected voxel roi");
+            };
+            voxel.clone()
+        };
+
+        let _new = create_contour_roi_from_voxel_roi(&mut world, source, PlaneFamily::Axial)
+            .expect("extraction should create contour roi");
+
+        let roi = world.get::<&Roi>(source).unwrap();
+        let RoiAuthoritativeData::Voxel(voxel_after) = &roi.authoritative_data else {
+            panic!("source should remain voxel authoritative");
+        };
+        assert_eq!(*voxel_after, source_before);
+        assert_eq!(roi.primary_representation, PrimaryRepresentation::Voxel);
+    }
+
+    #[test]
+    fn test_create_contour_roi_from_voxel_roi_returns_contour_primary_roi() {
+        let mut world = World::new();
+        let source = spawn_test_roi(&mut world);
+
+        let created = create_contour_roi_from_voxel_roi(&mut world, source, PlaneFamily::Axial)
+            .expect("extraction should create contour roi");
+
+        let roi = world.get::<&Roi>(created).unwrap();
+        assert_eq!(roi.primary_representation, PrimaryRepresentation::Contour);
+        assert!(matches!(
+            roi.authoritative_data,
+            RoiAuthoritativeData::Contour(_)
+        ));
+    }
+
+    #[test]
+    fn test_create_contour_roi_from_voxel_roi_populates_extractable_contours() {
+        let mut world = World::new();
+        let source = spawn_sparse_voxel_roi(&mut world);
+
+        let created = create_contour_roi_from_voxel_roi(&mut world, source, PlaneFamily::Axial)
+            .expect("extraction should create contour roi");
+
+        let roi = world.get::<&Roi>(created).unwrap();
+        let contour_data = roi.contour_data().expect("expected contour data");
+        assert_eq!(contour_data.active_plane_family, PlaneFamily::Axial);
+        assert!(contour_data.has_loops());
+        let seeded_geometry = roi
+            .voxel_cache()
+            .expect("expected source geometry cache on extracted contour roi")
+            .data
+            .geometry;
+        let source_geometry = world
+            .get::<&Roi>(source)
+            .ok()
+            .and_then(|source_roi| source_roi.voxel_cache().map(|cache| cache.data.geometry))
+            .expect("expected source geometry");
+        assert_eq!(seeded_geometry, source_geometry);
+    }
+
+    #[test]
+    fn test_create_contour_roi_from_voxel_roi_rejects_non_voxel_source() {
+        let mut world = World::new();
+        let source = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+        let result = create_contour_roi_from_voxel_roi(&mut world, source, PlaneFamily::Axial);
+        assert_eq!(result, Err(VoxelContourCreationError::NotVoxelRoi));
+    }
+
+    #[test]
+    fn test_create_contour_roi_from_voxel_roi_rejects_missing_source() {
+        let mut world = World::new();
+        let result = create_contour_roi_from_voxel_roi(
+            &mut world,
+            hecs::Entity::DANGLING,
+            PlaneFamily::Axial,
+        );
+        assert_eq!(result, Err(VoxelContourCreationError::MissingRoi));
+    }
+
+    #[test]
+    fn test_create_contour_roi_from_voxel_roi_surfaces_extraction_errors() {
+        let mut world = World::new();
+        let source = spawn_test_roi(&mut world);
+        let result = create_contour_roi_from_voxel_roi(&mut world, source, PlaneFamily::Oblique);
+        assert_eq!(
+            result,
+            Err(VoxelContourCreationError::ExtractionFailed(
+                VoxelContourExtractionError::UnsupportedPlaneFamily {
+                    family: PlaneFamily::Oblique
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn test_extracted_contour_roi_supports_replace_contour_data_edit_path() {
+        let mut world = World::new();
+        let source = spawn_sparse_voxel_roi(&mut world);
+        let extracted = create_contour_roi_from_voxel_roi(&mut world, source, PlaneFamily::Axial)
+            .expect("expected extracted contour roi");
+
+        let replacement = ContourData {
+            active_plane_family: PlaneFamily::Axial,
+            slices: vec![ContourSlice {
+                plane: test_plane_definition(PlaneFamily::Axial),
+                loops: vec![ContourLoop {
+                    points: vec![
+                        ContourPoint {
+                            local_mm: [0.0, 0.0],
+                        },
+                        ContourPoint {
+                            local_mm: [2.0, 0.0],
+                        },
+                        ContourPoint {
+                            local_mm: [1.0, 2.0],
+                        },
+                    ],
+                    is_closed: true,
+                }],
+            }],
+        };
+
+        let result = replace_contour_data(&mut world, extracted, replacement.clone());
+        assert_eq!(result, Ok(()));
+        let roi = world.get::<&Roi>(extracted).unwrap();
+        assert_eq!(roi.contour_data(), Some(&replacement));
+    }
+
+    #[test]
+    fn test_extracted_contour_roi_edit_queues_rebuild_voxel_cache_job() {
+        let mut world = World::new();
+        let source = spawn_sparse_voxel_roi(&mut world);
+        let extracted = create_contour_roi_from_voxel_roi(&mut world, source, PlaneFamily::Axial)
+            .expect("expected extracted contour roi");
+
+        let replacement = ContourData {
+            active_plane_family: PlaneFamily::Axial,
+            slices: vec![ContourSlice {
+                plane: test_plane_definition(PlaneFamily::Axial),
+                loops: vec![ContourLoop {
+                    points: vec![
+                        ContourPoint {
+                            local_mm: [0.0, 0.0],
+                        },
+                        ContourPoint {
+                            local_mm: [1.5, 0.0],
+                        },
+                        ContourPoint {
+                            local_mm: [0.0, 1.5],
+                        },
+                    ],
+                    is_closed: true,
+                }],
+            }],
+        };
+
+        replace_contour_data(&mut world, extracted, replacement).expect("replace should succeed");
+        let roi = world.get::<&Roi>(extracted).unwrap();
+        assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+        assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
+    }
+
+    #[test]
+    fn test_extracted_contour_roi_remains_valid_after_edit_and_rebuild_cycle() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        let source = spawn_sparse_voxel_roi(&mut world);
+        let extracted = create_contour_roi_from_voxel_roi(&mut world, source, PlaneFamily::Axial)
+            .expect("expected extracted contour roi");
+
+        let replacement = square_contour_data_for_main_volume(&world, 1.2);
+        replace_contour_data(&mut world, extracted, replacement.clone())
+            .expect("replace should succeed");
+        process_contour_voxel_rebuild_jobs(&mut world);
+
+        let roi = world.get::<&Roi>(extracted).unwrap();
+        assert_eq!(roi.primary_representation, PrimaryRepresentation::Contour);
+        assert_eq!(roi.contour_data(), Some(&replacement));
+        assert!(roi.is_cache_current(RoiCacheKind::Voxel));
+        assert!(roi.voxel_cache().is_some());
+        assert!(roi
+            .voxel_cache()
+            .expect("expected derived voxel cache")
+            .data
+            .raw_data
+            .iter()
+            .any(|v| *v != 0));
+        assert_eq!(roi.job_state.running, None);
+        assert_eq!(roi.job_state.queued, None);
     }
 
     #[test]

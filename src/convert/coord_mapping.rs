@@ -1,8 +1,8 @@
 //! Shared coordinate mapping helpers for slice/view alignment.
 //!
 //! Conventions:
-//! - Slice index from cursor UV uses center-based cursor semantics.
-//! - Slice center UV is `(slice + 0.5) / dim`.
+//! - Slice index from cursor UV uses node-based cursor semantics.
+//! - Slice node UV is `slice / (dim - 1)` for `dim > 1`.
 //! - Grid-node UV is `idx / (dim - 1)` for `dim > 1`.
 
 /// Compute clamped slice index from cursor UV in `[0,1]`.
@@ -10,18 +10,20 @@ pub fn slice_index_from_cursor_uv(cursor_uv: f32, dim: u32) -> i32 {
     if dim == 0 {
         return 0;
     }
-    // Match texel-center semantics: uv = (i + 0.5)/dim maps to slice i.
-    let idx = (cursor_uv * dim as f32 - 0.5).round() as i32;
+    if dim == 1 {
+        return 0;
+    }
+    let idx = (cursor_uv * (dim - 1) as f32).round() as i32;
     idx.clamp(0, dim as i32 - 1)
 }
 
-/// Center UV for a slice index.
+/// Node UV for a slice index.
 pub fn slice_center_uv(slice_index: i32, dim: u32) -> f32 {
-    if dim == 0 {
-        return 0.5;
+    if dim <= 1 {
+        return 0.0;
     }
     let clamped = slice_index.clamp(0, dim as i32 - 1) as f32;
-    (clamped + 0.5) / dim as f32
+    clamped / (dim - 1) as f32
 }
 
 /// Convert a grid node index to normalized UV in `[0,1]`.

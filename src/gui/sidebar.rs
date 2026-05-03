@@ -1,6 +1,7 @@
 use crate::components::*;
 use crate::convert::{
-    oblique_plane_from_view_rotation, orthogonal_plane_from_volume_uv, PlaneFamily,
+    oblique_plane_from_view_rotation, orthogonal_plane_from_volume_uv, world_mm_to_volume_uv,
+    PlaneFamily,
 };
 use crate::AppEvent;
 use hecs::World;
@@ -104,6 +105,60 @@ fn insert_test_contour_loop(
     )?;
 
     Ok(())
+}
+
+fn focus_cursor_on_first_extracted_slice(
+    world: &mut World,
+    entities: &AppEntities,
+    roi_entity: hecs::Entity,
+) {
+    let Some((family, origin_mm, roi_geometry)) = (|| {
+        let roi = world.get::<&Roi>(roi_entity).ok()?;
+        let contour = roi.contour_data()?;
+        let slice = contour.slices.first()?;
+        let geometry = roi.voxel_cache().map(|cache| cache.data.geometry)?;
+        Some((contour.active_plane_family, slice.plane.origin_mm, geometry))
+    })() else {
+        let Some((family, origin_mm, fallback_geometry)) = (|| {
+            let roi = world.get::<&Roi>(roi_entity).ok()?;
+            let contour = roi.contour_data()?;
+            let slice = contour.slices.first()?;
+            let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
+            let (_, volume) = query.iter().next()?;
+            Some((
+                contour.active_plane_family,
+                slice.plane.origin_mm,
+                VoxelGeometry {
+                    dimensions: volume.dimensions,
+                    spacing: volume.spacing,
+                    origin: volume.origin,
+                    orientation: volume.orientation,
+                },
+            ))
+        })() else {
+            return;
+        };
+        let slice_uv = world_mm_to_volume_uv(origin_mm, fallback_geometry);
+        if let Ok(mut cursor) = world.get::<&mut Transform>(entities.cursor) {
+            match family {
+                PlaneFamily::Axial => cursor.position[2] = slice_uv[2],
+                PlaneFamily::Coronal => cursor.position[1] = slice_uv[1],
+                PlaneFamily::Sagittal => cursor.position[0] = slice_uv[0],
+                PlaneFamily::Oblique => {}
+            }
+        }
+        return;
+    };
+
+    let slice_uv = world_mm_to_volume_uv(origin_mm, roi_geometry);
+    if let Ok(mut cursor) = world.get::<&mut Transform>(entities.cursor) {
+        match family {
+            PlaneFamily::Axial => cursor.position[2] = slice_uv[2],
+            PlaneFamily::Coronal => cursor.position[1] = slice_uv[1],
+            PlaneFamily::Sagittal => cursor.position[0] = slice_uv[0],
+            PlaneFamily::Oblique => {}
+        }
+    }
 }
 
 pub fn draw_sidebar(
@@ -239,6 +294,67 @@ pub fn draw_sidebar(
                         }
                         Err(err) => {
                             handlers::set_status_message(world, entities, err);
+                        }
+                    }
+                }
+            }
+        });
+
+        ui.horizontal(|ui| {
+            ui.label("Extract from active voxel ROI:");
+            for (label, family) in [
+                ("Axial", PlaneFamily::Axial),
+                ("Coronal", PlaneFamily::Coronal),
+                ("Sagittal", PlaneFamily::Sagittal),
+            ] {
+                if ui.small_button(label).clicked() {
+                    let active_roi = world
+                        .get::<&EditorState>(entities.editor)
+                        .ok()
+                        .and_then(|editor| editor.active_roi);
+                    let Some(source_roi) = active_roi else {
+                        handlers::set_status_message(
+                            world,
+                            entities,
+                            "Cannot extract contours: no active ROI selected.".to_string(),
+                        );
+                        continue;
+                    };
+
+                    match roi_runtime::create_contour_roi_from_voxel_roi(
+                        world, source_roi, family,
+                    ) {
+                        Ok(new_entity) => {
+                            new_active_roi = Some(new_entity);
+                            focus_cursor_on_first_extracted_slice(world, entities, new_entity);
+                            handlers::set_status_message(
+                                world,
+                                entities,
+                                format!("Created contour ROI from active voxel ROI ({family:?})."),
+                            );
+                        }
+                        Err(roi_runtime::VoxelContourCreationError::MissingRoi) => {
+                            handlers::set_status_message(
+                                world,
+                                entities,
+                                "Cannot extract contours: active ROI is missing from the scene."
+                                    .to_string(),
+                            );
+                        }
+                        Err(roi_runtime::VoxelContourCreationError::NotVoxelRoi) => {
+                            handlers::set_status_message(
+                                world,
+                                entities,
+                                "Cannot extract contours: active ROI is not voxel-primary."
+                                    .to_string(),
+                            );
+                        }
+                        Err(roi_runtime::VoxelContourCreationError::ExtractionFailed(err)) => {
+                            handlers::set_status_message(
+                                world,
+                                entities,
+                                format!("Contour extraction failed: {err:?}."),
+                            );
                         }
                     }
                 }

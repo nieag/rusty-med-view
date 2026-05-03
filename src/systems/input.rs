@@ -1,6 +1,6 @@
 // src/systems/input.rs
 use crate::components::*;
-use crate::convert::slice_index_from_cursor_uv;
+use crate::convert::{slice_center_uv, slice_index_from_cursor_uv};
 use crate::systems::picking::get_voxel_at_mouse;
 use glam::{Quat, Vec3};
 use hecs::World;
@@ -320,7 +320,7 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
                     let current_uv = transform.position[axis];
                     let current_voxel = slice_index_from_cursor_uv(current_uv, dim);
                     let new_voxel = (current_voxel + steps_to_move).clamp(0, dim as i32 - 1);
-                    transform.position[axis] = (new_voxel as f32 + 0.5) / dim as f32;
+                    transform.position[axis] = slice_center_uv(new_voxel, dim);
                 }
             }
         }

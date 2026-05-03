@@ -327,17 +327,21 @@ pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> Con
         return ContourRenderData::default();
     };
 
-    let geometry = {
-        let mut volume_query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
-        let Some((_, volume)) = volume_query.iter().next() else {
-            return ContourRenderData::default();
-        };
-        VoxelGeometry {
-            dimensions: volume.dimensions,
-            spacing: volume.spacing,
-            origin: volume.origin,
-            orientation: volume.orientation,
-        }
+    let geometry = roi
+        .voxel_cache()
+        .map(|cache| cache.data.geometry)
+        .or_else(|| {
+            let mut volume_query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
+            let (_, volume) = volume_query.iter().next()?;
+            Some(VoxelGeometry {
+                dimensions: volume.dimensions,
+                spacing: volume.spacing,
+                origin: volume.origin,
+                orientation: volume.orientation,
+            })
+        });
+    let Some(geometry) = geometry else {
+        return ContourRenderData::default();
     };
 
     let cursor_uv = world
@@ -746,6 +750,96 @@ mod tests {
                 }],
             },
         );
+        let roi_entity = world.spawn((roi, LayerSettings { opacity: 1.0 }, RoiTag));
+        world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(roi_entity);
+
+        let entities = AppEntities {
+            input: hecs::Entity::DANGLING,
+            editor,
+            gui_state: hecs::Entity::DANGLING,
+            volume_windowing: hecs::Entity::DANGLING,
+            annotations: hecs::Entity::DANGLING,
+            overlay: hecs::Entity::DANGLING,
+            protocol: hecs::Entity::DANGLING,
+            cursor,
+            window_settings,
+        };
+
+        let data = prepare_contour_render_data(&world, &entities);
+        assert!(!data.vertices.is_empty());
+    }
+
+    #[test]
+    fn test_prepare_contour_render_data_uses_roi_geometry_when_main_volume_missing() {
+        let mut world = World::new();
+        let cursor = world.spawn((Transform {
+            position: [0.5, 0.5, 0.5],
+        },));
+        let window_settings = world.spawn((WindowSettings {
+            width: 800,
+            height: 600,
+            viewport_rect: [0.0, 0.0, 800.0, 600.0],
+        },));
+        let editor = world.spawn((EditorState {
+            active_roi: None,
+            active_tool: EditorTool::Navigation,
+            contour_draft: None,
+            contour_selection: None,
+            contour_move_preview: None,
+        },));
+        world.spawn((
+            Viewport {
+                mode: ViewMode::Axial,
+                rect: [0.0, 0.0, 800.0, 600.0],
+                uniform_index: 0,
+            },
+            ViewportState {
+                zoom: 1.0,
+                pan: [0.0, 0.0],
+                pivot: [0.5, 0.5],
+                user_rotation: [0.0, 0.0, 0.0, 1.0],
+            },
+        ));
+
+        let geometry = VoxelGeometry {
+            dimensions: [32, 32, 32],
+            spacing: [1.5, 0.75, 2.0],
+            origin: [12.0, -8.0, 4.0],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+        let plane =
+            orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry).unwrap();
+        let mut roi = Roi::new_contour(
+            RoiId(2),
+            "Contour".to_string(),
+            ContourData {
+                active_plane_family: PlaneFamily::Axial,
+                slices: vec![ContourSlice {
+                    plane,
+                    loops: vec![ContourLoop {
+                        points: vec![
+                            ContourPoint {
+                                local_mm: [0.0, 0.0],
+                            },
+                            ContourPoint {
+                                local_mm: [3.0, 0.0],
+                            },
+                            ContourPoint {
+                                local_mm: [3.0, 3.0],
+                            },
+                        ],
+                        is_closed: true,
+                    }],
+                }],
+            },
+        );
+        roi.session_caches.voxel = Some(VoxelCache {
+            data: VoxelData {
+                geometry,
+                raw_data: vec![0; (32 * 32 * 32) as usize],
+            },
+            gpu_resources: None,
+        });
         let roi_entity = world.spawn((roi, LayerSettings { opacity: 1.0 }, RoiTag));
         world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(roi_entity);
 
