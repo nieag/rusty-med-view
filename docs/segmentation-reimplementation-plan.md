@@ -489,7 +489,12 @@ Transform and parity tests:
 
 Current Phase:
 - `Subplan 6.7: Post-6.6 Consolidation` complete
-- next checkpoint: `Subplan 7: Mesh Representation Architecture`
+- `Subplan 7 Step 7A: Mesh core types and ROI state` complete
+- `Subplan 7 Step 7B: Mesh cache slots and invalidation rules` complete
+- `Subplan 7 Step 7C: Runtime contracts for mesh-primary ROIs` complete
+- `Subplan 7 Step 7D: Explicit conversion contract scaffolding` complete
+- `Subplan 7 Step 7E: Closeout` complete
+- next checkpoint: `Subplan 8` mesh workflow implementation
 
 Completed:
 - `1453511` Baseline: remove legacy segmentation stack
@@ -777,6 +782,46 @@ Completed:
     - no smoothing/simplification/interpolation/boolean operations
     - no registration/resampling
     - no import/export
+- complete `Subplan 7 Step 7A` from [docs/subplan-7-mesh-architecture-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-7-mesh-architecture-handoff.md:1):
+  - add mesh core model types in ROI components: `MeshVertex`, `MeshFace`, and `MeshData`
+  - extend authoritative ROI state to explicit mesh data via `RoiAuthoritativeData::Mesh(MeshData)`
+  - add mesh-primary constructor `Roi::new_mesh(...)`
+  - add authoritative mesh accessor `Roi::mesh_data(&self)`
+  - add focused Step 7A tests for mesh-primary ROI initialization, mesh accessor success, and non-mesh accessor rejection
+- complete `Subplan 7 Step 7B` from [docs/subplan-7-mesh-architecture-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-7-mesh-architecture-handoff.md:1):
+  - define mesh cache storage shape in ROI session caches as `MeshCache { data: MeshData }`
+  - add mesh cache accessors on `Roi` (`mesh_cache`, `mesh_cache_mut`)
+  - add mesh-authoritative invalidation helper `mark_mesh_authoritative_changed(...)`
+  - enforce mesh-primary invalidation rules: mesh-authoritative edits dirty voxel + contour caches always, and dirty mesh cache only when a mesh derived cache exists
+  - add Step 7B tests for mesh-authoritative dirty/current transitions and mesh cache generation/current behavior after mesh-cache rebuild completion
+- complete `Subplan 7 Step 7C` from [docs/subplan-7-mesh-architecture-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-7-mesh-architecture-handoff.md:1):
+  - add runtime mesh-primary ROI creation helper `create_empty_mesh_roi(...)` with active-ROI selection behavior aligned to contour ROI creation flow
+  - add runtime mesh-authoritative mutation helper `replace_mesh_data(...)` with explicit `MissingRoi`/`NotMeshRoi` error contracts
+  - route mesh-authoritative mutation through ROI invalidation contracts via `mark_mesh_authoritative_changed(...)` without queueing unimplemented mesh-derived rebuild jobs
+  - add Step 7C tests for mesh ROI creation, mutation success, and non-mesh mutation rejection
+- complete `Subplan 7 Step 7D` from [docs/subplan-7-mesh-architecture-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-7-mesh-architecture-handoff.md:1):
+  - add explicit runtime placeholder contracts for mesh-derived rebuild requests:
+    - `request_rebuild_voxel_cache_from_mesh(...)`
+    - `request_rebuild_contour_cache_from_mesh(...)`
+  - enforce safe unsupported behavior with explicit `MeshDerivedRebuildError::NotImplemented` instead of implicit success
+  - keep placeholder request semantics side-effect-free when returning `NotImplemented` (no cache dirtying, no queued jobs)
+  - add Step 7D tests for placeholder behavior plus missing/non-mesh rejection
+- complete `Subplan 7 Step 7E` from [docs/subplan-7-mesh-architecture-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-7-mesh-architecture-handoff.md:1):
+  - rerun validation commands:
+    - `cargo test -q`
+    - `cargo check --target wasm32-unknown-unknown -q`
+    - `cargo fmt --all`
+    - `cargo clippy --all-targets --all-features -- -D warnings`
+  - confirm architecture-vs-algorithm boundary remains explicit:
+    - no mesh generation algorithm implementation
+    - no mesh editing/deformation workflow
+    - no renderer expansion for mesh visualization paths
+    - no SDF/TSDF, smoothing/interpolation, import/export, or registration/resampling work
+- complete post-review runtime-contract honesty fixes for Subplan 7:
+  - stop queueing unexecutable mesh-derived rebuild jobs from `replace_mesh_data(...)`
+  - make mesh rebuild request placeholders (`request_rebuild_voxel_cache_from_mesh`, `request_rebuild_contour_cache_from_mesh`) explicitly side-effect-free on `NotImplemented`
+  - align mesh mutation/runtime semantics so mesh edits invalidate derived cache state without advertising executable mesh job processing that does not yet exist
+  - add/adjust runtime tests to lock side-effect-free `NotImplemented` behavior and no-queued-job mesh mutation behavior
 
 Pending:
-- implement `Subplan 7: Mesh Representation Architecture`
+- implement `Subplan 8` mesh workflows on top of the established Subplan 7 architecture contracts

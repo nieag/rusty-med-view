@@ -35,10 +35,23 @@ pub enum ContourMutationError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeshMutationError {
+    MissingRoi,
+    NotMeshRoi,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoxelContourCreationError {
     MissingRoi,
     NotVoxelRoi,
     ExtractionFailed(VoxelContourExtractionError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeshDerivedRebuildError {
+    MissingRoi,
+    NotMeshRoi,
+    NotImplemented,
 }
 
 pub const MAX_SIMULTANEOUS_ROI_OVERLAYS: usize = 2;
@@ -203,7 +216,7 @@ pub fn set_active_contour_plane_family(
 
     let contour = match &mut roi.authoritative_data {
         RoiAuthoritativeData::Contour(contour) => contour,
-        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Mesh => {
+        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Mesh(_) => {
             return Err(ContourPlaneFamilySwitchError::NotContourRoi);
         }
     };
@@ -232,7 +245,7 @@ pub fn replace_contour_data(
 
     match &mut roi.authoritative_data {
         RoiAuthoritativeData::Contour(existing) => *existing = contour_data,
-        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Mesh => {
+        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Mesh(_) => {
             return Err(ContourMutationError::NotContourRoi);
         }
     }
@@ -380,6 +393,82 @@ pub fn create_empty_contour_roi(
     Ok(entity)
 }
 
+pub fn create_empty_mesh_roi(
+    world: &mut World,
+    editor_entity: hecs::Entity,
+) -> Result<hecs::Entity, String> {
+    if world.get::<&EditorState>(editor_entity).is_err() {
+        return Err("Missing editor state; mesh ROI was not created.".to_string());
+    }
+
+    let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
+    let roi_name = format!("Mesh ROI {}", next_roi_id);
+    let entity = world.spawn((
+        Roi::new_mesh(
+            RoiId(next_roi_id),
+            roi_name,
+            MeshData {
+                vertices: Vec::new(),
+                faces: Vec::new(),
+            },
+        ),
+        LayerSettings { opacity: 0.5 },
+        RoiTag,
+    ));
+
+    let mut editor = world
+        .get::<&mut EditorState>(editor_entity)
+        .map_err(|_| "Missing editor state; mesh ROI was not created.".to_string())?;
+    editor.active_roi = Some(entity);
+    Ok(entity)
+}
+
+pub fn replace_mesh_data(
+    world: &mut World,
+    roi_entity: hecs::Entity,
+    mesh_data: MeshData,
+) -> Result<(), MeshMutationError> {
+    let mut roi = world
+        .get::<&mut Roi>(roi_entity)
+        .map_err(|_| MeshMutationError::MissingRoi)?;
+
+    match &mut roi.authoritative_data {
+        RoiAuthoritativeData::Mesh(existing) => *existing = mesh_data,
+        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Contour(_) => {
+            return Err(MeshMutationError::NotMeshRoi);
+        }
+    }
+
+    roi.mark_mesh_authoritative_changed();
+    Ok(())
+}
+
+pub fn request_rebuild_voxel_cache_from_mesh(
+    world: &mut World,
+    roi_entity: hecs::Entity,
+) -> Result<(), MeshDerivedRebuildError> {
+    let roi = world
+        .get::<&mut Roi>(roi_entity)
+        .map_err(|_| MeshDerivedRebuildError::MissingRoi)?;
+    if !matches!(&roi.authoritative_data, RoiAuthoritativeData::Mesh(_)) {
+        return Err(MeshDerivedRebuildError::NotMeshRoi);
+    }
+    Err(MeshDerivedRebuildError::NotImplemented)
+}
+
+pub fn request_rebuild_contour_cache_from_mesh(
+    world: &mut World,
+    roi_entity: hecs::Entity,
+) -> Result<(), MeshDerivedRebuildError> {
+    let roi = world
+        .get::<&mut Roi>(roi_entity)
+        .map_err(|_| MeshDerivedRebuildError::MissingRoi)?;
+    if !matches!(&roi.authoritative_data, RoiAuthoritativeData::Mesh(_)) {
+        return Err(MeshDerivedRebuildError::NotMeshRoi);
+    }
+    Err(MeshDerivedRebuildError::NotImplemented)
+}
+
 pub fn create_contour_roi_from_voxel_roi(
     world: &mut World,
     source_roi: hecs::Entity,
@@ -391,7 +480,7 @@ pub fn create_contour_roi_from_voxel_roi(
             .map_err(|_| VoxelContourCreationError::MissingRoi)?;
         match &roi.authoritative_data {
             RoiAuthoritativeData::Voxel(voxel) => voxel.clone(),
-            RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh => {
+            RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh(_) => {
                 return Err(VoxelContourCreationError::NotVoxelRoi);
             }
         }
@@ -704,7 +793,7 @@ pub fn roi_voxel_stats(world: &World, roi_entity: hecs::Entity) -> Option<VoxelR
         }
         (_, RoiAuthoritativeData::Contour(_)) => return None,
         (_, RoiAuthoritativeData::Voxel(voxel)) => voxel,
-        (_, RoiAuthoritativeData::Mesh) => return None,
+        (_, RoiAuthoritativeData::Mesh(_)) => return None,
     };
 
     let occupied_voxels = voxel_data
@@ -854,6 +943,25 @@ mod tests {
                     ],
                     is_closed: true,
                 }],
+            }],
+        }
+    }
+
+    fn simple_mesh_data() -> MeshData {
+        MeshData {
+            vertices: vec![
+                MeshVertex {
+                    world_mm: [0.0, 0.0, 0.0],
+                },
+                MeshVertex {
+                    world_mm: [1.0, 0.0, 0.0],
+                },
+                MeshVertex {
+                    world_mm: [0.0, 1.0, 0.0],
+                },
+            ],
+            faces: vec![MeshFace {
+                vertex_indices: [0, 1, 2],
             }],
         }
     }
@@ -1061,6 +1169,120 @@ mod tests {
 
         let editor_state = world.get::<&EditorState>(editor).unwrap();
         assert_eq!(editor_state.active_roi, Some(entity));
+    }
+
+    #[test]
+    fn test_create_empty_mesh_roi_creates_mesh_primary_and_sets_active_roi() {
+        let mut world = World::new();
+        let editor = world.spawn((EditorState::default(),));
+
+        let entity = create_empty_mesh_roi(&mut world, editor).unwrap();
+
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert_eq!(roi.primary_representation, PrimaryRepresentation::Mesh);
+        let mesh_data = roi.mesh_data().expect("expected mesh roi");
+        assert!(mesh_data.vertices.is_empty());
+        assert!(mesh_data.faces.is_empty());
+        let editor_state = world.get::<&EditorState>(editor).unwrap();
+        assert_eq!(editor_state.active_roi, Some(entity));
+    }
+
+    #[test]
+    fn test_replace_mesh_data_updates_authoritative_state_without_queueing_unimplemented_jobs() {
+        let mut world = World::new();
+        let entity = world.spawn((Roi::new_mesh(
+            RoiId(300),
+            "Mesh".to_string(),
+            MeshData {
+                vertices: Vec::new(),
+                faces: Vec::new(),
+            },
+        ),));
+        {
+            let mut roi = world.get::<&mut Roi>(entity).unwrap();
+            roi.dirty_state.authoritative_dirty = false;
+            roi.dirty_state.voxel_cache_dirty = false;
+            roi.dirty_state.contour_cache_dirty = false;
+            roi.dirty_state.mesh_cache_dirty = false;
+            roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+            roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
+            roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        }
+
+        let replacement = simple_mesh_data();
+        let result = replace_mesh_data(&mut world, entity, replacement.clone());
+        assert_eq!(result, Ok(()));
+
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert_eq!(roi.mesh_data(), Some(&replacement));
+        assert!(roi.dirty_state.authoritative_dirty);
+        assert_eq!(roi.dirty_state.generations.authoritative, 2);
+        assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert!(roi.is_cache_dirty(RoiCacheKind::Contour));
+        assert!(!roi.is_cache_dirty(RoiCacheKind::Mesh));
+        assert_eq!(roi.job_state.queued, None);
+    }
+
+    #[test]
+    fn test_replace_mesh_data_rejects_non_mesh_roi() {
+        let mut world = World::new();
+        let entity = spawn_test_roi(&mut world);
+        let result = replace_mesh_data(&mut world, entity, simple_mesh_data());
+        assert_eq!(result, Err(MeshMutationError::NotMeshRoi));
+    }
+
+    #[test]
+    fn test_mesh_rebuild_contract_requests_fail_safely_without_side_effects() {
+        let mut world = World::new();
+        let entity = world.spawn((Roi::new_mesh(
+            RoiId(301),
+            "Mesh Contract".to_string(),
+            simple_mesh_data(),
+        ),));
+
+        let voxel_status_before = cache_status(&world, entity, RoiCacheKind::Voxel).unwrap();
+        let contour_status_before = cache_status(&world, entity, RoiCacheKind::Contour).unwrap();
+
+        let voxel_result = request_rebuild_voxel_cache_from_mesh(&mut world, entity);
+        assert_eq!(voxel_result, Err(MeshDerivedRebuildError::NotImplemented));
+        let voxel_status_after = cache_status(&world, entity, RoiCacheKind::Voxel).unwrap();
+        {
+            let roi = world.get::<&Roi>(entity).unwrap();
+            assert_eq!(roi.job_state.queued, None);
+        }
+        assert_eq!(voxel_status_after, voxel_status_before);
+
+        let contour_result = request_rebuild_contour_cache_from_mesh(&mut world, entity);
+        assert_eq!(contour_result, Err(MeshDerivedRebuildError::NotImplemented));
+        let contour_status_after = cache_status(&world, entity, RoiCacheKind::Contour).unwrap();
+        {
+            let roi = world.get::<&Roi>(entity).unwrap();
+            assert_eq!(roi.job_state.queued, None);
+        }
+        assert_eq!(contour_status_after, contour_status_before);
+    }
+
+    #[test]
+    fn test_mesh_rebuild_contract_requests_reject_non_mesh_and_missing_roi() {
+        let mut world = World::new();
+        let voxel_entity = spawn_test_roi(&mut world);
+
+        assert_eq!(
+            request_rebuild_voxel_cache_from_mesh(&mut world, voxel_entity),
+            Err(MeshDerivedRebuildError::NotMeshRoi)
+        );
+        assert_eq!(
+            request_rebuild_contour_cache_from_mesh(&mut world, voxel_entity),
+            Err(MeshDerivedRebuildError::NotMeshRoi)
+        );
+        assert_eq!(
+            request_rebuild_voxel_cache_from_mesh(&mut world, hecs::Entity::DANGLING),
+            Err(MeshDerivedRebuildError::MissingRoi)
+        );
+        assert_eq!(
+            request_rebuild_contour_cache_from_mesh(&mut world, hecs::Entity::DANGLING),
+            Err(MeshDerivedRebuildError::MissingRoi)
+        );
     }
 
     #[test]

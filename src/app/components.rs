@@ -258,6 +258,22 @@ impl ContourData {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MeshVertex {
+    pub world_mm: [f32; 3],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeshFace {
+    pub vertex_indices: [u32; 3],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeshData {
+    pub vertices: Vec<MeshVertex>,
+    pub faces: Vec<MeshFace>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContourDraft {
     pub roi_entity: hecs::Entity,
@@ -282,7 +298,7 @@ pub struct ContourMovePreview {
 pub enum RoiAuthoritativeData {
     Voxel(VoxelData),
     Contour(ContourData),
-    Mesh,
+    Mesh(MeshData),
 }
 
 #[derive(Default)]
@@ -294,7 +310,10 @@ pub struct RoiSessionCaches {
 
 pub struct ContourCache;
 
-pub struct MeshCache;
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeshCache {
+    pub data: MeshData,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoiCacheKind {
@@ -427,11 +446,51 @@ impl Roi {
         }
     }
 
+    pub fn new_mesh(roi_id: RoiId, name: String, mesh_data: MeshData) -> Self {
+        Self {
+            metadata: RoiMetadata {
+                roi_id,
+                name,
+                is_visible: true,
+                is_locked: false,
+                color: [1.0, 0.2, 0.2, 1.0],
+            },
+            primary_representation: PrimaryRepresentation::Mesh,
+            authoritative_data: RoiAuthoritativeData::Mesh(mesh_data),
+            session_caches: RoiSessionCaches {
+                voxel: None,
+                contour: None,
+                mesh: None,
+            },
+            dirty_state: RoiDirtyState {
+                voxel_cache_dirty: true,
+                contour_cache_dirty: true,
+                ..RoiDirtyState::default()
+            },
+            job_state: RoiJobState::default(),
+        }
+    }
+
     pub fn contour_data(&self) -> Option<&ContourData> {
         match &self.authoritative_data {
             RoiAuthoritativeData::Contour(contour) => Some(contour),
-            RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Mesh => None,
+            RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Mesh(_) => None,
         }
+    }
+
+    pub fn mesh_data(&self) -> Option<&MeshData> {
+        match &self.authoritative_data {
+            RoiAuthoritativeData::Mesh(mesh) => Some(mesh),
+            RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Contour(_) => None,
+        }
+    }
+
+    pub fn mesh_cache(&self) -> Option<&MeshCache> {
+        self.session_caches.mesh.as_ref()
+    }
+
+    pub fn mesh_cache_mut(&mut self) -> Option<&mut MeshCache> {
+        self.session_caches.mesh.as_mut()
     }
 
     pub fn voxel_cache(&self) -> Option<&VoxelCache> {
@@ -486,6 +545,16 @@ impl Roi {
         self.mark_cache_dirty(RoiCacheKind::Mesh);
         if self.session_caches.contour.is_some() {
             self.mark_cache_dirty(RoiCacheKind::Contour);
+        }
+    }
+
+    pub fn mark_mesh_authoritative_changed(&mut self) {
+        self.dirty_state.authoritative_dirty = true;
+        self.dirty_state.generations.authoritative += 1;
+        self.mark_cache_dirty(RoiCacheKind::Voxel);
+        self.mark_cache_dirty(RoiCacheKind::Contour);
+        if self.session_caches.mesh.is_some() {
+            self.mark_cache_dirty(RoiCacheKind::Mesh);
         }
     }
 
@@ -785,7 +854,7 @@ mod tests {
 
         let authoritative = match &roi.authoritative_data {
             RoiAuthoritativeData::Voxel(voxel) => voxel,
-            RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh => {
+            RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh(_) => {
                 panic!("expected voxel-authoritative ROI");
             }
         };
@@ -1097,5 +1166,176 @@ mod tests {
         );
 
         assert!(voxel_roi.contour_data().is_none());
+    }
+
+    #[test]
+    fn test_new_mesh_roi_initializes_mesh_primary_state() {
+        let mesh_data = MeshData {
+            vertices: vec![
+                MeshVertex {
+                    world_mm: [0.0, 0.0, 0.0],
+                },
+                MeshVertex {
+                    world_mm: [1.0, 0.0, 0.0],
+                },
+                MeshVertex {
+                    world_mm: [0.0, 1.0, 0.0],
+                },
+            ],
+            faces: vec![MeshFace {
+                vertex_indices: [0, 1, 2],
+            }],
+        };
+        let roi = Roi::new_mesh(RoiId(21), "Surface".to_string(), mesh_data.clone());
+
+        assert_eq!(roi.metadata.roi_id, RoiId(21));
+        assert_eq!(roi.metadata.name, "Surface");
+        assert_eq!(roi.primary_representation, PrimaryRepresentation::Mesh);
+        assert!(matches!(
+            roi.authoritative_data,
+            RoiAuthoritativeData::Mesh(_)
+        ));
+        assert_eq!(roi.mesh_data(), Some(&mesh_data));
+        assert!(roi.voxel_cache().is_none());
+        assert!(roi.session_caches.contour.is_none());
+        assert!(roi.session_caches.mesh.is_none());
+        assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert!(roi.is_cache_dirty(RoiCacheKind::Contour));
+        assert!(!roi.is_cache_dirty(RoiCacheKind::Mesh));
+    }
+
+    #[test]
+    fn test_mesh_accessor_rejects_non_mesh_rois() {
+        let voxel_roi = Roi::new_voxel_with_cache(
+            RoiId(22),
+            "Voxel".to_string(),
+            VoxelGeometry {
+                dimensions: [4, 4, 4],
+                spacing: [1.0, 1.0, 1.0],
+                origin: [0.0, 0.0, 0.0],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
+            vec![0; 4 * 4 * 4],
+            None,
+        );
+        let contour_roi = Roi::new_contour(
+            RoiId(23),
+            "Contour".to_string(),
+            ContourData {
+                active_plane_family: PlaneFamily::Axial,
+                slices: Vec::new(),
+            },
+        );
+
+        assert!(voxel_roi.mesh_data().is_none());
+        assert!(contour_roi.mesh_data().is_none());
+    }
+
+    #[test]
+    fn test_mark_mesh_authoritative_changed_invalidates_voxel_and_contour_without_mesh_cache() {
+        let mesh_data = MeshData {
+            vertices: vec![
+                MeshVertex {
+                    world_mm: [0.0, 0.0, 0.0],
+                },
+                MeshVertex {
+                    world_mm: [1.0, 0.0, 0.0],
+                },
+                MeshVertex {
+                    world_mm: [0.0, 1.0, 0.0],
+                },
+            ],
+            faces: vec![MeshFace {
+                vertex_indices: [0, 1, 2],
+            }],
+        };
+        let mut roi = Roi::new_mesh(RoiId(24), "Mesh".to_string(), mesh_data);
+
+        roi.dirty_state.voxel_cache_dirty = false;
+        roi.dirty_state.contour_cache_dirty = false;
+        roi.dirty_state.mesh_cache_dirty = false;
+        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+
+        roi.mark_mesh_authoritative_changed();
+
+        assert!(roi.dirty_state.authoritative_dirty);
+        assert_eq!(roi.dirty_state.generations.authoritative, 2);
+        assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert!(roi.is_cache_dirty(RoiCacheKind::Contour));
+        assert!(!roi.is_cache_dirty(RoiCacheKind::Mesh));
+        assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
+        assert!(!roi.is_cache_current(RoiCacheKind::Contour));
+    }
+
+    #[test]
+    fn test_mark_mesh_authoritative_changed_invalidates_mesh_cache_when_present() {
+        let mesh_data = MeshData {
+            vertices: vec![
+                MeshVertex {
+                    world_mm: [0.0, 0.0, 0.0],
+                },
+                MeshVertex {
+                    world_mm: [1.0, 0.0, 0.0],
+                },
+                MeshVertex {
+                    world_mm: [0.0, 1.0, 0.0],
+                },
+            ],
+            faces: vec![MeshFace {
+                vertex_indices: [0, 1, 2],
+            }],
+        };
+        let mut roi = Roi::new_mesh(RoiId(25), "Mesh Cached".to_string(), mesh_data.clone());
+        roi.session_caches.mesh = Some(MeshCache { data: mesh_data });
+        roi.dirty_state.voxel_cache_dirty = false;
+        roi.dirty_state.contour_cache_dirty = false;
+        roi.dirty_state.mesh_cache_dirty = false;
+        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+
+        roi.mark_mesh_authoritative_changed();
+
+        assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert!(roi.is_cache_dirty(RoiCacheKind::Contour));
+        assert!(roi.is_cache_dirty(RoiCacheKind::Mesh));
+        assert!(!roi.is_cache_current(RoiCacheKind::Mesh));
+    }
+
+    #[test]
+    fn test_finish_mesh_cache_rebuild_marks_mesh_cache_current_to_authoritative_generation() {
+        let mesh_data = MeshData {
+            vertices: vec![
+                MeshVertex {
+                    world_mm: [0.0, 0.0, 0.0],
+                },
+                MeshVertex {
+                    world_mm: [1.0, 0.0, 0.0],
+                },
+                MeshVertex {
+                    world_mm: [0.0, 1.0, 0.0],
+                },
+            ],
+            faces: vec![MeshFace {
+                vertex_indices: [0, 1, 2],
+            }],
+        };
+        let mut roi = Roi::new_mesh(RoiId(26), "Mesh Rebuild".to_string(), mesh_data.clone());
+        roi.session_caches.mesh = Some(MeshCache { data: mesh_data });
+        roi.dirty_state.mesh_cache_dirty = true;
+        roi.enqueue_rebuild(RoiJobKind::RebuildMeshCache);
+        assert_eq!(roi.start_queued_job(), Some(RoiJobKind::RebuildMeshCache));
+
+        roi.finish_cache_rebuild(RoiCacheKind::Mesh);
+
+        assert!(!roi.is_cache_dirty(RoiCacheKind::Mesh));
+        assert!(roi.is_cache_current(RoiCacheKind::Mesh));
+        assert_eq!(
+            roi.cache_generation(RoiCacheKind::Mesh),
+            roi.dirty_state.generations.authoritative
+        );
+        assert_eq!(roi.job_state.running, None);
     }
 }
