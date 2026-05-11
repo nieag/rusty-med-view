@@ -21,6 +21,7 @@ pub struct GpuState {
 pub struct Pipelines {
     pub render: wgpu::RenderPipeline,
     pub contour_overlay: crate::render::contours::ContourRenderer,
+    pub mesh_overlay: crate::render::meshes::MeshRenderer,
 }
 
 pub struct VolumeResources {
@@ -182,6 +183,7 @@ impl RenderingContext {
             pipeline::create_render_pipeline(&device, &texture_bind_group_layout, config.format);
         let contour_overlay =
             crate::render::contours::create_contour_renderer(&device, config.format);
+        let mesh_overlay = crate::render::meshes::create_mesh_renderer(&device, config.format);
         let (vertex_buffer, index_buffer, num_indices) = pipeline::create_geometry_buffers(&device);
 
         let gui = Gui::new(&device, config.format, &window);
@@ -211,6 +213,7 @@ impl RenderingContext {
             pipelines: Pipelines {
                 render: render_pipeline,
                 contour_overlay,
+                mesh_overlay,
             },
             volume_resources: VolumeResources {
                 texture_bind_group_layout,

@@ -1,5 +1,5 @@
 use crate::components::VoxelGeometry;
-use glam::{Quat, Vec3};
+use glam::{Mat3, Quat, Vec3};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PlaneFamily {
@@ -433,6 +433,46 @@ pub fn world_mm_to_volume_uv(world: [f32; 3], geometry: VoxelGeometry) -> [f32; 
     voxel_index_to_volume_uv(index, geometry.dimensions)
 }
 
+pub fn index_space_affine_from_src_to_dst(
+    src: VoxelGeometry,
+    dst: VoxelGeometry,
+) -> Option<[[f32; 4]; 3]> {
+    if src.spacing.into_iter().any(|spacing| spacing.abs() <= 1e-6)
+        || dst.spacing.into_iter().any(|spacing| spacing.abs() <= 1e-6)
+    {
+        return None;
+    }
+
+    let src_rot = normalized_orientation(src.orientation);
+    let dst_inv_rot = normalized_orientation(dst.orientation).inverse();
+
+    let src_scale = Mat3::from_diagonal(Vec3::from_array(src.spacing));
+    let dst_inv_scale = Mat3::from_diagonal(Vec3::new(
+        1.0 / dst.spacing[0],
+        1.0 / dst.spacing[1],
+        1.0 / dst.spacing[2],
+    ));
+
+    let linear = dst_inv_scale * Mat3::from_quat(dst_inv_rot * src_rot) * src_scale;
+    let translation = dst_inv_scale
+        * (dst_inv_rot * (Vec3::from_array(src.origin) - Vec3::from_array(dst.origin)));
+
+    let cols = linear.to_cols_array_2d();
+    Some([
+        [cols[0][0], cols[1][0], cols[2][0], translation[0]],
+        [cols[0][1], cols[1][1], cols[2][1], translation[1]],
+        [cols[0][2], cols[1][2], cols[2][2], translation[2]],
+    ])
+}
+
+pub fn transform_index_with_affine(index: [f32; 3], affine: [[f32; 4]; 3]) -> [f32; 3] {
+    [
+        affine[0][0] * index[0] + affine[0][1] * index[1] + affine[0][2] * index[2] + affine[0][3],
+        affine[1][0] * index[0] + affine[1][1] * index[1] + affine[1][2] * index[2] + affine[1][3],
+        affine[2][0] * index[0] + affine[2][1] * index[1] + affine[2][2] * index[2] + affine[2][3],
+    ]
+}
+
 pub fn sample_index_from_volume_uv(uv: [f32; 3], dimensions: [u32; 3]) -> [u32; 3] {
     let mut sample = [0; 3];
     for axis in 0..3 {
@@ -549,6 +589,39 @@ mod tests {
 
         let sample_with_zero_dim = sample_index_from_volume_uv([0.5, 0.5, 0.5], [0, 1, 2]);
         assert_eq!(sample_with_zero_dim, [0, 0, 1]);
+    }
+
+    #[test]
+    fn test_index_space_affine_identity_geometry_maps_index_to_itself() {
+        let geometry = identity_geometry();
+        let affine = index_space_affine_from_src_to_dst(geometry, geometry).unwrap();
+        let index = [3.25, 7.5, 1.0];
+        let mapped = transform_index_with_affine(index, affine);
+        assert!(approx_eq(mapped, index, 1e-6));
+    }
+
+    #[test]
+    fn test_index_space_affine_matches_world_mapping_for_shifted_geometry() {
+        let src = VoxelGeometry {
+            dimensions: [64, 48, 24],
+            spacing: [0.7, 1.1, 2.0],
+            origin: [10.0, -4.0, 2.0],
+            orientation: Quat::from_euler(glam::EulerRot::XYZ, 0.2, -0.3, 0.1).to_array(),
+        };
+        let dst = VoxelGeometry {
+            dimensions: [64, 48, 24],
+            spacing: [0.9, 0.8, 1.5],
+            origin: [4.0, -8.0, 5.0],
+            orientation: Quat::from_euler(glam::EulerRot::XYZ, -0.25, 0.1, 0.5).to_array(),
+        };
+
+        let affine = index_space_affine_from_src_to_dst(src, dst).unwrap();
+        let src_index = [11.25, 9.5, 3.0];
+        let mapped = transform_index_with_affine(src_index, affine);
+
+        let world = voxel_index_to_world_mm(src_index, src);
+        let expected = world_mm_to_voxel_index(world, dst);
+        assert!(approx_eq(mapped, expected, 1e-5));
     }
 
     #[test]

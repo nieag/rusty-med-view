@@ -117,6 +117,12 @@ const UNIFORM_ALIGNMENT: u64 = 256;
 /// Number of viewports in the layout protocol.
 const MAX_VIEWPORTS: u64 = 4;
 
+const fn align_to(value: u64, alignment: u64) -> u64 {
+    value.div_ceil(alignment) * alignment
+}
+
+const UNIFORM_STRIDE: u64 = align_to(std::mem::size_of::<Uniforms>() as u64, UNIFORM_ALIGNMENT);
+
 /// Create the overlay primitives storage buffer.
 pub fn create_overlay_buffer(device: &wgpu::Device) -> wgpu::Buffer {
     let buffer_size = (std::mem::size_of::<OverlayPrimitive>() * MAX_OVERLAY_PRIMITIVES) as u64;
@@ -184,8 +190,7 @@ pub fn create_render_pipeline(
 
 /// Create the uniform buffer with proper alignment for 4 viewports.
 pub fn create_uniform_buffer(device: &wgpu::Device) -> wgpu::Buffer {
-    let uniform_alignment = UNIFORM_ALIGNMENT;
-    let uniform_buffer_size = uniform_alignment * MAX_VIEWPORTS;
+    let uniform_buffer_size = UNIFORM_STRIDE * MAX_VIEWPORTS;
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Uniform Buffer"),
         size: uniform_buffer_size,
@@ -342,7 +347,7 @@ fn prepare_uniforms(
         u.overlay_primitive_count = overlay_count;
         u.overlay_dragging_idx = dragging_idx;
         u.overlay_mouse_uv = overlay_mouse_uv;
-        let offset = *u_idx as u64 * UNIFORM_ALIGNMENT;
+        let offset = *u_idx as u64 * UNIFORM_STRIDE;
         gpu.queue.write_buffer(
             &volume_res.uniform_buffer,
             offset,
@@ -427,7 +432,7 @@ fn render_volume_pass(
         let bg = &res.bind_group;
         for (_, rect, u_idx, _) in viewports {
             render_pass.set_viewport(rect[0], rect[1], rect[2], rect[3], 0.0, 1.0);
-            render_pass.set_bind_group(0, bg, &[*u_idx * 256]);
+            render_pass.set_bind_group(0, bg, &[(*u_idx as u64 * UNIFORM_STRIDE) as u32]);
             render_pass.draw_indexed(0..volume_res.num_indices, 0, 0..1);
         }
     }
@@ -472,6 +477,15 @@ pub fn render_frame(
         &viewports,
     );
 
+    let mesh_data = crate::render::meshes::prepare_mesh_render_data(&scene.world, &scene.entities);
+    crate::render::meshes::upload_mesh_render_data(
+        &gpu.device,
+        &gpu.queue,
+        &mut pipelines.mesh_overlay,
+        &mesh_data,
+    );
+    crate::render::meshes::render_meshes(&mut encoder, &view, &pipelines.mesh_overlay);
+
     let contour_data = contours::prepare_contour_render_data(&scene.world, &scene.entities);
     contours::upload_contour_render_data(
         &gpu.device,
@@ -497,4 +511,24 @@ pub fn render_frame(
     frame.present();
 
     repaint_after
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_uniform_stride_covers_current_uniform_size() {
+        let uniform_size = std::mem::size_of::<Uniforms>() as u64;
+        assert!(UNIFORM_STRIDE >= uniform_size);
+        assert_eq!(UNIFORM_STRIDE % UNIFORM_ALIGNMENT, 0);
+    }
+
+    #[test]
+    fn test_uniform_buffer_size_covers_all_viewport_slots() {
+        let last_viewport_offset = (MAX_VIEWPORTS - 1) * UNIFORM_STRIDE;
+        let uniform_size = std::mem::size_of::<Uniforms>() as u64;
+        let buffer_size = UNIFORM_STRIDE * MAX_VIEWPORTS;
+        assert!(last_viewport_offset + uniform_size <= buffer_size);
+    }
 }

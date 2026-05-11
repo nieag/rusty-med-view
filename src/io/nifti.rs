@@ -53,24 +53,85 @@ fn decompress_gzip(data: &[u8]) -> Result<Vec<u8>, LoadError> {
     Ok(decompressed)
 }
 
-/// Extract rotation matrix from NIfTI sform (srow_x/y/z) and convert to quaternion.
+/// Extract rotation matrix from the NIfTI spatial affine and convert to quaternion.
 ///
-/// The sform provides a 4x4 affine matrix stored as three 4-element rows.
-/// We extract the 3x3 upper-left rotation+scale portion, normalize the columns
-/// to get pure rotation, and convert to quaternion using Shepperd's method.
-fn extract_orientation_from_sform(header: &NiftiHeader) -> [f32; 4] {
-    if !has_valid_sform_axes(header.srow_x, header.srow_y, header.srow_z) {
+/// Prefer valid sform rows, then fall back to qform. This matters for common
+/// NIfTI pairs where the image stores patient-space translation in qform while
+/// the label stores it in sform.
+fn extract_orientation_from_header(header: &NiftiHeader) -> [f32; 4] {
+    let Some([row_x, row_y, row_z]) = spatial_affine_rows(header) else {
         return [0.0, 0.0, 0.0, 1.0];
-    }
-    calculate_orientation_from_rows(header.srow_x, header.srow_y, header.srow_z)
+    };
+    calculate_orientation_from_rows(row_x, row_y, row_z)
 }
 
-/// Extract translation/origin from NIfTI sform rows.
-///
-/// Returns `[0, 0, 0]` when the sform axes are invalid to align with
-/// orientation fallback behavior.
-fn extract_origin_from_sform(header: &NiftiHeader) -> [f32; 3] {
-    extract_origin_from_rows(header.srow_x, header.srow_y, header.srow_z)
+/// Extract translation/origin from the NIfTI spatial affine.
+fn extract_origin_from_header(header: &NiftiHeader) -> [f32; 3] {
+    let Some([row_x, row_y, row_z]) = spatial_affine_rows(header) else {
+        return [0.0, 0.0, 0.0];
+    };
+    extract_origin_from_rows(row_x, row_y, row_z)
+}
+
+fn spatial_affine_rows(header: &NiftiHeader) -> Option<[[f32; 4]; 3]> {
+    if has_valid_sform_axes(header.srow_x, header.srow_y, header.srow_z) {
+        return Some([header.srow_x, header.srow_y, header.srow_z]);
+    }
+
+    if header.qform_code != 0 && qform_fields_are_usable(header) {
+        let rows = qform_affine_rows(header)?;
+        if has_valid_sform_axes(rows[0], rows[1], rows[2]) {
+            return Some(rows);
+        }
+    }
+
+    None
+}
+
+fn qform_fields_are_usable(header: &NiftiHeader) -> bool {
+    let qfac = header.pixdim[0];
+    let qfac_valid = (qfac - 1.0).abs() <= 1e-6 || (qfac + 1.0).abs() <= 1e-6;
+    let quat_vector_len2 = header.quatern_b * header.quatern_b
+        + header.quatern_c * header.quatern_c
+        + header.quatern_d * header.quatern_d;
+    qfac_valid
+        && header.pixdim[1] > 0.0
+        && header.pixdim[2] > 0.0
+        && header.pixdim[3] > 0.0
+        && header.pixdim[1].is_finite()
+        && header.pixdim[2].is_finite()
+        && header.pixdim[3].is_finite()
+        && header.quatern_x.is_finite()
+        && header.quatern_y.is_finite()
+        && header.quatern_z.is_finite()
+        && header.quatern_b.is_finite()
+        && header.quatern_c.is_finite()
+        && header.quatern_d.is_finite()
+        && quat_vector_len2 <= 1.0 + 1e-5
+}
+
+fn qform_affine_rows(header: &NiftiHeader) -> Option<[[f32; 4]; 3]> {
+    let b = header.quatern_b;
+    let c = header.quatern_c;
+    let d = header.quatern_d;
+    let a2 = 1.0 - (b * b + c * c + d * d);
+    let a = if a2 > 0.0 { a2.sqrt() } else { 0.0 };
+    let rotation = glam::Mat3::from_quat(glam::Quat::from_xyzw(b, c, d, a).normalize());
+    let qfac = if header.pixdim[0] < 0.0 { -1.0 } else { 1.0 };
+    let col0 = rotation.x_axis * header.pixdim[1];
+    let col1 = rotation.y_axis * header.pixdim[2];
+    let col2 = rotation.z_axis * header.pixdim[3] * qfac;
+    let rows = [
+        [col0.x, col1.x, col2.x, header.quatern_x],
+        [col0.y, col1.y, col2.y, header.quatern_y],
+        [col0.z, col1.z, col2.z, header.quatern_z],
+    ];
+
+    if rows.iter().flatten().all(|component| component.is_finite()) {
+        Some(rows)
+    } else {
+        None
+    }
 }
 
 fn extract_origin_from_rows(srow_x: [f32; 4], srow_y: [f32; 4], srow_z: [f32; 4]) -> [f32; 3] {
@@ -286,7 +347,7 @@ pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
     } = parse_nifti_raw(data)?;
 
     let spacing = [header.pixdim[1], header.pixdim[2], header.pixdim[3]];
-    let origin = extract_origin_from_sform(&header);
+    let origin = extract_origin_from_header(&header);
     let scl_slope = if header.scl_slope == 0.0 {
         1.0
     } else {
@@ -316,7 +377,7 @@ pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
         max_val = min_val + 1.0;
     }
 
-    let orientation = extract_orientation_from_sform(&header);
+    let orientation = extract_orientation_from_header(&header);
 
     Ok(LoadedVolume {
         dimensions: [width, height, depth],
@@ -342,8 +403,8 @@ pub fn load_label_from_bytes(
     } = parse_nifti_raw(data)?;
 
     let spacing = [header.pixdim[1], header.pixdim[2], header.pixdim[3]];
-    let origin = extract_origin_from_sform(&header);
-    let orientation = extract_orientation_from_sform(&header);
+    let origin = extract_origin_from_header(&header);
+    let orientation = extract_orientation_from_header(&header);
 
     let mut label_data = Vec::with_capacity(total_voxels);
     for z in 0..depth as u16 {
@@ -464,5 +525,53 @@ mod tests {
 
         let origin = extract_origin_from_rows(srow_x, srow_y, srow_z);
         assert_eq!(origin, [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn test_extract_origin_from_header_falls_back_to_qform_translation() {
+        let mut pixdim = [0.0; 8];
+        pixdim[0] = 1.0;
+        pixdim[1] = 2.0;
+        pixdim[2] = 2.0;
+        pixdim[3] = 3.0;
+        let header = NiftiHeader {
+            srow_x: [0.0, 0.0, 0.0, 0.0],
+            srow_y: [0.0, 0.0, 0.0, 0.0],
+            srow_z: [0.0, 0.0, 0.0, 0.0],
+            sform_code: 0,
+            qform_code: 1,
+            pixdim,
+            quatern_x: -185.74844,
+            quatern_y: -178.64844,
+            quatern_z: -369.0,
+            ..NiftiHeader::default()
+        };
+
+        let origin = extract_origin_from_header(&header);
+        assert_eq!(origin, [-185.74844, -178.64844, -369.0]);
+    }
+
+    #[test]
+    fn test_extract_orientation_from_header_falls_back_to_qform_identity() {
+        let mut pixdim = [0.0; 8];
+        pixdim[0] = 1.0;
+        pixdim[1] = 2.0;
+        pixdim[2] = 2.0;
+        pixdim[3] = 3.0;
+        let header = NiftiHeader {
+            srow_x: [0.0, 0.0, 0.0, 0.0],
+            srow_y: [0.0, 0.0, 0.0, 0.0],
+            srow_z: [0.0, 0.0, 0.0, 0.0],
+            sform_code: 0,
+            qform_code: 1,
+            pixdim,
+            quatern_b: 0.0,
+            quatern_c: 0.0,
+            quatern_d: 0.0,
+            ..NiftiHeader::default()
+        };
+
+        let orientation = extract_orientation_from_header(&header);
+        assert_eq!(orientation, [0.0, 0.0, 0.0, 1.0]);
     }
 }

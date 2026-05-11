@@ -23,7 +23,15 @@ struct Uniforms {
     cursor_pos: vec4<f32>,
     volume_dims: vec4<u32>,
     volume_spacing: vec4<f32>,
+    overlay1_dims: vec4<u32>,
+    overlay2_dims: vec4<u32>,
     overlay_opacities: vec4<f32>,
+    overlay1_main_to_roi_row0: vec4<f32>,
+    overlay1_main_to_roi_row1: vec4<f32>,
+    overlay1_main_to_roi_row2: vec4<f32>,
+    overlay2_main_to_roi_row0: vec4<f32>,
+    overlay2_main_to_roi_row1: vec4<f32>,
+    overlay2_main_to_roi_row2: vec4<f32>,
     window_params: vec4<f32>,        // [center, width, data_min, data_max]
     resolution: vec2<f32>,
     mouse_uv: vec2<f32>,
@@ -96,7 +104,11 @@ fn intersectAABB(rayOrigin: vec3<f32>, rayDir: vec3<f32>, boxMin: vec3<f32>, box
 fn get_overlay_color(
     tex: texture_3d<u32>,
     lut: texture_1d<f32>,
-    uvw: vec3<f32>,
+    main_uvw: vec3<f32>,
+    overlay_dims: vec3<u32>,
+    main_to_roi_row0: vec4<f32>,
+    main_to_roi_row1: vec4<f32>,
+    main_to_roi_row2: vec4<f32>,
     opacity: f32,
     s_sampler: sampler,
     force_solid: bool
@@ -106,11 +118,21 @@ fn get_overlay_color(
     // Actually, wgpu doesn't allow filtering for UINT textures.
     // We must use `textureLoad` with integer coordinates.
 
-    let dims = vec3<f32>(uniforms.volume_dims.xyz);
-    let coords = vec3<i32>(floor(uvw * dims));
+    if any(overlay_dims == vec3<u32>(0u, 0u, 0u)) {
+        return vec4<f32>(0.0);
+    }
+
+    let main_dims = vec3<f32>(uniforms.volume_dims.xyz);
+    let main_index = main_uvw * main_dims;
+    let roi_index = vec3<f32>(
+        dot(main_to_roi_row0, vec4<f32>(main_index, 1.0)),
+        dot(main_to_roi_row1, vec4<f32>(main_index, 1.0)),
+        dot(main_to_roi_row2, vec4<f32>(main_index, 1.0))
+    );
+    let coords = vec3<i32>(floor(roi_index));
     
     // Bounds check
-    if any(coords < vec3<i32>(0)) || any(coords >= vec3<i32>(uniforms.volume_dims.xyz)) {
+    if any(coords < vec3<i32>(0)) || any(coords >= vec3<i32>(overlay_dims)) {
         return vec4<f32>(0.0);
     }
 
@@ -367,14 +389,36 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // We can't easily detect "dummy" in shader, so we rely on uniforms or just data being 0
             
             // Overlay 1
-            let col1 = get_overlay_color(t_label1, t_lut1, sample_pos, uniforms.overlay_opacities.x, s_diffuse, false);
+            let col1 = get_overlay_color(
+                t_label1,
+                t_lut1,
+                sample_pos,
+                uniforms.overlay1_dims.xyz,
+                uniforms.overlay1_main_to_roi_row0,
+                uniforms.overlay1_main_to_roi_row1,
+                uniforms.overlay1_main_to_roi_row2,
+                uniforms.overlay_opacities.x,
+                s_diffuse,
+                false
+            );
             if col1.a > 0.0 {
                 // Alpha blend: SrcAlpha, OneMinusSrcAlpha
                 final_color = vec4<f32>(mix(final_color.rgb, col1.rgb, col1.a), 1.0);
             }
             
             // Overlay 2
-            let col2 = get_overlay_color(t_label2, t_lut2, sample_pos, uniforms.overlay_opacities.y, s_diffuse, false);
+            let col2 = get_overlay_color(
+                t_label2,
+                t_lut2,
+                sample_pos,
+                uniforms.overlay2_dims.xyz,
+                uniforms.overlay2_main_to_roi_row0,
+                uniforms.overlay2_main_to_roi_row1,
+                uniforms.overlay2_main_to_roi_row2,
+                uniforms.overlay_opacities.y,
+                s_diffuse,
+                false
+            );
             if col2.a > 0.0 {
                 final_color = vec4<f32>(mix(final_color.rgb, col2.rgb, col2.a), 1.0);
             }
@@ -527,13 +571,35 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 var overlay_color = vec3<f32>(0.0);
                 var overlay_alpha = 0.0;
 
-                let o1 = get_overlay_color(t_label1, t_lut1, tex_coord, uniforms.overlay_opacities.x, s_diffuse, true);
+                let o1 = get_overlay_color(
+                    t_label1,
+                    t_lut1,
+                    tex_coord,
+                    uniforms.overlay1_dims.xyz,
+                    uniforms.overlay1_main_to_roi_row0,
+                    uniforms.overlay1_main_to_roi_row1,
+                    uniforms.overlay1_main_to_roi_row2,
+                    uniforms.overlay_opacities.x,
+                    s_diffuse,
+                    true
+                );
                 if o1.a > 0.0 {
                     overlay_color = mix(overlay_color, o1.rgb, o1.a);
                     overlay_alpha = max(overlay_alpha, o1.a);
                 }
 
-                let o2 = get_overlay_color(t_label2, t_lut2, tex_coord, uniforms.overlay_opacities.y, s_diffuse, true);
+                let o2 = get_overlay_color(
+                    t_label2,
+                    t_lut2,
+                    tex_coord,
+                    uniforms.overlay2_dims.xyz,
+                    uniforms.overlay2_main_to_roi_row0,
+                    uniforms.overlay2_main_to_roi_row1,
+                    uniforms.overlay2_main_to_roi_row2,
+                    uniforms.overlay_opacities.y,
+                    s_diffuse,
+                    true
+                );
                 if o2.a > 0.0 {
                     overlay_color = mix(overlay_color, o2.rgb, o2.a);
                     overlay_alpha = max(overlay_alpha, o2.a);

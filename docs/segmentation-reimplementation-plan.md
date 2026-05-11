@@ -25,6 +25,8 @@ Each ROI has exactly one authoritative representation at a time. Other represent
 - Allow only one active contour plane family to be editable at a time per ROI.
 - Authoritative voxel ROI state must carry its own spatial metadata; later phases must not rely on borrowing geometry from the current main volume by convention.
 - The current renderer only supports two simultaneous ROI overlay textures; until that changes, the limit must be explicit in the runtime or UI rather than silently truncating visible ROIs.
+- `egui` is GUI only; ROI geometry, contours, mesh surfaces/wireframes, segmentation overlays, and viewport clipping must use native wgpu renderer paths. See [docs/rendering-architecture.md](/Users/nieage/dev/git/rust_starter_app/docs/rendering-architecture.md:1).
+- ROI/image spatial alignment must use one central geometry contract: representation-native index/point space -> representation geometry -> patient/world millimetres -> viewport projection. Voxel overlays, contours, meshes, picking, and conversion helpers must not each invent local coordinate paths.
 
 ## Architecture Direction
 
@@ -365,6 +367,10 @@ Acceptance:
 Purpose:
 - implement slice-facing mesh deformation
 
+Implementation note:
+- concrete implementer guidance lives in [docs/subplan-8-mesh-workflow-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-mesh-workflow-handoff.md:1)
+- the first `Subplan 8` implementation pass intentionally includes the minimal mesh-specific rendering prerequisites needed to make the mesh workflow testable before full deformation tooling begins
+
 Deliver:
 - mesh-primary editing session model
 - slice-based deformation controls
@@ -375,6 +381,27 @@ Acceptance:
 - user can deform an ROI from 2D slice interactions
 - resulting state is coherent in MPR and 3D views
 - volume remains voxel-derived
+
+### 8.1 Spatial Geometry Contract
+
+Purpose:
+- close the voxel-overlay/mesh-placement gap before deformation work continues
+- make ROI-native geometry, patient/world space, and viewport projection a single tested contract
+
+Implementation note:
+- concrete implementer guidance lives in [docs/subplan-8-1-spatial-geometry-contract-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-1-spatial-geometry-contract-handoff.md:1)
+- this checkpoint supersedes the nearest-neighbor display-grid resampling direction from the first Subplan 8 voxel display geometry fixup
+
+Deliver:
+- central ROI/image geometry mapping helpers in `src/convert/`
+- geometry-aware voxel overlay sampling instead of assuming label texture coordinates equal main image texture coordinates
+- mesh extraction that remains native to the source `VoxelData.geometry` and emits world-millimetre vertices
+- geometry-aware voxel/mesh consistency checks that operate through world-space mapping rather than display-grid assumptions
+
+Acceptance:
+- voxel overlay, contour projection, and mesh projection agree through the same ROI-native-to-world-to-viewport contract
+- geometry-mismatched labels are either displayed/converted correctly through world geometry or fail clearly
+- no empty or displaced mesh ROI is created from non-empty voxel data
 
 ### 9. Rendering Integration Layer
 
@@ -494,7 +521,13 @@ Current Phase:
 - `Subplan 7 Step 7C: Runtime contracts for mesh-primary ROIs` complete
 - `Subplan 7 Step 7D: Explicit conversion contract scaffolding` complete
 - `Subplan 7 Step 7E: Closeout` complete
-- next checkpoint: `Subplan 8` mesh workflow implementation
+- `Subplan 8 Step 8A: Pure voxel-to-mesh extraction` complete
+- `Subplan 8 Step 8B: Runtime mesh ROI creation from existing ROI data` complete
+- `Subplan 8 Step 8C/8D/8E` complete
+- `Subplan 8 mesh rendering fixup` complete from [docs/subplan-8-mesh-rendering-fixup-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-mesh-rendering-fixup-handoff.md:1)
+- `Subplan 8 voxel display geometry fixup` reviewed; nearest-neighbor display-grid resampling is not accepted as the final correctness direction
+- `Subplan 8.1 Spatial Geometry Contract` complete from [docs/subplan-8-1-spatial-geometry-contract-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-1-spatial-geometry-contract-handoff.md:1)
+- next checkpoint: continue with deformation-focused phases on top of the shared geometry contract
 
 Completed:
 - `1453511` Baseline: remove legacy segmentation stack
@@ -754,10 +787,45 @@ Completed:
     - action: pan/zoom/slice scroll/3D view checks; expected: existing navigation and 3D behavior preserved; observed: pass
   - document deferred V1 limitations retained for post-6.6 work:
     - no oblique extraction support
-    - no smoothing/simplification/interpolation/boolean operations
-    - no mesh/SDF/TSDF integration
-    - no registration/resampling
+- complete `Subplan 8 Step 8A` from [docs/subplan-8-mesh-workflow-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-mesh-workflow-handoff.md:1):
+  - add pure voxel-to-mesh extraction module `src/convert/voxel_mesh_extract.rs`
+  - add API `extract_mesh_from_voxel_data(voxel_data) -> Result<MeshData, VoxelMeshExtractionError>`
+  - implement deterministic binary occupancy surface extraction from voxel boundary faces
+  - store extracted `MeshVertex` positions in world/patient coordinates via ROI-owned `VoxelGeometry`
+  - keep Step 8A boundary pure (no ECS/runtime/render/UI coupling)
+  - add Step 8A tests for empty voxel data, simple occupied shape, ROI geometry-controlled vertex placement, and deterministic output
+  - run verification commands: `cargo test -q`, `cargo check --target wasm32-unknown-unknown -q`, and `cargo fmt --all`
+- complete `Subplan 8 Step 8B` from [docs/subplan-8-mesh-workflow-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-mesh-workflow-handoff.md:1):
+  - add runtime helpers `create_mesh_roi_from_voxel_roi(...)` and `create_mesh_roi_from_contour_roi(...)` in `src/app/roi_runtime.rs`
+  - keep source ROIs unchanged and spawn new mesh-primary ROI entities with extracted `MeshData`
+  - gate contour-source mesh creation on presence of a current contour-derived voxel cache
+  - add Step 8B tests for voxel-source success + source unchanged, contour-source success when current voxel cache exists, and missing/unsupported source rejection paths
+- complete `Subplan 8 Step 8C` from [docs/subplan-8-mesh-workflow-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-mesh-workflow-handoff.md:1):
+  - add minimal mesh render-prep module `src/render/meshes.rs` that collects visible mesh ROI world-space wireframe segments
+  - keep V1 scope explicit and narrow: render path only used for `ViewMode::ThreeD`
+  - keep unsupported view modes as no-op by omission
+  - add Step 8C tests for empty payload safety, non-empty mesh render preparation, and stable no-mesh-visible behavior
+- complete `Subplan 8 Step 8D` from [docs/subplan-8-mesh-workflow-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-mesh-workflow-handoff.md:1):
+  - add explicit sidebar action to create a mesh ROI from the active ROI in `src/gui/sidebar.rs`
+  - support voxel-primary sources directly and contour-primary sources only when current voxel cache exists
+  - add explicit status messaging for missing active ROI, unsupported active ROI, missing contour voxel cache, extraction failure, and success
+- complete `Subplan 8 Step 8E` from [docs/subplan-8-mesh-workflow-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-mesh-workflow-handoff.md:1):
+  - verify mesh can now be extracted from voxel data and created as new mesh-primary ROI entities from voxel or eligible contour sources
+  - verify created mesh ROIs are inspectable in 3D viewport via wireframe overlay path
+  - retain explicit deferrals:
+    - no mesh deformation tools yet
+    - no mesh-to-voxel regeneration
+    - no mesh-to-contour regeneration
+    - no broad rendering abstraction rewrite
+    - no SDF/TSDF integration
+    - no smoothing/decimation/boolean/margin tooling
     - no import/export
+    - no registration/resampling
+  - run verification commands: `cargo test -q`, `cargo check --target wasm32-unknown-unknown -q`, and `cargo fmt --all`
+- post-review correction for `Subplan 8`:
+  - manual verification found that the first mesh render path is not acceptable as a completion baseline
+  - required fixup is documented in [docs/subplan-8-mesh-rendering-fixup-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-mesh-rendering-fixup-handoff.md:1)
+  - deformation work remains blocked until mesh rendering uses native wgpu ownership, projects world-mm mesh vertices through main display volume geometry, clips to viewport bounds, and makes binary all-non-zero extraction semantics explicit or implements real label filtering
 - begin `Subplan 6.7: Post-6.6 Consolidation`:
   - review the voxel/contour workflow for post-6.6 usability and readiness-to-mesh concerns
   - improve extracted contour ROI naming so derived contour ROIs carry explicit family context
@@ -823,5 +891,40 @@ Completed:
   - align mesh mutation/runtime semantics so mesh edits invalidate derived cache state without advertising executable mesh job processing that does not yet exist
   - add/adjust runtime tests to lock side-effect-free `NotImplemented` behavior and no-queued-job mesh mutation behavior
 
-Pending:
-- implement `Subplan 8` mesh workflows on top of the established Subplan 7 architecture contracts
+Completed Subplan 8 Review:
+- `Subplan 8` mesh rendering fixup from [docs/subplan-8-mesh-rendering-fixup-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-mesh-rendering-fixup-handoff.md:1):
+  - add explicit main display geometry helper `main_volume_geometry(world)` and keep compatibility alias `main_volume_voxel_geometry(world)`
+  - remove egui mesh drawing path from `src/gui/overlays.rs`
+  - add native mesh renderer in `src/render/meshes.rs` with:
+    - render prep from mesh ROI faces to GPU-facing vertices
+    - projection of mesh world-mm vertices through main display volume geometry
+    - per-viewport scissor enforcement in native wgpu pass
+    - render execution after volume pass and before egui pass
+  - keep mesh rendering limited to `ViewMode::ThreeD`; non-3D viewports emit no mesh batches
+  - skip invalid mesh face indices safely
+  - make binary extraction semantics explicit in UI text/status as all-non-zero voxel extraction
+  - add extraction regressions:
+    - single-voxel topology triangle count
+    - solid `2x2x2` internal-face suppression
+    - invalid raw-data length error
+    - all non-zero label values treated as occupied
+    - shifted-origin/non-unit-spacing world-bound checks retained
+  - add mesh render-prep regressions for missing main volume, non-3D viewports, and invalid face handling
+  - previous review blocker was mesh/voxel placement mismatch
+  - mismatch is resolved by [docs/subplan-8-1-spatial-geometry-contract-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-1-spatial-geometry-contract-handoff.md:1)
+  - final Subplan 8/8.1 review completed with no blocking findings before wrapping up the branch
+
+Completed Subplan 8.1 Review:
+- complete `Subplan 8.1 Spatial Geometry Contract` from [docs/subplan-8-1-spatial-geometry-contract-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-1-spatial-geometry-contract-handoff.md:1):
+  - add central index-space/world-space affine helpers in `src/convert/geometry.rs` with roundtrip coverage
+  - make voxel overlay sampling geometry-aware by mapping main-volume sample indices into ROI voxel index space per overlay
+  - preserve contour and mesh placement via existing ROI-native/world-mm paths while removing the temporary mesh-creation geometry mismatch gate
+  - update mesh-source runtime tests to validate mismatched-geometry acceptance under the shared world-space contract
+  - fix dynamic uniform-buffer stride after geometry-aware overlay uniforms increased `Uniforms` size
+  - fix NIfTI spatial loading to fall back from missing/invalid `sform` to `qform`, so main image and label origins can align when different headers store spatial metadata differently
+  - manual verification completed:
+    - action: load real image + label NIfTI; expected: label overlay visible and aligned; observed: pass after qform fallback
+    - action: inspect browser console during load/render; expected: no uniform buffer write/dynamic-offset WGPU errors; observed: pass after dynamic uniform stride fix
+    - action: create mesh from loaded voxel label; expected: mesh overlaps green voxel label in 3D; observed: pass
+    - action: draw contours and convert contour-derived voxel cache to mesh; expected: generated mesh remains coherent in viewer; observed: pass
+    - action: preserve existing image loading, label loading, contour editing, contour extraction, contour-to-voxel rebuild, 2D navigation, and 3D viewer behavior; expected: no regressions observed during manual checks; observed: pass

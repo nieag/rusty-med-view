@@ -45,6 +45,16 @@ This zero-lag order means interactions appear in the same frame they occur.
 - `src/util/orientation.rs` — **single source of truth** for all coordinate transforms and radiological mappings
 - `src/shaders/` — WGSL shader sources (`shader.wgsl` is the main volume raymarcher)
 
+## Rendering Boundary
+
+`egui` is GUI only. Use it for panels, controls, dialogs, status text, and explicitly temporary debug diagnostics.
+
+Do not use egui painting for viewer-scene content: medical images, ROI overlays, contours, contour points, mesh surfaces, mesh wireframes, segmentation geometry, or viewport clipping for those elements.
+
+Viewport-rendered content must go through native WGPU rendering under `src/render/` and `src/shaders/`. Projection math must use shared helpers in `src/convert/` or `src/util/orientation.rs`, not ad hoc GUI-side transforms.
+
+See `docs/rendering-architecture.md` before implementing or reviewing rendering-related work.
+
 ## Coordinate Systems & Orientation
 
 All coordinate work goes through `src/util/orientation.rs`. The app uses **radiological convention** (patient Right → screen Left, flipped X).

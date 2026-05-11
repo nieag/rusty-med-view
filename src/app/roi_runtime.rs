@@ -2,8 +2,9 @@ use crate::app::components::*;
 #[cfg(test)]
 use crate::convert::PlaneDefinition;
 use crate::convert::{
-    extract_contours_from_voxel_data, rasterize_contours_to_voxel_data, PlaneFamily,
-    VoxelContourExtractionError,
+    extract_contours_from_voxel_data, extract_mesh_from_voxel_data,
+    rasterize_contours_to_voxel_data, PlaneFamily, VoxelContourExtractionError,
+    VoxelMeshExtractionError,
 };
 use hecs::World;
 
@@ -45,6 +46,30 @@ pub enum VoxelContourCreationError {
     MissingRoi,
     NotVoxelRoi,
     ExtractionFailed(VoxelContourExtractionError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoxelMeshCreationError {
+    MissingRoi,
+    NotVoxelRoi,
+    MissingMainVolume,
+    EmptyMeshFromNonEmptySource,
+    ExtractionFailed(VoxelMeshExtractionError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContourMeshCreationError {
+    MissingRoi,
+    NotContourRoi,
+    MissingCurrentVoxelCache,
+    ExtractionFailed(VoxelMeshExtractionError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayVoxelSourceError {
+    MissingRoi,
+    NotVoxelRoi,
+    MissingMainVolume,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,7 +161,7 @@ pub fn recreate_scene_bind_groups(
     }
 }
 
-pub fn main_volume_voxel_geometry(world: &World) -> Option<VoxelGeometry> {
+pub fn main_volume_geometry(world: &World) -> Option<VoxelGeometry> {
     let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
     let (_, volume) = query.iter().next()?;
     Some(VoxelGeometry {
@@ -145,6 +170,10 @@ pub fn main_volume_voxel_geometry(world: &World) -> Option<VoxelGeometry> {
         origin: volume.origin,
         orientation: volume.orientation,
     })
+}
+
+pub fn main_volume_voxel_geometry(world: &World) -> Option<VoxelGeometry> {
+    main_volume_geometry(world)
 }
 
 pub fn renderable_voxel_overlay_rois(
@@ -506,6 +535,119 @@ pub fn create_contour_roi_from_voxel_roi(
         // Preserve source voxel geometry as the initial contour reference frame.
         // This keeps extracted contour projection/edit mapping aligned before any
         // contour->voxel rebuild retargets caches to main-volume geometry.
+        roi.session_caches.voxel = Some(VoxelCache {
+            data: source_voxel,
+            gpu_resources: None,
+        });
+    }
+    Ok(entity)
+}
+
+pub fn create_mesh_roi_from_voxel_roi(
+    world: &mut World,
+    source_roi: hecs::Entity,
+) -> Result<hecs::Entity, VoxelMeshCreationError> {
+    let source_voxel =
+        voxel_data_for_display_surface_extraction(world, source_roi).map_err(|err| match err {
+            DisplayVoxelSourceError::MissingRoi => VoxelMeshCreationError::MissingRoi,
+            DisplayVoxelSourceError::NotVoxelRoi => VoxelMeshCreationError::NotVoxelRoi,
+            DisplayVoxelSourceError::MissingMainVolume => VoxelMeshCreationError::MissingMainVolume,
+        })?;
+
+    let source_has_occupancy = source_voxel.raw_data.iter().any(|value| *value != 0);
+    let extracted = extract_mesh_from_voxel_data(&source_voxel)
+        .map_err(VoxelMeshCreationError::ExtractionFailed)?;
+    if source_has_occupancy && (extracted.vertices.is_empty() || extracted.faces.is_empty()) {
+        return Err(VoxelMeshCreationError::EmptyMeshFromNonEmptySource);
+    }
+
+    let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
+    let source_name = world
+        .get::<&Roi>(source_roi)
+        .ok()
+        .map(|roi| roi.metadata.name.clone())
+        .unwrap_or_else(|| "Voxel ROI".to_string());
+    let entity = world.spawn((
+        Roi::new_mesh(
+            RoiId(next_roi_id),
+            format!("{source_name} (Mesh)"),
+            extracted,
+        ),
+        LayerSettings { opacity: 0.5 },
+        RoiTag,
+    ));
+    if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
+        // Preserve source voxel geometry as extraction/provenance context.
+        // Rendering projects mesh world-mm vertices through main display volume geometry.
+        roi.session_caches.voxel = Some(VoxelCache {
+            data: source_voxel,
+            gpu_resources: None,
+        });
+    }
+    Ok(entity)
+}
+
+pub fn voxel_data_for_display_surface_extraction(
+    world: &World,
+    source_roi: hecs::Entity,
+) -> Result<VoxelData, DisplayVoxelSourceError> {
+    let source_voxel = {
+        let roi = world
+            .get::<&Roi>(source_roi)
+            .map_err(|_| DisplayVoxelSourceError::MissingRoi)?;
+        match &roi.authoritative_data {
+            RoiAuthoritativeData::Voxel(voxel) => voxel.clone(),
+            RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh(_) => {
+                return Err(DisplayVoxelSourceError::NotVoxelRoi);
+            }
+        }
+    };
+
+    let _ = main_volume_geometry(world).ok_or(DisplayVoxelSourceError::MissingMainVolume)?;
+    Ok(source_voxel)
+}
+
+pub fn create_mesh_roi_from_contour_roi(
+    world: &mut World,
+    source_roi: hecs::Entity,
+) -> Result<hecs::Entity, ContourMeshCreationError> {
+    let source_voxel = {
+        let roi = world
+            .get::<&Roi>(source_roi)
+            .map_err(|_| ContourMeshCreationError::MissingRoi)?;
+        if !matches!(&roi.authoritative_data, RoiAuthoritativeData::Contour(_)) {
+            return Err(ContourMeshCreationError::NotContourRoi);
+        }
+        let Some(cache) = roi.voxel_cache() else {
+            return Err(ContourMeshCreationError::MissingCurrentVoxelCache);
+        };
+        if !roi.is_cache_current(RoiCacheKind::Voxel) {
+            return Err(ContourMeshCreationError::MissingCurrentVoxelCache);
+        }
+        cache.data.clone()
+    };
+
+    let extracted = extract_mesh_from_voxel_data(&source_voxel)
+        .map_err(ContourMeshCreationError::ExtractionFailed)?;
+
+    let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
+    let source_name = world
+        .get::<&Roi>(source_roi)
+        .ok()
+        .map(|roi| roi.metadata.name.clone())
+        .unwrap_or_else(|| "Contour ROI".to_string());
+    let entity = world.spawn((
+        Roi::new_mesh(
+            RoiId(next_roi_id),
+            format!("{source_name} (Mesh)"),
+            extracted,
+        ),
+        LayerSettings { opacity: 0.5 },
+        RoiTag,
+    ));
+    if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
+        // Preserve contour-derived voxel geometry as extraction/provenance context.
+        // Rendering projects mesh world-mm vertices through main display volume geometry.
         roi.session_caches.voxel = Some(VoxelCache {
             data: source_voxel,
             gpu_resources: None,
@@ -1078,6 +1220,12 @@ mod tests {
     }
 
     #[test]
+    fn test_main_volume_geometry_returns_none_when_missing() {
+        let world = World::new();
+        assert!(main_volume_geometry(&world).is_none());
+    }
+
+    #[test]
     fn test_visible_voxel_overlay_count_ignores_non_renderable_rois() {
         let mut world = World::new();
         let first = spawn_test_roi(&mut world);
@@ -1381,6 +1529,214 @@ mod tests {
                     family: PlaneFamily::Oblique
                 }
             ))
+        );
+    }
+
+    #[test]
+    fn test_create_mesh_roi_from_voxel_roi_keeps_source_unchanged() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        let source = spawn_sparse_voxel_roi(&mut world);
+        let before = {
+            let roi = world.get::<&Roi>(source).unwrap();
+            match &roi.authoritative_data {
+                RoiAuthoritativeData::Voxel(voxel) => voxel.clone(),
+                RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh(_) => {
+                    panic!("source must remain voxel-primary")
+                }
+            }
+        };
+
+        let _mesh = create_mesh_roi_from_voxel_roi(&mut world, source)
+            .expect("mesh ROI creation should succeed for voxel source");
+
+        let after = {
+            let roi = world.get::<&Roi>(source).unwrap();
+            match &roi.authoritative_data {
+                RoiAuthoritativeData::Voxel(voxel) => voxel.clone(),
+                RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh(_) => {
+                    panic!("source must remain voxel-primary")
+                }
+            }
+        };
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn test_create_mesh_roi_from_voxel_roi_returns_mesh_primary_roi() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        let source = spawn_sparse_voxel_roi(&mut world);
+
+        let created = create_mesh_roi_from_voxel_roi(&mut world, source)
+            .expect("mesh ROI creation should succeed for voxel source");
+        let roi = world
+            .get::<&Roi>(created)
+            .expect("created ROI should exist");
+
+        assert_eq!(roi.primary_representation, PrimaryRepresentation::Mesh);
+        assert!(roi.mesh_data().is_some());
+        assert!(roi.voxel_cache().is_some());
+    }
+
+    #[test]
+    fn test_create_mesh_roi_from_voxel_roi_rejects_non_voxel_source() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        let source = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+
+        let result = create_mesh_roi_from_voxel_roi(&mut world, source);
+        assert_eq!(result, Err(VoxelMeshCreationError::NotVoxelRoi));
+    }
+
+    #[test]
+    fn test_create_mesh_roi_from_voxel_roi_rejects_missing_main_volume() {
+        let mut world = World::new();
+        let source = spawn_sparse_voxel_roi(&mut world);
+        let result = create_mesh_roi_from_voxel_roi(&mut world, source);
+        assert_eq!(result, Err(VoxelMeshCreationError::MissingMainVolume));
+    }
+
+    #[test]
+    fn test_voxel_data_for_display_surface_extraction_returns_authoritative_when_geometry_matches()
+    {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        let source = spawn_sparse_voxel_roi(&mut world);
+        let source_voxel = world
+            .get::<&Roi>(source)
+            .ok()
+            .and_then(|roi| roi.voxel_cache().map(|cache| cache.data.clone()))
+            .expect("source voxel");
+
+        let display_voxel =
+            voxel_data_for_display_surface_extraction(&world, source).expect("display source");
+        assert_eq!(display_voxel, source_voxel);
+    }
+
+    #[test]
+    fn test_voxel_data_for_display_surface_extraction_accepts_mismatched_geometry() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        let source = world.spawn((Roi::new_voxel_with_cache(
+            RoiId(42),
+            "Mismatched".to_string(),
+            VoxelGeometry {
+                dimensions: [4, 4, 4],
+                spacing: [2.0, 2.0, 2.0],
+                origin: [0.0, 0.0, 0.0],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
+            {
+                let mut raw = vec![0_u8; 64];
+                raw[21] = 1;
+                raw
+            },
+            None,
+        ),));
+
+        let result = voxel_data_for_display_surface_extraction(&world, source);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_create_mesh_roi_from_voxel_roi_accepts_mismatched_geometry() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        let source = world.spawn((Roi::new_voxel_with_cache(
+            RoiId(43),
+            "Mismatched".to_string(),
+            VoxelGeometry {
+                dimensions: [4, 4, 4],
+                spacing: [2.0, 2.0, 2.0],
+                origin: [0.0, 0.0, 0.0],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
+            {
+                let mut raw = vec![0_u8; 64];
+                raw[21] = 1;
+                raw
+            },
+            None,
+        ),));
+
+        let result = create_mesh_roi_from_voxel_roi(&mut world, source);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_create_mesh_roi_from_voxel_roi_spawns_mesh_when_geometry_is_mismatched() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        let source = world.spawn((Roi::new_voxel_with_cache(
+            RoiId(44),
+            "Mismatched".to_string(),
+            VoxelGeometry {
+                dimensions: [4, 4, 4],
+                spacing: [2.0, 2.0, 2.0],
+                origin: [0.0, 0.0, 0.0],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
+            {
+                let mut raw = vec![0_u8; 64];
+                raw[21] = 1;
+                raw
+            },
+            None,
+        ),));
+
+        let roi_count_before = world.query::<&Roi>().iter().count();
+        let result = create_mesh_roi_from_voxel_roi(&mut world, source);
+        let roi_count_after = world.query::<&Roi>().iter().count();
+
+        assert!(result.is_ok());
+        assert!(roi_count_after > roi_count_before);
+    }
+
+    #[test]
+    fn test_create_mesh_roi_from_contour_roi_succeeds_with_current_voxel_cache() {
+        let mut world = World::new();
+        let source = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+        let source_voxel = VoxelData {
+            geometry: VoxelGeometry {
+                dimensions: [4, 4, 4],
+                spacing: [1.0, 1.0, 1.0],
+                origin: [0.0, 0.0, 0.0],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
+            raw_data: {
+                let mut raw = vec![0_u8; 64];
+                raw[(2 * 4 + 1) * 4 + 1] = 1;
+                raw
+            },
+        };
+        {
+            let mut roi = world.get::<&mut Roi>(source).unwrap();
+            roi.session_caches.voxel = Some(VoxelCache {
+                data: source_voxel,
+                gpu_resources: None,
+            });
+            roi.dirty_state.voxel_cache_dirty = false;
+            roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+        }
+
+        let created = create_mesh_roi_from_contour_roi(&mut world, source)
+            .expect("contour source should succeed when current voxel cache exists");
+        let roi = world.get::<&Roi>(created).unwrap();
+        assert_eq!(roi.primary_representation, PrimaryRepresentation::Mesh);
+        assert!(roi.mesh_data().is_some());
+        assert!(roi.voxel_cache().is_some());
+    }
+
+    #[test]
+    fn test_create_mesh_roi_from_contour_roi_requires_current_voxel_cache() {
+        let mut world = World::new();
+        let source = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+
+        let result = create_mesh_roi_from_contour_roi(&mut world, source);
+        assert_eq!(
+            result,
+            Err(ContourMeshCreationError::MissingCurrentVoxelCache)
         );
     }
 

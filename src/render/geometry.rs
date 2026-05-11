@@ -1,7 +1,11 @@
 // src/geometry.rs
 // use crate::components::ViewState; // Removed
 use crate::components::VoxelGeometry;
+use crate::components::{
+    AppEntities, MainVolumeTag, Transform, Viewport, ViewportState, VolumeData, WindowSettings,
+};
 use glam::Vec3;
+use hecs::World;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -65,6 +69,75 @@ pub struct ViewProjection {
     pub aspect_ratios: [f32; 3],
     pub geometry: VoxelGeometry,
     pub cursor_pos: [f32; 3],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DisplayProjectionContext {
+    pub main_geometry: VoxelGeometry,
+    pub viewport_rect: [f32; 4],
+    pub window_size: [f32; 2],
+    pub screen_aspect: f32,
+    pub zoom: f32,
+    pub pan: [f32; 2],
+    pub pivot: [f32; 2],
+    pub cursor_pos: [f32; 3],
+    pub display_aspect_ratios: [f32; 3],
+    pub composed_rotation_3d: [f32; 4],
+}
+
+impl DisplayProjectionContext {
+    pub fn view_projection_3d(self) -> ViewProjection {
+        ViewProjection {
+            zoom: self.zoom,
+            pan: self.pan,
+            pivot: self.pivot,
+            rotation: self.composed_rotation_3d,
+            aspect_ratios: self.display_aspect_ratios,
+            geometry: self.main_geometry,
+            cursor_pos: self.cursor_pos,
+        }
+    }
+}
+
+pub fn build_display_projection_context(
+    world: &World,
+    entities: &AppEntities,
+    viewport: &Viewport,
+    viewport_state: &ViewportState,
+) -> Option<DisplayProjectionContext> {
+    let mut volume_query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
+    let (_, main_volume) = volume_query.iter().next()?;
+    let main_geometry = crate::app::roi_runtime::main_volume_geometry(world)?;
+
+    let window_size = world
+        .get::<&WindowSettings>(entities.window_settings)
+        .map(|settings| [settings.width as f32, settings.height as f32])
+        .ok()?;
+    let cursor_pos = world
+        .get::<&Transform>(entities.cursor)
+        .map(|cursor| cursor.position)
+        .unwrap_or([0.5, 0.5, 0.5]);
+    let screen_aspect = if viewport.rect[3] > 0.0 {
+        viewport.rect[2] / viewport.rect[3]
+    } else {
+        1.0
+    };
+
+    Some(DisplayProjectionContext {
+        main_geometry,
+        viewport_rect: viewport.rect,
+        window_size,
+        screen_aspect,
+        zoom: viewport_state.zoom,
+        pan: viewport_state.pan,
+        pivot: viewport_state.pivot,
+        cursor_pos,
+        display_aspect_ratios: main_volume.aspect_ratios(),
+        composed_rotation_3d: crate::util::orientation::compose_view_rotation(
+            main_volume.orientation,
+            viewport_state.user_rotation,
+        ),
+    })
 }
 
 /// Project a world position (0..1) to Normalized Device Coordinates (0..1 relative to viewport)

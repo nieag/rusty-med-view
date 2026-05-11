@@ -29,6 +29,13 @@
   - descriptive system names like `sys_prepare_render_data`.
 - Keep public APIs explicit in `mod.rs`; avoid broad re-exports unless needed.
 
+## Rendering Architecture Invariants
+- `egui` is GUI only: panels, controls, dialogs, status text, and explicitly temporary debug diagnostics.
+- Do not use egui painting for viewer-scene content such as medical images, ROI overlays, contours, contour points, mesh surfaces, mesh wireframes, or segmentation geometry.
+- Viewport-rendered content must go through native WGPU rendering under `src/render/` and `src/shaders/`, with renderer-owned viewport clipping/scissoring.
+- Projection and coordinate-space logic must use shared helpers in `src/convert/` or `src/util/orientation.rs`; do not add ad hoc viewport projection math in `src/gui/`.
+- See `docs/rendering-architecture.md` before implementing or reviewing rendering-related work.
+
 ## Testing Guidelines
 - Add unit tests with each non-trivial behavior change.
 - Test names should describe outcome, e.g. `test_plane_distance_to_slice_index_matches_center_convention`.

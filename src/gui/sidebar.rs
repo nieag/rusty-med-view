@@ -373,6 +373,109 @@ pub fn draw_sidebar(
             }
         });
 
+        ui.horizontal(|ui| {
+            if ui
+                .small_button("Create mesh (all non-zero)")
+                .on_hover_text("Create a mesh-primary ROI from all non-zero voxels of the active voxel ROI, or from the active contour ROI's current voxel cache.")
+                .clicked()
+            {
+                let active_roi = world
+                    .get::<&EditorState>(entities.editor)
+                    .ok()
+                    .and_then(|editor| editor.active_roi);
+                if let Some(source_roi) = active_roi {
+                    let source_kind = world
+                        .get::<&Roi>(source_roi)
+                        .ok()
+                        .map(|roi| roi.primary_representation);
+
+                    let result = match source_kind {
+                        Some(PrimaryRepresentation::Voxel) => {
+                            roi_runtime::create_mesh_roi_from_voxel_roi(world, source_roi)
+                                .map_err(|err| match err {
+                                    roi_runtime::VoxelMeshCreationError::MissingRoi => {
+                                        "Cannot create mesh ROI: active ROI is missing from the scene."
+                                            .to_string()
+                                    }
+                                    roi_runtime::VoxelMeshCreationError::NotVoxelRoi => {
+                                        "Cannot create mesh ROI: active ROI is not voxel-primary."
+                                            .to_string()
+                                    }
+                                    roi_runtime::VoxelMeshCreationError::MissingMainVolume => {
+                                        "Cannot create mesh ROI: main display volume is unavailable."
+                                            .to_string()
+                                    }
+                                    roi_runtime::VoxelMeshCreationError::EmptyMeshFromNonEmptySource => {
+                                        "Cannot create mesh ROI: mesh extraction produced no surface from a non-empty voxel ROI.".to_string()
+                                    }
+                                    roi_runtime::VoxelMeshCreationError::ExtractionFailed(err) => {
+                                        format!("Mesh extraction failed: {err:?}.")
+                                    }
+                                })
+                        }
+                        Some(PrimaryRepresentation::Contour) => {
+                            roi_runtime::create_mesh_roi_from_contour_roi(world, source_roi)
+                                .map_err(|err| match err {
+                                    roi_runtime::ContourMeshCreationError::MissingRoi => {
+                                        "Cannot create mesh ROI: active ROI is missing from the scene."
+                                            .to_string()
+                                    }
+                                    roi_runtime::ContourMeshCreationError::NotContourRoi => {
+                                        "Cannot create mesh ROI: active ROI is not contour-primary."
+                                            .to_string()
+                                    }
+                                    roi_runtime::ContourMeshCreationError::MissingCurrentVoxelCache => {
+                                        "Cannot create mesh ROI: contour ROI has no current voxel cache."
+                                            .to_string()
+                                    }
+                                    roi_runtime::ContourMeshCreationError::ExtractionFailed(err) => {
+                                        format!("Mesh extraction failed: {err:?}.")
+                                    }
+                                })
+                        }
+                        Some(PrimaryRepresentation::Mesh) => {
+                            Err("Cannot create mesh ROI: active ROI is already mesh-primary."
+                                .to_string())
+                        }
+                        None => Err(
+                            "Cannot create mesh ROI: active ROI is missing from the scene."
+                                .to_string(),
+                        ),
+                    };
+
+                    match result {
+                        Ok(new_entity) => {
+                            new_active_roi = Some(new_entity);
+                            let source_name = world
+                                .get::<&Roi>(source_roi)
+                                .ok()
+                                .map(|roi| roi.metadata.name.clone())
+                                .unwrap_or_else(|| "ROI".to_string());
+                            let new_name = world
+                                .get::<&Roi>(new_entity)
+                                .ok()
+                                .map(|roi| roi.metadata.name.clone())
+                                .unwrap_or_else(|| "Mesh ROI".to_string());
+                            handlers::set_status_message(
+                                world,
+                                entities,
+                                format!(
+                                    "Created mesh ROI '{new_name}' from all non-zero voxels in '{source_name}'."
+                                ),
+                            );
+                        }
+                        Err(message) => handlers::set_status_message(world, entities, message),
+                    }
+                } else {
+                    handlers::set_status_message(
+                        world,
+                        entities,
+                        "Cannot create mesh ROI: no active ROI selected.".to_string(),
+                    );
+                }
+            }
+        });
+
         let mut active_contour_plane_family = new_active_roi.and_then(|entity| {
             world
                 .get::<&Roi>(entity)
