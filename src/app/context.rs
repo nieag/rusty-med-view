@@ -51,18 +51,28 @@ pub struct RenderingContext {
     pub event_proxy: EventLoopProxy<AppEvent>,
 }
 
+#[derive(Debug, Clone)]
+pub struct RenderingInitError {
+    pub category: &'static str,
+    pub message: String,
+}
+
 impl RenderingContext {
     pub async fn new(
         instance: &wgpu::Instance,
         window: Arc<Window>,
         event_proxy: EventLoopProxy<AppEvent>,
-    ) -> Self {
+    ) -> Result<Self, RenderingInitError> {
         log::info!("Initializing Rendering Context...");
         let size = window.inner_size();
 
-        let surface = instance
-            .create_surface(window.clone())
-            .expect("Failed to create surface");
+        let surface =
+            instance
+                .create_surface(window.clone())
+                .map_err(|err| RenderingInitError {
+                    category: "wgpu.surface",
+                    message: format!("Failed to create surface: {err}"),
+                })?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
@@ -70,12 +80,18 @@ impl RenderingContext {
                 force_fallback_adapter: false,
             })
             .await
-            .expect("Failed to find an appropriate adapter.");
+            .map_err(|err| RenderingInitError {
+                category: "wgpu.adapter",
+                message: format!("Failed to find an appropriate adapter: {err:?}"),
+            })?;
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor::default())
             .await
-            .expect("Failed to create device");
+            .map_err(|err| RenderingInitError {
+                category: "wgpu.device",
+                message: format!("Failed to create device: {err}"),
+            })?;
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps.formats[0];
@@ -202,7 +218,7 @@ impl RenderingContext {
             None,
         );
 
-        RenderingContext {
+        Ok(RenderingContext {
             window,
             gpu: GpuState {
                 device,
@@ -229,6 +245,6 @@ impl RenderingContext {
             gui,
             settings_entity,
             event_proxy,
-        }
+        })
     }
 }

@@ -51,6 +51,12 @@ pub struct QaSnapshotQa {
     pub version: u32,
     pub requested_sample: Option<String>,
     pub requested_preset: Option<String>,
+    pub sample_phase: QaSamplePhase,
+    pub preset_phase: QaPresetPhase,
+    pub readiness_blockers: Vec<String>,
+    pub preset_applied_frame: Option<u64>,
+    pub last_presented_frame: Option<u64>,
+    pub active_qa_roi: Option<String>,
     pub ready: bool,
     pub last_error: Option<QaError>,
 }
@@ -80,6 +86,9 @@ pub struct QaSnapshotRoi {
     pub name: String,
     pub visible: bool,
     pub active: bool,
+    pub overlay_slot: Option<u32>,
+    pub voxel_dimensions: Option<[u32; 3]>,
+    pub non_empty_voxel_bounds: Option<[[u32; 3]; 2]>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -88,6 +97,7 @@ pub struct QaSnapshotViewport {
     pub rect: [f32; 4],
     pub ready: bool,
     pub overlay_renderable: bool,
+    pub readiness_blockers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -161,6 +171,34 @@ pub struct QaRuntime {
     pub log_buffer: QaLogBuffer,
     pub last_error: Option<QaError>,
     pub frame_counter: u64,
+    pub sample_phase: QaSamplePhase,
+    pub preset_phase: QaPresetPhase,
+    pub preset_applied_frame: Option<u64>,
+    pub last_presented_frame: Option<u64>,
+    pub active_qa_roi: Option<String>,
+    pub sample_bootstrap_started: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QaSamplePhase {
+    NotRequested,
+    FetchingVolume,
+    LoadingVolume,
+    FetchingLabel,
+    LoadingLabel,
+    Loaded,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QaPresetPhase {
+    NotRequested,
+    PendingSample,
+    Applying,
+    Applied,
+    Failed,
 }
 
 impl QaRuntime {
@@ -176,11 +214,20 @@ impl QaRuntime {
             log_buffer: QaLogBuffer::new(QA_LOG_CAPACITY),
             last_error: None,
             frame_counter: 0,
+            sample_phase: QaSamplePhase::NotRequested,
+            preset_phase: QaPresetPhase::NotRequested,
+            preset_applied_frame: None,
+            last_presented_frame: None,
+            active_qa_roi: None,
+            sample_bootstrap_started: false,
         }
     }
 
     pub fn ready(&self) -> bool {
-        self.enabled && self.requested_sample.is_none() && self.requested_preset.is_none()
+        self.enabled
+            && self.requested_sample.is_none()
+            && self.requested_preset.is_none()
+            && self.last_error.is_none()
     }
 
     pub fn log(

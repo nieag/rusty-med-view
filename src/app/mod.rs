@@ -8,6 +8,8 @@ use crate::app::components::*;
 use crate::app::context::RenderingContext;
 use crate::app::events::AppEvent;
 use crate::io::handlers;
+#[cfg(target_arch = "wasm32")]
+use crate::io::nifti::{load_label_from_bytes, load_nifti_from_bytes};
 use crate::render::pipeline;
 use crate::render::protocols;
 use crate::systems;
@@ -15,6 +17,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_futures::JsFuture;
 use winit::{
     application::ApplicationHandler,
     event::*,
@@ -24,6 +28,139 @@ use winit::{
 
 /// Pixel-to-line scroll normalization factor for trackpad deltas.
 const PIXEL_SCROLL_FACTOR: f64 = 0.05;
+const QA_SAMPLE_LIVER_0: &str = "liver_0";
+const QA_PRESET_IMAGE_LABEL_MPR_BASIC: &str = "image_label_mpr_basic";
+
+fn non_empty_voxel_bounds(raw: &[u8], dims: [u32; 3]) -> Option<[[u32; 3]; 2]> {
+    if dims.contains(&0) {
+        return None;
+    }
+    let [dx, dy, dz] = dims;
+    let mut min = [u32::MAX; 3];
+    let mut max = [0_u32; 3];
+    let mut found = false;
+    let stride_y = dx as usize;
+    let stride_z = (dx as usize).saturating_mul(dy as usize);
+    for z in 0..dz {
+        for y in 0..dy {
+            for x in 0..dx {
+                let idx = (z as usize)
+                    .saturating_mul(stride_z)
+                    .saturating_add((y as usize).saturating_mul(stride_y))
+                    .saturating_add(x as usize);
+                if raw.get(idx).copied().unwrap_or(0) == 0 {
+                    continue;
+                }
+                found = true;
+                min[0] = min[0].min(x);
+                min[1] = min[1].min(y);
+                min[2] = min[2].min(z);
+                max[0] = max[0].max(x);
+                max[1] = max[1].max(y);
+                max[2] = max[2].max(z);
+            }
+        }
+    }
+    found.then_some([min, max])
+}
+
+#[cfg(target_arch = "wasm32")]
+fn spawn_qa_fetch_volume(proxy: EventLoopProxy<AppEvent>) {
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = fetch_bytes("/qa_samples/liver_0.nii")
+            .await
+            .and_then(|bytes| {
+                load_nifti_from_bytes(&bytes)
+                    .map(LoadResult::Volume)
+                    .map_err(|e| e.to_string())
+            });
+        let event = result.map_err(crate::io::nifti::LoadError::DimensionError);
+        let _ = proxy.send_event(AppEvent::VolumeLoaded(event));
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+fn spawn_qa_fetch_label(proxy: EventLoopProxy<AppEvent>) {
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = fetch_bytes("/qa_samples/liver_0_label.nii")
+            .await
+            .and_then(|bytes| {
+                load_label_from_bytes(&bytes, "liver_0_label.nii".to_string())
+                    .map(LoadResult::Label)
+                    .map_err(|e| e.to_string())
+            });
+        let event = result.map_err(crate::io::nifti::LoadError::DimensionError);
+        let _ = proxy.send_event(AppEvent::VolumeLoaded(event));
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn fetch_bytes(path: &str) -> Result<Vec<u8>, String> {
+    let window = web_sys::window().ok_or_else(|| "window missing".to_string())?;
+    let response_js = JsFuture::from(window.fetch_with_str(path))
+        .await
+        .map_err(|err| format!("{err:?}"))?;
+    let ok = js_sys::Reflect::get(&response_js, &"ok".into())
+        .ok()
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !ok {
+        let status = js_sys::Reflect::get(&response_js, &"status".into())
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(-1.0);
+        return Err(format!("http {status} for {path}"));
+    }
+    let array_buffer_fn = js_sys::Reflect::get(&response_js, &"arrayBuffer".into())
+        .map_err(|_| format!("arrayBuffer missing for {path}"))?;
+    let array_buffer_promise = js_sys::Function::from(array_buffer_fn)
+        .call0(&response_js)
+        .map_err(|_| format!("arrayBuffer call failed for {path}"))?;
+    let array_buffer = JsFuture::from(js_sys::Promise::from(array_buffer_promise))
+        .await
+        .map_err(|err| format!("{err:?}"))?;
+    let bytes = js_sys::Uint8Array::new(&array_buffer).to_vec();
+    Ok(bytes)
+}
+
+fn apply_image_label_mpr_basic_preset(
+    world: &mut hecs::World,
+    entities: &AppEntities,
+    active_roi: hecs::Entity,
+) -> bool {
+    protocols::apply_protocol(world, entities, "Standard 2x2");
+    if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
+        editor.active_roi = Some(active_roi);
+    }
+    if let Ok(mut roi) = world.get::<&mut Roi>(active_roi) {
+        roi.metadata.is_visible = true;
+        if let Some(cache) = roi.voxel_cache() {
+            if let Some(bounds) =
+                non_empty_voxel_bounds(&cache.data.raw_data, cache.data.geometry.dimensions)
+            {
+                let Some(main_geometry) = roi_runtime::main_volume_voxel_geometry(world) else {
+                    return false;
+                };
+                let center = [
+                    (bounds[0][0] + bounds[1][0]) as f32 * 0.5,
+                    (bounds[0][1] + bounds[1][1]) as f32 * 0.5,
+                    (bounds[0][2] + bounds[1][2]) as f32 * 0.5,
+                ];
+                let roi_uv = crate::convert::voxel_index_to_volume_uv(
+                    center,
+                    cache.data.geometry.dimensions,
+                );
+                let world_mm = crate::convert::volume_uv_to_world_mm(roi_uv, cache.data.geometry);
+                let uv = crate::convert::world_mm_to_volume_uv(world_mm, main_geometry);
+                if let Ok(mut cursor) = world.get::<&mut Transform>(entities.cursor) {
+                    cursor.position = uv;
+                }
+                return true;
+            }
+        }
+    }
+    false
+}
 
 pub struct AppState {
     pub context: Option<RenderingContext>,
@@ -44,6 +181,12 @@ impl App {
     ) -> Self {
         let mut qa = qa::QaRuntime::new(qa_enabled, requested_sample, requested_preset);
         if qa_enabled {
+            if qa.requested_sample.as_deref() == Some(QA_SAMPLE_LIVER_0) {
+                qa.sample_phase = qa::QaSamplePhase::NotRequested;
+            }
+            if qa.requested_preset.as_deref() == Some(QA_PRESET_IMAGE_LABEL_MPR_BASIC) {
+                qa.preset_phase = qa::QaPresetPhase::PendingSample;
+            }
             qa.log(
                 0,
                 qa::QaLevel::Info,
@@ -68,15 +211,6 @@ impl Default for App {
 
 impl AppState {
     pub fn qa_state_snapshot(&self) -> qa::QaSnapshot {
-        let qa_info = qa::QaSnapshotQa {
-            enabled: self.qa.enabled,
-            version: qa::QA_API_VERSION,
-            requested_sample: self.qa.requested_sample.clone(),
-            requested_preset: self.qa.requested_preset.clone(),
-            ready: self.qa.ready(),
-            last_error: self.qa.last_error.clone(),
-        };
-
         if let Some(ctx) = &self.context {
             let status = ctx
                 .scene
@@ -103,17 +237,48 @@ impl AppState {
 
             let mut active_roi_id = None;
             let mut active_roi_name = None;
+            let renderable =
+                roi_runtime::renderable_voxel_overlay_rois(&ctx.scene.world, active_roi_entity);
+            let mut overlay_slots: std::collections::HashMap<hecs::Entity, u32> =
+                std::collections::HashMap::new();
+            for (idx, overlay) in renderable.iter().enumerate() {
+                overlay_slots.insert(overlay.entity, idx as u32);
+            }
+
             let mut rois = Vec::new();
+            let mut active_roi_non_empty_bounds = None;
+            let mut active_roi_dims = None;
+            let mut active_roi_geometry = None;
+            let mut active_roi_overlay_slot = None;
+            let mut active_roi_visible = false;
+            let mut active_roi_has_renderable_cache = false;
             for (entity, roi) in ctx.scene.world.query::<&Roi>().iter() {
                 if Some(entity) == active_roi_entity {
                     active_roi_id = Some(roi.metadata.roi_id.0);
                     active_roi_name = Some(roi.metadata.name.clone());
+                    active_roi_visible = roi.metadata.is_visible;
+                    active_roi_has_renderable_cache = roi.renderable_voxel_cache().is_some();
+                }
+                let voxel_dimensions = roi
+                    .voxel_cache()
+                    .map(|cache| cache.data.geometry.dimensions);
+                let non_empty_bounds = roi.voxel_cache().and_then(|cache| {
+                    non_empty_voxel_bounds(&cache.data.raw_data, cache.data.geometry.dimensions)
+                });
+                if Some(entity) == active_roi_entity {
+                    active_roi_non_empty_bounds = non_empty_bounds;
+                    active_roi_dims = voxel_dimensions;
+                    active_roi_geometry = roi.voxel_cache().map(|cache| cache.data.geometry);
+                    active_roi_overlay_slot = overlay_slots.get(&entity).copied();
                 }
                 rois.push(qa::QaSnapshotRoi {
                     id: roi.metadata.roi_id.0,
                     name: roi.metadata.name.clone(),
                     visible: roi.metadata.is_visible,
                     active: Some(entity) == active_roi_entity,
+                    overlay_slot: overlay_slots.get(&entity).copied(),
+                    voxel_dimensions,
+                    non_empty_voxel_bounds: non_empty_bounds,
                 });
             }
 
@@ -154,6 +319,17 @@ impl AppState {
                 });
 
             let mut viewports = Vec::new();
+            let mut has_axial = false;
+            let mut has_coronal = false;
+            let mut has_sagittal = false;
+            let mut has_three_d = false;
+            let mut all_required_rects_non_zero = true;
+            let cursor_pos = ctx
+                .scene
+                .world
+                .get::<&Transform>(ctx.scene.entities.cursor)
+                .map(|cursor| cursor.position)
+                .unwrap_or([0.5, 0.5, 0.5]);
             for (_, vp) in ctx.scene.world.query::<&Viewport>().iter() {
                 let mode = match vp.mode {
                     ViewMode::ThreeD => "three_d",
@@ -163,13 +339,175 @@ impl AppState {
                     ViewMode::Oblique => "oblique",
                 };
                 let valid_rect = vp.rect[2] > 0.0 && vp.rect[3] > 0.0;
+                let mut blockers = Vec::new();
+                if !valid_rect {
+                    blockers.push("rect_non_positive".to_string());
+                }
+                let is_required = matches!(
+                    vp.mode,
+                    ViewMode::Axial | ViewMode::Coronal | ViewMode::Sagittal | ViewMode::ThreeD
+                );
+                if is_required && !valid_rect {
+                    all_required_rects_non_zero = false;
+                }
+                let mut overlay_renderable = false;
+                match vp.mode {
+                    ViewMode::Axial | ViewMode::Coronal | ViewMode::Sagittal => {
+                        if !active_roi_visible {
+                            blockers.push("active_roi_not_visible".to_string());
+                        }
+                        if active_roi_overlay_slot.is_none() {
+                            blockers.push("active_roi_overlay_slot_missing".to_string());
+                        }
+                        if active_roi_non_empty_bounds.is_none() {
+                            blockers.push("active_roi_non_empty_voxel_bounds_missing".to_string());
+                        }
+                        if let (Some(bounds), Some(dims), Some(roi_geometry), Some(main_geometry)) = (
+                            active_roi_non_empty_bounds,
+                            active_roi_dims,
+                            active_roi_geometry,
+                            roi_runtime::main_volume_voxel_geometry(&ctx.scene.world),
+                        ) {
+                            let axis = match vp.mode {
+                                ViewMode::Axial => 2,
+                                ViewMode::Coronal => 1,
+                                ViewMode::Sagittal => 0,
+                                ViewMode::ThreeD | ViewMode::Oblique => 2,
+                            };
+                            let roi_min = crate::convert::voxel_index_to_volume_uv(
+                                [
+                                    bounds[0][0] as f32,
+                                    bounds[0][1] as f32,
+                                    bounds[0][2] as f32,
+                                ],
+                                dims,
+                            );
+                            let roi_max = crate::convert::voxel_index_to_volume_uv(
+                                [
+                                    bounds[1][0] as f32,
+                                    bounds[1][1] as f32,
+                                    bounds[1][2] as f32,
+                                ],
+                                dims,
+                            );
+                            let cursor_world =
+                                crate::convert::volume_uv_to_world_mm(cursor_pos, main_geometry);
+                            let cursor_roi_uv =
+                                crate::convert::world_mm_to_volume_uv(cursor_world, roi_geometry);
+                            let min_uv = roi_min[axis].min(roi_max[axis]);
+                            let max_uv = roi_min[axis].max(roi_max[axis]);
+                            let uv = cursor_roi_uv[axis];
+                            if uv < min_uv || uv > max_uv {
+                                blockers
+                                    .push("slice_does_not_intersect_active_roi_bounds".to_string());
+                            }
+                        }
+                        overlay_renderable = blockers.is_empty() && active_roi_has_renderable_cache;
+                        if !active_roi_has_renderable_cache {
+                            blockers.push("active_roi_renderable_voxel_cache_missing".to_string());
+                        }
+                    }
+                    ViewMode::ThreeD => {}
+                    ViewMode::Oblique => {}
+                }
+                match vp.mode {
+                    ViewMode::Axial => has_axial = true,
+                    ViewMode::Coronal => has_coronal = true,
+                    ViewMode::Sagittal => has_sagittal = true,
+                    ViewMode::ThreeD => has_three_d = true,
+                    ViewMode::Oblique => {}
+                }
                 viewports.push(qa::QaSnapshotViewport {
                     mode: mode.to_string(),
                     rect: vp.rect,
                     ready: valid_rect,
-                    overlay_renderable: false,
+                    overlay_renderable,
+                    readiness_blockers: blockers,
                 });
             }
+
+            let is_qa2_request = self.qa.requested_sample.as_deref() == Some(QA_SAMPLE_LIVER_0)
+                && self.qa.requested_preset.as_deref() == Some(QA_PRESET_IMAGE_LABEL_MPR_BASIC);
+            let mut readiness_blockers = Vec::new();
+            if !self.qa.enabled {
+                readiness_blockers.push("qa_disabled".to_string());
+            }
+            if is_qa2_request {
+                if self.qa.sample_phase != qa::QaSamplePhase::Loaded {
+                    readiness_blockers.push("sample_not_loaded".to_string());
+                }
+                if self.qa.preset_phase != qa::QaPresetPhase::Applied {
+                    readiness_blockers.push("preset_not_applied".to_string());
+                }
+                if !volume.loaded {
+                    readiness_blockers.push("main_volume_not_loaded".to_string());
+                }
+                if active_roi_id.is_none() {
+                    readiness_blockers.push("active_roi_missing".to_string());
+                }
+                if !active_roi_visible {
+                    readiness_blockers.push("active_roi_not_visible".to_string());
+                }
+                if active_roi_non_empty_bounds.is_none() {
+                    readiness_blockers
+                        .push("active_roi_non_empty_voxel_bounds_missing".to_string());
+                }
+                if !active_roi_has_renderable_cache {
+                    readiness_blockers
+                        .push("active_roi_renderable_voxel_cache_missing".to_string());
+                }
+                if !has_axial {
+                    readiness_blockers.push("viewport_axial_missing".to_string());
+                }
+                if !has_coronal {
+                    readiness_blockers.push("viewport_coronal_missing".to_string());
+                }
+                if !has_sagittal {
+                    readiness_blockers.push("viewport_sagittal_missing".to_string());
+                }
+                if !has_three_d {
+                    readiness_blockers.push("viewport_three_d_missing".to_string());
+                }
+                if !all_required_rects_non_zero {
+                    readiness_blockers.push("required_viewport_rect_non_positive".to_string());
+                }
+                for vp in &viewports {
+                    if matches!(vp.mode.as_str(), "axial" | "coronal" | "sagittal")
+                        && !vp.overlay_renderable
+                    {
+                        readiness_blockers.push(format!("{}_overlay_not_renderable", vp.mode));
+                    }
+                    if vp.mode == "three_d" && !vp.ready {
+                        readiness_blockers.push("three_d_not_ready".to_string());
+                    }
+                }
+                if let Some(preset_frame) = self.qa.preset_applied_frame {
+                    match self.qa.last_presented_frame {
+                        Some(last) if last > preset_frame => {}
+                        _ => readiness_blockers.push("no_presented_frame_after_preset".to_string()),
+                    }
+                } else {
+                    readiness_blockers.push("preset_applied_frame_missing".to_string());
+                }
+            }
+            if self.qa.last_error.is_some() {
+                readiness_blockers.push("last_error_present".to_string());
+            }
+
+            let qa_info = qa::QaSnapshotQa {
+                enabled: self.qa.enabled,
+                version: qa::QA_API_VERSION,
+                requested_sample: self.qa.requested_sample.clone(),
+                requested_preset: self.qa.requested_preset.clone(),
+                sample_phase: self.qa.sample_phase,
+                preset_phase: self.qa.preset_phase,
+                readiness_blockers: readiness_blockers.clone(),
+                preset_applied_frame: self.qa.preset_applied_frame,
+                last_presented_frame: self.qa.last_presented_frame,
+                active_qa_roi: self.qa.active_qa_roi.clone(),
+                ready: readiness_blockers.is_empty(),
+                last_error: self.qa.last_error.clone(),
+            };
 
             let app = qa::QaSnapshotApp {
                 status,
@@ -180,7 +518,7 @@ impl AppState {
             };
 
             let render = qa::QaSnapshotRender {
-                overlay_slots_used: 0,
+                overlay_slots_used: renderable.len() as u32,
                 overlay_slots_max: 2,
             };
 
@@ -193,6 +531,29 @@ impl AppState {
                 render,
             }
         } else {
+            let mut readiness_blockers = Vec::new();
+            let is_qa2_request = self.qa.requested_sample.as_deref() == Some(QA_SAMPLE_LIVER_0)
+                && self.qa.requested_preset.as_deref() == Some(QA_PRESET_IMAGE_LABEL_MPR_BASIC);
+            if self.qa.enabled && is_qa2_request {
+                readiness_blockers.push("app_context_not_ready".to_string());
+            }
+            if self.qa.last_error.is_some() {
+                readiness_blockers.push("last_error_present".to_string());
+            }
+            let qa_info = qa::QaSnapshotQa {
+                enabled: self.qa.enabled,
+                version: qa::QA_API_VERSION,
+                requested_sample: self.qa.requested_sample.clone(),
+                requested_preset: self.qa.requested_preset.clone(),
+                sample_phase: self.qa.sample_phase,
+                preset_phase: self.qa.preset_phase,
+                readiness_blockers: readiness_blockers.clone(),
+                preset_applied_frame: self.qa.preset_applied_frame,
+                last_presented_frame: self.qa.last_presented_frame,
+                active_qa_roi: self.qa.active_qa_roi.clone(),
+                ready: readiness_blockers.is_empty(),
+                last_error: self.qa.last_error.clone(),
+            };
             qa::QaSnapshot {
                 qa: qa_info,
                 app: qa::QaSnapshotApp {
@@ -229,6 +590,9 @@ impl AppState {
                 .filter(|(_, roi)| roi.metadata.is_visible)
                 .count()
         });
+        let overlay_slots_used = self.context.as_ref().map_or(0, |ctx| {
+            roi_runtime::renderable_voxel_overlay_rois(&ctx.scene.world, None).len() as u32
+        });
         let warning_count = self
             .qa
             .log_buffer
@@ -248,7 +612,7 @@ impl AppState {
         qa::QaMetricsSnapshot {
             frame_counter: self.qa.frame_counter,
             visible_rois,
-            overlay_slots_used: 0,
+            overlay_slots_used,
             overlay_slots_max: 2,
             warning_count,
             error_count,
@@ -277,18 +641,68 @@ impl ApplicationHandler<AppEvent> for App {
 
             #[cfg(not(target_arch = "wasm32"))]
             {
-                let context =
-                    pollster::block_on(RenderingContext::new(&self.instance, window, proxy));
-                self.state.lock().unwrap().context = Some(context);
+                match pollster::block_on(RenderingContext::new(&self.instance, window, proxy)) {
+                    Ok(context) => self.state.lock().unwrap().context = Some(context),
+                    Err(err) => {
+                        log::error!("{}", err.message);
+                        let mut guard = self.state.lock().unwrap();
+                        if guard.qa.enabled {
+                            let mut fields = BTreeMap::new();
+                            fields.insert("error".to_string(), err.message.clone());
+                            let frame = guard.qa.frame_counter;
+                            let _event = guard.qa.log(
+                                frame,
+                                qa::QaLevel::Error,
+                                err.category,
+                                "rendering context initialization failed",
+                                fields.clone(),
+                            );
+                            guard
+                                .qa
+                                .set_error(err.category, err.message.clone(), fields);
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                let json = qa::to_json(&event);
+                                web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(&json));
+                            }
+                        }
+                    }
+                }
             }
 
             #[cfg(target_arch = "wasm32")]
             {
                 let state_clone = self.state.clone();
                 let instance_clone = self.instance.clone();
+                let proxy_clone = proxy.clone();
                 wasm_bindgen_futures::spawn_local(async move {
-                    let context = RenderingContext::new(&instance_clone, window, proxy).await;
-                    state_clone.lock().unwrap().context = Some(context);
+                    match RenderingContext::new(&instance_clone, window, proxy).await {
+                        Ok(context) => {
+                            state_clone.lock().unwrap().context = Some(context);
+                            let _ = proxy_clone.send_event(AppEvent::QaStartSampleLoad);
+                        }
+                        Err(err) => {
+                            log::error!("{}", err.message);
+                            let mut guard = state_clone.lock().unwrap();
+                            if guard.qa.enabled {
+                                let mut fields = BTreeMap::new();
+                                fields.insert("error".to_string(), err.message.clone());
+                                let frame = guard.qa.frame_counter;
+                                let event = guard.qa.log(
+                                    frame,
+                                    qa::QaLevel::Error,
+                                    err.category,
+                                    "rendering context initialization failed",
+                                    fields.clone(),
+                                );
+                                guard
+                                    .qa
+                                    .set_error(err.category, err.message.clone(), fields);
+                                let json = qa::to_json(&event);
+                                web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(&json));
+                            }
+                        }
+                    }
                 });
             }
         }
@@ -374,6 +788,7 @@ impl ApplicationHandler<AppEvent> for App {
             }
             WindowEvent::RedrawRequested => {
                 qa_runtime.frame_counter = qa_runtime.frame_counter.saturating_add(1);
+                qa_runtime.last_presented_frame = Some(qa_runtime.frame_counter);
                 let repaint_after = pipeline::render_frame(
                     &ctx.gpu,
                     &ctx.volume_resources,
@@ -403,9 +818,43 @@ impl ApplicationHandler<AppEvent> for App {
         };
 
         match event {
+            AppEvent::QaStartSampleLoad => {
+                #[cfg(target_arch = "wasm32")]
+                if qa_runtime.enabled
+                    && !qa_runtime.sample_bootstrap_started
+                    && qa_runtime.requested_sample.as_deref() == Some(QA_SAMPLE_LIVER_0)
+                {
+                    qa_runtime.sample_bootstrap_started = true;
+                    qa_runtime.sample_phase = qa::QaSamplePhase::FetchingVolume;
+                    if qa_runtime.requested_preset.as_deref()
+                        == Some(QA_PRESET_IMAGE_LABEL_MPR_BASIC)
+                    {
+                        qa_runtime.preset_phase = qa::QaPresetPhase::PendingSample;
+                    }
+                    let mut fields = BTreeMap::new();
+                    fields.insert("sample".to_string(), QA_SAMPLE_LIVER_0.to_string());
+                    qa_runtime.log(
+                        qa_runtime.frame_counter,
+                        qa::QaLevel::Info,
+                        "qa.sample",
+                        "fetching sample volume",
+                        fields,
+                    );
+                    spawn_qa_fetch_volume(ctx.event_proxy.clone());
+                }
+            }
             AppEvent::VolumeLoaded(result) => {
                 match result {
                     Ok(load_res) => {
+                        if qa_runtime.enabled {
+                            qa_runtime.sample_phase = match load_res {
+                                LoadResult::Volume(_) => qa::QaSamplePhase::LoadingVolume,
+                                LoadResult::Label(_) => qa::QaSamplePhase::LoadingLabel,
+                            };
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        let is_volume = matches!(load_res, LoadResult::Volume(_));
+                        let is_label = matches!(load_res, LoadResult::Label(_));
                         let _dims = match load_res {
                             LoadResult::Volume(ref loaded) => {
                                 let dims = handlers::handle_volume_load(
@@ -495,18 +944,106 @@ impl ApplicationHandler<AppEvent> for App {
                             },
                             active_roi,
                         );
+
+                        #[cfg(target_arch = "wasm32")]
+                        if qa_runtime.enabled
+                            && is_volume
+                            && qa_runtime.requested_sample.as_deref() == Some(QA_SAMPLE_LIVER_0)
+                        {
+                            qa_runtime.sample_phase = qa::QaSamplePhase::FetchingLabel;
+                            let mut fields = BTreeMap::new();
+                            fields.insert("sample".to_string(), QA_SAMPLE_LIVER_0.to_string());
+                            qa_runtime.log(
+                                qa_runtime.frame_counter,
+                                qa::QaLevel::Info,
+                                "qa.sample",
+                                "volume loaded, fetching label",
+                                fields,
+                            );
+                            spawn_qa_fetch_label(ctx.event_proxy.clone());
+                        }
+
+                        if qa_runtime.enabled
+                            && is_label
+                            && qa_runtime.requested_sample.as_deref() == Some(QA_SAMPLE_LIVER_0)
+                        {
+                            qa_runtime.sample_phase = qa::QaSamplePhase::Loaded;
+                            if qa_runtime.requested_preset.as_deref()
+                                == Some(QA_PRESET_IMAGE_LABEL_MPR_BASIC)
+                            {
+                                qa_runtime.preset_phase = qa::QaPresetPhase::Applying;
+                                let active_roi = ctx
+                                    .scene
+                                    .world
+                                    .get::<&EditorState>(ctx.scene.entities.editor)
+                                    .ok()
+                                    .and_then(|editor| editor.active_roi);
+                                if let Some(active_roi) = active_roi {
+                                    let ok = apply_image_label_mpr_basic_preset(
+                                        &mut ctx.scene.world,
+                                        &ctx.scene.entities,
+                                        active_roi,
+                                    );
+                                    if ok {
+                                        qa_runtime.preset_phase = qa::QaPresetPhase::Applied;
+                                        qa_runtime.preset_applied_frame =
+                                            Some(qa_runtime.frame_counter);
+                                        qa_runtime.active_qa_roi =
+                                            Some(format!("{:?}", active_roi));
+                                        let _ =
+                                            ctx.event_proxy.send_event(AppEvent::RebuildBindGroups);
+                                        qa_runtime.log(
+                                            qa_runtime.frame_counter,
+                                            qa::QaLevel::Info,
+                                            "qa.preset",
+                                            "image_label_mpr_basic applied",
+                                            BTreeMap::new(),
+                                        );
+                                    } else {
+                                        qa_runtime.preset_phase = qa::QaPresetPhase::Failed;
+                                        let fields = BTreeMap::new();
+                                        qa_runtime.set_error(
+                                            "qa.preset",
+                                            "failed to center cursor from non-empty label bounds",
+                                            fields,
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
+                        let is_qa_sample = qa_runtime.enabled
+                            && qa_runtime.requested_sample.as_deref() == Some(QA_SAMPLE_LIVER_0);
                         let mut fields = BTreeMap::new();
                         fields.insert("error".to_string(), format!("{e:?}"));
+                        let error_category = if is_qa_sample {
+                            "qa.sample"
+                        } else {
+                            "load.volume"
+                        };
                         let _event = qa_runtime.log(
                             qa_runtime.frame_counter,
                             qa::QaLevel::Error,
-                            "load.volume",
+                            error_category,
                             "volume or label load event failed",
                             fields.clone(),
                         );
-                        qa_runtime.set_error("load.volume", format!("{e:?}"), fields);
+                        if is_qa_sample {
+                            qa_runtime.set_error("qa.sample", format!("{e:?}"), fields);
+                        } else {
+                            qa_runtime.set_error("load.volume", format!("{e:?}"), fields);
+                        }
+                        if qa_runtime.enabled
+                            && qa_runtime.requested_sample.as_deref() == Some(QA_SAMPLE_LIVER_0)
+                        {
+                            qa_runtime.sample_phase = qa::QaSamplePhase::Failed;
+                            if qa_runtime.requested_preset.as_deref()
+                                == Some(QA_PRESET_IMAGE_LABEL_MPR_BASIC)
+                            {
+                                qa_runtime.preset_phase = qa::QaPresetPhase::Failed;
+                            }
+                        }
                         #[cfg(target_arch = "wasm32")]
                         if qa_runtime.enabled {
                             let json = qa::to_json(&_event);

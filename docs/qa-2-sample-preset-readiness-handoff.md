@@ -1,5 +1,18 @@
 # QA-2 Sample Preset Readiness Handoff
 
+## Implementation Status
+
+- State: implemented in codebase
+- Completed:
+  - QA sample/preset runtime phases and readiness blockers
+  - WASM sample autoload (`liver_0` image then label) via existing load handlers
+  - deterministic `image_label_mpr_basic` preset apply
+  - ROI overlay slot, voxel dims, non-empty bounds facts
+  - viewport readiness + `overlay_renderable` facts
+  - Playwright QA-2 URL readiness test
+- Pending:
+  - none in QA-2 scope
+
 This is the implementation handoff for the first agent-usable visual QA slice.
 
 Goal: make `/?qa=1&sample=liver_0&preset=image_label_mpr_basic` load a deterministic scene, expose enough structured state to crop screenshots, and make `waitForReady(...)` meaningful for that scene.

@@ -4,6 +4,7 @@ use crate::io::nifti::LoadError;
 #[derive(Debug)]
 pub enum AppEvent {
     VolumeLoaded(Result<LoadResult, LoadError>),
+    QaStartSampleLoad,
     RebuildBindGroups,
     SwitchProtocol(String),
     ToggleMaximize(hecs::Entity),
