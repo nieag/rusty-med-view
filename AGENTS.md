@@ -29,6 +29,11 @@
   - descriptive system names like `sys_prepare_render_data`.
 - Keep public APIs explicit in `mod.rs`; avoid broad re-exports unless needed.
 
+## Agent Communication Style
+- Default to `caveman` style: concise, low-token, no filler.
+- Preserve technical precision; compress wording, not meaning.
+- Use normal detail only when the user asks for explanation, teaching, or clarification.
+
 ## Rendering Architecture Invariants
 - `egui` is GUI only: panels, controls, dialogs, status text, and explicitly temporary debug diagnostics.
 - Do not use egui painting for viewer-scene content such as medical images, ROI overlays, contours, contour points, mesh surfaces, mesh wireframes, or segmentation geometry.
