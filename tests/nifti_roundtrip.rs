@@ -1,11 +1,20 @@
 /// Integration tests: load sample NIfTI files and verify basic properties.
-///
-/// Requires liver_0.nii and liver_0_label.nii in the crate root.
 use rusty_med_view::nifti_loader::{load_label_from_bytes, load_nifti_from_bytes};
+use std::path::PathBuf;
+
+fn sample_path(name: &str) -> PathBuf {
+    let qa_path = PathBuf::from("qa_samples").join(name);
+    if qa_path.exists() {
+        qa_path
+    } else {
+        PathBuf::from(name)
+    }
+}
 
 #[test]
 fn load_liver_volume() {
-    let data = std::fs::read("liver_0.nii").expect("liver_0.nii not found in crate root");
+    let data = std::fs::read(sample_path("liver_0.nii"))
+        .expect("liver_0.nii not found in qa_samples/ or crate root");
     let vol = load_nifti_from_bytes(&data).expect("Failed to load liver_0.nii");
 
     // Dimensions must be non-zero on all axes
@@ -30,8 +39,8 @@ fn load_liver_volume() {
 
 #[test]
 fn load_liver_label() {
-    let data =
-        std::fs::read("liver_0_label.nii").expect("liver_0_label.nii not found in crate root");
+    let data = std::fs::read(sample_path("liver_0_label.nii"))
+        .expect("liver_0_label.nii not found in qa_samples/ or crate root");
     let label = load_label_from_bytes(&data, "liver_0_label.nii".to_string())
         .expect("Failed to load label");
 
