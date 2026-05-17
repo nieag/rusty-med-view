@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Make the running viewer inspectable enough that an agent or reviewer can verify visual behavior in the web app without relying only on manual screenshots and human descriptions.
+Make the running viewer inspectable enough that an agent can verify visual behavior from structured state and logs.
 
 This tooling is for development and QA. It must not become part of normal clinical/viewer UI behavior.
 
@@ -19,17 +19,18 @@ Primary goals:
 Do not build:
 
 - a full automated visual regression framework in the first pass
-- pixel-perfect CI screenshot comparisons
+- pixel-perfect image comparisons
+- browser crop automation as a required QA path
 - production telemetry
 - renderer rewrites just to support QA
 - egui-based drawing of viewport scene content
 
-Screenshots are optional/manual review aids. Automated screenshot cropping and image comparison are deferred because browser/canvas coordinate spaces vary across automation environments.
+Image capture is out of scope for automated QA. Browser/canvas coordinate spaces vary across automation environments; use structured facts instead.
 
 ## Design Principles
 
 - Debug state must be queryable from the browser console or automation runtime.
-- Visual QA should rely first on structured facts. Screenshots can help humans but are not an automation acceptance gate.
+- Visual QA should rely on structured facts, not captured pixels.
 - QA tooling must be deterministic: same sample, same view preset, same viewport layout, same active ROI.
 - Geometry diagnostics must use the same central spatial contract as the app: representation-native space -> ROI geometry -> world millimetres -> viewport projection.
 - Debug overlays that appear inside viewports must use native WGPU rendering, not egui painting.
@@ -127,7 +128,7 @@ For the first pass, `overlay_renderable` means:
 - the current viewport plane/slice intersects the label world bounds
 - renderer reports no overlay warning/error after the frame
 
-Pixel-level proof, screenshot color sampling, and golden image diffs are out of scope for the first pass.
+Pixel-level proof, color sampling, and golden image diffs are out of scope.
 
 The first implementation should expose both:
 
@@ -221,7 +222,7 @@ Required `viewports` fields per viewport:
 - user rotation and composed 3D rotation
 - display projection context summary
 - visible ROI count
-- screenshot/crop rect in browser pixels
+- viewport rect diagnostics
 
 Required `render` fields:
 
@@ -368,7 +369,7 @@ The QA path must not create separate loading semantics that can pass while real 
 
 ## Structured Render Fact Workflow
 
-The browser automation layer should use structured state/logs as the primary verification surface. Screenshots remain optional/manual aids and should not be required for QA pass/fail.
+The browser automation layer should use structured state/logs as the verification surface.
 
 Required app support:
 
@@ -376,7 +377,7 @@ Required app support:
 - `state().viewports[*]` reports mode, rect validity, renderability facts, and blockers
 - `state().rois[*]` reports overlay slot, voxel dimensions, non-empty bounds, and visibility facts
 - `state().render` reports cheap render facts such as overlay slot usage and frame counters
-- `logs()` exposes load, preset, geometry, and render failures before optional screenshot capture
+- `logs()` exposes load, preset, geometry, and render failures
 
 Useful structured facts:
 
@@ -395,7 +396,7 @@ Initial review flow:
 3. Wait for `window.__viewerQa.waitForReady(...)`.
 4. Query `state()`, `metrics()`, and recent `logs()`.
 5. Report pass/fail from structured facts and blockers.
-6. Capture screenshots only if a human needs optional visual confirmation.
+6. Stop there; do not require image capture.
 
 ## Debug Overlays
 
@@ -416,7 +417,7 @@ Rules:
 - no egui painting for viewport geometry
 - overlays must be clearly marked debug-only
 - overlays must be toggleable from QA state/preset
-- overlays should be excluded from optional screenshots unless explicitly requested
+- overlays should stay opt-in if any future visual artifact path is reintroduced
 
 ## Implementation Phases
 
@@ -464,13 +465,13 @@ Deliver:
 - per-viewport renderability facts beyond QA-2 readiness
 - render-facing counters/facts for image, overlay, contour, and mesh submissions where cheap
 - structured blockers that explain why a viewport should or should not show content
-- documented automation workflow that reports state/log pass/fail without screenshots
+- documented automation workflow that reports state/log pass/fail
 
 Acceptance:
 
 - an agent can verify image+label viewport readiness from `state()` and `logs()` alone
 - an agent can explain missing image/overlay/mesh content with structured blockers
-- screenshots are optional and not required for automated QA pass/fail
+- captured pixels are not required for automated QA pass/fail
 
 ### QA-4: Geometry Debug Overlays
 
@@ -482,7 +483,7 @@ Deliver:
 
 Acceptance:
 
-- debug screenshots can show whether voxel, contour, mesh, and main volume bounds overlap as expected
+- structured debug facts can show whether voxel, contour, mesh, and main volume bounds overlap as expected
 - debug overlays do not use egui painting
 - normal viewer rendering is unchanged when debug overlays are disabled
 
@@ -492,15 +493,15 @@ Deliver only after QA-1 through QA-4 are stable.
 
 Possible additions:
 
-- optional screenshot artifacts for stable presets
+- optional non-blocking visual artifacts only if a later plan reintroduces them
 - perceptual/image-diff thresholds
-- CI artifact upload rather than strict fail initially
+- CI structured artifact upload rather than strict image fail initially
 - browser-console failure collection in CI
 
 Acceptance:
 
-- optional visual artifacts are useful for review without causing flaky CI failures
-- strict image comparison is introduced only if coordinate/capture stability is proven later
+- visual artifacts remain outside the automated pass/fail path
+- strict image comparison is deferred indefinitely unless a separate plan proves coordinate/capture stability
 
 ## Validation Checklist for Implementers
 
@@ -511,7 +512,7 @@ Every QA tooling implementation pass should report:
 - exact URL or preset used for manual/browser verification
 - `state()` fields checked
 - `logs()` warnings/errors observed
-- optional screenshots captured, with expected vs observed notes when used
+- structured state/log facts checked
 - any cases where visual state and structured state disagree
 
 Required commands unless the implementation is docs-only:

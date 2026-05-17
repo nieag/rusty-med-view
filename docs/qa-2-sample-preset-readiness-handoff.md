@@ -17,7 +17,7 @@ This is the implementation handoff for the first agent-usable structured QA slic
 
 Goal: make `/?qa=1&sample=liver_0&preset=image_label_mpr_basic` load a deterministic scene, expose enough structured state to verify readiness from state/logs, and make `waitForReady(...)` meaningful for that scene.
 
-Keep QA-2 scoped. Do not add screenshot capture inside the app, golden image comparison, debug overlays, mesh extraction, contour conversion, or a visible QA panel.
+Keep QA-2 scoped. Do not add screenshot capture, golden image comparison, debug overlays, mesh extraction, contour conversion, or a visible QA panel.
 
 ## Scope
 
@@ -35,6 +35,7 @@ Implement only:
 Do not implement:
 
 - app-owned screenshot capture
+- browser screenshot/crop automation
 - automated pixel matching
 - `voxel_mesh_alignment_3d`
 - contour/mesh readiness
@@ -203,12 +204,7 @@ Required checks:
 - `lastError()` is `null`
 - logs contain sample/preset progress events and no `error` events
 
-Optional manual diagnostics:
-
-- capture full app screenshot as Playwright artifact
-- capture viewport crops only when the automation environment has a known-good coordinate mapping
-
-Screenshots remain external/manual artifacts; the app should not implement screenshot capture in QA-2, and crop correctness is not a QA-2 acceptance gate.
+No screenshot artifacts are required for QA-2. Readiness is state/log based.
 
 ## Step 8: Validation
 

@@ -1,8 +1,8 @@
 # QA-3 Structured Render Facts Handoff
 
-Purpose: make agents verify viewer/render behavior from `window.__viewerQa.state()`, `logs()`, and `metrics()` without relying on screenshot crop stability.
+Purpose: make agents verify viewer/render behavior from `window.__viewerQa.state()`, `logs()`, and `metrics()`.
 
-Screenshots are optional/manual diagnostics. Do not make screenshot capture or crop correctness an acceptance gate in QA-3.
+QA-3 is state-only. Do not add screenshot capture, viewport crop automation, pixel matching, or image artifacts.
 
 ## Scope
 
@@ -21,10 +21,29 @@ Add facts for:
 Do not implement:
 
 - app-side screenshot capture
+- browser screenshot automation
+- viewport crop coordinate work
+- viewport rect conversion between physical, CSS, canvas, or page spaces
 - pixel comparison
 - golden image storage
 - debug overlays
 - broad renderer refactors
+
+Do not treat `state().viewports[*].rect` as a screenshot crop contract. It may remain a renderer/app diagnostic rect only.
+
+## Likely Files
+
+- `src/app/qa.rs`
+- `src/app/mod.rs`
+- `src/render/pipeline.rs`
+- `src/render/contours.rs`
+- `src/render/meshes.rs`
+- `src/app/roi_runtime.rs`
+- `tests/qa1_viewerqa.spec.js`
+- `docs/viewer-qa-debug-tooling-plan.md`
+- `docs/qa-3-structured-render-facts-handoff.md`
+
+Avoid shader changes unless a fact cannot be exposed from CPU-side render prep/state.
 
 ## Proposed State Shape
 
@@ -69,6 +88,7 @@ For `/?qa=1&sample=liver_0&preset=image_label_mpr_basic` in a GPU-capable browse
 - `render.overlay_slots_used >= 1`
 - render logs have no `error` events
 - every false renderability fact has a useful blocker
+- no screenshot, crop, or pixel assertion is required
 
 In no-GPU/headless environments:
 
@@ -93,4 +113,4 @@ Browser automation:
 - keep QA-2 ready-or-structured-WGPU-fail test
 - add QA-3 assertions for structured render facts
 
-Optional screenshots may be saved as artifacts but must not decide pass/fail.
+No screenshot artifacts are required or expected for QA-3.

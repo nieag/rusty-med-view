@@ -35,7 +35,13 @@ test("qa-1 viewer qa surface contract", async ({ page }) => {
       return false;
     }
   });
-  expect(waitReadyResolved).toBeTruthy();
+  if (!waitReadyResolved) {
+    const failError = await page.evaluate(() => window.__viewerQa.lastError());
+    expect(failError).toBeTruthy();
+    expect(["wgpu.adapter", "wgpu.device", "wgpu.surface"]).toContain(
+      failError.category,
+    );
+  }
 
   await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
   const noQaType = await page.evaluate(() => typeof window.__viewerQa);
