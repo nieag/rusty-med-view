@@ -20,6 +20,15 @@
 - `cargo fmt --all` : format code.
 - `cargo clippy --all-targets --all-features -D warnings` : lint with warnings as errors.
 
+## RTK Command Discipline
+- For shell commands, prefer `rtk <command>` instead of raw commands so output stays compact.
+- Examples:
+  - `rtk git status`
+  - `rtk git diff --stat`
+  - `rtk cargo test -q`
+  - `rtk cargo check --target wasm32-unknown-unknown -q`
+- Use raw commands only when RTK lacks support or full unfiltered output is required.
+
 ## Coding Style & Naming Conventions
 - Rust 2021 edition, 4-space indentation, standard `rustfmt`.
 - Prefer small, testable functions for math/geometry logic.
