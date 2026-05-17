@@ -3,6 +3,7 @@
 node_modules/
 test-results/
 playwright-report/
+qa_artifacts/
 .DS_Store
 *.ninc
 *.nrrd

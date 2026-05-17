@@ -13,9 +13,9 @@
 - Pending:
   - none in QA-2 scope
 
-This is the implementation handoff for the first agent-usable visual QA slice.
+This is the implementation handoff for the first agent-usable structured QA slice.
 
-Goal: make `/?qa=1&sample=liver_0&preset=image_label_mpr_basic` load a deterministic scene, expose enough structured state to crop screenshots, and make `waitForReady(...)` meaningful for that scene.
+Goal: make `/?qa=1&sample=liver_0&preset=image_label_mpr_basic` load a deterministic scene, expose enough structured state to verify readiness from state/logs, and make `waitForReady(...)` meaningful for that scene.
 
 Keep QA-2 scoped. Do not add screenshot capture inside the app, golden image comparison, debug overlays, mesh extraction, contour conversion, or a visible QA panel.
 
@@ -27,7 +27,7 @@ Implement only:
 - sequential image then label load using the same NIfTI parsing and load handlers as manual loading
 - `image_label_mpr_basic` preset application
 - readiness state for the requested sample/preset
-- viewport crop rects for axial, coronal, sagittal, and 3D viewports
+- viewport rect validity for axial, coronal, sagittal, and 3D viewports
 - global ROI overlay slot fact and 2D `overlay_renderable` facts
 - QA logs/errors for sample load, preset application, and readiness blockers
 - Playwright/browser check for the full QA-2 URL
@@ -203,12 +203,12 @@ Required checks:
 - `lastError()` is `null`
 - logs contain sample/preset progress events and no `error` events
 
-Optional but useful:
+Optional manual diagnostics:
 
 - capture full app screenshot as Playwright artifact
-- capture each viewport crop using exposed rects
+- capture viewport crops only when the automation environment has a known-good coordinate mapping
 
-Screenshots remain external artifacts; the app should not implement screenshot capture in QA-2.
+Screenshots remain external/manual artifacts; the app should not implement screenshot capture in QA-2, and crop correctness is not a QA-2 acceptance gate.
 
 ## Step 8: Validation
 

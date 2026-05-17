@@ -11,7 +11,7 @@ Primary goals:
 - deterministic app setup for known visual scenarios
 - queryable structured runtime state
 - structured logs and metrics for rendering/conversion/debugging
-- screenshot capture workflow for viewport-level visual inspection
+- structured render facts for viewport-level inspection
 - enough geometry diagnostics to debug image/label/contour/mesh alignment problems
 
 ## Non-Goals
@@ -24,12 +24,12 @@ Do not build:
 - renderer rewrites just to support QA
 - egui-based drawing of viewport scene content
 
-Screenshots are initially for agent-assisted/manual review. Automated image comparisons can be added later only after the capture path is stable.
+Screenshots are optional/manual review aids. Automated screenshot cropping and image comparison are deferred because browser/canvas coordinate spaces vary across automation environments.
 
 ## Design Principles
 
 - Debug state must be queryable from the browser console or automation runtime.
-- Visual QA should combine screenshots with structured facts; screenshots alone are not enough.
+- Visual QA should rely first on structured facts. Screenshots can help humans but are not an automation acceptance gate.
 - QA tooling must be deterministic: same sample, same view preset, same viewport layout, same active ROI.
 - Geometry diagnostics must use the same central spatial contract as the app: representation-native space -> ROI geometry -> world millimetres -> viewport projection.
 - Debug overlays that appear inside viewports must use native WGPU rendering, not egui painting.
@@ -103,7 +103,7 @@ Readiness ownership:
 - sample label loaded through the same label/ROI creation path as manual loading after bytes are fetched
 - label ROI exists, is active, is visible, and has non-empty voxel data
 - axial, coronal, sagittal, and 3D viewports exist
-- all viewport crop rects are non-zero browser-pixel rectangles inside the canvas/browser bounds
+- all viewport rects are non-zero and usable as diagnostics
 - 2D cursors are centered from the non-zero label bounds using ROI-owned voxel geometry and the shared geometry contract
 - axial, coronal, and sagittal viewports report both `ready` and `overlay_renderable`
 - 3D viewport reports `ready` with a valid deterministic camera and no render error
@@ -366,22 +366,27 @@ Preferred first pass:
 
 The QA path must not create separate loading semantics that can pass while real loading is broken.
 
-## Screenshot Workflow
+## Structured Render Fact Workflow
 
-The browser automation layer can capture screenshots once the app exposes stable readiness and viewport rectangles.
+The browser automation layer should use structured state/logs as the primary verification surface. Screenshots remain optional/manual aids and should not be required for QA pass/fail.
 
 Required app support:
 
 - `waitForReady(...)` reports that loading/conversions/rendering have reached a stable state
-- `state().viewports[*].rect` gives browser-pixel crop rectangles
-- status/logs expose load or render failures before screenshot capture
-- screenshot capture itself should stay outside the app for the first pass; browser automation should capture full screenshots and viewport crops from exposed rects
+- `state().viewports[*]` reports mode, rect validity, renderability facts, and blockers
+- `state().rois[*]` reports overlay slot, voxel dimensions, non-empty bounds, and visibility facts
+- `state().render` reports cheap render facts such as overlay slot usage and frame counters
+- `logs()` exposes load, preset, geometry, and render failures before optional screenshot capture
 
-Screenshot types:
+Useful structured facts:
 
-- full app screenshot for layout/status review
-- per-viewport crop for image/overlay/mesh inspection
-- optional debug-overlay screenshot for geometry diagnostics
+- per-viewport `image_renderable`
+- per-viewport `overlay_renderable`
+- per-viewport `volume_slice_in_bounds`
+- per-viewport `cursor_intersects_roi`
+- ROI `overlay_slot`
+- frame presented after preset
+- render warnings/errors
 
 Initial review flow:
 
@@ -389,8 +394,8 @@ Initial review flow:
 2. Open app URL with QA query params.
 3. Wait for `window.__viewerQa.waitForReady(...)`.
 4. Query `state()`, `metrics()`, and recent `logs()`.
-5. Capture full screenshot and relevant viewport crop.
-6. Compare visible output against structured expected state.
+5. Report pass/fail from structured facts and blockers.
+6. Capture screenshots only if a human needs optional visual confirmation.
 
 ## Debug Overlays
 
@@ -403,7 +408,7 @@ Useful overlays:
 - mesh world bounds
 - contour plane outlines
 - patient/world axes
-- active viewport crop/scissor bounds
+- active viewport/scissor bounds
 - sampled label/mesh alignment markers
 
 Rules:
@@ -411,7 +416,7 @@ Rules:
 - no egui painting for viewport geometry
 - overlays must be clearly marked debug-only
 - overlays must be toggleable from QA state/preset
-- overlays should be excluded from normal screenshots unless explicitly requested
+- overlays should be excluded from optional screenshots unless explicitly requested
 
 ## Implementation Phases
 
@@ -452,20 +457,20 @@ Acceptance:
 - the 3D viewport is ready with a deterministic camera, without requiring label mesh geometry
 - manual file loading still works unchanged
 
-### QA-3: Screenshot Review Workflow
+### QA-3: Structured Render Facts
 
 Deliver:
 
-- documented browser automation workflow
-- viewport rects/crop data in debug state
-- screenshot capture examples for full app and selected viewport
-- expected-vs-observed checklist template
+- per-viewport renderability facts beyond QA-2 readiness
+- render-facing counters/facts for image, overlay, contour, and mesh submissions where cheap
+- structured blockers that explain why a viewport should or should not show content
+- documented automation workflow that reports state/log pass/fail without screenshots
 
 Acceptance:
 
-- an agent can capture a 3D viewport screenshot after loading sample data
-- an agent can inspect screenshot plus structured state to diagnose alignment
-- user no longer needs to manually provide screenshots for every visual review pass
+- an agent can verify image+label viewport readiness from `state()` and `logs()` alone
+- an agent can explain missing image/overlay/mesh content with structured blockers
+- screenshots are optional and not required for automated QA pass/fail
 
 ### QA-4: Geometry Debug Overlays
 
@@ -487,15 +492,15 @@ Deliver only after QA-1 through QA-4 are stable.
 
 Possible additions:
 
-- golden screenshot capture for stable presets
+- optional screenshot artifacts for stable presets
 - perceptual/image-diff thresholds
 - CI artifact upload rather than strict fail initially
 - browser-console failure collection in CI
 
 Acceptance:
 
-- visual artifacts are useful for review without causing flaky CI failures
-- strict image comparison is introduced only for stable, deterministic scenes
+- optional visual artifacts are useful for review without causing flaky CI failures
+- strict image comparison is introduced only if coordinate/capture stability is proven later
 
 ## Validation Checklist for Implementers
 
@@ -506,7 +511,7 @@ Every QA tooling implementation pass should report:
 - exact URL or preset used for manual/browser verification
 - `state()` fields checked
 - `logs()` warnings/errors observed
-- screenshots captured, with expected vs observed notes
+- optional screenshots captured, with expected vs observed notes when used
 - any cases where visual state and structured state disagree
 
 Required commands unless the implementation is docs-only:
@@ -520,13 +525,13 @@ cargo fmt --all
 ## Open Questions
 
 - How much WGPU error information can be captured into structured logs across native and WASM?
-- Should screenshot cropping be handled only by browser automation, or should the app expose canvas capture helpers?
-- Which presets are stable enough to become future CI visual artifacts?
+- Which structured render facts should become future CI gates?
 
 ## Implementer Handoffs
 
 - QA-1: [docs/qa-1-debug-api-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/qa-1-debug-api-handoff.md:1)
 - QA-2: [docs/qa-2-sample-preset-readiness-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/qa-2-sample-preset-readiness-handoff.md:1)
+- QA-3: [docs/qa-3-structured-render-facts-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/qa-3-structured-render-facts-handoff.md:1)
 
 ## Implementation Status
 
@@ -545,4 +550,4 @@ cargo fmt --all
   - updated NIfTI roundtrip integration tests to load samples from `qa_samples/` (with crate-root fallback)
   - QA-2 implementation handoff written
 - Pending:
-  - QA-2 sample autoload and `image_label_mpr_basic` readiness
+  - QA-3 structured render facts
