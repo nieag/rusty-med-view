@@ -554,8 +554,8 @@ Current Phase:
 - `Subplan 8 voxel display geometry fixup` reviewed; nearest-neighbor display-grid resampling is not accepted as the final correctness direction
 - `Subplan 8.1 Spatial Geometry Contract` complete from [docs/subplan-8-1-spatial-geometry-contract-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-1-spatial-geometry-contract-handoff.md:1)
 - `Subplan 9: Rendering Integration Layer` complete (render-view adapters wired through runtime/render prep/QA facts; overlay cap explicit and asserted)
-- `Subplan 9.1: Representation Orchestration and Contour View Caches` implementation handoff written in [docs/subplan-9-1-representation-orchestration-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-9-1-representation-orchestration-handoff.md:1)
-- next checkpoint: `Subplan 9.1: Representation Orchestration and Contour View Caches`
+- `Subplan 9.1: Representation Orchestration and Contour View Caches` complete from [docs/subplan-9-1-representation-orchestration-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-9-1-representation-orchestration-handoff.md:1)
+- next checkpoint: `Subplan 10: Performance and Cache Strategy`
 
 Completed:
 - `1453511` Baseline: remove legacy segmentation stack

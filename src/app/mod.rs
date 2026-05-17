@@ -372,8 +372,78 @@ impl AppState {
                 }
                 let mut contour_renderable = false;
                 let mut mesh_renderable = false;
+                let mut representation_requests = Vec::new();
+                let mut voxel_cache_state = "unsupported".to_string();
+                let mut contour_view_cache_state = "unsupported".to_string();
+                let mut mesh_cache_state = "unsupported".to_string();
+                let mut contour_editable = false;
+                let mut contour_promotable = false;
                 let mut volume_slice_in_bounds = None;
                 let mut cursor_intersects_active_roi = None;
+                if let Some(active) = active_roi_entity {
+                    let voxel_req = roi_runtime::request_viewport_voxel_overlay_state(
+                        &ctx.scene.world,
+                        vp.mode,
+                        active,
+                    );
+                    voxel_cache_state = voxel_req.state.as_str().to_string();
+                    if let Some(reason) = voxel_req.reason {
+                        overlay_blockers.push(reason);
+                    }
+                    representation_requests.push("voxel_overlay".to_string());
+
+                    let mesh_req =
+                        roi_runtime::request_viewport_mesh_state(&ctx.scene.world, vp.mode, active);
+                    mesh_cache_state = mesh_req.state.as_str().to_string();
+                    if let Some(reason) = mesh_req.reason {
+                        mesh_blockers.push(reason);
+                    }
+                    representation_requests.push("mesh_3d".to_string());
+
+                    if let Some(geometry) = active_roi_geometry
+                        .or_else(|| roi_runtime::main_volume_voxel_geometry(&ctx.scene.world))
+                    {
+                        let displayed_plane = match vp.mode {
+                            ViewMode::Axial => crate::convert::orthogonal_plane_from_volume_uv(
+                                crate::convert::PlaneFamily::Axial,
+                                cursor_pos,
+                                geometry,
+                            ),
+                            ViewMode::Coronal => crate::convert::orthogonal_plane_from_volume_uv(
+                                crate::convert::PlaneFamily::Coronal,
+                                cursor_pos,
+                                geometry,
+                            ),
+                            ViewMode::Sagittal => crate::convert::orthogonal_plane_from_volume_uv(
+                                crate::convert::PlaneFamily::Sagittal,
+                                cursor_pos,
+                                geometry,
+                            ),
+                            ViewMode::Oblique => crate::convert::oblique_plane_from_view_rotation(
+                                cursor_pos,
+                                vp_state.user_rotation,
+                                geometry,
+                            ),
+                            ViewMode::ThreeD => None,
+                        };
+                        if let Some(plane) = displayed_plane {
+                            let contour_key = ContourViewKey::from_plane(plane);
+                            let contour_req = roi_runtime::request_contour_view_state(
+                                &ctx.scene.world,
+                                active,
+                                &contour_key,
+                            );
+                            contour_view_cache_state =
+                                contour_req.request.state.as_str().to_string();
+                            contour_editable = contour_req.editable;
+                            contour_promotable = contour_req.promotable;
+                            if let Some(reason) = contour_req.request.reason {
+                                contour_blockers.push(reason);
+                            }
+                            representation_requests.push("contour_view".to_string());
+                        }
+                    }
+                }
                 match vp.mode {
                     ViewMode::Axial | ViewMode::Coronal | ViewMode::Sagittal => {
                         mesh_blockers.push("mesh_not_applicable_in_2d_view".to_string());
@@ -507,6 +577,15 @@ impl AppState {
                     mode: mode.to_string(),
                     rect: vp.rect,
                     ready: valid_rect,
+                    representation_requests,
+                    voxel_cache_state: voxel_cache_state.clone(),
+                    contour_view_cache_state: contour_view_cache_state.clone(),
+                    mesh_cache_state: mesh_cache_state.clone(),
+                    contour_editable,
+                    contour_promotable,
+                    stale: voxel_cache_state == "stale"
+                        || contour_view_cache_state == "stale"
+                        || mesh_cache_state == "stale",
                     image_renderable,
                     overlay_renderable,
                     contour_renderable,

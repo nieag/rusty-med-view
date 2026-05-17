@@ -258,8 +258,31 @@ Implement:
 Tests:
 
 - existing QA-1/QA-2/QA-3 still pass
+
+## Implementation Status
+
+Status: complete.
+
+Completed:
+- Step 9.1A (model): added `ContourViewCache`, `ContourViewKey`, `ContourSliceKey`, `CacheViewState`, ROI contour-view cache helpers.
+- Step 9.1B (request states): added runtime request APIs for voxel/contour/mesh representation states with stable `current|stale|rebuilding|blocked|unsupported` contract.
+- Step 9.1C (promotion): added explicit promotion API (`promote_contour_view_to_authoritative`) with rejection on stale/rebuilding/blocked and cache invalidation for voxel/mesh/contour views.
+- Step 9.1D (QA facts wiring): QA viewport snapshot now reports representation requests, per-representation cache state, contour editable/promotable flags, stale marker, and render blockers.
+- Step 9.1E (closeout): validated and reviewed 9.1 runtime/QA state integration.
+
+Deferred:
+- Mesh/SDF-mediated sync (out of scope).
+- 3D contour polyline fallback (out of scope).
+- Screenshot QA (out of scope).
 - new preset facts pass in GPU-capable browser
 - no-GPU branch remains structured WGPU failure only
+
+Validation:
+- `rtk cargo fmt --all`
+- `rtk cargo test -q` (208 passed)
+- `rtk cargo check --target wasm32-unknown-unknown -q`
+- `rtk cargo clippy --all-targets --all-features -- -D warnings`
+- manual visual check reported good
 
 ### Step 9.1E: Closeout
 

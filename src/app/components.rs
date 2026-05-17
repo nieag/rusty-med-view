@@ -316,7 +316,62 @@ pub struct RoiSessionCaches {
     pub mesh: Option<MeshCache>,
 }
 
-pub struct ContourCache;
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContourCache {
+    pub views: Vec<ContourViewCache>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContourViewCache {
+    pub key: ContourViewKey,
+    pub data: ContourData,
+    pub source_generation: u64,
+    pub state: CacheViewState,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContourViewKey {
+    pub family: PlaneFamily,
+    pub plane: PlaneDefinition,
+    pub slice_key: ContourSliceKey,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ContourSliceKey {
+    pub origin_quantized_mm: [i32; 3],
+    pub normal_quantized: [i32; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CacheViewState {
+    Current,
+    Stale,
+    Rebuilding,
+    Blocked { reason: String },
+}
+
+impl ContourSliceKey {
+    pub fn from_plane(plane: PlaneDefinition) -> Self {
+        Self {
+            origin_quantized_mm: plane.origin_mm.map(|v| (v * 1000.0).round() as i32),
+            normal_quantized: plane.normal_mm.map(|v| (v * 1_000_000.0).round() as i32),
+        }
+    }
+}
+
+impl ContourViewKey {
+    pub fn from_plane(plane: PlaneDefinition) -> Self {
+        Self {
+            family: plane.family,
+            plane,
+            slice_key: ContourSliceKey::from_plane(plane),
+        }
+    }
+
+    pub fn logical_eq(&self, other: &Self) -> bool {
+        self.family == other.family && self.slice_key == other.slice_key
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MeshCache {
@@ -515,6 +570,74 @@ impl Roi {
 
     pub fn voxel_gpu_cache_mut(&mut self) -> Option<&mut GpuVolumeResources> {
         self.voxel_cache_mut()?.gpu_resources.as_mut()
+    }
+
+    pub fn contour_cache(&self) -> Option<&ContourCache> {
+        self.session_caches.contour.as_ref()
+    }
+
+    pub fn contour_cache_mut(&mut self) -> Option<&mut ContourCache> {
+        self.session_caches.contour.as_mut()
+    }
+
+    pub fn ensure_contour_cache(&mut self) -> &mut ContourCache {
+        self.session_caches
+            .contour
+            .get_or_insert_with(|| ContourCache { views: Vec::new() })
+    }
+
+    pub fn upsert_contour_view_cache(
+        &mut self,
+        key: ContourViewKey,
+        data: ContourData,
+        source_generation: u64,
+        state: CacheViewState,
+    ) {
+        let cache = self.ensure_contour_cache();
+        if let Some(existing) = cache
+            .views
+            .iter_mut()
+            .find(|view| view.key.logical_eq(&key))
+        {
+            existing.data = data;
+            existing.source_generation = source_generation;
+            existing.state = state;
+            existing.key = key;
+        } else {
+            cache.views.push(ContourViewCache {
+                key,
+                data,
+                source_generation,
+                state,
+            });
+        }
+    }
+
+    pub fn contour_view_cache(&self, key: &ContourViewKey) -> Option<&ContourViewCache> {
+        self.contour_cache()?
+            .views
+            .iter()
+            .find(|view| view.key.logical_eq(key))
+    }
+
+    pub fn contour_view_cache_mut(
+        &mut self,
+        key: &ContourViewKey,
+    ) -> Option<&mut ContourViewCache> {
+        self.contour_cache_mut()?
+            .views
+            .iter_mut()
+            .find(|view| view.key.logical_eq(key))
+    }
+
+    pub fn mark_all_contour_view_caches_stale(&mut self) {
+        if let Some(cache) = self.contour_cache_mut() {
+            for view in &mut cache.views {
+                if !matches!(view.state, CacheViewState::Blocked { .. }) {
+                    view.state = CacheViewState::Stale;
+                }
+            }
+        }
     }
 
     pub fn cache_generation(&self, kind: RoiCacheKind) -> u64 {
@@ -760,6 +883,94 @@ mod tests {
         };
         let ar = vol.aspect_ratios();
         assert_eq!(ar, [1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn test_contour_view_key_from_plane_excludes_viewport_identity() {
+        let plane = test_plane_definition(PlaneFamily::Axial);
+        let key_a = ContourViewKey::from_plane(plane);
+        let key_b = ContourViewKey::from_plane(plane);
+        assert!(key_a.logical_eq(&key_b));
+    }
+
+    #[test]
+    fn test_contour_view_key_lookup_uses_slice_key_not_exact_plane_float() {
+        let contour = ContourData {
+            active_plane_family: PlaneFamily::Axial,
+            slices: Vec::new(),
+        };
+        let mut roi = Roi::new_contour(RoiId(12), "C".to_string(), contour.clone());
+        let plane = test_plane_definition(PlaneFamily::Coronal);
+        let key_a = ContourViewKey::from_plane(plane);
+        roi.upsert_contour_view_cache(
+            key_a.clone(),
+            contour,
+            roi.dirty_state.generations.authoritative,
+            CacheViewState::Current,
+        );
+
+        let mut drifted = plane;
+        drifted.normal_mm = [0.0, 0.0, 1.0 + 1e-8];
+        let key_b = ContourViewKey::from_plane(drifted);
+        assert!(roi.contour_view_cache(&key_b).is_some());
+    }
+
+    #[test]
+    fn test_oblique_slice_key_distinguishes_same_origin_different_normal() {
+        let contour = ContourData {
+            active_plane_family: PlaneFamily::Oblique,
+            slices: Vec::new(),
+        };
+        let mut roi = Roi::new_contour(RoiId(13), "Oblique".to_string(), contour.clone());
+        let plane_a = PlaneDefinition {
+            family: PlaneFamily::Oblique,
+            origin_mm: [12.0, -3.0, 7.0],
+            u_axis_mm: [1.0, 0.0, 0.0],
+            v_axis_mm: [0.0, 1.0, 0.0],
+            normal_mm: [0.0, 0.0, 1.0],
+        };
+        let plane_b = PlaneDefinition {
+            family: PlaneFamily::Oblique,
+            origin_mm: [12.0, -3.0, 7.0],
+            u_axis_mm: [1.0, 0.0, 0.0],
+            v_axis_mm: [0.0, 0.70710677, 0.70710677],
+            normal_mm: [0.0, -0.70710677, 0.70710677],
+        };
+        let key_a = ContourViewKey::from_plane(plane_a);
+        let key_b = ContourViewKey::from_plane(plane_b);
+        assert!(!key_a.logical_eq(&key_b));
+
+        let gen = roi.dirty_state.generations.authoritative;
+        roi.upsert_contour_view_cache(key_a, contour.clone(), gen, CacheViewState::Current);
+        roi.upsert_contour_view_cache(key_b.clone(), contour, gen, CacheViewState::Current);
+        let cache = roi.contour_cache().unwrap();
+        assert_eq!(cache.views.len(), 2);
+        assert!(roi.contour_view_cache(&key_b).is_some());
+    }
+
+    #[test]
+    fn test_mark_contour_authoritative_changed_marks_existing_derived_views_dirty() {
+        let contour = ContourData {
+            active_plane_family: PlaneFamily::Axial,
+            slices: Vec::new(),
+        };
+        let mut roi = Roi::new_contour(RoiId(11), "C".to_string(), contour.clone());
+        let plane = test_plane_definition(PlaneFamily::Coronal);
+        roi.upsert_contour_view_cache(
+            ContourViewKey::from_plane(plane),
+            contour,
+            roi.dirty_state.generations.authoritative,
+            CacheViewState::Current,
+        );
+        roi.dirty_state.contour_cache_dirty = false;
+        roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
+
+        roi.mark_contour_authoritative_changed();
+        roi.mark_all_contour_view_caches_stale();
+
+        let cache = roi.contour_cache().unwrap();
+        assert_eq!(cache.views.len(), 1);
+        assert_eq!(cache.views[0].state, CacheViewState::Stale);
     }
 
     #[test]
