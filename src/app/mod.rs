@@ -340,6 +340,9 @@ impl AppState {
                 };
                 let valid_rect = vp.rect[2] > 0.0 && vp.rect[3] > 0.0;
                 let mut blockers = Vec::new();
+                let mut overlay_blockers = Vec::new();
+                let mut contour_blockers = Vec::new();
+                let mut mesh_blockers = Vec::new();
                 if !valid_rect {
                     blockers.push("rect_non_positive".to_string());
                 }
@@ -351,16 +354,27 @@ impl AppState {
                     all_required_rects_non_zero = false;
                 }
                 let mut overlay_renderable = false;
+                let image_renderable = valid_rect && volume.loaded;
+                if !volume.loaded {
+                    blockers.push("main_volume_not_loaded".to_string());
+                }
+                let mut contour_renderable = false;
+                let mut mesh_renderable = false;
+                let mut volume_slice_in_bounds = None;
+                let mut cursor_intersects_active_roi = None;
                 match vp.mode {
                     ViewMode::Axial | ViewMode::Coronal | ViewMode::Sagittal => {
+                        mesh_blockers.push("mesh_not_applicable_in_2d_view".to_string());
                         if !active_roi_visible {
-                            blockers.push("active_roi_not_visible".to_string());
+                            overlay_blockers.push("active_roi_not_visible".to_string());
+                            contour_blockers.push("active_roi_not_visible".to_string());
                         }
                         if active_roi_overlay_slot.is_none() {
-                            blockers.push("active_roi_overlay_slot_missing".to_string());
+                            overlay_blockers.push("active_roi_overlay_slot_missing".to_string());
                         }
                         if active_roi_non_empty_bounds.is_none() {
-                            blockers.push("active_roi_non_empty_voxel_bounds_missing".to_string());
+                            overlay_blockers
+                                .push("active_roi_non_empty_voxel_bounds_missing".to_string());
                         }
                         if let (Some(bounds), Some(dims), Some(roi_geometry), Some(main_geometry)) = (
                             active_roi_non_empty_bounds,
@@ -397,19 +411,61 @@ impl AppState {
                             let min_uv = roi_min[axis].min(roi_max[axis]);
                             let max_uv = roi_min[axis].max(roi_max[axis]);
                             let uv = cursor_roi_uv[axis];
-                            if uv < min_uv || uv > max_uv {
-                                blockers
+                            let intersects = uv >= min_uv && uv <= max_uv;
+                            cursor_intersects_active_roi = Some(intersects);
+                            if !intersects {
+                                overlay_blockers
                                     .push("slice_does_not_intersect_active_roi_bounds".to_string());
                             }
+                            volume_slice_in_bounds = Some((0.0..=1.0).contains(&cursor_pos[axis]));
+                            if volume_slice_in_bounds == Some(false) {
+                                overlay_blockers
+                                    .push("cursor_slice_out_of_volume_bounds".to_string());
+                            }
                         }
-                        overlay_renderable = blockers.is_empty() && active_roi_has_renderable_cache;
+                        overlay_renderable =
+                            overlay_blockers.is_empty() && active_roi_has_renderable_cache;
                         if !active_roi_has_renderable_cache {
-                            blockers.push("active_roi_renderable_voxel_cache_missing".to_string());
+                            overlay_blockers
+                                .push("active_roi_renderable_voxel_cache_missing".to_string());
+                        }
+                        contour_renderable =
+                            ctx.scene
+                                .world
+                                .get::<&Roi>(active_roi_entity.unwrap_or(hecs::Entity::DANGLING))
+                                .ok()
+                                .map(|roi| match &roi.authoritative_data {
+                                    RoiAuthoritativeData::Contour(contour) => contour.has_loops(),
+                                    RoiAuthoritativeData::Voxel(_)
+                                    | RoiAuthoritativeData::Mesh(_) => false,
+                                })
+                                .unwrap_or(false);
+                        if !contour_renderable {
+                            contour_blockers
+                                .push("active_contour_data_missing_or_empty".to_string());
+                        }
+                        contour_renderable = contour_renderable && image_renderable;
+                    }
+                    ViewMode::ThreeD => {
+                        overlay_blockers.push("overlay_not_applicable_in_three_d_view".to_string());
+                        contour_blockers.push("contour_not_applicable_in_three_d_view".to_string());
+                        mesh_renderable = ctx.scene.world.query::<&Roi>().iter().any(|(_, roi)| {
+                            roi.metadata.is_visible
+                                && matches!(roi.authoritative_data, RoiAuthoritativeData::Mesh(_))
+                        }) && image_renderable;
+                        if !mesh_renderable {
+                            mesh_blockers.push("visible_mesh_roi_missing".to_string());
                         }
                     }
-                    ViewMode::ThreeD => {}
-                    ViewMode::Oblique => {}
+                    ViewMode::Oblique => {
+                        overlay_blockers.push("overlay_not_supported_in_oblique".to_string());
+                        contour_blockers.push("contour_not_supported_in_oblique".to_string());
+                        mesh_blockers.push("mesh_not_supported_in_oblique".to_string());
+                    }
                 }
+                blockers.extend(overlay_blockers);
+                blockers.extend(contour_blockers);
+                blockers.extend(mesh_blockers);
                 match vp.mode {
                     ViewMode::Axial => has_axial = true,
                     ViewMode::Coronal => has_coronal = true,
@@ -421,7 +477,13 @@ impl AppState {
                     mode: mode.to_string(),
                     rect: vp.rect,
                     ready: valid_rect,
+                    image_renderable,
                     overlay_renderable,
+                    contour_renderable,
+                    mesh_renderable,
+                    volume_slice_in_bounds,
+                    cursor_intersects_active_roi,
+                    render_blockers: blockers.clone(),
                     readiness_blockers: blockers,
                 });
             }
@@ -518,8 +580,15 @@ impl AppState {
             };
 
             let render = qa::QaSnapshotRender {
+                frame_counter: self.qa.frame_counter,
+                last_presented_frame: self.qa.last_presented_frame,
+                viewport_uniform_count: self.qa.viewport_uniform_count,
                 overlay_slots_used: renderable.len() as u32,
                 overlay_slots_max: 2,
+                contour_batch_count: self.qa.contour_batch_count,
+                mesh_batch_count: self.qa.mesh_batch_count,
+                last_warning: self.qa.last_render_warning.clone(),
+                last_error: self.qa.last_render_error.clone(),
             };
 
             qa::QaSnapshot {
@@ -574,8 +643,15 @@ impl AppState {
                 rois: vec![],
                 viewports: vec![],
                 render: qa::QaSnapshotRender {
+                    frame_counter: self.qa.frame_counter,
+                    last_presented_frame: self.qa.last_presented_frame,
+                    viewport_uniform_count: self.qa.viewport_uniform_count,
                     overlay_slots_used: 0,
                     overlay_slots_max: 2,
+                    contour_batch_count: self.qa.contour_batch_count,
+                    mesh_batch_count: self.qa.mesh_batch_count,
+                    last_warning: self.qa.last_render_warning.clone(),
+                    last_error: self.qa.last_render_error.clone(),
                 },
             }
         }
@@ -789,7 +865,7 @@ impl ApplicationHandler<AppEvent> for App {
             WindowEvent::RedrawRequested => {
                 qa_runtime.frame_counter = qa_runtime.frame_counter.saturating_add(1);
                 qa_runtime.last_presented_frame = Some(qa_runtime.frame_counter);
-                let repaint_after = pipeline::render_frame(
+                let (repaint_after, frame_stats) = pipeline::render_frame(
                     &ctx.gpu,
                     &ctx.volume_resources,
                     &mut ctx.pipelines,
@@ -798,6 +874,15 @@ impl ApplicationHandler<AppEvent> for App {
                     &ctx.window,
                     ctx.event_proxy.clone(),
                 );
+                qa_runtime.viewport_uniform_count = frame_stats.viewport_uniform_count;
+                qa_runtime.contour_batch_count = frame_stats.contour_batch_count;
+                qa_runtime.mesh_batch_count = frame_stats.mesh_batch_count;
+                if let Some(category) = frame_stats.last_warning {
+                    qa_runtime.last_render_warning = Some(category.to_string());
+                }
+                if let Some(category) = frame_stats.last_error {
+                    qa_runtime.last_render_error = Some(category.to_string());
+                }
 
                 if repaint_after.is_zero() {
                     ctx.window.request_redraw();

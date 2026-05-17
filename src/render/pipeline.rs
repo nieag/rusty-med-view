@@ -286,6 +286,15 @@ pub fn create_scene_bind_group(
 // Viewport tuple: (entity, rect, uniform_index, mode)
 type ViewportList = Vec<(hecs::Entity, [f32; 4], u32, ViewMode)>;
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RenderFrameStats {
+    pub viewport_uniform_count: u32,
+    pub contour_batch_count: u32,
+    pub mesh_batch_count: u32,
+    pub last_warning: Option<&'static str>,
+    pub last_error: Option<&'static str>,
+}
+
 /// Run ECS systems and GUI prep for this frame.
 fn run_frame_systems(
     scene: &mut SceneState,
@@ -358,35 +367,41 @@ fn prepare_uniforms(
 }
 
 /// Acquire the next surface texture, reconfiguring if needed. Returns None to skip the frame.
+enum AcquireSurfaceResult {
+    Frame(wgpu::SurfaceTexture),
+    Warn(&'static str),
+    Error(&'static str),
+}
+
 fn acquire_surface_texture(
     surface: &wgpu::Surface,
     device: &wgpu::Device,
     config: &wgpu::SurfaceConfiguration,
-) -> Option<wgpu::SurfaceTexture> {
+) -> AcquireSurfaceResult {
     match surface.get_current_texture() {
-        Ok(frame) => Some(frame),
+        Ok(frame) => AcquireSurfaceResult::Frame(frame),
         Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
             log::warn!("Surface lost/outdated; reconfiguring surface");
             surface.configure(device, config);
             match surface.get_current_texture() {
-                Ok(frame) => Some(frame),
+                Ok(frame) => AcquireSurfaceResult::Frame(frame),
                 Err(err) => {
                     log::warn!("Surface error after reconfigure: {err:?}; skipping frame");
-                    None
+                    AcquireSurfaceResult::Warn("render.surface_reconfigure_failed")
                 }
             }
         }
         Err(wgpu::SurfaceError::Timeout) => {
             log::warn!("Surface timeout; skipping frame");
-            None
+            AcquireSurfaceResult::Warn("render.surface_timeout")
         }
         Err(wgpu::SurfaceError::OutOfMemory) => {
             log::error!("Surface out of memory; skipping frame");
-            None
+            AcquireSurfaceResult::Error("render.surface_out_of_memory")
         }
         Err(err) => {
             log::warn!("Surface error: {err:?}; skipping frame");
-            None
+            AcquireSurfaceResult::Warn("render.surface_error")
         }
     }
 }
@@ -447,17 +462,25 @@ pub fn render_frame(
     gui: &mut gui::Gui,
     window: &Arc<Window>,
     event_proxy: winit::event_loop::EventLoopProxy<crate::AppEvent>,
-) -> std::time::Duration {
+) -> (std::time::Duration, RenderFrameStats) {
+    let mut stats = RenderFrameStats::default();
     if gpu.config.width == 0 || gpu.config.height == 0 {
-        return std::time::Duration::MAX;
+        return (std::time::Duration::MAX, stats);
     }
 
     run_frame_systems(scene, gui, gpu, volume_res, window, event_proxy);
     let viewports = prepare_uniforms(scene, gpu, volume_res);
-
+    stats.viewport_uniform_count = viewports.len() as u32;
     let frame = match acquire_surface_texture(&gpu.surface, &gpu.device, &gpu.config) {
-        Some(f) => f,
-        None => return std::time::Duration::from_millis(16),
+        AcquireSurfaceResult::Frame(f) => f,
+        AcquireSurfaceResult::Warn(category) => {
+            stats.last_warning = Some(category);
+            return (std::time::Duration::from_millis(16), stats);
+        }
+        AcquireSurfaceResult::Error(category) => {
+            stats.last_error = Some(category);
+            return (std::time::Duration::from_millis(16), stats);
+        }
     };
     let view = frame
         .texture
@@ -478,6 +501,7 @@ pub fn render_frame(
     );
 
     let mesh_data = crate::render::meshes::prepare_mesh_render_data(&scene.world, &scene.entities);
+    stats.mesh_batch_count = mesh_data.batches.len() as u32;
     crate::render::meshes::upload_mesh_render_data(
         &gpu.device,
         &gpu.queue,
@@ -487,6 +511,11 @@ pub fn render_frame(
     crate::render::meshes::render_meshes(&mut encoder, &view, &pipelines.mesh_overlay);
 
     let contour_data = contours::prepare_contour_render_data(&scene.world, &scene.entities);
+    stats.contour_batch_count = if contour_data.vertices.is_empty() {
+        0
+    } else {
+        1
+    };
     contours::upload_contour_render_data(
         &gpu.device,
         &gpu.queue,
@@ -509,8 +538,7 @@ pub fn render_frame(
 
     gpu.queue.submit(std::iter::once(encoder.finish()));
     frame.present();
-
-    repaint_after
+    (repaint_after, stats)
 }
 
 #[cfg(test)]

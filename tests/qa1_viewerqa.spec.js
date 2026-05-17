@@ -85,6 +85,9 @@ test("qa-2 sample preset readiness", async ({ page }) => {
     expect(byMode.axial.overlay_renderable).toBeTruthy();
     expect(byMode.coronal.overlay_renderable).toBeTruthy();
     expect(byMode.sagittal.overlay_renderable).toBeTruthy();
+    expect(typeof byMode.axial.image_renderable).toBe("boolean");
+    expect(typeof byMode.axial.contour_renderable).toBe("boolean");
+    expect(typeof byMode.axial.mesh_renderable).toBe("boolean");
 
     const activeRoi = state.rois.find((roi) => roi.active);
     expect(activeRoi).toBeTruthy();
@@ -100,5 +103,91 @@ test("qa-2 sample preset readiness", async ({ page }) => {
     expect(state.qa.ready).toBeFalsy();
     expect(state.qa.readiness_blockers).toContain("app_context_not_ready");
     expect(logs.events.some((e) => e.level === "error")).toBeTruthy();
+  }
+});
+
+test("qa-3 structured render facts", async ({ page }) => {
+  await page.goto(
+    `${BASE_URL}/?qa=1&sample=liver_0&preset=image_label_mpr_basic`,
+    { waitUntil: "domcontentloaded" },
+  );
+  await page.waitForFunction(() => typeof window.__viewerQa === "object");
+  let waitTimedOut = false;
+  try {
+    await page.waitForFunction(
+      () => {
+        const qa = window.__viewerQa;
+        if (!qa) return false;
+        const state = qa.state?.();
+        const err = qa.lastError?.();
+        const modes = new Set((state?.viewports ?? []).map((v) => v.mode));
+        const hasAllModes = ["axial", "coronal", "sagittal", "three_d"].every((m) =>
+          modes.has(m),
+        );
+        return (state?.qa?.ready === true && hasAllModes) || !!err;
+      },
+      {},
+      { timeout: 10000 },
+    );
+  } catch {
+    waitTimedOut = true;
+  }
+
+  const { state, logs, lastError } = await page.evaluate(() => ({
+    state: window.__viewerQa.state(),
+    logs: window.__viewerQa.logs(),
+    lastError: window.__viewerQa.lastError(),
+  }));
+  if (waitTimedOut) {
+    throw new Error(
+      JSON.stringify(
+        {
+          reason: "qa3_wait_timeout",
+          readiness_blockers: state?.qa?.readiness_blockers ?? [],
+          viewport_modes: (state?.viewports ?? []).map((v) => v.mode),
+          logs: logs?.events ?? [],
+        },
+        null,
+        2,
+      ),
+    );
+  }
+
+  expect(typeof state.render.frame_counter).toBe("number");
+  expect(state.render.overlay_slots_max).toBeGreaterThanOrEqual(1);
+  expect(typeof state.render.viewport_uniform_count).toBe("number");
+  expect(typeof state.render.contour_batch_count).toBe("number");
+  expect(typeof state.render.mesh_batch_count).toBe("number");
+  expect(state.render.last_warning === null || typeof state.render.last_warning === "string").toBeTruthy();
+  expect(state.render.last_error === null || typeof state.render.last_error === "string").toBeTruthy();
+
+  if (state.qa.ready) {
+    const byMode = Object.fromEntries(state.viewports.map((vp) => [vp.mode, vp]));
+    for (const mode of ["axial", "coronal", "sagittal", "three_d"]) {
+      expect(byMode[mode]).toBeTruthy();
+      expect(typeof byMode[mode].image_renderable).toBe("boolean");
+      expect(typeof byMode[mode].overlay_renderable).toBe("boolean");
+      expect(typeof byMode[mode].contour_renderable).toBe("boolean");
+      expect(typeof byMode[mode].mesh_renderable).toBe("boolean");
+      expect(Array.isArray(byMode[mode].render_blockers)).toBeTruthy();
+    }
+    expect(byMode.axial.image_renderable).toBeTruthy();
+    expect(byMode.coronal.image_renderable).toBeTruthy();
+    expect(byMode.sagittal.image_renderable).toBeTruthy();
+    expect(byMode.axial.overlay_renderable).toBeTruthy();
+    expect(byMode.coronal.overlay_renderable).toBeTruthy();
+    expect(byMode.sagittal.overlay_renderable).toBeTruthy();
+    expect(state.render.overlay_slots_used).toBeGreaterThanOrEqual(1);
+    expect(logs.events.some((e) => e.level === "error")).toBeFalsy();
+    for (const vp of state.viewports) {
+      if (!vp.image_renderable || !vp.overlay_renderable || !vp.contour_renderable || !vp.mesh_renderable) {
+        expect(vp.render_blockers.length).toBeGreaterThan(0);
+      }
+    }
+  } else {
+    expect(lastError).toBeTruthy();
+    expect(["wgpu.adapter", "wgpu.device", "wgpu.surface"]).toContain(lastError.category);
+    expect(state.qa.ready).toBeFalsy();
+    expect(state.qa.readiness_blockers.length).toBeGreaterThan(0);
   }
 });

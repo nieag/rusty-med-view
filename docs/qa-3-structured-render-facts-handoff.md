@@ -114,3 +114,19 @@ Browser automation:
 - add QA-3 assertions for structured render facts
 
 No screenshot artifacts are required or expected for QA-3.
+
+## Implementation Status
+
+Current phase: implemented in app QA snapshot + render pipeline logging/metrics + browser QA assertions.
+
+Completed:
+- [x] Added structured viewport facts: `image_renderable`, `overlay_renderable`, `contour_renderable`, `mesh_renderable`, `volume_slice_in_bounds`, `cursor_intersects_active_roi`, `render_blockers`.
+- [x] Added structured render facts: frame/present counters, viewport uniform count, overlay slot usage, contour/mesh batch counts, last render warning/error category (from render stats, non-spam).
+- [x] Kept QA logs focused on qa/sample/preset/load flow; no per-frame render debug log spam.
+- [x] Extended QA browser tests with QA-3 assertions (ready path + no-GPU structured-fail path).
+
+Pending:
+- [ ] Run full validation commands and confirm in CI-like environment.
+
+Commit checkpoints:
+- [ ] Pending commit hash.

@@ -96,14 +96,27 @@ pub struct QaSnapshotViewport {
     pub mode: String,
     pub rect: [f32; 4],
     pub ready: bool,
+    pub image_renderable: bool,
     pub overlay_renderable: bool,
+    pub contour_renderable: bool,
+    pub mesh_renderable: bool,
+    pub volume_slice_in_bounds: Option<bool>,
+    pub cursor_intersects_active_roi: Option<bool>,
+    pub render_blockers: Vec<String>,
     pub readiness_blockers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct QaSnapshotRender {
+    pub frame_counter: u64,
+    pub last_presented_frame: Option<u64>,
+    pub viewport_uniform_count: u32,
     pub overlay_slots_used: u32,
     pub overlay_slots_max: u32,
+    pub contour_batch_count: u32,
+    pub mesh_batch_count: u32,
+    pub last_warning: Option<String>,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -177,6 +190,11 @@ pub struct QaRuntime {
     pub last_presented_frame: Option<u64>,
     pub active_qa_roi: Option<String>,
     pub sample_bootstrap_started: bool,
+    pub viewport_uniform_count: u32,
+    pub contour_batch_count: u32,
+    pub mesh_batch_count: u32,
+    pub last_render_warning: Option<String>,
+    pub last_render_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -220,6 +238,11 @@ impl QaRuntime {
             last_presented_frame: None,
             active_qa_roi: None,
             sample_bootstrap_started: false,
+            viewport_uniform_count: 0,
+            contour_batch_count: 0,
+            mesh_batch_count: 0,
+            last_render_warning: None,
+            last_render_error: None,
         }
     }
 
