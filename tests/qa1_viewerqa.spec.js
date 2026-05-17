@@ -160,6 +160,7 @@ test("qa-3 structured render facts", async ({ page }) => {
   expect(typeof state.render.mesh_batch_count).toBe("number");
   expect(state.render.last_warning === null || typeof state.render.last_warning === "string").toBeTruthy();
   expect(state.render.last_error === null || typeof state.render.last_error === "string").toBeTruthy();
+  expect(state.render.overlay_slots_used).toBeLessThanOrEqual(state.render.overlay_slots_max);
 
   if (state.qa.ready) {
     const byMode = Object.fromEntries(state.viewports.map((vp) => [vp.mode, vp]));

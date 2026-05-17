@@ -4,6 +4,7 @@ use crate::components::{
 use crate::render::geometry::{
     build_display_projection_context, world_to_ndc, DisplayProjectionContext,
 };
+use crate::render::roi_views::{RenderRepresentationRequest, RoiRenderViews};
 use glam::Vec3;
 use hecs::World;
 use wgpu::util::DeviceExt;
@@ -133,6 +134,7 @@ pub fn create_mesh_renderer(
 
 pub fn prepare_mesh_render_data(world: &World, entities: &AppEntities) -> MeshRenderData {
     let mut data = MeshRenderData::default();
+    let roi_views = RoiRenderViews::for_world(world, RenderRepresentationRequest::default());
     for (_, (viewport, viewport_state)) in world.query::<(&Viewport, &ViewportState)>().iter() {
         if viewport.mode != ViewMode::ThreeD {
             continue;
@@ -145,11 +147,11 @@ pub fn prepare_mesh_render_data(world: &World, entities: &AppEntities) -> MeshRe
 
         let batch_start = data.vertices.len() as u32;
 
-        for (_, roi) in world.query::<&Roi>().iter() {
-            if !roi.metadata.is_visible {
+        for mesh_view in &roi_views.mesh_overlays {
+            let Ok(roi) = world.get::<&Roi>(mesh_view.entity) else {
                 continue;
-            }
-            let Some(mesh) = mesh_data_for_render(roi) else {
+            };
+            let Some(mesh) = mesh_data_for_render(&roi) else {
                 continue;
             };
             append_projected_mesh(mesh, roi.metadata.color, projection_ctx, &mut data.vertices);

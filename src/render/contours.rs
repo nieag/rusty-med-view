@@ -3,6 +3,7 @@ use crate::convert::{
     oblique_plane_from_view_rotation, orthogonal_plane_from_volume_uv, plane_local_mm_to_world_mm,
     volume_uv_to_viewport_uv, world_mm_to_volume_uv, PlaneDefinition, PlaneFamily, ViewportMapping,
 };
+use crate::render::roi_views::{RenderRepresentationRequest, RoiRenderViews};
 use hecs::World;
 use wgpu::util::DeviceExt;
 
@@ -312,13 +313,24 @@ pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> Con
             Err(_) | Ok((None, _, _, _)) => return ContourRenderData::default(),
         };
 
+    let roi_views = RoiRenderViews::for_world(
+        world,
+        RenderRepresentationRequest {
+            active_roi: Some(active_roi),
+            ..RenderRepresentationRequest::default()
+        },
+    );
+    if !roi_views
+        .contour_overlays
+        .iter()
+        .any(|overlay| overlay.entity == active_roi)
+    {
+        return ContourRenderData::default();
+    }
     let roi = match world.get::<&Roi>(active_roi) {
         Ok(roi) => roi,
         Err(_) => return ContourRenderData::default(),
     };
-    if !roi.metadata.is_visible {
-        return ContourRenderData::default();
-    }
     let preview_contour_data = contour_move_preview
         .as_ref()
         .filter(|preview| preview.roi_entity == active_roi)

@@ -408,6 +408,9 @@ Acceptance:
 Purpose:
 - keep rendering representation-agnostic
 
+Implementation note:
+- concrete implementer guidance lives in [docs/subplan-9-rendering-integration-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-9-rendering-integration-handoff.md:1)
+
 Deliver:
 - ROI render-view adapters for voxel, contour, and mesh
 - viewport-side representation requests
@@ -418,6 +421,28 @@ Acceptance:
 - render code only draws prepared view data
 - conversion logic does not live inside render passes
 - overlay-count behavior is explicit rather than silently truncating ROIs
+
+### 9.1 Representation Orchestration and Contour View Caches
+
+Purpose:
+- tie the primary-representation ROI model, derived session caches, viewport render requests, and QA facts into one runtime contract
+
+Implementation note:
+- concrete implementer guidance lives in [docs/subplan-9-1-representation-orchestration-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-9-1-representation-orchestration-handoff.md:1)
+
+Deliver:
+- contour view-cache model for read-only per-view/per-plane contour display
+- viewport representation request policy for voxel overlays, contour views, and 3D mesh display
+- contour view promotion flow so editing another view makes that plane family authoritative
+- explicit current/stale/rebuilding/blocked/unsupported cache states
+- QA state/presets that prove representation requests and cache states without screenshots
+
+Acceptance:
+- each viewport can report which ROI representation it requests and why
+- contour-primary ROIs keep one editable authoritative plane family while supporting derived contour views
+- editing a derived contour view promotes it through an explicit runtime flow rather than creating multiple authoritative contour families
+- contour edits invalidate/rebuild voxel, contour view, and mesh caches in a documented order
+- 3D ROI display requests mesh cache/surface rather than contour-polyline hacks
 
 ### 10. Performance and Cache Strategy
 
@@ -454,7 +479,8 @@ Required implementation order:
 12. Mesh representation architecture
 13. Mesh deform workflow
 14. Rendering integration layer
-15. Performance and cache strategy
+15. Representation orchestration and contour view caches
+16. Performance and cache strategy
 
 Rules:
 
@@ -527,7 +553,9 @@ Current Phase:
 - `Subplan 8 mesh rendering fixup` complete from [docs/subplan-8-mesh-rendering-fixup-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-mesh-rendering-fixup-handoff.md:1)
 - `Subplan 8 voxel display geometry fixup` reviewed; nearest-neighbor display-grid resampling is not accepted as the final correctness direction
 - `Subplan 8.1 Spatial Geometry Contract` complete from [docs/subplan-8-1-spatial-geometry-contract-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-1-spatial-geometry-contract-handoff.md:1)
-- next checkpoint: continue with deformation-focused phases on top of the shared geometry contract
+- `Subplan 9: Rendering Integration Layer` complete (render-view adapters wired through runtime/render prep/QA facts; overlay cap explicit and asserted)
+- `Subplan 9.1: Representation Orchestration and Contour View Caches` implementation handoff written in [docs/subplan-9-1-representation-orchestration-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-9-1-representation-orchestration-handoff.md:1)
+- next checkpoint: `Subplan 9.1: Representation Orchestration and Contour View Caches`
 
 Completed:
 - `1453511` Baseline: remove legacy segmentation stack
@@ -731,6 +759,20 @@ Completed:
   - retain stale-generation requeue behavior for superseded rebuild results
   - add tests for main-volume-change invalidation and hard-failure no-requeue behavior
   - rerun verification commands: `cargo fmt --all`, `cargo test -q`, `cargo check --target wasm32-unknown-unknown -q`, and `cargo clippy --all-targets --all-features -- -D warnings`
+- complete `Subplan 9: Rendering Integration Layer` from [docs/subplan-9-rendering-integration-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-9-rendering-integration-handoff.md:1):
+  - add read-only adapter module `src/render/roi_views.rs` with voxel/contour/mesh candidate views, overlay-cap report, and structured skip reasons
+  - route voxel overlay slot selection/count through adapter-backed `roi_runtime::renderable_voxel_overlay_rois`
+  - route contour/mesh prep entry through adapter candidates while preserving limits (active-contour-only, mesh in 3D path)
+  - route QA snapshot renderability/blockers through adapter facts/reasons where practical
+  - retain current two-overlay cap and expose cap facts through `overlay_slots_used`/`overlay_slots_max`
+  - add QA-3 assertion `overlay_slots_used <= overlay_slots_max`
+  - validation run:
+    - `cargo fmt --all`
+    - `cargo test -q`
+    - `cargo check --target wasm32-unknown-unknown -q`
+    - `cargo clippy --all-targets --all-features -- -D warnings`
+    - `NO_COLOR=true trunk serve` (outside sandbox due local bind/browser requirements)
+    - `npx playwright test tests/qa1_viewerqa.spec.js --reporter=line` (3 passed)
 - complete `Subplan 6.6 Step 6.6A` from [docs/subplan-6-6-voxel-to-contour-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-6-6-voxel-to-contour-handoff.md:1):
   - add pure extraction module `src/convert/voxel_contour_extract.rs` with `VoxelContourExtractionError` and
     `extract_contours_from_voxel_data(voxel_data, family) -> Result<ContourData, ...>`

@@ -6,6 +6,7 @@ use crate::convert::{
     rasterize_contours_to_voxel_data, PlaneFamily, VoxelContourExtractionError,
     VoxelMeshExtractionError,
 };
+use crate::render::roi_views::{RenderRepresentationRequest, RoiRenderViews};
 use hecs::World;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,7 +80,8 @@ pub enum MeshDerivedRebuildError {
     NotImplemented,
 }
 
-pub const MAX_SIMULTANEOUS_ROI_OVERLAYS: usize = 2;
+pub const MAX_SIMULTANEOUS_ROI_OVERLAYS: usize =
+    crate::render::roi_views::DEFAULT_MAX_VOXEL_OVERLAYS;
 
 fn plane_family_label(family: PlaneFamily) -> &'static str {
     match family {
@@ -180,41 +182,22 @@ pub fn renderable_voxel_overlay_rois(
     world: &World,
     active_roi: Option<hecs::Entity>,
 ) -> Vec<RenderableVoxelOverlay> {
-    let mut overlays = Vec::new();
-
-    if let Some(active) = active_roi {
-        if let (Ok(roi), Ok(settings)) = (
-            world.get::<&Roi>(active),
-            world.get::<&LayerSettings>(active),
-        ) {
-            if roi.renderable_voxel_cache().is_some() {
-                overlays.push(RenderableVoxelOverlay {
-                    entity: active,
-                    opacity: settings.opacity,
-                });
-            }
-        }
-    }
-
-    let mut query = world.query::<(&Roi, &LayerSettings)>();
-    for (entity, (roi, settings)) in query.iter() {
-        if Some(entity) == active_roi {
-            continue;
-        }
-        if roi.renderable_voxel_cache().is_none() {
-            continue;
-        }
-        overlays.push(RenderableVoxelOverlay {
-            entity,
-            opacity: settings.opacity,
-        });
-        if overlays.len() >= MAX_SIMULTANEOUS_ROI_OVERLAYS {
-            break;
-        }
-    }
-
-    overlays.truncate(MAX_SIMULTANEOUS_ROI_OVERLAYS);
-    overlays
+    let views = RoiRenderViews::for_world(
+        world,
+        RenderRepresentationRequest {
+            active_roi,
+            max_voxel_overlays: MAX_SIMULTANEOUS_ROI_OVERLAYS,
+            contour_active_only: true,
+        },
+    );
+    views
+        .voxel_overlays
+        .into_iter()
+        .map(|overlay| RenderableVoxelOverlay {
+            entity: overlay.entity,
+            opacity: overlay.opacity,
+        })
+        .collect()
 }
 
 pub fn visible_voxel_overlay_count(world: &World) -> usize {

@@ -12,6 +12,7 @@ use crate::io::handlers;
 use crate::io::nifti::{load_label_from_bytes, load_nifti_from_bytes};
 use crate::render::pipeline;
 use crate::render::protocols;
+use crate::render::roi_views::{RenderRepresentationRequest, RoiRenderViews};
 use crate::systems;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -237,11 +238,17 @@ impl AppState {
 
             let mut active_roi_id = None;
             let mut active_roi_name = None;
-            let renderable =
-                roi_runtime::renderable_voxel_overlay_rois(&ctx.scene.world, active_roi_entity);
+            let roi_views = RoiRenderViews::for_world(
+                &ctx.scene.world,
+                RenderRepresentationRequest {
+                    active_roi: active_roi_entity,
+                    max_voxel_overlays: roi_runtime::MAX_SIMULTANEOUS_ROI_OVERLAYS,
+                    contour_active_only: true,
+                },
+            );
             let mut overlay_slots: std::collections::HashMap<hecs::Entity, u32> =
                 std::collections::HashMap::new();
-            for (idx, overlay) in renderable.iter().enumerate() {
+            for (idx, overlay) in roi_views.voxel_overlays.iter().enumerate() {
                 overlay_slots.insert(overlay.entity, idx as u32);
             }
 
@@ -257,7 +264,7 @@ impl AppState {
                     active_roi_id = Some(roi.metadata.roi_id.0);
                     active_roi_name = Some(roi.metadata.name.clone());
                     active_roi_visible = roi.metadata.is_visible;
-                    active_roi_has_renderable_cache = roi.renderable_voxel_cache().is_some();
+                    active_roi_has_renderable_cache = overlay_slots.contains_key(&entity);
                 }
                 let voxel_dimensions = roi
                     .voxel_cache()
@@ -330,7 +337,12 @@ impl AppState {
                 .get::<&Transform>(ctx.scene.entities.cursor)
                 .map(|cursor| cursor.position)
                 .unwrap_or([0.5, 0.5, 0.5]);
-            for (_, vp) in ctx.scene.world.query::<&Viewport>().iter() {
+            for (_, (vp, vp_state)) in ctx
+                .scene
+                .world
+                .query::<(&Viewport, &ViewportState)>()
+                .iter()
+            {
                 let mode = match vp.mode {
                     ViewMode::ThreeD => "three_d",
                     ViewMode::Axial => "axial",
@@ -371,6 +383,15 @@ impl AppState {
                         }
                         if active_roi_overlay_slot.is_none() {
                             overlay_blockers.push("active_roi_overlay_slot_missing".to_string());
+                            if let Some(active) = active_roi_entity {
+                                if let Some(skip) = roi_views
+                                    .voxel_skips
+                                    .iter()
+                                    .find(|skip| skip.entity == active)
+                                {
+                                    overlay_blockers.push(skip.reason.to_string());
+                                }
+                            }
                         }
                         if active_roi_non_empty_bounds.is_none() {
                             overlay_blockers
@@ -429,32 +450,41 @@ impl AppState {
                             overlay_blockers
                                 .push("active_roi_renderable_voxel_cache_missing".to_string());
                         }
-                        contour_renderable =
-                            ctx.scene
-                                .world
-                                .get::<&Roi>(active_roi_entity.unwrap_or(hecs::Entity::DANGLING))
-                                .ok()
-                                .map(|roi| match &roi.authoritative_data {
-                                    RoiAuthoritativeData::Contour(contour) => contour.has_loops(),
-                                    RoiAuthoritativeData::Voxel(_)
-                                    | RoiAuthoritativeData::Mesh(_) => false,
-                                })
-                                .unwrap_or(false);
+                        contour_renderable = active_roi_entity
+                            .map(|active| {
+                                crate::render::roi_views::contour_renderable_in_viewport(
+                                    &ctx.scene.world,
+                                    vp,
+                                    vp_state,
+                                    cursor_pos,
+                                    active,
+                                )
+                            })
+                            .unwrap_or(false);
                         if !contour_renderable {
                             contour_blockers
                                 .push("active_contour_data_missing_or_empty".to_string());
+                            if let Some(active) = active_roi_entity {
+                                if let Some(skip) = roi_views
+                                    .contour_skips
+                                    .iter()
+                                    .find(|skip| skip.entity == active)
+                                {
+                                    contour_blockers.push(skip.reason.to_string());
+                                }
+                            }
                         }
                         contour_renderable = contour_renderable && image_renderable;
                     }
                     ViewMode::ThreeD => {
                         overlay_blockers.push("overlay_not_applicable_in_three_d_view".to_string());
                         contour_blockers.push("contour_not_applicable_in_three_d_view".to_string());
-                        mesh_renderable = ctx.scene.world.query::<&Roi>().iter().any(|(_, roi)| {
-                            roi.metadata.is_visible
-                                && matches!(roi.authoritative_data, RoiAuthoritativeData::Mesh(_))
-                        }) && image_renderable;
+                        mesh_renderable = !roi_views.mesh_overlays.is_empty() && image_renderable;
                         if !mesh_renderable {
                             mesh_blockers.push("visible_mesh_roi_missing".to_string());
+                            if let Some(skip) = roi_views.mesh_skips.first() {
+                                mesh_blockers.push(skip.reason.to_string());
+                            }
                         }
                     }
                     ViewMode::Oblique => {
@@ -583,8 +613,8 @@ impl AppState {
                 frame_counter: self.qa.frame_counter,
                 last_presented_frame: self.qa.last_presented_frame,
                 viewport_uniform_count: self.qa.viewport_uniform_count,
-                overlay_slots_used: renderable.len() as u32,
-                overlay_slots_max: 2,
+                overlay_slots_used: roi_views.overlay_cap.selected_count as u32,
+                overlay_slots_max: roi_views.overlay_cap.max_count as u32,
                 contour_batch_count: self.qa.contour_batch_count,
                 mesh_batch_count: self.qa.mesh_batch_count,
                 last_warning: self.qa.last_render_warning.clone(),
@@ -647,7 +677,7 @@ impl AppState {
                     last_presented_frame: self.qa.last_presented_frame,
                     viewport_uniform_count: self.qa.viewport_uniform_count,
                     overlay_slots_used: 0,
-                    overlay_slots_max: 2,
+                    overlay_slots_max: roi_runtime::MAX_SIMULTANEOUS_ROI_OVERLAYS as u32,
                     contour_batch_count: self.qa.contour_batch_count,
                     mesh_batch_count: self.qa.mesh_batch_count,
                     last_warning: self.qa.last_render_warning.clone(),
@@ -667,7 +697,9 @@ impl AppState {
                 .count()
         });
         let overlay_slots_used = self.context.as_ref().map_or(0, |ctx| {
-            roi_runtime::renderable_voxel_overlay_rois(&ctx.scene.world, None).len() as u32
+            RoiRenderViews::for_world(&ctx.scene.world, RenderRepresentationRequest::default())
+                .overlay_cap
+                .selected_count as u32
         });
         let warning_count = self
             .qa
@@ -689,7 +721,7 @@ impl AppState {
             frame_counter: self.qa.frame_counter,
             visible_rois,
             overlay_slots_used,
-            overlay_slots_max: 2,
+            overlay_slots_max: roi_runtime::MAX_SIMULTANEOUS_ROI_OVERLAYS as u32,
             warning_count,
             error_count,
         }
