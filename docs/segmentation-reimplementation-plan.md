@@ -444,6 +444,49 @@ Acceptance:
 - contour edits invalidate/rebuild voxel, contour view, and mesh caches in a documented order
 - 3D ROI display requests mesh cache/surface rather than contour-polyline hacks
 
+### 9.2 Voxel/Contour Functional Closeout
+
+Purpose:
+- make voxel-primary and contour-primary workflows usable end-to-end before performance/GPU/chunking work begins
+
+Implementation note:
+- concrete implementer guidance lives in [docs/subplan-9-2-voxel-contour-functional-closeout-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-9-2-voxel-contour-functional-closeout-handoff.md:1)
+
+Deliver:
+- functional `Voxel -> Contour -> Voxel` workflow on sample data
+- orthogonal contour view caches built from current voxel caches
+- explicit contour view promotion UI/runtime path
+- contour edit stale/rebuild/current state reflected in QA
+- active oblique contour editing/display behavior, with explicit blockers for unsupported oblique voxel overlay or derived oblique extraction
+
+Acceptance:
+- user can load voxel ROI, extract/edit contour, rebuild voxel cache, and inspect updated overlay/stats
+- derived orthogonal contour views are real caches, not state-only placeholders
+- editing another contour view promotes it through runtime API
+- oblique contour behavior is usable or blocked explicitly
+- unsupported paths are visible in QA state and UI status, not silent
+
+### 9.3 Mesh-Primary Functional Closeout
+
+Purpose:
+- make mesh-primary ROI workflow functional enough before performance/GPU/chunking work begins
+
+Implementation note:
+- concrete implementer guidance lives in [docs/subplan-9-3-mesh-primary-functional-closeout-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-9-3-mesh-primary-functional-closeout-handoff.md:1)
+
+Deliver:
+- CPU `Mesh -> Voxel` V1 conversion into target voxel grid
+- `Mesh -> Contour` behavior through `Mesh -> Voxel -> Contour`
+- runtime mesh-derived voxel rebuild path replacing current `NotImplemented` placeholder
+- minimal mesh edit operation proving authoritative mesh mutation and derived-cache rebuild
+- QA/manual workflow state for mesh-primary MPR/3D coherence
+
+Acceptance:
+- user can create mesh ROI, perform minimal mesh edit, rebuild voxel cache, and inspect MPR/3D state
+- mesh-derived contour views route through current voxel cache or report explicit blockers
+- invalid/open/unsupported mesh cases fail safely
+- no SDF/TSDF, GPU voxelization, or full mesh UX polish is required yet
+
 ### 10. Performance and Cache Strategy
 
 Purpose:
@@ -480,7 +523,9 @@ Required implementation order:
 13. Mesh deform workflow
 14. Rendering integration layer
 15. Representation orchestration and contour view caches
-16. Performance and cache strategy
+16. Voxel/contour functional closeout
+17. Mesh-primary functional closeout
+18. Performance and cache strategy
 
 Rules:
 
@@ -555,7 +600,9 @@ Current Phase:
 - `Subplan 8.1 Spatial Geometry Contract` complete from [docs/subplan-8-1-spatial-geometry-contract-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-1-spatial-geometry-contract-handoff.md:1)
 - `Subplan 9: Rendering Integration Layer` complete (render-view adapters wired through runtime/render prep/QA facts; overlay cap explicit and asserted)
 - `Subplan 9.1: Representation Orchestration and Contour View Caches` complete from [docs/subplan-9-1-representation-orchestration-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-9-1-representation-orchestration-handoff.md:1)
-- next checkpoint: `Subplan 10: Performance and Cache Strategy`
+- `Subplan 9.2: Voxel/Contour Functional Closeout` implementation handoff written in [docs/subplan-9-2-voxel-contour-functional-closeout-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-9-2-voxel-contour-functional-closeout-handoff.md:1)
+- `Subplan 9.3: Mesh-Primary Functional Closeout` implementation handoff written in [docs/subplan-9-3-mesh-primary-functional-closeout-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-9-3-mesh-primary-functional-closeout-handoff.md:1)
+- next checkpoint: `Subplan 9.2: Voxel/Contour Functional Closeout`
 
 Completed:
 - `1453511` Baseline: remove legacy segmentation stack
