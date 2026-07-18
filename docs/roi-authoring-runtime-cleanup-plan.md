@@ -77,7 +77,7 @@ In scope:
 ```text
 src/app/roi/
   mod.rs              Public facade and explicit exports
-  model.rs            ROI authority, cache, generation, and job value types
+  model.rs            ROI identity, metadata, and authoritative shape value types
   authority.rs        Authoritative mutations and promotion
   cache.rs            Invalidation, freshness, and result installation
   preview.rs          Preview sessions, revisions, commit, and cancel
@@ -220,7 +220,7 @@ Exit criteria:
 Deliver:
 
 - create `src/app/roi/model.rs`
-- move ROI-specific value types out of the general components module
+- move authoritative ROI identity, metadata, voxel, contour, and mesh value types out of the general components module
 - preserve explicit compatibility imports while callers migrate
 - add `Roi::primary_representation()` derived query
 
@@ -370,19 +370,25 @@ Each phase should land as a focused checkpoint with its hash recorded below. Do 
 
 ## Implementation Status
 
-State: planned; implementation not started.
+State: in progress.
 
-Current checkpoint: complete ROI closeout acceptance and establish the C0 characterization baseline.
+Current checkpoint: C2 read-only requests and render boundary.
 
 Completed prerequisites:
 
 - `90d94ae` R6: implement bidirectional ROI editing closeout
 - `4860bf2` Docs: record ROI closeout checkpoint
 
+Completed cleanup work:
+
+- `6268dfc` Docs: plan ROI authoring runtime cleanup
+- C0 automated baseline: 281 tests pass; WASM check and warning-free Clippy pass
+- C0 characterization audit confirmed existing coverage for authority roundtrips, preview/commit/cancel, stale-result rejection, history, cache/job invariants, and exact Oblique promotion
+- `79e3faa` C1: extract authoritative ROI model types, derive primary representation from authority, and point pure conversion modules at the model boundary
+
 Pending:
 
-- C0 baseline and characterization
-- C1 model extraction
+- C0 manual liver-sample performance baseline, retained as part of ROI closeout acceptance
 - C2 read-only requests and render boundary
 - C3 authority and history
 - C4 cache ownership
@@ -393,4 +399,4 @@ Pending:
 
 Implementation checkpoints:
 
-- none
+- `79e3faa` C1 authoritative model extraction
