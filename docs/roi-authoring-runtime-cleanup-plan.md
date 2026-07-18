@@ -372,7 +372,7 @@ Each phase should land as a focused checkpoint with its hash recorded below. Do 
 
 State: in progress.
 
-Current checkpoint: C3 authority and history.
+Current checkpoint: C4 cache ownership.
 
 Completed prerequisites:
 
@@ -387,11 +387,11 @@ Completed cleanup work:
 - `79e3faa` C1: extract authoritative ROI model types, derive primary representation from authority, and point pure conversion modules at the model boundary
 - `8026f55` C2: isolate read-only representation and cache requests, migrate UI/QA callers, and retain compatibility delegators
 - C2 audit finding: requested contour-view extraction remains synchronous in frame cache synchronization; move or bound this work during C6 scheduler/executor cleanup if measured latency requires it
+- `c3b1a01` C3: isolate authoritative mutations and representation promotion in `roi::authority`, isolate undo/redo in `roi::history`, and migrate production edit callers to the focused facade
 
 Pending:
 
 - C0 manual liver-sample performance baseline, retained as part of ROI closeout acceptance
-- C3 authority and history
 - C4 cache ownership
 - C5 preview lifecycle
 - C6 scheduler and executor
@@ -402,3 +402,4 @@ Implementation checkpoints:
 
 - `79e3faa` C1 authoritative model extraction
 - `8026f55` C2 read-only representation requests
+- `c3b1a01` C3 authority and history
