@@ -372,7 +372,7 @@ Each phase should land as a focused checkpoint with its hash recorded below. Do 
 
 State: in progress.
 
-Current checkpoint: C4 cache ownership.
+Current checkpoint: C5 preview lifecycle.
 
 Completed prerequisites:
 
@@ -388,11 +388,11 @@ Completed cleanup work:
 - `8026f55` C2: isolate read-only representation and cache requests, migrate UI/QA callers, and retain compatibility delegators
 - C2 audit finding: requested contour-view extraction remains synchronous in frame cache synchronization; move or bound this work during C6 scheduler/executor cleanup if measured latency requires it
 - `c3b1a01` C3: isolate authoritative mutations and representation promotion in `roi::authority`, isolate undo/redo in `roi::history`, and migrate production edit callers to the focused facade
+- `a205f87` C4: centralize cache freshness, invalidation, promotion rebasing, and generation/revision-checked result installation in `roi::cache`; focused invariant tests raise the suite to 284 tests
 
 Pending:
 
 - C0 manual liver-sample performance baseline, retained as part of ROI closeout acceptance
-- C4 cache ownership
 - C5 preview lifecycle
 - C6 scheduler and executor
 - C7 tool-intent transition seam
@@ -403,3 +403,4 @@ Implementation checkpoints:
 - `79e3faa` C1 authoritative model extraction
 - `8026f55` C2 read-only representation requests
 - `c3b1a01` C3 authority and history
+- `a205f87` C4 cache ownership
