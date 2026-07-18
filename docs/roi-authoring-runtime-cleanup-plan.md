@@ -390,11 +390,13 @@ Completed cleanup work:
 - `c3b1a01` C3: isolate authoritative mutations and representation promotion in `roi::authority`, isolate undo/redo in `roi::history`, and migrate production edit callers to the focused facade
 - `a205f87` C4: centralize cache freshness, invalidation, promotion rebasing, and generation/revision-checked result installation in `roi::cache`; focused invariant tests raise the suite to 284 tests
 - `02082ae` C5: isolate preview lifecycle in `roi::preview`, replace parallel contour/mesh preview options with one typed session, and route preview begin/commit/cancel through the ROI facade; focused lifecycle tests raise the suite to 286 tests
+- `647e095` C6 scheduler checkpoint: move ordering, coalescing, dependency, and supersession policy into `roi::scheduler`; remove duplicated `running`/`queued` projections so one running request and one pending queue are canonical
 
 Pending:
 
 - C0 manual liver-sample performance baseline, retained as part of ROI closeout acceptance
 - C6 scheduler and executor
+  - scheduler complete; frame-budgeted executor extraction pending
 - C7 tool-intent transition seam
 - C8 consolidation and closeout
 
@@ -405,3 +407,4 @@ Implementation checkpoints:
 - `c3b1a01` C3 authority and history
 - `a205f87` C4 cache ownership
 - `02082ae` C5 preview lifecycle
+- `647e095` C6 canonical scheduler state (partial phase checkpoint)
