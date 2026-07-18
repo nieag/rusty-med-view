@@ -397,7 +397,7 @@ impl AppState {
                 let mut volume_slice_in_bounds = None;
                 let mut cursor_intersects_active_roi = None;
                 if let Some(active) = active_roi_entity {
-                    let voxel_req = roi_runtime::request_viewport_voxel_overlay_state(
+                    let voxel_req = roi::request_viewport_voxel_overlay_state(
                         &ctx.scene.world,
                         vp.mode,
                         active,
@@ -409,7 +409,7 @@ impl AppState {
                     representation_requests.push("voxel_overlay".to_string());
 
                     let mesh_req =
-                        roi_runtime::request_viewport_mesh_state(&ctx.scene.world, vp.mode, active);
+                        roi::request_viewport_mesh_state(&ctx.scene.world, vp.mode, active);
                     mesh_cache_state = mesh_req.state.as_str().to_string();
                     if let Some(reason) = mesh_req.reason {
                         mesh_blockers.push(reason);
@@ -428,7 +428,7 @@ impl AppState {
                             );
                         if let Some(plane) = displayed_plane {
                             let contour_key = ContourViewKey::from_plane(plane);
-                            let contour_req = roi_runtime::request_contour_view_state(
+                            let contour_req = roi::request_contour_view_state(
                                 &ctx.scene.world,
                                 active,
                                 &contour_key,

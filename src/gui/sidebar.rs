@@ -4,7 +4,7 @@ use crate::AppEvent;
 use hecs::World;
 use winit::event_loop::EventLoopProxy;
 
-use crate::app::roi_runtime;
+use crate::app::{roi, roi_runtime};
 use crate::io::handlers;
 
 fn activate_promoted_edit_tool(world: &mut World, entities: &AppEntities, tool: EditorTool) {
@@ -278,9 +278,9 @@ pub fn draw_sidebar(
         });
         if let (Some(roi_entity), Some(primary)) = (new_active_roi, active_primary) {
             let voxel_ready = primary == PrimaryRepresentation::Voxel
-                || roi_runtime::cache_status(world, roi_entity, RoiCacheKind::Voxel)
+                || roi::cache_status(world, roi_entity, RoiCacheKind::Voxel)
                     .is_some_and(|status| status.is_current);
-            let mesh_status = roi_runtime::request_mesh_cache_state(world, roi_entity);
+            let mesh_status = roi::request_mesh_cache_state(world, roi_entity);
             let mesh_ready = primary == PrimaryRepresentation::Mesh
                 || mesh_status.state == roi_runtime::RepresentationRequestState::Current;
             let contour_family = world
@@ -567,7 +567,7 @@ pub fn draw_sidebar(
             }
 
             if let Some(view_key) = active_viewport_contour_view_key(world, entities, entity) {
-                let contour_status = roi_runtime::request_contour_view_state(world, entity, &view_key);
+                let contour_status = roi::request_contour_view_state(world, entity, &view_key);
                 ui.label(format!(
                     "Displayed view: {:?} ({})",
                     view_key.family,
