@@ -630,6 +630,7 @@ Current Phase:
 - R6 ROI MPR protocol complete: axial, coronal, sagittal, RMB-rotatable oblique, and 3D viewports are simultaneously available in the QA workflow
 - oblique dirty-slice edits currently use a correctness-first full-contour voxel rebuild; incremental arbitrary-plane rasterization remains performance work
 - next checkpoint: manual oblique alignment acceptance, then representative-volume R7 performance/closeout QA
+- post-closeout runtime modularization and tool-intent transition work is planned in [docs/roi-authoring-runtime-cleanup-plan.md](/Users/nieage/dev/git/rust_starter_app/docs/roi-authoring-runtime-cleanup-plan.md:1)
 
 Completed:
 - `1453511` Baseline: remove legacy segmentation stack

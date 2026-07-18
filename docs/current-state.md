@@ -70,3 +70,4 @@ Pending:
 
 Plan Document:
 - See `docs/segmentation-reimplementation-plan.md` for the canonical roadmap and implementation status.
+- See `docs/roi-authoring-runtime-cleanup-plan.md` for the post-closeout runtime modularization and segmentation-tool transition plan.

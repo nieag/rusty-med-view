@@ -367,3 +367,5 @@ Pending:
 - R6 manual image/voxel/contour world-space alignment acceptance
 - oblique incremental rasterization if measured full-contour rebuild latency misses the interaction gate
 - R7 performance and closeout QA
+
+Follow-on architecture cleanup and segmentation-tool transition planning is tracked in `docs/roi-authoring-runtime-cleanup-plan.md`.
