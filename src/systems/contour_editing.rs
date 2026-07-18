@@ -1,3 +1,5 @@
+use crate::app::roi;
+#[cfg(test)]
 use crate::app::roi_runtime;
 use crate::components::{
     AppEntities, ContourData, ContourDraft, ContourLoop, ContourMovePreview, ContourPoint,
@@ -417,7 +419,7 @@ pub fn handle_contour_draw_click(
             });
         }
 
-        roi_runtime::replace_contour_data_for_slice_with_history(
+        roi::replace_contour_data_for_slice_with_history(
             world,
             entities.editor,
             roi_entity,
@@ -704,7 +706,7 @@ pub fn move_selected_point(
     let (selection, mut contour_data, viewport) = selected_context(world, entities)?;
     let dirty_plane =
         update_selected_point_in_data(&selection, &mut contour_data, viewport, viewport_uv)?;
-    roi_runtime::replace_contour_data_for_slice_with_history(
+    roi::replace_contour_data_for_slice_with_history(
         world,
         entities.editor,
         selection.roi_entity,
@@ -807,7 +809,7 @@ pub fn finalize_selected_point_move(
             .take()
             .ok_or(ContourEditOperationError::MissingSelection)?
     };
-    let result = roi_runtime::replace_contour_data_for_slice_with_history(
+    let result = roi::replace_contour_data_for_slice_with_history(
         world,
         entities.editor,
         preview.roi_entity,
@@ -882,7 +884,7 @@ pub fn insert_point_into_selected_loop(
         },
     );
 
-    roi_runtime::replace_contour_data_for_slice_with_history(
+    roi::replace_contour_data_for_slice_with_history(
         world,
         entities.editor,
         selection.roi_entity,
@@ -933,7 +935,7 @@ pub fn delete_selected_contour_element(
         clear_selection = true;
     }
 
-    roi_runtime::replace_contour_data_with_history(
+    roi::replace_contour_data_with_history(
         world,
         entities.editor,
         selection.roi_entity,

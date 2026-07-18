@@ -13,7 +13,7 @@ fn activate_promoted_edit_tool(world: &mut World, entities: &AppEntities, tool: 
         .ok()
         .and_then(|editor| editor.active_roi);
     if let Some(roi_entity) = active_roi {
-        roi_runtime::clear_roi_edit_history_for_roi(world, entities.editor, roi_entity);
+        roi::clear_roi_edit_history_for_roi(world, entities.editor, roi_entity);
     }
     if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
         input.contour_move_pending_commit = false;
@@ -66,14 +66,14 @@ fn promote_contour_family_for_active_view(
     family: PlaneFamily,
 ) -> Result<(), String> {
     if family != PlaneFamily::Oblique {
-        return roi_runtime::promote_roi_to_contour_authority(world, roi_entity, family)
+        return roi::promote_roi_to_contour_authority(world, roi_entity, family)
             .map_err(|error| format!("{error:?}"));
     }
 
     let view_key = active_viewport_contour_view_key(world, entities, roi_entity)
         .filter(|key| key.family == PlaneFamily::Oblique)
         .ok_or_else(|| "activate an oblique 2D viewport before promotion".to_string())?;
-    roi_runtime::promote_contour_view_to_authoritative(world, roi_entity, &view_key)
+    roi::promote_contour_view_to_authoritative(world, roi_entity, &view_key)
         .map_err(|error| format!("{error:?}"))
 }
 
@@ -282,7 +282,7 @@ pub fn draw_sidebar(
                     .is_some_and(|status| status.is_current);
             let mesh_status = roi::request_mesh_cache_state(world, roi_entity);
             let mesh_ready = primary == PrimaryRepresentation::Mesh
-                || mesh_status.state == roi_runtime::RepresentationRequestState::Current;
+                || mesh_status.state == roi::RepresentationRequestState::Current;
             let contour_family = world
                 .get::<&Roi>(roi_entity)
                 .ok()
@@ -313,7 +313,7 @@ pub fn draw_sidebar(
                     .clicked()
                     && primary != PrimaryRepresentation::Voxel
                 {
-                    match roi_runtime::promote_current_voxel_cache_to_authority(world, roi_entity) {
+                    match roi::promote_current_voxel_cache_to_authority(world, roi_entity) {
                         Ok(()) => {
                             activate_promoted_edit_tool(
                                 world,
@@ -349,7 +349,7 @@ pub fn draw_sidebar(
                     .clicked()
                     && primary != PrimaryRepresentation::Contour
                 {
-                    match roi_runtime::promote_roi_to_contour_authority(
+                    match roi::promote_roi_to_contour_authority(
                         world,
                         roi_entity,
                         target_contour_family,
@@ -393,7 +393,7 @@ pub fn draw_sidebar(
                     .clicked()
                     && primary != PrimaryRepresentation::Mesh
                 {
-                    match roi_runtime::promote_current_mesh_cache_to_authority(world, roi_entity) {
+                    match roi::promote_current_mesh_cache_to_authority(world, roi_entity) {
                         Ok(()) => {
                             activate_promoted_edit_tool(world, entities, EditorTool::MeshDeform);
                             handlers::set_status_message(
@@ -521,14 +521,14 @@ pub fn draw_sidebar(
 
             if active_contour_plane_family != Some(current_family) {
                 if let Some(new_family) = active_contour_plane_family {
-                    match roi_runtime::set_active_contour_plane_family(world, entity, new_family) {
+                    match roi::set_active_contour_plane_family(world, entity, new_family) {
                         Ok(()) => {}
-                        Err(roi_runtime::ContourPlaneFamilySwitchError::RequiresConversion) => {
+                        Err(roi::ContourPlaneFamilySwitchError::RequiresConversion) => {
                             match promote_contour_family_for_active_view(
                                 world, entities, entity, new_family,
                             ) {
                                 Ok(()) => {
-                                    roi_runtime::clear_roi_edit_history_for_roi(
+                                    roi::clear_roi_edit_history_for_roi(
                                         world,
                                         entities.editor,
                                         entity,
@@ -546,7 +546,7 @@ pub fn draw_sidebar(
                                 ),
                             }
                         }
-                        Err(roi_runtime::ContourPlaneFamilySwitchError::MissingRoi) => {
+                        Err(roi::ContourPlaneFamilySwitchError::MissingRoi) => {
                             handlers::set_status_message(
                                 world,
                                 entities,
@@ -554,7 +554,7 @@ pub fn draw_sidebar(
                                     .to_string(),
                             )
                         }
-                        Err(roi_runtime::ContourPlaneFamilySwitchError::NotContourRoi) => {
+                        Err(roi::ContourPlaneFamilySwitchError::NotContourRoi) => {
                             handlers::set_status_message(
                                 world,
                                 entities,
@@ -580,11 +580,11 @@ pub fn draw_sidebar(
                     && ui.small_button("Make displayed view editable").clicked()
                 {
                     if contour_status.promotable {
-                        match roi_runtime::promote_contour_view_to_authoritative(
+                        match roi::promote_contour_view_to_authoritative(
                             world, entity, &view_key,
                         ) {
                             Ok(()) => {
-                                roi_runtime::clear_roi_edit_history_for_roi(
+                                roi::clear_roi_edit_history_for_roi(
                                     world,
                                     entities.editor,
                                     entity,
@@ -607,27 +607,27 @@ pub fn draw_sidebar(
                         }
                     } else {
                         let message = match contour_status.request.state {
-                            roi_runtime::RepresentationRequestState::Current => {
+                            roi::RepresentationRequestState::Current => {
                                 "Displayed contour view is already authoritative.".to_string()
                             }
-                            roi_runtime::RepresentationRequestState::Stale => {
+                            roi::RepresentationRequestState::Stale => {
                                 "Displayed contour view is stale; rebuild the voxel cache before promotion."
                                     .to_string()
                             }
-                            roi_runtime::RepresentationRequestState::Preview => {
+                            roi::RepresentationRequestState::Preview => {
                                 "Displayed contour view is a live preview; commit and wait for the current cache before promotion."
                                     .to_string()
                             }
-                            roi_runtime::RepresentationRequestState::Queued => {
+                            roi::RepresentationRequestState::Queued => {
                                 "Displayed contour view rebuild is queued; wait for current data before promotion."
                                     .to_string()
                             }
-                            roi_runtime::RepresentationRequestState::Rebuilding => {
+                            roi::RepresentationRequestState::Rebuilding => {
                                 "Displayed contour view is rebuilding; wait for the voxel cache rebuild to finish."
                                     .to_string()
                             }
-                            roi_runtime::RepresentationRequestState::Blocked
-                            | roi_runtime::RepresentationRequestState::Unsupported => format!(
+                            roi::RepresentationRequestState::Blocked
+                            | roi::RepresentationRequestState::Unsupported => format!(
                                 "Displayed contour view cannot be promoted: {}.",
                                 contour_status
                                     .request

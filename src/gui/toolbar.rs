@@ -15,9 +15,9 @@ fn apply_roi_history_action(
         input.mesh_move_pending_commit = false;
     }
     let result = if undo {
-        crate::app::roi_runtime::undo_roi_edit(world, entities.editor)
+        crate::app::roi::undo_roi_edit(world, entities.editor)
     } else {
-        crate::app::roi_runtime::redo_roi_edit(world, entities.editor)
+        crate::app::roi::redo_roi_edit(world, entities.editor)
     };
     match result {
         Ok(_) => {
@@ -263,8 +263,8 @@ pub fn draw_toolbar(
         }
 
         ui.separator();
-        let can_undo = crate::app::roi_runtime::can_undo_roi_edit(world, entities.editor);
-        let can_redo = crate::app::roi_runtime::can_redo_roi_edit(world, entities.editor);
+        let can_undo = crate::app::roi::can_undo_roi_edit(world, entities.editor);
+        let can_redo = crate::app::roi::can_redo_roi_edit(world, entities.editor);
         if ui
             .add_enabled(can_undo, egui::Button::new("↶"))
             .on_hover_text("Undo ROI edit")

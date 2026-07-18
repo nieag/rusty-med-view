@@ -1,4 +1,10 @@
 use crate::app::components::*;
+pub use crate::app::roi::authority::{
+    ContourMutationError, ContourPlaneFamilySwitchError, ContourPromotionError,
+    MeshAuthorityPromotionError, MeshMutationError, VoxelAuthorityPromotionError,
+    VoxelContourPromotionError,
+};
+pub use crate::app::roi::history::RoiEditHistoryError;
 pub use crate::app::roi::requests::{
     ContourRepresentationStatus, RepresentationRequestState, RepresentationRequestStatus,
     RoiCacheStatus,
@@ -39,41 +45,6 @@ pub struct VoxelRoiStats {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContourPlaneFamilySwitchError {
-    MissingRoi,
-    NotContourRoi,
-    RequiresConversion,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContourMutationError {
-    MissingRoi,
-    MissingEditorState,
-    NotContourRoi,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MeshMutationError {
-    MissingRoi,
-    MissingEditorState,
-    MissingPreview,
-    NotMeshRoi,
-    InvalidDelta,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RoiEditHistoryError {
-    MissingEditorState,
-    MissingRoi,
-    NoUndo,
-    NoRedo,
-    Locked,
-    RepresentationChanged,
-}
-
-const MAX_ROI_EDIT_HISTORY: usize = 32;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoxelContourCreationError {
     MissingRoi,
     NotVoxelRoi,
@@ -98,35 +69,6 @@ pub enum ContourMeshCreationError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VoxelContourPromotionError {
-    MissingRoi,
-    Locked,
-    NotVoxelRoi,
-    VoxelCacheMissing,
-    VoxelCacheNotCurrent,
-    ExtractionFailed(VoxelContourExtractionError),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VoxelAuthorityPromotionError {
-    MissingRoi,
-    Locked,
-    AlreadyVoxelPrimary,
-    VoxelCacheMissing,
-    VoxelCacheNotCurrent,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MeshAuthorityPromotionError {
-    MissingRoi,
-    Locked,
-    AlreadyMeshPrimary,
-    MeshCacheMissing,
-    MeshCacheNotCurrent,
-    EmptyMesh,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisplayVoxelSourceError {
     MissingRoi,
     NotVoxelRoi,
@@ -139,14 +81,6 @@ pub enum MeshDerivedRebuildError {
     NotMeshRoi,
     MissingTargetGeometry,
     VoxelizationFailed(MeshVoxelizationError),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContourPromotionError {
-    MissingRoi,
-    NotContourRoi,
-    ViewCacheMissing,
-    ViewCacheNotCurrent,
 }
 
 pub const MAX_SIMULTANEOUS_ROI_OVERLAYS: usize =
@@ -289,28 +223,7 @@ pub fn set_active_contour_plane_family(
     roi_entity: hecs::Entity,
     family: PlaneFamily,
 ) -> Result<(), ContourPlaneFamilySwitchError> {
-    let mut roi = world
-        .get::<&mut Roi>(roi_entity)
-        .map_err(|_| ContourPlaneFamilySwitchError::MissingRoi)?;
-
-    let contour = match &mut roi.authoritative_data {
-        RoiAuthoritativeData::Contour(contour) => contour,
-        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Mesh(_) => {
-            return Err(ContourPlaneFamilySwitchError::NotContourRoi);
-        }
-    };
-
-    if contour.active_plane_family == family {
-        return Ok(());
-    }
-
-    if contour.has_loops() {
-        return Err(ContourPlaneFamilySwitchError::RequiresConversion);
-    }
-
-    contour.active_plane_family = family;
-    roi.mark_contour_authoritative_changed();
-    Ok(())
+    crate::app::roi::authority::set_active_contour_plane_family(world, roi_entity, family)
 }
 
 pub fn request_voxel_overlay_state(
@@ -602,60 +515,7 @@ pub fn promote_contour_view_to_authoritative(
     roi_entity: hecs::Entity,
     view_key: &ContourViewKey,
 ) -> Result<(), ContourPromotionError> {
-    let mut roi = world
-        .get::<&mut Roi>(roi_entity)
-        .map_err(|_| ContourPromotionError::MissingRoi)?;
-    let (active_family, previous_authoritative) = match &roi.authoritative_data {
-        RoiAuthoritativeData::Contour(contour) => (contour.active_plane_family, contour.clone()),
-        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Mesh(_) => {
-            return Err(ContourPromotionError::NotContourRoi);
-        }
-    };
-
-    if active_family == view_key.family {
-        return Ok(());
-    }
-
-    let Some(view_cache) = roi.contour_view_cache(view_key).cloned() else {
-        return Err(ContourPromotionError::ViewCacheMissing);
-    };
-    if view_cache.state != CacheViewState::Current {
-        return Err(ContourPromotionError::ViewCacheNotCurrent);
-    }
-    if roi.is_cache_dirty(RoiCacheKind::Voxel) || !roi.is_cache_current(RoiCacheKind::Voxel) {
-        return Err(ContourPromotionError::ViewCacheNotCurrent);
-    }
-    if view_cache.source_generation != roi.dirty_state.generations.authoritative {
-        return Err(ContourPromotionError::ViewCacheNotCurrent);
-    }
-
-    let new_data = view_cache.data;
-    let contour = match &mut roi.authoritative_data {
-        RoiAuthoritativeData::Contour(contour) => contour,
-        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Mesh(_) => {
-            return Err(ContourPromotionError::NotContourRoi);
-        }
-    };
-    *contour = new_data;
-    contour.active_plane_family = view_key.family;
-    roi.mark_contour_authoritative_changed();
-    let new_generation = roi.dirty_state.generations.authoritative;
-    for slice in previous_authoritative
-        .slices
-        .iter()
-        .filter(|slice| slice.plane.family == active_family)
-    {
-        roi.upsert_contour_view_cache(
-            ContourViewKey::from_plane(slice.plane),
-            previous_authoritative.clone(),
-            new_generation,
-            CacheViewState::Stale,
-        );
-    }
-    roi.mark_all_contour_view_caches_stale();
-    roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
-    roi.mark_cache_dirty(RoiCacheKind::Mesh);
-    Ok(())
+    crate::app::roi::authority::promote_contour_view_to_authoritative(world, roi_entity, view_key)
 }
 
 pub fn replace_contour_data(
@@ -663,21 +523,7 @@ pub fn replace_contour_data(
     roi_entity: hecs::Entity,
     contour_data: ContourData,
 ) -> Result<(), ContourMutationError> {
-    let mut roi = world
-        .get::<&mut Roi>(roi_entity)
-        .map_err(|_| ContourMutationError::MissingRoi)?;
-
-    match &mut roi.authoritative_data {
-        RoiAuthoritativeData::Contour(existing) => *existing = contour_data,
-        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Mesh(_) => {
-            return Err(ContourMutationError::NotContourRoi);
-        }
-    }
-
-    roi.mark_contour_authoritative_changed();
-    roi.mark_all_contour_view_caches_stale();
-    roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
-    Ok(())
+    crate::app::roi::authority::replace_contour_data(world, roi_entity, contour_data)
 }
 
 pub fn replace_contour_data_for_slice(
@@ -686,29 +532,12 @@ pub fn replace_contour_data_for_slice(
     contour_data: ContourData,
     dirty_plane: crate::convert::PlaneDefinition,
 ) -> Result<(), ContourMutationError> {
-    let mut roi = world
-        .get::<&mut Roi>(roi_entity)
-        .map_err(|_| ContourMutationError::MissingRoi)?;
-
-    match &mut roi.authoritative_data {
-        RoiAuthoritativeData::Contour(existing) => *existing = contour_data,
-        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Mesh(_) => {
-            return Err(ContourMutationError::NotContourRoi);
-        }
-    }
-
-    roi.mark_contour_authoritative_changed();
-    roi.mark_all_contour_view_caches_stale();
-    roi.job_state = RoiJobState::default();
-    let source_generation = roi.dirty_state.generations.authoritative;
-    roi.enqueue_job(RoiJobRequest {
-        kind: RoiJobKind::RebuildVoxelCache,
-        source_generation,
-        preview_revision: None,
-        priority: RoiJobPriority::VisibleCommitted,
-        dirty_region: RoiDirtyRegion::ContourSlice(ContourSliceKey::from_plane(dirty_plane)),
-    });
-    Ok(())
+    crate::app::roi::authority::replace_contour_data_for_slice(
+        world,
+        roi_entity,
+        contour_data,
+        dirty_plane,
+    )
 }
 
 pub fn replace_contour_data_with_history(
@@ -717,7 +546,12 @@ pub fn replace_contour_data_with_history(
     roi_entity: hecs::Entity,
     contour_data: ContourData,
 ) -> Result<(), ContourMutationError> {
-    replace_contour_data_with_history_impl(world, editor_entity, roi_entity, contour_data, None)
+    crate::app::roi::history::replace_contour_data_with_history(
+        world,
+        editor_entity,
+        roi_entity,
+        contour_data,
+    )
 }
 
 pub fn replace_contour_data_for_slice_with_history(
@@ -727,74 +561,21 @@ pub fn replace_contour_data_for_slice_with_history(
     contour_data: ContourData,
     dirty_plane: crate::convert::PlaneDefinition,
 ) -> Result<(), ContourMutationError> {
-    replace_contour_data_with_history_impl(
+    crate::app::roi::history::replace_contour_data_for_slice_with_history(
         world,
         editor_entity,
         roi_entity,
         contour_data,
-        Some(dirty_plane),
+        dirty_plane,
     )
-}
-
-fn replace_contour_data_with_history_impl(
-    world: &mut World,
-    editor_entity: hecs::Entity,
-    roi_entity: hecs::Entity,
-    contour_data: ContourData,
-    dirty_plane: Option<crate::convert::PlaneDefinition>,
-) -> Result<(), ContourMutationError> {
-    if world.get::<&EditorState>(editor_entity).is_err() {
-        return Err(ContourMutationError::MissingEditorState);
-    }
-    let before = world
-        .get::<&Roi>(roi_entity)
-        .map_err(|_| ContourMutationError::MissingRoi)?
-        .contour_data()
-        .cloned()
-        .ok_or(ContourMutationError::NotContourRoi)?;
-    if before == contour_data {
-        return Ok(());
-    }
-    let dirty_region = dirty_plane
-        .map(ContourSliceKey::from_plane)
-        .filter(|key| {
-            before
-                .slices
-                .iter()
-                .any(|slice| ContourSliceKey::from_plane(slice.plane) == *key)
-                && contour_data
-                    .slices
-                    .iter()
-                    .any(|slice| ContourSliceKey::from_plane(slice.plane) == *key)
-        })
-        .map(RoiDirtyRegion::ContourSlice)
-        .unwrap_or(RoiDirtyRegion::Full);
-    match dirty_plane {
-        Some(plane) => replace_contour_data_for_slice(world, roi_entity, contour_data, plane)?,
-        None => replace_contour_data(world, roi_entity, contour_data)?,
-    }
-    push_roi_undo_entry(
-        world,
-        editor_entity,
-        RoiEditHistoryEntry {
-            roi_entity,
-            snapshot: RoiEditSnapshot::Contour(before),
-            dirty_region,
-        },
-    )
-    .map_err(|_| ContourMutationError::MissingEditorState)
 }
 
 pub fn can_undo_roi_edit(world: &World, editor_entity: hecs::Entity) -> bool {
-    world
-        .get::<&EditorState>(editor_entity)
-        .is_ok_and(|editor| !editor.roi_undo_stack.is_empty())
+    crate::app::roi::history::can_undo_roi_edit(world, editor_entity)
 }
 
 pub fn can_redo_roi_edit(world: &World, editor_entity: hecs::Entity) -> bool {
-    world
-        .get::<&EditorState>(editor_entity)
-        .is_ok_and(|editor| !editor.roi_redo_stack.is_empty())
+    crate::app::roi::history::can_redo_roi_edit(world, editor_entity)
 }
 
 pub fn clear_roi_edit_history_for_roi(
@@ -802,161 +583,21 @@ pub fn clear_roi_edit_history_for_roi(
     editor_entity: hecs::Entity,
     roi_entity: hecs::Entity,
 ) {
-    if let Ok(mut editor) = world.get::<&mut EditorState>(editor_entity) {
-        editor
-            .roi_undo_stack
-            .retain(|entry| entry.roi_entity != roi_entity);
-        editor
-            .roi_redo_stack
-            .retain(|entry| entry.roi_entity != roi_entity);
-    }
+    crate::app::roi::history::clear_roi_edit_history_for_roi(world, editor_entity, roi_entity);
 }
 
 pub fn undo_roi_edit(
     world: &mut World,
     editor_entity: hecs::Entity,
 ) -> Result<hecs::Entity, RoiEditHistoryError> {
-    apply_roi_edit_history(world, editor_entity, true)
+    crate::app::roi::history::undo_roi_edit(world, editor_entity)
 }
 
 pub fn redo_roi_edit(
     world: &mut World,
     editor_entity: hecs::Entity,
 ) -> Result<hecs::Entity, RoiEditHistoryError> {
-    apply_roi_edit_history(world, editor_entity, false)
-}
-
-fn apply_roi_edit_history(
-    world: &mut World,
-    editor_entity: hecs::Entity,
-    undo: bool,
-) -> Result<hecs::Entity, RoiEditHistoryError> {
-    let entry = {
-        let editor = world
-            .get::<&EditorState>(editor_entity)
-            .map_err(|_| RoiEditHistoryError::MissingEditorState)?;
-        let stack = if undo {
-            &editor.roi_undo_stack
-        } else {
-            &editor.roi_redo_stack
-        };
-        stack.last().cloned().ok_or(if undo {
-            RoiEditHistoryError::NoUndo
-        } else {
-            RoiEditHistoryError::NoRedo
-        })?
-    };
-    let current = capture_roi_edit_snapshot(world, entry.roi_entity)?;
-    restore_roi_edit_snapshot(
-        world,
-        entry.roi_entity,
-        entry.snapshot.clone(),
-        entry.dirty_region,
-    )?;
-
-    let mut editor = world
-        .get::<&mut EditorState>(editor_entity)
-        .map_err(|_| RoiEditHistoryError::MissingEditorState)?;
-    let source_stack = if undo {
-        &mut editor.roi_undo_stack
-    } else {
-        &mut editor.roi_redo_stack
-    };
-    source_stack.pop();
-    let destination_stack = if undo {
-        &mut editor.roi_redo_stack
-    } else {
-        &mut editor.roi_undo_stack
-    };
-    destination_stack.push(RoiEditHistoryEntry {
-        roi_entity: entry.roi_entity,
-        snapshot: current,
-        dirty_region: entry.dirty_region,
-    });
-    trim_history_stack(destination_stack);
-    editor.active_roi = Some(entry.roi_entity);
-    editor.contour_draft = None;
-    editor.contour_selection = None;
-    editor.contour_move_preview = None;
-    editor.mesh_edit_preview = None;
-    editor.mesh_selection = None;
-    Ok(entry.roi_entity)
-}
-
-fn capture_roi_edit_snapshot(
-    world: &World,
-    roi_entity: hecs::Entity,
-) -> Result<RoiEditSnapshot, RoiEditHistoryError> {
-    let roi = world
-        .get::<&Roi>(roi_entity)
-        .map_err(|_| RoiEditHistoryError::MissingRoi)?;
-    match &roi.authoritative_data {
-        RoiAuthoritativeData::Contour(contour) => Ok(RoiEditSnapshot::Contour(contour.clone())),
-        RoiAuthoritativeData::Mesh(mesh) => Ok(RoiEditSnapshot::Mesh(mesh.clone())),
-        RoiAuthoritativeData::Voxel(_) => Err(RoiEditHistoryError::RepresentationChanged),
-    }
-}
-
-fn restore_roi_edit_snapshot(
-    world: &mut World,
-    roi_entity: hecs::Entity,
-    snapshot: RoiEditSnapshot,
-    dirty_region: RoiDirtyRegion,
-) -> Result<(), RoiEditHistoryError> {
-    let mut roi = world
-        .get::<&mut Roi>(roi_entity)
-        .map_err(|_| RoiEditHistoryError::MissingRoi)?;
-    if roi.metadata.is_locked {
-        return Err(RoiEditHistoryError::Locked);
-    }
-    roi.job_state = RoiJobState::default();
-    roi.end_preview();
-    match (&mut roi.authoritative_data, snapshot) {
-        (RoiAuthoritativeData::Contour(existing), RoiEditSnapshot::Contour(contour)) => {
-            *existing = contour;
-            roi.mark_contour_authoritative_changed();
-            roi.mark_all_contour_view_caches_stale();
-            let source_generation = roi.dirty_state.generations.authoritative;
-            roi.enqueue_job(RoiJobRequest {
-                kind: RoiJobKind::RebuildVoxelCache,
-                source_generation,
-                preview_revision: None,
-                priority: RoiJobPriority::VisibleCommitted,
-                dirty_region: match dirty_region {
-                    RoiDirtyRegion::ContourSlice(key) => RoiDirtyRegion::ContourSlice(key),
-                    _ => RoiDirtyRegion::Full,
-                },
-            });
-        }
-        (RoiAuthoritativeData::Mesh(existing), RoiEditSnapshot::Mesh(mesh)) => {
-            *existing = mesh;
-            roi.mark_mesh_authoritative_changed();
-            roi.mark_all_contour_view_caches_stale();
-            roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
-        }
-        _ => return Err(RoiEditHistoryError::RepresentationChanged),
-    }
-    Ok(())
-}
-
-fn push_roi_undo_entry(
-    world: &mut World,
-    editor_entity: hecs::Entity,
-    entry: RoiEditHistoryEntry,
-) -> Result<(), RoiEditHistoryError> {
-    let mut editor = world
-        .get::<&mut EditorState>(editor_entity)
-        .map_err(|_| RoiEditHistoryError::MissingEditorState)?;
-    editor.roi_undo_stack.push(entry);
-    trim_history_stack(&mut editor.roi_undo_stack);
-    editor.roi_redo_stack.clear();
-    Ok(())
-}
-
-fn trim_history_stack(stack: &mut Vec<RoiEditHistoryEntry>) {
-    if stack.len() > MAX_ROI_EDIT_HISTORY {
-        stack.remove(0);
-    }
+    crate::app::roi::history::redo_roi_edit(world, editor_entity)
 }
 
 fn approx_eq_slice<const N: usize>(lhs: [f32; N], rhs: [f32; N], epsilon: f32) -> bool {
@@ -1132,20 +773,7 @@ pub fn replace_mesh_data(
     roi_entity: hecs::Entity,
     mesh_data: MeshData,
 ) -> Result<(), MeshMutationError> {
-    let mut roi = world
-        .get::<&mut Roi>(roi_entity)
-        .map_err(|_| MeshMutationError::MissingRoi)?;
-
-    match &mut roi.authoritative_data {
-        RoiAuthoritativeData::Mesh(existing) => *existing = mesh_data,
-        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Contour(_) => {
-            return Err(MeshMutationError::NotMeshRoi);
-        }
-    }
-
-    roi.mark_mesh_authoritative_changed();
-    roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
-    Ok(())
+    crate::app::roi::authority::replace_mesh_data(world, roi_entity, mesh_data)
 }
 
 pub fn replace_mesh_data_with_history(
@@ -1154,29 +782,12 @@ pub fn replace_mesh_data_with_history(
     roi_entity: hecs::Entity,
     mesh_data: MeshData,
 ) -> Result<(), MeshMutationError> {
-    if world.get::<&EditorState>(editor_entity).is_err() {
-        return Err(MeshMutationError::MissingEditorState);
-    }
-    let before = world
-        .get::<&Roi>(roi_entity)
-        .map_err(|_| MeshMutationError::MissingRoi)?
-        .mesh_data()
-        .cloned()
-        .ok_or(MeshMutationError::NotMeshRoi)?;
-    if before == mesh_data {
-        return Ok(());
-    }
-    replace_mesh_data(world, roi_entity, mesh_data)?;
-    push_roi_undo_entry(
+    crate::app::roi::history::replace_mesh_data_with_history(
         world,
         editor_entity,
-        RoiEditHistoryEntry {
-            roi_entity,
-            snapshot: RoiEditSnapshot::Mesh(before),
-            dirty_region: RoiDirtyRegion::Full,
-        },
+        roi_entity,
+        mesh_data,
     )
-    .map_err(|_| MeshMutationError::MissingEditorState)
 }
 
 pub fn translate_mesh_data(
@@ -1361,14 +972,7 @@ pub fn promote_voxel_roi_to_contour_authority(
     roi_entity: hecs::Entity,
     family: PlaneFamily,
 ) -> Result<(), VoxelContourPromotionError> {
-    let roi = world
-        .get::<&Roi>(roi_entity)
-        .map_err(|_| VoxelContourPromotionError::MissingRoi)?;
-    if !matches!(roi.authoritative_data, RoiAuthoritativeData::Voxel(_)) {
-        return Err(VoxelContourPromotionError::NotVoxelRoi);
-    }
-    drop(roi);
-    promote_roi_to_contour_authority(world, roi_entity, family)
+    crate::app::roi::authority::promote_voxel_roi_to_contour_authority(world, roi_entity, family)
 }
 
 pub fn promote_roi_to_contour_authority(
@@ -1376,212 +980,21 @@ pub fn promote_roi_to_contour_authority(
     roi_entity: hecs::Entity,
     family: PlaneFamily,
 ) -> Result<(), VoxelContourPromotionError> {
-    let (source_voxel, authoritative_mesh) = {
-        let roi = world
-            .get::<&Roi>(roi_entity)
-            .map_err(|_| VoxelContourPromotionError::MissingRoi)?;
-        if roi.metadata.is_locked {
-            return Err(VoxelContourPromotionError::Locked);
-        }
-        match &roi.authoritative_data {
-            RoiAuthoritativeData::Voxel(voxel) => (voxel.clone(), None),
-            RoiAuthoritativeData::Contour(contour) if contour.active_plane_family == family => {
-                return Ok(())
-            }
-            RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh(_) => {
-                let voxel_cache = roi
-                    .voxel_cache()
-                    .ok_or(VoxelContourPromotionError::VoxelCacheMissing)?;
-                if !roi.is_cache_current(RoiCacheKind::Voxel) {
-                    return Err(VoxelContourPromotionError::VoxelCacheNotCurrent);
-                }
-                let mesh = match &roi.authoritative_data {
-                    RoiAuthoritativeData::Mesh(mesh) => Some(mesh.clone()),
-                    RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Contour(_) => None,
-                };
-                (voxel_cache.data.clone(), mesh)
-            }
-        }
-    };
-    let extracted = extract_contours_from_voxel_data(&source_voxel, family)
-        .map_err(VoxelContourPromotionError::ExtractionFailed)?;
-
-    let mut roi = world
-        .get::<&mut Roi>(roi_entity)
-        .map_err(|_| VoxelContourPromotionError::MissingRoi)?;
-    let mesh_cache_was_current = authoritative_mesh.is_some()
-        || (roi.mesh_cache().is_some() && roi.is_cache_current(RoiCacheKind::Mesh));
-    if let Some(mesh) = authoritative_mesh {
-        roi.session_caches.mesh = Some(MeshCache {
-            data: mesh,
-            chunks: None,
-        });
-    }
-    let new_generation = roi.dirty_state.generations.authoritative.saturating_add(1);
-
-    roi.authoritative_data = RoiAuthoritativeData::Contour(extracted);
-    roi.session_caches.contour = None;
-    if let Some(voxel_cache) = roi.session_caches.voxel.as_mut() {
-        voxel_cache.data = source_voxel;
-    } else {
-        roi.session_caches.voxel = Some(VoxelCache {
-            data: source_voxel,
-            gpu_resources: None,
-        });
-    }
-    roi.job_state = RoiJobState::default();
-    roi.end_preview();
-    roi.dirty_state = RoiDirtyState {
-        authoritative_dirty: true,
-        voxel_cache_dirty: false,
-        contour_cache_dirty: false,
-        mesh_cache_dirty: !mesh_cache_was_current,
-        generations: CacheGeneration {
-            authoritative: new_generation,
-            voxel: new_generation,
-            contour: new_generation,
-            mesh: if mesh_cache_was_current {
-                new_generation
-            } else {
-                0
-            },
-        },
-    };
-    if !mesh_cache_was_current {
-        roi.enqueue_rebuild(RoiJobKind::RebuildMeshCache);
-    }
-    Ok(())
+    crate::app::roi::authority::promote_roi_to_contour_authority(world, roi_entity, family)
 }
 
 pub fn promote_current_voxel_cache_to_authority(
     world: &mut World,
     roi_entity: hecs::Entity,
 ) -> Result<(), VoxelAuthorityPromotionError> {
-    let (source_voxel, retained_mesh) = {
-        let roi = world
-            .get::<&Roi>(roi_entity)
-            .map_err(|_| VoxelAuthorityPromotionError::MissingRoi)?;
-        if roi.metadata.is_locked {
-            return Err(VoxelAuthorityPromotionError::Locked);
-        }
-        if matches!(roi.authoritative_data, RoiAuthoritativeData::Voxel(_)) {
-            return Err(VoxelAuthorityPromotionError::AlreadyVoxelPrimary);
-        }
-        let voxel_cache = roi
-            .voxel_cache()
-            .ok_or(VoxelAuthorityPromotionError::VoxelCacheMissing)?;
-        if !roi.is_cache_current(RoiCacheKind::Voxel) {
-            return Err(VoxelAuthorityPromotionError::VoxelCacheNotCurrent);
-        }
-        let retained_mesh = match &roi.authoritative_data {
-            RoiAuthoritativeData::Mesh(mesh) => Some(MeshCache {
-                data: mesh.clone(),
-                chunks: None,
-            }),
-            RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Contour(_) => {
-                (roi.mesh_cache().is_some() && roi.is_cache_current(RoiCacheKind::Mesh))
-                    .then(|| roi.mesh_cache().expect("mesh cache checked").clone())
-            }
-        };
-        (voxel_cache.data.clone(), retained_mesh)
-    };
-
-    let mut roi = world
-        .get::<&mut Roi>(roi_entity)
-        .map_err(|_| VoxelAuthorityPromotionError::MissingRoi)?;
-    let mesh_cache_is_current = retained_mesh.is_some();
-    let new_generation = roi.dirty_state.generations.authoritative.saturating_add(1);
-
-    roi.authoritative_data = RoiAuthoritativeData::Voxel(source_voxel.clone());
-    if let Some(voxel_cache) = roi.session_caches.voxel.as_mut() {
-        voxel_cache.data = source_voxel;
-    } else {
-        unreachable!("current voxel cache was checked before promotion");
-    }
-    roi.session_caches.contour = None;
-    roi.session_caches.mesh = retained_mesh;
-    roi.job_state = RoiJobState::default();
-    roi.end_preview();
-    roi.dirty_state = RoiDirtyState {
-        authoritative_dirty: true,
-        voxel_cache_dirty: false,
-        contour_cache_dirty: true,
-        mesh_cache_dirty: !mesh_cache_is_current,
-        generations: CacheGeneration {
-            authoritative: new_generation,
-            voxel: new_generation,
-            contour: 0,
-            mesh: if mesh_cache_is_current {
-                new_generation
-            } else {
-                0
-            },
-        },
-    };
-    if !mesh_cache_is_current {
-        roi.enqueue_rebuild(RoiJobKind::RebuildMeshCache);
-    }
-    Ok(())
+    crate::app::roi::authority::promote_current_voxel_cache_to_authority(world, roi_entity)
 }
 
 pub fn promote_current_mesh_cache_to_authority(
     world: &mut World,
     roi_entity: hecs::Entity,
 ) -> Result<(), MeshAuthorityPromotionError> {
-    let mesh = {
-        let roi = world
-            .get::<&Roi>(roi_entity)
-            .map_err(|_| MeshAuthorityPromotionError::MissingRoi)?;
-        if roi.metadata.is_locked {
-            return Err(MeshAuthorityPromotionError::Locked);
-        }
-        if matches!(roi.authoritative_data, RoiAuthoritativeData::Mesh(_)) {
-            return Err(MeshAuthorityPromotionError::AlreadyMeshPrimary);
-        }
-        let mesh_cache = roi
-            .mesh_cache()
-            .ok_or(MeshAuthorityPromotionError::MeshCacheMissing)?;
-        if !roi.is_cache_current(RoiCacheKind::Mesh) {
-            return Err(MeshAuthorityPromotionError::MeshCacheNotCurrent);
-        }
-        if mesh_cache.data.vertices.is_empty() || mesh_cache.data.faces.is_empty() {
-            return Err(MeshAuthorityPromotionError::EmptyMesh);
-        }
-        mesh_cache.data.clone()
-    };
-
-    let mut roi = world
-        .get::<&mut Roi>(roi_entity)
-        .map_err(|_| MeshAuthorityPromotionError::MissingRoi)?;
-    let voxel_cache_was_current =
-        roi.voxel_cache().is_some() && roi.is_cache_current(RoiCacheKind::Voxel);
-    let new_generation = roi.dirty_state.generations.authoritative.saturating_add(1);
-
-    roi.authoritative_data = RoiAuthoritativeData::Mesh(mesh);
-    roi.session_caches.mesh = None;
-    roi.session_caches.contour = None;
-    roi.job_state = RoiJobState::default();
-    roi.end_preview();
-    roi.dirty_state = RoiDirtyState {
-        authoritative_dirty: true,
-        voxel_cache_dirty: !voxel_cache_was_current,
-        contour_cache_dirty: true,
-        mesh_cache_dirty: false,
-        generations: CacheGeneration {
-            authoritative: new_generation,
-            voxel: if voxel_cache_was_current {
-                new_generation
-            } else {
-                0
-            },
-            contour: 0,
-            mesh: new_generation,
-        },
-    };
-    if !voxel_cache_was_current {
-        roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
-    }
-    Ok(())
+    crate::app::roi::authority::promote_current_mesh_cache_to_authority(world, roi_entity)
 }
 
 pub fn create_mesh_roi_from_voxel_roi(

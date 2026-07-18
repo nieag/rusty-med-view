@@ -1,5 +1,21 @@
+pub mod authority;
+pub mod history;
 pub mod model;
 pub mod requests;
+
+pub use authority::{
+    promote_contour_view_to_authoritative, promote_current_mesh_cache_to_authority,
+    promote_current_voxel_cache_to_authority, promote_roi_to_contour_authority,
+    promote_voxel_roi_to_contour_authority, replace_contour_data, replace_contour_data_for_slice,
+    replace_mesh_data, set_active_contour_plane_family, ContourMutationError,
+    ContourPlaneFamilySwitchError, ContourPromotionError, MeshAuthorityPromotionError,
+    MeshMutationError, VoxelAuthorityPromotionError, VoxelContourPromotionError,
+};
+pub use history::{
+    can_redo_roi_edit, can_undo_roi_edit, clear_roi_edit_history_for_roi, redo_roi_edit,
+    replace_contour_data_for_slice_with_history, replace_contour_data_with_history,
+    replace_mesh_data_with_history, undo_roi_edit, RoiEditHistoryError,
+};
 
 pub use model::{
     ContourData, ContourLoop, ContourPoint, ContourSlice, MeshData, MeshFace, MeshVertex,
