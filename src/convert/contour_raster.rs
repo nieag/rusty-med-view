@@ -1,4 +1,4 @@
-use crate::components::{ContourData, VoxelData, VoxelGeometry};
+use crate::app::roi::{ContourData, VoxelData, VoxelGeometry};
 use crate::convert::{
     plane_local_mm_to_world_mm, voxel_index_to_world_mm, world_mm_to_plane_local_mm,
     world_mm_to_voxel_index, PlaneDefinition, PlaneFamily,

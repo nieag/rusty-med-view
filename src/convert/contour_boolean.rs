@@ -1,4 +1,4 @@
-use crate::components::{ContourLoop, ContourPoint, ContourSlice};
+use crate::app::roi::{ContourLoop, ContourPoint, ContourSlice};
 use geo::{BooleanOps, Contains, Coord, LineString, MultiPolygon, Point, Polygon};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

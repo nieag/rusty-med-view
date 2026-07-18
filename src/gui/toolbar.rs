@@ -107,14 +107,14 @@ fn set_editor_tool(
     }
     match requested_tool {
         EditorTool::ContourSelect | EditorTool::ContourDraw
-            if roi.primary_representation != PrimaryRepresentation::Contour =>
+            if roi.primary_representation() != PrimaryRepresentation::Contour =>
         {
             return Err(
                 "Switch the active ROI to Contour authority before editing points or adding loops."
                     .to_string(),
             );
         }
-        EditorTool::MeshDeform if roi.primary_representation != PrimaryRepresentation::Mesh => {
+        EditorTool::MeshDeform if roi.primary_representation() != PrimaryRepresentation::Mesh => {
             return Err("Switch the active ROI to Mesh authority before deforming it.".to_string());
         }
         _ => {}

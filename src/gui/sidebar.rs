@@ -274,7 +274,7 @@ pub fn draw_sidebar(
             world
                 .get::<&Roi>(entity)
                 .ok()
-                .map(|roi| roi.primary_representation)
+                .map(|roi| roi.primary_representation())
         });
         if let (Some(roi_entity), Some(primary)) = (new_active_roi, active_primary) {
             let voxel_ready = primary == PrimaryRepresentation::Voxel
@@ -415,7 +415,7 @@ pub fn draw_sidebar(
 
         let active_mesh_roi = new_active_roi.filter(|entity| {
             world.get::<&Roi>(*entity).is_ok_and(|roi| {
-                roi.primary_representation == PrimaryRepresentation::Mesh
+                roi.primary_representation() == PrimaryRepresentation::Mesh
             })
         });
         if let Some(mesh_entity) = active_mesh_roi {
@@ -692,7 +692,7 @@ pub fn draw_sidebar(
 
             let show_contour_point_controls = Some(entity) == new_active_roi
                 && world.get::<&Roi>(entity).is_ok_and(|roi| {
-                    roi.primary_representation == PrimaryRepresentation::Contour
+                    roi.primary_representation() == PrimaryRepresentation::Contour
                 })
                 && world
                     .get::<&EditorState>(entities.editor)

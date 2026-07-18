@@ -1,4 +1,4 @@
-use crate::components::{MeshData, MeshFace, MeshVertex, VoxelData};
+use crate::app::roi::{MeshData, MeshFace, MeshVertex, VoxelData};
 use crate::convert::voxel_index_to_world_mm;
 use std::sync::Arc;
 

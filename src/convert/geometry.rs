@@ -1,4 +1,4 @@
-use crate::components::VoxelGeometry;
+use crate::app::roi::VoxelGeometry;
 use glam::{Mat3, Quat, Vec3};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

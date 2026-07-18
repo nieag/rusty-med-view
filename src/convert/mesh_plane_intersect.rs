@@ -1,4 +1,4 @@
-use crate::components::{ContourData, ContourLoop, ContourPoint, ContourSlice, MeshData};
+use crate::app::roi::{ContourData, ContourLoop, ContourPoint, ContourSlice, MeshData};
 use crate::convert::{world_mm_to_plane_local_mm, PlaneDefinition};
 use glam::Vec3;
 use std::collections::{BTreeMap, BTreeSet};

@@ -2,6 +2,7 @@ pub mod components;
 pub mod context;
 pub mod events;
 pub mod qa;
+pub mod roi;
 pub mod roi_runtime;
 
 use crate::app::components::*;

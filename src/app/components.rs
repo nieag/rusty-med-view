@@ -1,3 +1,7 @@
+pub use crate::app::roi::{
+    ContourData, ContourLoop, ContourPoint, ContourSlice, MeshData, MeshFace, MeshVertex,
+    PrimaryRepresentation, RoiAuthoritativeData, RoiId, RoiMetadata, VoxelData, VoxelGeometry,
+};
 use crate::convert::{ChunkedMeshData, PlaneDefinition, PlaneFamily};
 use glam::Vec3;
 
@@ -216,102 +220,14 @@ impl Default for EditorState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RoiId(pub u64);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PrimaryRepresentation {
-    Voxel,
-    Contour,
-    Mesh,
-}
-
-#[derive(Debug, Clone)]
-pub struct RoiMetadata {
-    pub roi_id: RoiId,
-    pub name: String,
-    pub is_visible: bool,
-    pub is_locked: bool,
-    pub color: [f32; 4],
-}
-
 pub struct LayerSettings {
     pub opacity: f32,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct VoxelData {
-    pub geometry: VoxelGeometry,
-    pub raw_data: Vec<u8>,
 }
 
 #[derive(Clone)]
 pub struct VoxelCache {
     pub data: VoxelData,
     pub gpu_resources: Option<GpuVolumeResources>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct VoxelGeometry {
-    pub dimensions: [u32; 3],
-    pub spacing: [f32; 3],
-    pub origin: [f32; 3],
-    pub orientation: [f32; 4],
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ContourPoint {
-    pub local_mm: [f32; 2],
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ContourLoop {
-    pub points: Vec<ContourPoint>,
-    pub is_closed: bool,
-}
-
-impl ContourLoop {
-    pub fn is_valid_closed_loop(&self) -> bool {
-        self.is_closed && self.points.len() >= 3
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ContourSlice {
-    pub plane: PlaneDefinition,
-    pub loops: Vec<ContourLoop>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ContourData {
-    pub active_plane_family: PlaneFamily,
-    pub slices: Vec<ContourSlice>,
-}
-
-impl ContourData {
-    pub fn is_empty(&self) -> bool {
-        self.slices.is_empty()
-    }
-
-    pub fn has_loops(&self) -> bool {
-        self.slices.iter().any(|slice| !slice.loops.is_empty())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MeshVertex {
-    pub world_mm: [f32; 3],
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MeshFace {
-    pub vertex_indices: [u32; 3],
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct MeshData {
-    pub vertices: Vec<MeshVertex>,
-    pub faces: Vec<MeshFace>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -358,12 +274,6 @@ pub struct RoiEditHistoryEntry {
     pub roi_entity: hecs::Entity,
     pub snapshot: RoiEditSnapshot,
     pub dirty_region: RoiDirtyRegion,
-}
-
-pub enum RoiAuthoritativeData {
-    Voxel(VoxelData),
-    Contour(ContourData),
-    Mesh(MeshData),
 }
 
 #[derive(Default)]
@@ -616,7 +526,6 @@ pub struct RoiJobState {
 
 pub struct Roi {
     pub metadata: RoiMetadata,
-    pub primary_representation: PrimaryRepresentation,
     pub authoritative_data: RoiAuthoritativeData,
     pub session_caches: RoiSessionCaches,
     pub dirty_state: RoiDirtyState,
@@ -626,6 +535,14 @@ pub struct Roi {
 }
 
 impl Roi {
+    pub fn primary_representation(&self) -> PrimaryRepresentation {
+        match &self.authoritative_data {
+            RoiAuthoritativeData::Voxel(_) => PrimaryRepresentation::Voxel,
+            RoiAuthoritativeData::Contour(_) => PrimaryRepresentation::Contour,
+            RoiAuthoritativeData::Mesh(_) => PrimaryRepresentation::Mesh,
+        }
+    }
+
     pub fn new_voxel(
         roi_id: RoiId,
         name: String,
@@ -652,7 +569,6 @@ impl Roi {
                 is_locked: false,
                 color: [1.0, 0.2, 0.2, 1.0],
             },
-            primary_representation: PrimaryRepresentation::Voxel,
             authoritative_data: RoiAuthoritativeData::Voxel(voxel_data.clone()),
             session_caches: RoiSessionCaches {
                 voxel: Some(VoxelCache {
@@ -688,7 +604,6 @@ impl Roi {
                 is_locked: false,
                 color: [1.0, 0.2, 0.2, 1.0],
             },
-            primary_representation: PrimaryRepresentation::Contour,
             authoritative_data: RoiAuthoritativeData::Contour(contour_data),
             session_caches: RoiSessionCaches {
                 voxel: None,
@@ -717,7 +632,6 @@ impl Roi {
                 is_locked: false,
                 color: [1.0, 0.2, 0.2, 1.0],
             },
-            primary_representation: PrimaryRepresentation::Mesh,
             authoritative_data: RoiAuthoritativeData::Mesh(mesh_data),
             session_caches: RoiSessionCaches {
                 voxel: None,
@@ -1293,7 +1207,7 @@ mod tests {
 
         assert_eq!(roi.metadata.roi_id, RoiId(7));
         assert_eq!(roi.metadata.name, "Liver");
-        assert_eq!(roi.primary_representation, PrimaryRepresentation::Voxel);
+        assert_eq!(roi.primary_representation(), PrimaryRepresentation::Voxel);
         assert!(matches!(
             roi.authoritative_data,
             RoiAuthoritativeData::Voxel(VoxelData {
@@ -1754,7 +1668,7 @@ mod tests {
 
         assert_eq!(roi.metadata.roi_id, RoiId(14));
         assert_eq!(roi.metadata.name, "GTV");
-        assert_eq!(roi.primary_representation, PrimaryRepresentation::Contour);
+        assert_eq!(roi.primary_representation(), PrimaryRepresentation::Contour);
         assert!(matches!(
             roi.authoritative_data,
             RoiAuthoritativeData::Contour(_)
@@ -1807,7 +1721,7 @@ mod tests {
 
         assert_eq!(roi.metadata.roi_id, RoiId(21));
         assert_eq!(roi.metadata.name, "Surface");
-        assert_eq!(roi.primary_representation, PrimaryRepresentation::Mesh);
+        assert_eq!(roi.primary_representation(), PrimaryRepresentation::Mesh);
         assert!(matches!(
             roi.authoritative_data,
             RoiAuthoritativeData::Mesh(_)

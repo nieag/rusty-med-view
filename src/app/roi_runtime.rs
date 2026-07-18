@@ -1661,7 +1661,6 @@ pub fn promote_roi_to_contour_authority(
     }
     let new_generation = roi.dirty_state.generations.authoritative.saturating_add(1);
 
-    roi.primary_representation = PrimaryRepresentation::Contour;
     roi.authoritative_data = RoiAuthoritativeData::Contour(extracted);
     roi.session_caches.contour = None;
     if let Some(voxel_cache) = roi.session_caches.voxel.as_mut() {
@@ -1735,7 +1734,6 @@ pub fn promote_current_voxel_cache_to_authority(
     let mesh_cache_is_current = retained_mesh.is_some();
     let new_generation = roi.dirty_state.generations.authoritative.saturating_add(1);
 
-    roi.primary_representation = PrimaryRepresentation::Voxel;
     roi.authoritative_data = RoiAuthoritativeData::Voxel(source_voxel.clone());
     if let Some(voxel_cache) = roi.session_caches.voxel.as_mut() {
         voxel_cache.data = source_voxel;
@@ -1801,7 +1799,6 @@ pub fn promote_current_mesh_cache_to_authority(
         roi.voxel_cache().is_some() && roi.is_cache_current(RoiCacheKind::Voxel);
     let new_generation = roi.dirty_state.generations.authoritative.saturating_add(1);
 
-    roi.primary_representation = PrimaryRepresentation::Mesh;
     roi.authoritative_data = RoiAuthoritativeData::Mesh(mesh);
     roi.session_caches.mesh = None;
     roi.session_caches.contour = None;
@@ -2831,17 +2828,14 @@ pub fn voxel_roi_stats(world: &World, roi_entity: hecs::Entity) -> Option<VoxelR
 
 pub fn roi_voxel_stats(world: &World, roi_entity: hecs::Entity) -> Option<VoxelRoiStats> {
     let roi = world.get::<&Roi>(roi_entity).ok()?;
-    let voxel_data = match (&roi.primary_representation, &roi.authoritative_data) {
-        (PrimaryRepresentation::Contour, RoiAuthoritativeData::Contour(_))
-        | (PrimaryRepresentation::Mesh, RoiAuthoritativeData::Mesh(_)) => {
+    let voxel_data = match &roi.authoritative_data {
+        RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh(_) => {
             if !roi.is_cache_current(RoiCacheKind::Voxel) {
                 return None;
             }
             &roi.voxel_cache()?.data
         }
-        (_, RoiAuthoritativeData::Contour(_)) => return None,
-        (_, RoiAuthoritativeData::Voxel(voxel)) => voxel,
-        (_, RoiAuthoritativeData::Mesh(_)) => return None,
+        RoiAuthoritativeData::Voxel(voxel) => voxel,
     };
 
     let occupied_voxels = voxel_data
@@ -3270,7 +3264,7 @@ mod tests {
         let entity = create_empty_contour_roi(&mut world, editor, PlaneFamily::Coronal).unwrap();
 
         let roi = world.get::<&Roi>(entity).unwrap();
-        assert_eq!(roi.primary_representation, PrimaryRepresentation::Contour);
+        assert_eq!(roi.primary_representation(), PrimaryRepresentation::Contour);
         let contour_data = roi.contour_data().expect("expected contour roi");
         assert_eq!(contour_data.active_plane_family, PlaneFamily::Coronal);
         assert!(contour_data.slices.is_empty());
@@ -3295,7 +3289,7 @@ mod tests {
         let entity = create_empty_mesh_roi(&mut world, editor).unwrap();
 
         let roi = world.get::<&Roi>(entity).unwrap();
-        assert_eq!(roi.primary_representation, PrimaryRepresentation::Mesh);
+        assert_eq!(roi.primary_representation(), PrimaryRepresentation::Mesh);
         let mesh_data = roi.mesh_data().expect("expected mesh roi");
         assert!(mesh_data.vertices.is_empty());
         assert!(mesh_data.faces.is_empty());
@@ -3323,7 +3317,7 @@ mod tests {
         let roi = world.get::<&Roi>(entity).unwrap();
         assert_eq!(roi.metadata.roi_id, roi_id);
         assert_eq!(roi.metadata.name, name);
-        assert_eq!(roi.primary_representation, PrimaryRepresentation::Contour);
+        assert_eq!(roi.primary_representation(), PrimaryRepresentation::Contour);
         assert_eq!(
             roi.contour_data().unwrap().active_plane_family,
             PlaneFamily::Axial
@@ -3345,7 +3339,7 @@ mod tests {
 
         assert_eq!(result, Err(VoxelContourPromotionError::Locked));
         assert_eq!(
-            world.get::<&Roi>(entity).unwrap().primary_representation,
+            world.get::<&Roi>(entity).unwrap().primary_representation(),
             PrimaryRepresentation::Voxel
         );
     }
@@ -3376,7 +3370,7 @@ mod tests {
         let roi = world.get::<&Roi>(entity).unwrap();
         assert_eq!(roi.metadata.roi_id, roi_id);
         assert_eq!(roi.metadata.name, name);
-        assert_eq!(roi.primary_representation, PrimaryRepresentation::Mesh);
+        assert_eq!(roi.primary_representation(), PrimaryRepresentation::Mesh);
         assert_eq!(roi.mesh_data(), Some(&mesh));
         assert_eq!(roi.dirty_state.generations.authoritative, 2);
         assert!(roi.is_cache_current(RoiCacheKind::Voxel));
@@ -3404,7 +3398,7 @@ mod tests {
             Err(MeshAuthorityPromotionError::MeshCacheNotCurrent)
         );
         assert_eq!(
-            world.get::<&Roi>(entity).unwrap().primary_representation,
+            world.get::<&Roi>(entity).unwrap().primary_representation(),
             PrimaryRepresentation::Voxel
         );
     }
@@ -3420,7 +3414,7 @@ mod tests {
 
         let roi = world.get::<&Roi>(entity).unwrap();
         assert_eq!(roi.metadata.roi_id, roi_id);
-        assert_eq!(roi.primary_representation, PrimaryRepresentation::Voxel);
+        assert_eq!(roi.primary_representation(), PrimaryRepresentation::Voxel);
         assert!(matches!(
             roi.authoritative_data,
             RoiAuthoritativeData::Voxel(_)
@@ -3453,7 +3447,7 @@ mod tests {
         promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
 
         let roi = world.get::<&Roi>(entity).unwrap();
-        assert_eq!(roi.primary_representation, PrimaryRepresentation::Mesh);
+        assert_eq!(roi.primary_representation(), PrimaryRepresentation::Mesh);
         assert_eq!(roi.mesh_data(), Some(&mesh));
         assert_eq!(roi.dirty_state.generations.authoritative, 4);
     }
@@ -3694,7 +3688,7 @@ mod tests {
             panic!("source should remain voxel authoritative");
         };
         assert_eq!(*voxel_after, source_before);
-        assert_eq!(roi.primary_representation, PrimaryRepresentation::Voxel);
+        assert_eq!(roi.primary_representation(), PrimaryRepresentation::Voxel);
     }
 
     #[test]
@@ -3706,7 +3700,7 @@ mod tests {
             .expect("extraction should create contour roi");
 
         let roi = world.get::<&Roi>(created).unwrap();
-        assert_eq!(roi.primary_representation, PrimaryRepresentation::Contour);
+        assert_eq!(roi.primary_representation(), PrimaryRepresentation::Contour);
         assert!(matches!(
             roi.authoritative_data,
             RoiAuthoritativeData::Contour(_)
@@ -3844,7 +3838,7 @@ mod tests {
             .get::<&Roi>(created)
             .expect("created ROI should exist");
 
-        assert_eq!(roi.primary_representation, PrimaryRepresentation::Mesh);
+        assert_eq!(roi.primary_representation(), PrimaryRepresentation::Mesh);
         assert!(roi.mesh_data().is_some());
         assert!(roi.voxel_cache().is_some());
     }
@@ -3993,7 +3987,7 @@ mod tests {
         let created = create_mesh_roi_from_contour_roi(&mut world, source)
             .expect("contour source should succeed when current voxel cache exists");
         let roi = world.get::<&Roi>(created).unwrap();
-        assert_eq!(roi.primary_representation, PrimaryRepresentation::Mesh);
+        assert_eq!(roi.primary_representation(), PrimaryRepresentation::Mesh);
         assert!(roi.mesh_data().is_some());
         assert!(roi.voxel_cache().is_some());
     }
@@ -4093,7 +4087,7 @@ mod tests {
         process_voxel_mesh_rebuild_jobs(&mut world);
 
         let roi = world.get::<&Roi>(extracted).unwrap();
-        assert_eq!(roi.primary_representation, PrimaryRepresentation::Contour);
+        assert_eq!(roi.primary_representation(), PrimaryRepresentation::Contour);
         assert_eq!(roi.contour_data(), Some(&replacement));
         assert!(roi.is_cache_current(RoiCacheKind::Voxel));
         assert!(roi.voxel_cache().is_some());
