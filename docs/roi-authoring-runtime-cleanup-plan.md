@@ -372,7 +372,7 @@ Each phase should land as a focused checkpoint with its hash recorded below. Do 
 
 State: in progress.
 
-Current checkpoint: C2 read-only requests and render boundary.
+Current checkpoint: C3 authority and history.
 
 Completed prerequisites:
 
@@ -385,11 +385,12 @@ Completed cleanup work:
 - C0 automated baseline: 281 tests pass; WASM check and warning-free Clippy pass
 - C0 characterization audit confirmed existing coverage for authority roundtrips, preview/commit/cancel, stale-result rejection, history, cache/job invariants, and exact Oblique promotion
 - `79e3faa` C1: extract authoritative ROI model types, derive primary representation from authority, and point pure conversion modules at the model boundary
+- `8026f55` C2: isolate read-only representation and cache requests, migrate UI/QA callers, and retain compatibility delegators
+- C2 audit finding: requested contour-view extraction remains synchronous in frame cache synchronization; move or bound this work during C6 scheduler/executor cleanup if measured latency requires it
 
 Pending:
 
 - C0 manual liver-sample performance baseline, retained as part of ROI closeout acceptance
-- C2 read-only requests and render boundary
 - C3 authority and history
 - C4 cache ownership
 - C5 preview lifecycle
@@ -400,3 +401,4 @@ Pending:
 Implementation checkpoints:
 
 - `79e3faa` C1 authoritative model extraction
+- `8026f55` C2 read-only representation requests

@@ -27,6 +27,7 @@ Voxel, contour, and mesh authority can be switched on the same ROI whenever the 
 State: bidirectional ROI editing core implemented; acceptance closeout in progress
 
 Architecture cleanup has started: authoritative ROI shape types now live under `src/app/roi/model.rs`, and primary representation is derived from authoritative data instead of stored redundantly.
+Read-only cache and representation readiness queries now live under `src/app/roi/requests.rs`; UI and QA callers no longer depend on the mutation-heavy compatibility runtime for those decisions.
 
 Completed:
 - ROI core model and ROI-owned spatial metadata
