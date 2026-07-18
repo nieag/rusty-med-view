@@ -266,6 +266,10 @@ State: in progress.
 
 Current checkpoint: manual R6 oblique acceptance and R7 measured performance/final QA.
 
+Implementation checkpoints:
+
+- `90d94ae` R6: implement bidirectional ROI editing closeout
+
 Completed prerequisites:
 
 - Subplans 1 through 9.2
