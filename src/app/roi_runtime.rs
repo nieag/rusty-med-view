@@ -292,7 +292,7 @@ pub fn ensure_contour_view_cache(
         return match intersect_mesh_with_plane(mesh, view_key.plane) {
             Ok(data) => {
                 let generation = roi.dirty_state.generations.authoritative;
-                roi.upsert_contour_view_cache(
+                let _ = roi.install_contour_view_result(
                     view_key.clone(),
                     data,
                     generation,
@@ -316,7 +316,7 @@ pub fn ensure_contour_view_cache(
             Ok(data) => {
                 let generation = roi.dirty_state.generations.authoritative;
                 let revision = roi.preview_state.revision;
-                roi.upsert_contour_view_cache(
+                let _ = roi.install_contour_view_result(
                     view_key.clone(),
                     data,
                     generation,
@@ -382,22 +382,17 @@ pub fn ensure_contour_view_cache(
 
     match build_contour_view_data_for_plane(&voxel_data, view_key) {
         Ok(data) => {
-            roi.upsert_contour_view_cache(
-                view_key.clone(),
-                data,
-                generation,
-                CacheViewState::Current,
-            );
-            roi.dirty_state.contour_cache_dirty = false;
-            roi.dirty_state.generations.contour = generation;
-            RepresentationRequestStatus::current()
+            match roi.install_current_contour_view_result(view_key.clone(), data, generation) {
+                Ok(()) => RepresentationRequestStatus::current(),
+                Err(_) => RepresentationRequestStatus::stale("contour_view_result_superseded"),
+            }
         }
         Err(
             VoxelContourExtractionError::UnsupportedPlaneFamily { .. }
             | VoxelContourExtractionError::UnsupportedPlaneGeometry,
         ) => {
             let generation = roi.dirty_state.generations.authoritative;
-            roi.upsert_contour_view_cache(
+            let _ = roi.install_contour_view_result(
                 view_key.clone(),
                 ContourData {
                     active_plane_family: view_key.family,
@@ -957,12 +952,14 @@ pub fn create_contour_roi_from_voxel_roi(
         // Preserve source voxel geometry as the initial contour reference frame.
         // This keeps extracted contour projection/edit mapping aligned before any
         // contour->voxel rebuild retargets caches to main-volume geometry.
-        roi.session_caches.voxel = Some(VoxelCache {
-            data: source_voxel,
-            gpu_resources: None,
-        });
-        roi.dirty_state.voxel_cache_dirty = false;
-        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+        let generation = roi.dirty_state.generations.authoritative;
+        let _ = roi.install_voxel_cache_result(
+            VoxelCache {
+                data: source_voxel,
+                gpu_resources: None,
+            },
+            generation,
+        );
     }
     Ok(entity)
 }
@@ -1033,7 +1030,7 @@ pub fn create_mesh_roi_from_voxel_roi(
     if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
         // Preserve source voxel geometry as extraction/provenance context.
         // Rendering projects mesh world-mm vertices through main display volume geometry.
-        roi.session_caches.voxel = Some(VoxelCache {
+        roi.store_stale_voxel_cache(VoxelCache {
             data: source_voxel,
             gpu_resources: None,
         });
@@ -1102,7 +1099,7 @@ pub fn create_mesh_roi_from_contour_roi(
     if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
         // Preserve contour-derived voxel geometry as extraction/provenance context.
         // Rendering projects mesh world-mm vertices through main display volume geometry.
-        roi.session_caches.voxel = Some(VoxelCache {
+        roi.store_stale_voxel_cache(VoxelCache {
             data: source_voxel,
             gpu_resources: None,
         });
@@ -1155,9 +1152,8 @@ pub fn invalidate_contour_voxel_caches_for_main_volume_change(world: &mut World)
 
         // Derived contour voxel caches target the current main-volume grid, so they
         // must be invalidated whenever that reference grid changes.
-        roi.session_caches.voxel = None;
+        roi.discard_cache(RoiCacheKind::Voxel);
         roi.finish_job(RoiJobKind::RebuildVoxelCache);
-        roi.mark_cache_dirty(RoiCacheKind::Voxel);
         roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
     }
 }
@@ -1339,11 +1335,20 @@ fn resume_voxel_mesh_rebuild_work(
         roi.finish_job(RoiJobKind::RebuildMeshCache);
         return;
     }
-    roi.session_caches.mesh = Some(MeshCache {
-        data: mesh_data,
-        chunks: Some(chunked_mesh),
-    });
-    roi.finish_cache_rebuild(RoiCacheKind::Mesh);
+    if roi
+        .install_mesh_cache_result(
+            MeshCache {
+                data: mesh_data,
+                chunks: Some(chunked_mesh),
+            },
+            work.source_generation,
+        )
+        .is_err()
+    {
+        roi.job_metrics.discarded_count = roi.job_metrics.discarded_count.saturating_add(1);
+        roi.finish_job(RoiJobKind::RebuildMeshCache);
+        return;
+    }
     roi.job_metrics.completed_count = roi.job_metrics.completed_count.saturating_add(1);
     roi.job_metrics.last_duration_ms = duration.as_secs_f32() * 1000.0;
 }
@@ -1454,11 +1459,20 @@ fn process_mesh_voxel_rebuild_for_entity(
     let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) else {
         return false;
     };
-    roi.session_caches.voxel = Some(VoxelCache {
-        data: voxel_data,
-        gpu_resources,
-    });
-    roi.finish_cache_rebuild(RoiCacheKind::Voxel);
+    if roi
+        .install_voxel_cache_result(
+            VoxelCache {
+                data: voxel_data,
+                gpu_resources,
+            },
+            source_generation,
+        )
+        .is_err()
+    {
+        roi.job_metrics.discarded_count = roi.job_metrics.discarded_count.saturating_add(1);
+        roi.finish_job(RoiJobKind::RebuildVoxelCache);
+        return false;
+    }
     roi.mark_cache_dirty(RoiCacheKind::Contour);
     roi.mark_all_contour_view_caches_stale();
     roi.job_metrics.completed_count = roi.job_metrics.completed_count.saturating_add(1);
@@ -1619,13 +1633,20 @@ fn resume_contour_preview_mesh_work(
         roi.finish_job(RoiJobKind::RebuildVoxelCache);
         return false;
     }
-    roi.session_caches.preview_mesh = Some(PreviewMeshCache {
-        data: mesh_data,
-        chunks: Some(chunked_mesh),
-        dirty_voxel_aabb: preview_aabb,
-        source_generation,
-        preview_revision,
-    });
+    if roi
+        .install_preview_mesh_result(PreviewMeshCache {
+            data: mesh_data,
+            chunks: Some(chunked_mesh),
+            dirty_voxel_aabb: preview_aabb,
+            source_generation,
+            preview_revision,
+        })
+        .is_err()
+    {
+        roi.job_metrics.discarded_count = roi.job_metrics.discarded_count.saturating_add(1);
+        roi.finish_job(RoiJobKind::RebuildVoxelCache);
+        return false;
+    }
     roi.finish_job(RoiJobKind::RebuildVoxelCache);
     roi.job_metrics.completed_count = roi.job_metrics.completed_count.saturating_add(1);
     roi.job_metrics.last_duration_ms = duration.as_secs_f32() * 1000.0;
@@ -1827,11 +1848,18 @@ fn process_contour_voxel_rebuild_for_entity(
             roi.finish_job(RoiJobKind::RebuildVoxelCache);
             return false;
         }
-        roi.session_caches.preview_voxel = Some(PreviewVoxelCache {
-            data: voxel_data.clone(),
-            source_generation: authoritative_generation,
-            preview_revision: revision,
-        });
+        if roi
+            .install_preview_voxel_result(PreviewVoxelCache {
+                data: voxel_data.clone(),
+                source_generation: authoritative_generation,
+                preview_revision: revision,
+            })
+            .is_err()
+        {
+            roi.job_metrics.discarded_count = roi.job_metrics.discarded_count.saturating_add(1);
+            roi.finish_job(RoiJobKind::RebuildVoxelCache);
+            return false;
+        }
         roi.mark_all_contour_view_caches_stale();
         drop(roi);
         let work = ContourPreviewMeshWork {
@@ -1916,11 +1944,20 @@ fn process_contour_voxel_rebuild_for_entity(
         return false;
     };
 
-    roi.session_caches.voxel = Some(VoxelCache {
-        data: voxel_data,
-        gpu_resources,
-    });
-    roi.finish_cache_rebuild(RoiCacheKind::Voxel);
+    if roi
+        .install_voxel_cache_result(
+            VoxelCache {
+                data: voxel_data,
+                gpu_resources,
+            },
+            authoritative_generation,
+        )
+        .is_err()
+    {
+        roi.job_metrics.discarded_count = roi.job_metrics.discarded_count.saturating_add(1);
+        roi.finish_job(RoiJobKind::RebuildVoxelCache);
+        return false;
+    }
     roi.mark_cache_dirty(RoiCacheKind::Mesh);
     roi.enqueue_job(RoiJobRequest {
         kind: RoiJobKind::RebuildMeshCache,

@@ -1,4 +1,5 @@
 pub mod authority;
+pub mod cache;
 pub mod history;
 pub mod model;
 pub mod requests;
@@ -11,6 +12,7 @@ pub use authority::{
     ContourPlaneFamilySwitchError, ContourPromotionError, MeshAuthorityPromotionError,
     MeshMutationError, VoxelAuthorityPromotionError, VoxelContourPromotionError,
 };
+pub use cache::CacheInstallError;
 pub use history::{
     can_redo_roi_edit, can_undo_roi_edit, clear_roi_edit_history_for_roi, redo_roi_edit,
     replace_contour_data_for_slice_with_history, replace_contour_data_with_history,

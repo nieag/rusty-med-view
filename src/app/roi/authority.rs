@@ -1,7 +1,7 @@
 use crate::app::components::{
-    CacheGeneration, CacheViewState, ContourData, ContourSliceKey, ContourViewKey, MeshCache,
-    MeshData, Roi, RoiAuthoritativeData, RoiCacheKind, RoiDirtyRegion, RoiDirtyState, RoiJobKind,
-    RoiJobPriority, RoiJobRequest, RoiJobState, VoxelCache,
+    CacheViewState, ContourData, ContourSliceKey, ContourViewKey, MeshCache, MeshData, Roi,
+    RoiAuthoritativeData, RoiCacheKind, RoiDirtyRegion, RoiJobKind, RoiJobPriority, RoiJobRequest,
+    RoiJobState,
 };
 use crate::convert::{
     extract_contours_from_voxel_data, PlaneDefinition, PlaneFamily, VoxelContourExtractionError,
@@ -284,42 +284,15 @@ pub fn promote_roi_to_contour_authority(
         .map_err(|_| VoxelContourPromotionError::MissingRoi)?;
     let mesh_cache_was_current = authoritative_mesh.is_some()
         || (roi.mesh_cache().is_some() && roi.is_cache_current(RoiCacheKind::Mesh));
-    if let Some(mesh) = authoritative_mesh {
-        roi.session_caches.mesh = Some(MeshCache {
-            data: mesh,
-            chunks: None,
-        });
-    }
-    let new_generation = roi.dirty_state.generations.authoritative.saturating_add(1);
+    let replacement_mesh = authoritative_mesh.map(|mesh| MeshCache {
+        data: mesh,
+        chunks: None,
+    });
 
     roi.authoritative_data = RoiAuthoritativeData::Contour(extracted);
-    roi.session_caches.contour = None;
-    if let Some(voxel_cache) = roi.session_caches.voxel.as_mut() {
-        voxel_cache.data = source_voxel;
-    } else {
-        roi.session_caches.voxel = Some(VoxelCache {
-            data: source_voxel,
-            gpu_resources: None,
-        });
-    }
     roi.job_state = RoiJobState::default();
     roi.end_preview();
-    roi.dirty_state = RoiDirtyState {
-        authoritative_dirty: true,
-        voxel_cache_dirty: false,
-        contour_cache_dirty: false,
-        mesh_cache_dirty: !mesh_cache_was_current,
-        generations: CacheGeneration {
-            authoritative: new_generation,
-            voxel: new_generation,
-            contour: new_generation,
-            mesh: if mesh_cache_was_current {
-                new_generation
-            } else {
-                0
-            },
-        },
-    };
+    roi.rebase_after_contour_promotion(source_voxel, replacement_mesh, mesh_cache_was_current);
     if !mesh_cache_was_current {
         roi.enqueue_rebuild(RoiJobKind::RebuildMeshCache);
     }
@@ -363,34 +336,11 @@ pub fn promote_current_voxel_cache_to_authority(
         .get::<&mut Roi>(roi_entity)
         .map_err(|_| VoxelAuthorityPromotionError::MissingRoi)?;
     let mesh_cache_is_current = retained_mesh.is_some();
-    let new_generation = roi.dirty_state.generations.authoritative.saturating_add(1);
 
     roi.authoritative_data = RoiAuthoritativeData::Voxel(source_voxel.clone());
-    if let Some(voxel_cache) = roi.session_caches.voxel.as_mut() {
-        voxel_cache.data = source_voxel;
-    } else {
-        unreachable!("current voxel cache was checked before promotion");
-    }
-    roi.session_caches.contour = None;
-    roi.session_caches.mesh = retained_mesh;
     roi.job_state = RoiJobState::default();
     roi.end_preview();
-    roi.dirty_state = RoiDirtyState {
-        authoritative_dirty: true,
-        voxel_cache_dirty: false,
-        contour_cache_dirty: true,
-        mesh_cache_dirty: !mesh_cache_is_current,
-        generations: CacheGeneration {
-            authoritative: new_generation,
-            voxel: new_generation,
-            contour: 0,
-            mesh: if mesh_cache_is_current {
-                new_generation
-            } else {
-                0
-            },
-        },
-    };
+    roi.rebase_after_voxel_promotion(source_voxel, retained_mesh);
     if !mesh_cache_is_current {
         roi.enqueue_rebuild(RoiJobKind::RebuildMeshCache);
     }
@@ -428,29 +378,11 @@ pub fn promote_current_mesh_cache_to_authority(
         .map_err(|_| MeshAuthorityPromotionError::MissingRoi)?;
     let voxel_cache_was_current =
         roi.voxel_cache().is_some() && roi.is_cache_current(RoiCacheKind::Voxel);
-    let new_generation = roi.dirty_state.generations.authoritative.saturating_add(1);
 
     roi.authoritative_data = RoiAuthoritativeData::Mesh(mesh);
-    roi.session_caches.mesh = None;
-    roi.session_caches.contour = None;
     roi.job_state = RoiJobState::default();
     roi.end_preview();
-    roi.dirty_state = RoiDirtyState {
-        authoritative_dirty: true,
-        voxel_cache_dirty: !voxel_cache_was_current,
-        contour_cache_dirty: true,
-        mesh_cache_dirty: false,
-        generations: CacheGeneration {
-            authoritative: new_generation,
-            voxel: if voxel_cache_was_current {
-                new_generation
-            } else {
-                0
-            },
-            contour: 0,
-            mesh: new_generation,
-        },
-    };
+    roi.rebase_after_mesh_promotion(voxel_cache_was_current);
     if !voxel_cache_was_current {
         roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
     }
