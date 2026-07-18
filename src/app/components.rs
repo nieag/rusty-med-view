@@ -1,4 +1,4 @@
-use crate::convert::{PlaneDefinition, PlaneFamily};
+use crate::convert::{ChunkedMeshData, PlaneDefinition, PlaneFamily};
 use glam::Vec3;
 
 use winit::keyboard::ModifiersState;
@@ -89,6 +89,7 @@ pub struct InputState {
     pub egui_wants_input: bool,
     pub scroll_accumulator: [f32; 4], // Accumulate sub-slice deltas per viewport
     pub contour_move_pending_commit: bool,
+    pub mesh_move_pending_commit: bool,
 }
 
 // --- Volume Data ---
@@ -130,27 +131,34 @@ pub struct GpuVolumeResources {
 }
 
 // --- Uniforms ---
+pub const MAX_VOXEL_OVERLAY_SLOTS: usize = 8;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct VoxelOverlayUniform {
+    pub dimensions: [u32; 4],
+    pub opacity: [f32; 4],
+    pub main_to_roi_row0: [f32; 4],
+    pub main_to_roi_row1: [f32; 4],
+    pub main_to_roi_row2: [f32; 4],
+}
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Uniforms {
     pub cursor_pos: [f32; 4],
     pub volume_dims: [u32; 4],
     pub volume_spacing: [f32; 4],
-    pub overlay1_dims: [u32; 4],
-    pub overlay2_dims: [u32; 4],
-    pub overlay_opacities: [f32; 4],
-    pub overlay1_main_to_roi_row0: [f32; 4],
-    pub overlay1_main_to_roi_row1: [f32; 4],
-    pub overlay1_main_to_roi_row2: [f32; 4],
-    pub overlay2_main_to_roi_row0: [f32; 4],
-    pub overlay2_main_to_roi_row1: [f32; 4],
-    pub overlay2_main_to_roi_row2: [f32; 4],
+    pub voxel_overlays: [VoxelOverlayUniform; MAX_VOXEL_OVERLAY_SLOTS],
     pub window_params: [f32; 4],
     pub resolution: [f32; 2],
     pub mouse_uv: [f32; 2],
     pub pan: [f32; 2],
     pub zoom_pivot: [f32; 2],
     pub rotation: [f32; 4], // Quaternion
+    pub oblique_origin_uv: [f32; 4],
+    pub oblique_u_dir_length: [f32; 4],
+    pub oblique_v_dir_length: [f32; 4],
     // --- Overlay primitive fields ---
     pub overlay_mouse_uv: [f32; 2], // Mouse position for dragged primitive
     pub overlay_primitive_count: u32, // Number of active primitives
@@ -173,15 +181,39 @@ pub enum EditorTool {
     Navigation,
     ContourSelect,
     ContourDraw,
+    MeshDeform,
 }
 
-#[derive(Default)]
 pub struct EditorState {
     pub active_roi: Option<hecs::Entity>,
     pub active_tool: EditorTool,
     pub contour_draft: Option<ContourDraft>,
     pub contour_selection: Option<ContourSelection>,
     pub contour_move_preview: Option<ContourMovePreview>,
+    pub mesh_edit_preview: Option<MeshEditPreview>,
+    pub mesh_selection: Option<MeshSelection>,
+    pub mesh_brush_radius_mm: f32,
+    pub mesh_brush_strength: f32,
+    pub roi_undo_stack: Vec<RoiEditHistoryEntry>,
+    pub roi_redo_stack: Vec<RoiEditHistoryEntry>,
+}
+
+impl Default for EditorState {
+    fn default() -> Self {
+        Self {
+            active_roi: None,
+            active_tool: EditorTool::Navigation,
+            contour_draft: None,
+            contour_selection: None,
+            contour_move_preview: None,
+            mesh_edit_preview: None,
+            mesh_selection: None,
+            mesh_brush_radius_mm: 12.0,
+            mesh_brush_strength: 1.0,
+            roi_undo_stack: Vec::new(),
+            roi_redo_stack: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -303,6 +335,31 @@ pub struct ContourMovePreview {
     pub contour_data: ContourData,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeshEditPreview {
+    pub roi_entity: hecs::Entity,
+    pub mesh_data: MeshData,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeshSelection {
+    pub roi_entity: hecs::Entity,
+    pub vertex_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RoiEditSnapshot {
+    Contour(ContourData),
+    Mesh(MeshData),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoiEditHistoryEntry {
+    pub roi_entity: hecs::Entity,
+    pub snapshot: RoiEditSnapshot,
+    pub dirty_region: RoiDirtyRegion,
+}
+
 pub enum RoiAuthoritativeData {
     Voxel(VoxelData),
     Contour(ContourData),
@@ -314,6 +371,24 @@ pub struct RoiSessionCaches {
     pub voxel: Option<VoxelCache>,
     pub contour: Option<ContourCache>,
     pub mesh: Option<MeshCache>,
+    pub preview_voxel: Option<PreviewVoxelCache>,
+    pub preview_mesh: Option<PreviewMeshCache>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreviewVoxelCache {
+    pub data: VoxelData,
+    pub source_generation: u64,
+    pub preview_revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreviewMeshCache {
+    pub data: MeshData,
+    pub chunks: Option<ChunkedMeshData>,
+    pub dirty_voxel_aabb: Option<([u32; 3], [u32; 3])>,
+    pub source_generation: u64,
+    pub preview_revision: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -345,10 +420,15 @@ pub struct ContourSliceKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CacheViewState {
     Current,
+    Preview { revision: u64 },
     Stale,
+    Queued,
     Rebuilding,
     Blocked { reason: String },
+    Unsupported { reason: String },
 }
+
+pub const MAX_CONTOUR_VIEW_CACHE_ENTRIES: usize = 96;
 
 impl ContourSliceKey {
     pub fn from_plane(plane: PlaneDefinition) -> Self {
@@ -376,6 +456,7 @@ impl ContourViewKey {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MeshCache {
     pub data: MeshData,
+    pub chunks: Option<ChunkedMeshData>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -420,10 +501,117 @@ pub enum RoiJobKind {
     RebuildMeshCache,
 }
 
+impl RoiJobKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RebuildVoxelCache => "rebuild_voxel_cache",
+            Self::RebuildContourCache => "rebuild_contour_cache",
+            Self::RebuildMeshCache => "rebuild_mesh_cache",
+        }
+    }
+
+    fn dependency_rank(self) -> u8 {
+        match self {
+            Self::RebuildVoxelCache => 0,
+            Self::RebuildContourCache => 1,
+            Self::RebuildMeshCache => 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoiJobPriority {
+    InteractivePreview,
+    VisibleCommitted,
+    Background,
+}
+
+impl RoiJobPriority {
+    fn rank(self) -> u8 {
+        match self {
+            Self::InteractivePreview => 0,
+            Self::VisibleCommitted => 1,
+            Self::Background => 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoiDirtyRegion {
+    Full,
+    VoxelAabb { min: [u32; 3], max: [u32; 3] },
+    ContourSlice(ContourSliceKey),
+    MeshChunkAabb { min: [u32; 3], max: [u32; 3] },
+}
+
+impl RoiDirtyRegion {
+    fn merged(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Full, _) | (_, Self::Full) => Self::Full,
+            (
+                Self::VoxelAabb {
+                    min: a_min,
+                    max: a_max,
+                },
+                Self::VoxelAabb {
+                    min: b_min,
+                    max: b_max,
+                },
+            ) => Self::VoxelAabb {
+                min: std::array::from_fn(|axis| a_min[axis].min(b_min[axis])),
+                max: std::array::from_fn(|axis| a_max[axis].max(b_max[axis])),
+            },
+            (
+                Self::MeshChunkAabb {
+                    min: a_min,
+                    max: a_max,
+                },
+                Self::MeshChunkAabb {
+                    min: b_min,
+                    max: b_max,
+                },
+            ) => Self::MeshChunkAabb {
+                min: std::array::from_fn(|axis| a_min[axis].min(b_min[axis])),
+                max: std::array::from_fn(|axis| a_max[axis].max(b_max[axis])),
+            },
+            (left, right) if left == right => left,
+            _ => Self::Full,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoiJobRequest {
+    pub kind: RoiJobKind,
+    pub source_generation: u64,
+    pub preview_revision: Option<u64>,
+    pub priority: RoiJobPriority,
+    pub dirty_region: RoiDirtyRegion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct RoiJobMetrics {
+    pub completed_count: u64,
+    pub discarded_count: u64,
+    pub failed_count: u64,
+    pub last_duration_ms: f32,
+    pub max_queue_depth: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RoiPreviewState {
+    pub active: bool,
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RoiJobState {
+    /// Compatibility projection of `running_request`.
     pub running: Option<RoiJobKind>,
+    /// Compatibility projection of the highest-priority pending request.
     pub queued: Option<RoiJobKind>,
+    pub running_request: Option<RoiJobRequest>,
+    pub pending: Vec<RoiJobRequest>,
 }
 
 pub struct Roi {
@@ -433,6 +621,8 @@ pub struct Roi {
     pub session_caches: RoiSessionCaches,
     pub dirty_state: RoiDirtyState,
     pub job_state: RoiJobState,
+    pub job_metrics: RoiJobMetrics,
+    pub preview_state: RoiPreviewState,
 }
 
 impl Roi {
@@ -453,7 +643,6 @@ impl Roi {
         raw_data: Vec<u8>,
         gpu_resources: Option<GpuVolumeResources>,
     ) -> Self {
-        let has_voxel_gpu_cache = gpu_resources.is_some();
         let voxel_data = VoxelData { geometry, raw_data };
         Self {
             metadata: RoiMetadata {
@@ -472,16 +661,21 @@ impl Roi {
                 }),
                 contour: None,
                 mesh: None,
+                preview_voxel: None,
+                preview_mesh: None,
             },
             dirty_state: RoiDirtyState {
-                voxel_cache_dirty: !has_voxel_gpu_cache,
+                contour_cache_dirty: true,
+                mesh_cache_dirty: true,
                 generations: CacheGeneration {
-                    voxel: if has_voxel_gpu_cache { 1 } else { 0 },
+                    voxel: 1,
                     ..CacheGeneration::default()
                 },
                 ..RoiDirtyState::default()
             },
             job_state: RoiJobState::default(),
+            job_metrics: RoiJobMetrics::default(),
+            preview_state: RoiPreviewState::default(),
         }
     }
 
@@ -500,12 +694,17 @@ impl Roi {
                 voxel: None,
                 contour: None,
                 mesh: None,
+                preview_voxel: None,
+                preview_mesh: None,
             },
             dirty_state: RoiDirtyState {
                 voxel_cache_dirty: true,
+                mesh_cache_dirty: true,
                 ..RoiDirtyState::default()
             },
             job_state: RoiJobState::default(),
+            job_metrics: RoiJobMetrics::default(),
+            preview_state: RoiPreviewState::default(),
         }
     }
 
@@ -524,6 +723,8 @@ impl Roi {
                 voxel: None,
                 contour: None,
                 mesh: None,
+                preview_voxel: None,
+                preview_mesh: None,
             },
             dirty_state: RoiDirtyState {
                 voxel_cache_dirty: true,
@@ -531,6 +732,8 @@ impl Roi {
                 ..RoiDirtyState::default()
             },
             job_state: RoiJobState::default(),
+            job_metrics: RoiJobMetrics::default(),
+            preview_state: RoiPreviewState::default(),
         }
     }
 
@@ -610,6 +813,9 @@ impl Roi {
                 source_generation,
                 state,
             });
+            if cache.views.len() > MAX_CONTOUR_VIEW_CACHE_ENTRIES {
+                cache.views.remove(0);
+            }
         }
     }
 
@@ -630,10 +836,30 @@ impl Roi {
             .find(|view| view.key.logical_eq(key))
     }
 
+    pub fn contour_view_data_for_render(&self, key: &ContourViewKey) -> Option<&ContourData> {
+        if let Some(contour) = self.contour_data() {
+            if contour.active_plane_family == key.family {
+                return Some(contour);
+            }
+        }
+
+        let view = self.contour_view_cache(key)?;
+        if matches!(
+            view.state,
+            CacheViewState::Blocked { .. } | CacheViewState::Unsupported { .. }
+        ) {
+            return None;
+        }
+        Some(&view.data)
+    }
+
     pub fn mark_all_contour_view_caches_stale(&mut self) {
         if let Some(cache) = self.contour_cache_mut() {
             for view in &mut cache.views {
-                if !matches!(view.state, CacheViewState::Blocked { .. }) {
+                if !matches!(
+                    view.state,
+                    CacheViewState::Blocked { .. } | CacheViewState::Unsupported { .. }
+                ) {
                     view.state = CacheViewState::Stale;
                 }
             }
@@ -698,25 +924,102 @@ impl Roi {
     }
 
     pub fn enqueue_rebuild(&mut self, kind: RoiJobKind) {
-        if self.job_state.running == Some(kind) {
+        self.enqueue_job(RoiJobRequest {
+            kind,
+            source_generation: self.dirty_state.generations.authoritative,
+            preview_revision: None,
+            priority: RoiJobPriority::VisibleCommitted,
+            dirty_region: RoiDirtyRegion::Full,
+        });
+    }
+
+    pub fn enqueue_job(&mut self, request: RoiJobRequest) {
+        if self.job_state.running_request == Some(request) {
             return;
         }
-        self.job_state.queued = Some(kind);
+
+        if let Some(index) = self
+            .job_state
+            .pending
+            .iter()
+            .position(|queued| queued.kind == request.kind)
+        {
+            let queued = self.job_state.pending[index];
+            if queued.source_generation > request.source_generation
+                || (queued.source_generation == request.source_generation
+                    && queued.preview_revision > request.preview_revision)
+            {
+                return;
+            }
+            self.job_state.pending[index] = RoiJobRequest {
+                dirty_region: queued.dirty_region.merged(request.dirty_region),
+                priority: if queued.priority.rank() <= request.priority.rank() {
+                    queued.priority
+                } else {
+                    request.priority
+                },
+                ..request
+            };
+        } else {
+            self.job_state.pending.push(request);
+        }
+        self.job_state
+            .pending
+            .sort_by_key(|request| (request.priority.rank(), request.kind.dependency_rank()));
+        self.job_state.queued = self.job_state.pending.first().map(|request| request.kind);
+        self.job_metrics.max_queue_depth = self
+            .job_metrics
+            .max_queue_depth
+            .max(self.job_state.pending.len());
     }
 
     pub fn start_queued_job(&mut self) -> Option<RoiJobKind> {
         if self.job_state.running.is_some() {
             return None;
         }
-        let next = self.job_state.queued.take()?;
-        self.job_state.running = Some(next);
-        Some(next)
+        let request = if self.job_state.pending.is_empty() {
+            let kind = self.job_state.queued.take()?;
+            RoiJobRequest {
+                kind,
+                source_generation: self.dirty_state.generations.authoritative,
+                preview_revision: None,
+                priority: RoiJobPriority::VisibleCommitted,
+                dirty_region: RoiDirtyRegion::Full,
+            }
+        } else {
+            self.job_state.pending.remove(0)
+        };
+        self.job_state.running = Some(request.kind);
+        self.job_state.running_request = Some(request);
+        self.job_state.queued = self.job_state.pending.first().map(|request| request.kind);
+        Some(request.kind)
     }
 
     pub fn finish_job(&mut self, kind: RoiJobKind) {
         if self.job_state.running == Some(kind) {
             self.job_state.running = None;
+            self.job_state.running_request = None;
         }
+    }
+
+    pub fn has_queued_job(&self, kind: RoiJobKind) -> bool {
+        self.job_state
+            .pending
+            .iter()
+            .any(|request| request.kind == kind)
+            || (self.job_state.pending.is_empty() && self.job_state.queued == Some(kind))
+    }
+
+    pub fn begin_preview(&mut self) -> u64 {
+        self.preview_state.active = true;
+        self.preview_state.revision = self.preview_state.revision.saturating_add(1);
+        self.preview_state.revision
+    }
+
+    pub fn end_preview(&mut self) {
+        self.preview_state.active = false;
+        self.session_caches.preview_voxel = None;
+        self.session_caches.preview_mesh = None;
     }
 
     pub fn finish_cache_rebuild(&mut self, kind: RoiCacheKind) {
@@ -1010,8 +1313,8 @@ mod tests {
         assert!(roi.voxel_gpu_cache().is_none());
         assert!(roi.session_caches.contour.is_none());
         assert!(roi.session_caches.mesh.is_none());
-        assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
-        assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
+        assert!(!roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert!(roi.is_cache_current(RoiCacheKind::Voxel));
         assert!(roi.renderable_voxel_cache().is_none());
     }
 
@@ -1034,7 +1337,7 @@ mod tests {
     }
 
     #[test]
-    fn test_new_voxel_roi_without_cache_starts_with_dirty_voxel_cache() {
+    fn test_new_voxel_roi_without_gpu_still_has_current_cpu_voxel_cache() {
         let roi = Roi::new_voxel_with_cache(
             RoiId(8),
             "Kidney".to_string(),
@@ -1048,8 +1351,8 @@ mod tests {
             None,
         );
 
-        assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
-        assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
+        assert!(!roi.is_cache_dirty(RoiCacheKind::Voxel));
+        assert!(roi.is_cache_current(RoiCacheKind::Voxel));
         assert!(roi.voxel_cache().is_some());
         assert!(roi.voxel_gpu_cache().is_none());
     }
@@ -1100,9 +1403,6 @@ mod tests {
         );
 
         roi.metadata.is_visible = true;
-        roi.dirty_state.voxel_cache_dirty = false;
-        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
-
         assert!(roi.is_cache_current(RoiCacheKind::Voxel));
         assert!(roi.voxel_gpu_cache().is_none());
         assert!(roi.renderable_voxel_cache().is_none());
@@ -1191,7 +1491,7 @@ mod tests {
     }
 
     #[test]
-    fn test_enqueue_rebuild_supersedes_previous_queued_job() {
+    fn test_enqueue_rebuild_preserves_multiple_representation_jobs() {
         let mut roi = Roi::new_voxel_with_cache(
             RoiId(10),
             "Pancreas".to_string(),
@@ -1208,9 +1508,107 @@ mod tests {
         roi.enqueue_rebuild(RoiJobKind::RebuildContourCache);
         roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
 
+        assert_eq!(roi.job_state.pending.len(), 2);
         assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
         assert_eq!(roi.start_queued_job(), Some(RoiJobKind::RebuildVoxelCache));
-        assert_eq!(roi.job_state.running, Some(RoiJobKind::RebuildVoxelCache));
+        roi.finish_job(RoiJobKind::RebuildVoxelCache);
+        assert_eq!(
+            roi.start_queued_job(),
+            Some(RoiJobKind::RebuildContourCache)
+        );
+        assert_eq!(roi.job_state.running, Some(RoiJobKind::RebuildContourCache));
+    }
+
+    #[test]
+    fn test_interactive_job_priority_and_preview_supersession() {
+        let mut roi = Roi::new_voxel_with_cache(
+            RoiId(20),
+            "Priority".to_string(),
+            VoxelGeometry {
+                dimensions: [8, 8, 8],
+                spacing: [1.0; 3],
+                origin: [0.0; 3],
+                orientation: [0.0, 0.0, 0.0, 1.0],
+            },
+            vec![0; 512],
+            None,
+        );
+        roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
+        roi.enqueue_job(RoiJobRequest {
+            kind: RoiJobKind::RebuildMeshCache,
+            source_generation: 1,
+            preview_revision: Some(1),
+            priority: RoiJobPriority::InteractivePreview,
+            dirty_region: RoiDirtyRegion::VoxelAabb {
+                min: [2, 2, 2],
+                max: [3, 3, 3],
+            },
+        });
+        roi.enqueue_job(RoiJobRequest {
+            kind: RoiJobKind::RebuildMeshCache,
+            source_generation: 1,
+            preview_revision: Some(2),
+            priority: RoiJobPriority::InteractivePreview,
+            dirty_region: RoiDirtyRegion::VoxelAabb {
+                min: [4, 4, 4],
+                max: [5, 5, 5],
+            },
+        });
+
+        assert_eq!(roi.job_state.pending.len(), 2);
+        let request = roi.job_state.pending[0];
+        assert_eq!(request.kind, RoiJobKind::RebuildMeshCache);
+        assert_eq!(request.preview_revision, Some(2));
+        assert_eq!(
+            request.dirty_region,
+            RoiDirtyRegion::VoxelAabb {
+                min: [2, 2, 2],
+                max: [5, 5, 5]
+            }
+        );
+        assert_eq!(roi.job_metrics.max_queue_depth, 2);
+    }
+
+    #[test]
+    fn test_preview_revision_is_monotonic_and_explicitly_ends() {
+        let mut roi = Roi::new_contour(
+            RoiId(21),
+            "Preview".to_string(),
+            ContourData {
+                active_plane_family: PlaneFamily::Axial,
+                slices: Vec::new(),
+            },
+        );
+
+        assert_eq!(roi.begin_preview(), 1);
+        assert_eq!(roi.begin_preview(), 2);
+        assert!(roi.preview_state.active);
+        roi.end_preview();
+        assert!(!roi.preview_state.active);
+        assert_eq!(roi.preview_state.revision, 2);
+    }
+
+    #[test]
+    fn test_contour_view_cache_is_bounded() {
+        let contour = ContourData {
+            active_plane_family: PlaneFamily::Axial,
+            slices: Vec::new(),
+        };
+        let mut roi = Roi::new_contour(RoiId(22), "Bounded".to_string(), contour.clone());
+        for index in 0..=MAX_CONTOUR_VIEW_CACHE_ENTRIES {
+            let mut plane = test_plane_definition(PlaneFamily::Coronal);
+            plane.origin_mm[1] = index as f32;
+            roi.upsert_contour_view_cache(
+                ContourViewKey::from_plane(plane),
+                contour.clone(),
+                1,
+                CacheViewState::Current,
+            );
+        }
+
+        let cache = roi.contour_cache().unwrap();
+        assert_eq!(cache.views.len(), MAX_CONTOUR_VIEW_CACHE_ENTRIES);
+        assert_eq!(cache.views[0].key.plane.origin_mm[1], 1.0);
     }
 
     #[test]
@@ -1507,7 +1905,10 @@ mod tests {
             }],
         };
         let mut roi = Roi::new_mesh(RoiId(25), "Mesh Cached".to_string(), mesh_data.clone());
-        roi.session_caches.mesh = Some(MeshCache { data: mesh_data });
+        roi.session_caches.mesh = Some(MeshCache {
+            data: mesh_data,
+            chunks: None,
+        });
         roi.dirty_state.voxel_cache_dirty = false;
         roi.dirty_state.contour_cache_dirty = false;
         roi.dirty_state.mesh_cache_dirty = false;
@@ -1542,7 +1943,10 @@ mod tests {
             }],
         };
         let mut roi = Roi::new_mesh(RoiId(26), "Mesh Rebuild".to_string(), mesh_data.clone());
-        roi.session_caches.mesh = Some(MeshCache { data: mesh_data });
+        roi.session_caches.mesh = Some(MeshCache {
+            data: mesh_data,
+            chunks: None,
+        });
         roi.dirty_state.mesh_cache_dirty = true;
         roi.enqueue_rebuild(RoiJobKind::RebuildMeshCache);
         assert_eq!(roi.start_queued_job(), Some(RoiJobKind::RebuildMeshCache));

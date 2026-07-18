@@ -19,25 +19,28 @@ struct VertexOutput {
     @location(0) uv: vec2<f32>,
 }
 
+struct VoxelOverlayUniform {
+    dimensions: vec4<u32>,
+    opacity: vec4<f32>,
+    main_to_roi_row0: vec4<f32>,
+    main_to_roi_row1: vec4<f32>,
+    main_to_roi_row2: vec4<f32>,
+}
+
 struct Uniforms {
     cursor_pos: vec4<f32>,
     volume_dims: vec4<u32>,
     volume_spacing: vec4<f32>,
-    overlay1_dims: vec4<u32>,
-    overlay2_dims: vec4<u32>,
-    overlay_opacities: vec4<f32>,
-    overlay1_main_to_roi_row0: vec4<f32>,
-    overlay1_main_to_roi_row1: vec4<f32>,
-    overlay1_main_to_roi_row2: vec4<f32>,
-    overlay2_main_to_roi_row0: vec4<f32>,
-    overlay2_main_to_roi_row1: vec4<f32>,
-    overlay2_main_to_roi_row2: vec4<f32>,
+    voxel_overlays: array<VoxelOverlayUniform, 8>,
     window_params: vec4<f32>,        // [center, width, data_min, data_max]
     resolution: vec2<f32>,
     mouse_uv: vec2<f32>,
     pan: vec2<f32>,
     zoom_pivot: vec2<f32>,
     rotation: vec4<f32>, // quaternion [x, y, z, w]
+    oblique_origin_uv: vec4<f32>,
+    oblique_u_dir_length: vec4<f32>,
+    oblique_v_dir_length: vec4<f32>,
     // Overlay primitive fields
     overlay_mouse_uv: vec2<f32>,     // Mouse position for dragged primitive
     overlay_primitive_count: u32,    // Number of active primitives
@@ -52,13 +55,15 @@ struct Uniforms {
 @group(0) @binding(1) var s_diffuse: sampler; // Trilinear sampler
 @group(0) @binding(2) var<uniform> uniforms: Uniforms;
 
-// Overlay 1
-@group(0) @binding(3) var t_label1: texture_3d<u32>;
-@group(0) @binding(4) var t_lut1: texture_1d<f32>;
-
-// Overlay 2
+@group(0) @binding(3) var t_label0: texture_3d<u32>;
+@group(0) @binding(4) var t_label1: texture_3d<u32>;
 @group(0) @binding(5) var t_label2: texture_3d<u32>;
-@group(0) @binding(6) var t_lut2: texture_1d<f32>;
+@group(0) @binding(6) var t_label3: texture_3d<u32>;
+@group(0) @binding(7) var t_label4: texture_3d<u32>;
+@group(0) @binding(8) var t_label5: texture_3d<u32>;
+@group(0) @binding(9) var t_label6: texture_3d<u32>;
+@group(0) @binding(10) var t_label7: texture_3d<u32>;
+@group(0) @binding(11) var t_overlay_lut: texture_1d<f32>;
 
 // --- GPU Overlay Primitives ---
 const MAX_OVERLAY_PRIMITIVES: u32 = 64u;
@@ -72,7 +77,7 @@ struct OverlayPrimitive {
     secondary_pos: vec4<f32>, // for lines: end point
 };
 
-@group(0) @binding(7) var<storage, read> overlay_primitives: array<OverlayPrimitive, 64>;
+@group(0) @binding(12) var<storage, read> overlay_primitives: array<OverlayPrimitive, 64>;
 
 @vertex
 fn vs_main(model: VertexInput) -> VertexOutput {
@@ -103,14 +108,12 @@ fn intersectAABB(rayOrigin: vec3<f32>, rayDir: vec3<f32>, boxMin: vec3<f32>, box
 // Helper: Get label color from specific overlay slot
 fn get_overlay_color(
     tex: texture_3d<u32>,
-    lut: texture_1d<f32>,
     main_uvw: vec3<f32>,
     overlay_dims: vec3<u32>,
     main_to_roi_row0: vec4<f32>,
     main_to_roi_row1: vec4<f32>,
     main_to_roi_row2: vec4<f32>,
     opacity: f32,
-    s_sampler: sampler,
     force_solid: bool
 ) -> vec4<f32> {
     // Note: We use the same sampler as the main volume for coordinate consistency, 
@@ -144,12 +147,49 @@ fn get_overlay_color(
     
     // Lookup color
     // We assume LUT is 256 pixels
-    let color = textureLoad(lut, i32(label_id) % 256, 0);
+    let color = textureLoad(t_overlay_lut, i32(label_id) % 256, 0);
 
     if force_solid {
         return vec4<f32>(color.rgb, 1.0);
     }
     return vec4<f32>(color.rgb, color.a * opacity);
+}
+
+fn get_overlay_color_for_slot(
+    slot: u32,
+    main_uvw: vec3<f32>,
+    force_solid: bool
+) -> vec4<f32> {
+    let overlay = uniforms.voxel_overlays[slot];
+    switch slot {
+        case 0u: {
+            return get_overlay_color(t_label0, main_uvw, overlay.dimensions.xyz, overlay.main_to_roi_row0, overlay.main_to_roi_row1, overlay.main_to_roi_row2, overlay.opacity.x, force_solid);
+        }
+        case 1u: {
+            return get_overlay_color(t_label1, main_uvw, overlay.dimensions.xyz, overlay.main_to_roi_row0, overlay.main_to_roi_row1, overlay.main_to_roi_row2, overlay.opacity.x, force_solid);
+        }
+        case 2u: {
+            return get_overlay_color(t_label2, main_uvw, overlay.dimensions.xyz, overlay.main_to_roi_row0, overlay.main_to_roi_row1, overlay.main_to_roi_row2, overlay.opacity.x, force_solid);
+        }
+        case 3u: {
+            return get_overlay_color(t_label3, main_uvw, overlay.dimensions.xyz, overlay.main_to_roi_row0, overlay.main_to_roi_row1, overlay.main_to_roi_row2, overlay.opacity.x, force_solid);
+        }
+        case 4u: {
+            return get_overlay_color(t_label4, main_uvw, overlay.dimensions.xyz, overlay.main_to_roi_row0, overlay.main_to_roi_row1, overlay.main_to_roi_row2, overlay.opacity.x, force_solid);
+        }
+        case 5u: {
+            return get_overlay_color(t_label5, main_uvw, overlay.dimensions.xyz, overlay.main_to_roi_row0, overlay.main_to_roi_row1, overlay.main_to_roi_row2, overlay.opacity.x, force_solid);
+        }
+        case 6u: {
+            return get_overlay_color(t_label6, main_uvw, overlay.dimensions.xyz, overlay.main_to_roi_row0, overlay.main_to_roi_row1, overlay.main_to_roi_row2, overlay.opacity.x, force_solid);
+        }
+        case 7u: {
+            return get_overlay_color(t_label7, main_uvw, overlay.dimensions.xyz, overlay.main_to_roi_row0, overlay.main_to_roi_row1, overlay.main_to_roi_row2, overlay.opacity.x, force_solid);
+        }
+        default: {
+            return vec4<f32>(0.0);
+        }
+    }
 }
 
 // Compute Crosshair color and alpha
@@ -283,29 +323,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         } else if uniforms.view_mode == 3u {
             slice_aspect = phys_y / phys_z;
         } else if uniforms.view_mode == 4u {
-            let q = uniforms.rotation;
-            let x2 = q.x + q.x;
-            let y2 = q.y + q.y;
-            let z2 = q.z + q.z;
-            let xx = q.x * x2;
-            let xy = q.x * y2;
-            let xz = q.x * z2;
-            let yy = q.y * y2;
-            let yz = q.y * z2;
-            let zz = q.z * z2;
-            let wx = q.w * x2;
-            let wy = q.w * y2;
-            let wz = q.w * z2;
-            let rot = mat3x3<f32>(
-                vec3<f32>(1.0 - (yy + zz), xy + wz, xz - wy),
-                vec3<f32>(xy - wz, 1.0 - (xx + zz), yz + wx),
-                vec3<f32>(xz + wy, yz - wx, 1.0 - (xx + yy))
-            );
-            let u_axis = normalize(rot * vec3<f32>(1.0, 0.0, 0.0));
-            let v_axis = normalize(rot * vec3<f32>(0.0, 1.0, 0.0));
-            let lu = max(length(u_axis * vec3<f32>(phys_x, phys_y, phys_z)), 1e-3);
-            let lv = max(length(v_axis * vec3<f32>(phys_x, phys_y, phys_z)), 1e-3);
-            slice_aspect = lu / lv;
+            slice_aspect = uniforms.oblique_u_dir_length.w
+                / max(uniforms.oblique_v_dir_length.w, 1e-3);
         } // Y over Z
 
         // Correction K
@@ -346,87 +365,41 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 ch_v2 = vec2<f32>(-1.0, 0.0); // +Y (Green) -> Left
                 ch_v3 = vec2<f32>(0.0, -1.0); // +Z (Blue) -> Up
             } else if uniforms.view_mode == 4u { // Oblique (rotation-driven)
-                let q = uniforms.rotation;
-                let x2 = q.x + q.x;
-                let y2 = q.y + q.y;
-                let z2 = q.z + q.z;
-                let xx = q.x * x2;
-                let xy = q.x * y2;
-                let xz = q.x * z2;
-                let yy = q.y * y2;
-                let yz = q.y * z2;
-                let zz = q.z * z2;
-                let wx = q.w * x2;
-                let wy = q.w * y2;
-                let wz = q.w * z2;
-                let rot = mat3x3<f32>(
-                    vec3<f32>(1.0 - (yy + zz), xy + wz, xz - wy),
-                    vec3<f32>(xy - wz, 1.0 - (xx + zz), yz + wx),
-                    vec3<f32>(xz + wy, yz - wx, 1.0 - (xx + yy))
-                );
-                let u_axis = normalize(rot * vec3<f32>(1.0, 0.0, 0.0));
-                let v_axis = normalize(rot * vec3<f32>(0.0, 1.0, 0.0));
-                let phys = vec3<f32>(phys_x, phys_y, phys_z);
-                let lu = max(length(u_axis * phys), 1e-3);
-                let lv = max(length(v_axis * phys), 1e-3);
-                let center_mm = (cursor - 0.5) * phys;
-                let du = (0.5 - zoomed_uv.x) * lu;
-                let dv = (0.5 - zoomed_uv.y) * lv;
-                let sample_mm = center_mm + u_axis * du + v_axis * dv;
-                sample_pos = sample_mm / phys + 0.5;
+                let du = (0.5 - zoomed_uv.x) * uniforms.oblique_u_dir_length.w;
+                let dv = (0.5 - zoomed_uv.y) * uniforms.oblique_v_dir_length.w;
+                sample_pos = uniforms.oblique_origin_uv.xyz
+                    + uniforms.oblique_u_dir_length.xyz * du
+                    + uniforms.oblique_v_dir_length.xyz * dv;
                 crosshair_screen_pos = vec2<f32>(0.5, 0.5);
                 ch_v1 = vec2<f32>(0.0, 0.0);
                 ch_v2 = vec2<f32>(0.0, 0.0);
                 ch_v3 = vec2<f32>(0.0, 0.0);
             }
 
-            // 1. Sample Main Volume and apply windowing
-            let raw_intensity = textureSampleLevel(t_diffuse, s_diffuse, sample_pos, 0.0).r;
-            let windowed = apply_window(raw_intensity, uniforms.window_params.x, uniforms.window_params.y);
-            final_color = vec4<f32>(windowed, windowed, windowed, 1.0);
-            
-            // 2. Blend Overlays (if texture not dummy)
-            // We can't easily detect "dummy" in shader, so we rely on uniforms or just data being 0
-            
-            // Overlay 1
-            let col1 = get_overlay_color(
-                t_label1,
-                t_lut1,
-                sample_pos,
-                uniforms.overlay1_dims.xyz,
-                uniforms.overlay1_main_to_roi_row0,
-                uniforms.overlay1_main_to_roi_row1,
-                uniforms.overlay1_main_to_roi_row2,
-                uniforms.overlay_opacities.x,
-                s_diffuse,
-                false
-            );
-            if col1.a > 0.0 {
-                // Alpha blend: SrcAlpha, OneMinusSrcAlpha
-                final_color = vec4<f32>(mix(final_color.rgb, col1.rgb, col1.a), 1.0);
-            }
-            
-            // Overlay 2
-            let col2 = get_overlay_color(
-                t_label2,
-                t_lut2,
-                sample_pos,
-                uniforms.overlay2_dims.xyz,
-                uniforms.overlay2_main_to_roi_row0,
-                uniforms.overlay2_main_to_roi_row1,
-                uniforms.overlay2_main_to_roi_row2,
-                uniforms.overlay_opacities.y,
-                s_diffuse,
-                false
-            );
-            if col2.a > 0.0 {
-                final_color = vec4<f32>(mix(final_color.rgb, col2.rgb, col2.a), 1.0);
-            }
+            if any(sample_pos < vec3<f32>(0.0)) || any(sample_pos > vec3<f32>(1.0)) {
+                final_color = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+                draw_crosshair = false;
+            } else {
+                // 1. Sample Main Volume and apply windowing
+                let raw_intensity = textureSampleLevel(t_diffuse, s_diffuse, sample_pos, 0.0).r;
+                let windowed = apply_window(raw_intensity, uniforms.window_params.x, uniforms.window_params.y);
+                final_color = vec4<f32>(windowed, windowed, windowed, 1.0);
 
-            // Crosshair State for 2D modes
-            draw_crosshair = true;
-            ch_len = 0.0;
-            ch_alpha = 0.7;
+                // 2. Blend visible ROI overlays in deterministic slot order.
+                for (var slot = 0u; slot < 8u; slot++) {
+                    if (uniforms.overlay_flags & (1u << slot)) != 0u {
+                        let overlay_color = get_overlay_color_for_slot(slot, sample_pos, false);
+                        if overlay_color.a > 0.0 {
+                            final_color = vec4<f32>(mix(final_color.rgb, overlay_color.rgb, overlay_color.a), 1.0);
+                        }
+                    }
+                }
+
+                // Crosshair State for 2D modes
+                draw_crosshair = true;
+                ch_len = 0.0;
+                ch_alpha = 0.7;
+            }
 
         }
     } else {
@@ -571,38 +544,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 var overlay_color = vec3<f32>(0.0);
                 var overlay_alpha = 0.0;
 
-                let o1 = get_overlay_color(
-                    t_label1,
-                    t_lut1,
-                    tex_coord,
-                    uniforms.overlay1_dims.xyz,
-                    uniforms.overlay1_main_to_roi_row0,
-                    uniforms.overlay1_main_to_roi_row1,
-                    uniforms.overlay1_main_to_roi_row2,
-                    uniforms.overlay_opacities.x,
-                    s_diffuse,
-                    true
-                );
-                if o1.a > 0.0 {
-                    overlay_color = mix(overlay_color, o1.rgb, o1.a);
-                    overlay_alpha = max(overlay_alpha, o1.a);
-                }
-
-                let o2 = get_overlay_color(
-                    t_label2,
-                    t_lut2,
-                    tex_coord,
-                    uniforms.overlay2_dims.xyz,
-                    uniforms.overlay2_main_to_roi_row0,
-                    uniforms.overlay2_main_to_roi_row1,
-                    uniforms.overlay2_main_to_roi_row2,
-                    uniforms.overlay_opacities.y,
-                    s_diffuse,
-                    true
-                );
-                if o2.a > 0.0 {
-                    overlay_color = mix(overlay_color, o2.rgb, o2.a);
-                    overlay_alpha = max(overlay_alpha, o2.a);
+                for (var slot = 0u; slot < 8u; slot++) {
+                    if (uniforms.overlay_flags & (1u << slot)) != 0u {
+                        let roi_color = get_overlay_color_for_slot(slot, tex_coord, true);
+                        if roi_color.a > 0.0 {
+                            overlay_color = mix(overlay_color, roi_color.rgb, roi_color.a);
+                            overlay_alpha = max(overlay_alpha, roi_color.a);
+                        }
+                    }
                 }
                 
                 // Composite

@@ -1,8 +1,5 @@
 use crate::components::*;
-use crate::convert::{
-    oblique_plane_from_view_rotation, orthogonal_plane_from_volume_uv, world_mm_to_volume_uv,
-    PlaneFamily,
-};
+use crate::convert::{world_mm_to_volume_uv, PlaneFamily};
 use crate::AppEvent;
 use hecs::World;
 use winit::event_loop::EventLoopProxy;
@@ -10,101 +7,74 @@ use winit::event_loop::EventLoopProxy;
 use crate::app::roi_runtime;
 use crate::io::handlers;
 
-fn insert_test_contour_loop(
-    world: &mut World,
+fn activate_promoted_edit_tool(world: &mut World, entities: &AppEntities, tool: EditorTool) {
+    let active_roi = world
+        .get::<&EditorState>(entities.editor)
+        .ok()
+        .and_then(|editor| editor.active_roi);
+    if let Some(roi_entity) = active_roi {
+        roi_runtime::clear_roi_edit_history_for_roi(world, entities.editor, roi_entity);
+    }
+    if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+        input.contour_move_pending_commit = false;
+        input.mesh_move_pending_commit = false;
+    }
+    if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
+        editor.active_tool = tool;
+        editor.contour_draft = None;
+        editor.contour_selection = None;
+        editor.contour_move_preview = None;
+        editor.mesh_edit_preview = None;
+        editor.mesh_selection = None;
+    }
+}
+
+fn active_viewport_contour_view_key(
+    world: &World,
     entities: &AppEntities,
     roi_entity: hecs::Entity,
-) -> Result<(), String> {
-    let geometry = {
-        let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
-        let (_, volume) = query
-            .iter()
-            .next()
-            .ok_or_else(|| "Load a main volume before inserting a test contour.".to_string())?;
-        VoxelGeometry {
-            dimensions: volume.dimensions,
-            spacing: volume.spacing,
-            origin: volume.origin,
-            orientation: volume.orientation,
-        }
-    };
-
+) -> Option<ContourViewKey> {
+    let active_viewport = world
+        .get::<&InputState>(entities.input)
+        .ok()
+        .and_then(|input| input.active_viewport)?;
+    let viewport = world.get::<&Viewport>(active_viewport).ok()?;
+    let viewport_state = world.get::<&ViewportState>(active_viewport).ok()?;
     let cursor_uv = world
         .get::<&Transform>(entities.cursor)
         .map(|cursor| cursor.position)
         .unwrap_or([0.5, 0.5, 0.5]);
-
-    let mut contour_data = world
-        .get::<&Roi>(roi_entity)
-        .map_err(|_| "Active contour ROI is missing.".to_string())?
-        .contour_data()
-        .cloned()
-        .ok_or_else(|| "Active ROI is not contour-primary.".to_string())?;
-
-    let plane = match contour_data.active_plane_family {
-        PlaneFamily::Axial | PlaneFamily::Coronal | PlaneFamily::Sagittal => {
-            orthogonal_plane_from_volume_uv(contour_data.active_plane_family, cursor_uv, geometry)
-                .ok_or_else(|| "Failed to resolve orthogonal contour plane.".to_string())?
-        }
-        PlaneFamily::Oblique => {
-            let active_viewport = world
-                .get::<&InputState>(entities.input)
-                .ok()
-                .and_then(|input| input.active_viewport)
-                .ok_or_else(|| {
-                    "Activate an oblique viewport before inserting an oblique test contour."
-                        .to_string()
-                })?;
-            let viewport = world
-                .get::<&Viewport>(active_viewport)
-                .map_err(|_| "Active viewport is missing.".to_string())?;
-            if viewport.mode != ViewMode::Oblique {
-                return Err(
-                    "Switch the active viewport to oblique before inserting oblique test contour."
-                        .to_string(),
-                );
-            }
-            let rotation = world
-                .get::<&ViewportState>(active_viewport)
-                .map_err(|_| "Active viewport state is missing.".to_string())?
-                .user_rotation;
-            oblique_plane_from_view_rotation(cursor_uv, rotation, geometry)
-                .ok_or_else(|| "Failed to resolve oblique contour plane.".to_string())?
-        }
-    };
-
-    let seeded_loop = ContourLoop {
-        points: vec![
-            ContourPoint {
-                local_mm: [-12.0, -10.0],
-            },
-            ContourPoint {
-                local_mm: [12.0, -10.0],
-            },
-            ContourPoint {
-                local_mm: [0.0, 12.0],
-            },
-        ],
-        is_closed: true,
-    };
-
-    contour_data.slices.push(ContourSlice {
-        plane,
-        loops: vec![seeded_loop],
-    });
-
-    roi_runtime::replace_contour_data(world, roi_entity, contour_data).map_err(
-        |err| match err {
-            roi_runtime::ContourMutationError::MissingRoi => {
-                "Active contour ROI is missing.".to_string()
-            }
-            roi_runtime::ContourMutationError::NotContourRoi => {
-                "Active ROI is not contour-primary.".to_string()
-            }
-        },
+    let geometry = roi_runtime::main_volume_voxel_geometry(world).or_else(|| {
+        world
+            .get::<&Roi>(roi_entity)
+            .ok()
+            .and_then(|roi| roi.voxel_cache().map(|cache| cache.data.geometry))
+    })?;
+    let plane = crate::render::roi_views::displayed_plane_for_viewport(
+        viewport.mode,
+        cursor_uv,
+        viewport_state.user_rotation,
+        geometry,
     )?;
+    Some(ContourViewKey::from_plane(plane))
+}
 
-    Ok(())
+fn promote_contour_family_for_active_view(
+    world: &mut World,
+    entities: &AppEntities,
+    roi_entity: hecs::Entity,
+    family: PlaneFamily,
+) -> Result<(), String> {
+    if family != PlaneFamily::Oblique {
+        return roi_runtime::promote_roi_to_contour_authority(world, roi_entity, family)
+            .map_err(|error| format!("{error:?}"));
+    }
+
+    let view_key = active_viewport_contour_view_key(world, entities, roi_entity)
+        .filter(|key| key.family == PlaneFamily::Oblique)
+        .ok_or_else(|| "activate an oblique 2D viewport before promotion".to_string())?;
+    roi_runtime::promote_contour_view_to_authoritative(world, roi_entity, &view_key)
+        .map_err(|error| format!("{error:?}"))
 }
 
 fn focus_cursor_on_first_extracted_slice(
@@ -300,181 +270,226 @@ pub fn draw_sidebar(
             }
         });
 
-        ui.horizontal(|ui| {
-            ui.label("Extract from active voxel ROI:");
-            for (label, family) in [
-                ("Axial", PlaneFamily::Axial),
-                ("Coronal", PlaneFamily::Coronal),
-                ("Sagittal", PlaneFamily::Sagittal),
-            ] {
-                if ui.small_button(label).clicked() {
-                    let active_roi = world
-                        .get::<&EditorState>(entities.editor)
-                        .ok()
-                        .and_then(|editor| editor.active_roi);
-                    let Some(source_roi) = active_roi else {
-                        handlers::set_status_message(
+        let active_primary = new_active_roi.and_then(|entity| {
+            world
+                .get::<&Roi>(entity)
+                .ok()
+                .map(|roi| roi.primary_representation)
+        });
+        if let (Some(roi_entity), Some(primary)) = (new_active_roi, active_primary) {
+            let voxel_ready = primary == PrimaryRepresentation::Voxel
+                || roi_runtime::cache_status(world, roi_entity, RoiCacheKind::Voxel)
+                    .is_some_and(|status| status.is_current);
+            let mesh_status = roi_runtime::request_mesh_cache_state(world, roi_entity);
+            let mesh_ready = primary == PrimaryRepresentation::Mesh
+                || mesh_status.state == roi_runtime::RepresentationRequestState::Current;
+            let contour_family = world
+                .get::<&Roi>(roi_entity)
+                .ok()
+                .and_then(|roi| {
+                    roi.contour_data()
+                        .map(|contour| contour.active_plane_family)
+                });
+            let target_contour_family = active_viewport_contour_view_key(world, entities, roi_entity)
+                .map(|key| key.family)
+                .filter(|family| *family != PlaneFamily::Oblique)
+                .or(contour_family)
+                .unwrap_or(PlaneFamily::Axial);
+
+            ui.horizontal(|ui| {
+                ui.label("Authority:");
+                if ui
+                    .add_enabled(
+                        voxel_ready,
+                        egui::Button::new("Voxel")
+                            .small()
+                            .selected(primary == PrimaryRepresentation::Voxel),
+                    )
+                    .on_hover_text(if voxel_ready {
+                        "Use the current voxel representation as authority."
+                    } else {
+                        "Voxel representation is not current yet."
+                    })
+                    .clicked()
+                    && primary != PrimaryRepresentation::Voxel
+                {
+                    match roi_runtime::promote_current_voxel_cache_to_authority(world, roi_entity) {
+                        Ok(()) => {
+                            activate_promoted_edit_tool(
+                                world,
+                                entities,
+                                EditorTool::Navigation,
+                            );
+                            handlers::set_status_message(
+                                world,
+                                entities,
+                                "Switched ROI to voxel authority.".to_string(),
+                            );
+                            let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
+                        }
+                        Err(error) => handlers::set_status_message(
                             world,
                             entities,
-                            "Cannot extract contours: no active ROI selected.".to_string(),
-                        );
-                        continue;
-                    };
-
-                    match roi_runtime::create_contour_roi_from_voxel_roi(
-                        world, source_roi, family,
-                    ) {
-                        Ok(new_entity) => {
-                            new_active_roi = Some(new_entity);
-                            focus_cursor_on_first_extracted_slice(world, entities, new_entity);
-                            let source_name = world
-                                .get::<&Roi>(source_roi)
-                                .ok()
-                                .map(|roi| roi.metadata.name.clone())
-                                .unwrap_or_else(|| "Voxel ROI".to_string());
-                            let new_name = world
-                                .get::<&Roi>(new_entity)
-                                .ok()
-                                .map(|roi| roi.metadata.name.clone())
-                                .unwrap_or_else(|| "Contour ROI".to_string());
-                            handlers::set_status_message(
-                                world,
-                                entities,
-                                format!(
-                                    "Extracted contour ROI '{new_name}' from voxel ROI '{source_name}'."
-                                ),
-                            );
-                        }
-                        Err(roi_runtime::VoxelContourCreationError::MissingRoi) => {
-                            handlers::set_status_message(
-                                world,
-                                entities,
-                                "Cannot extract contours: active ROI is missing from the scene."
-                                    .to_string(),
-                            );
-                        }
-                        Err(roi_runtime::VoxelContourCreationError::NotVoxelRoi) => {
-                            handlers::set_status_message(
-                                world,
-                                entities,
-                                "Cannot extract contours: active ROI is not voxel-primary."
-                                    .to_string(),
-                            );
-                        }
-                        Err(roi_runtime::VoxelContourCreationError::ExtractionFailed(err)) => {
-                            handlers::set_status_message(
-                                world,
-                                entities,
-                                format!("Contour extraction failed: {err:?}."),
-                            );
-                        }
-                    }
-                }
-            }
-        });
-
-        ui.horizontal(|ui| {
-            if ui
-                .small_button("Create mesh (all non-zero)")
-                .on_hover_text("Create a mesh-primary ROI from all non-zero voxels of the active voxel ROI, or from the active contour ROI's current voxel cache.")
-                .clicked()
-            {
-                let active_roi = world
-                    .get::<&EditorState>(entities.editor)
-                    .ok()
-                    .and_then(|editor| editor.active_roi);
-                if let Some(source_roi) = active_roi {
-                    let source_kind = world
-                        .get::<&Roi>(source_roi)
-                        .ok()
-                        .map(|roi| roi.primary_representation);
-
-                    let result = match source_kind {
-                        Some(PrimaryRepresentation::Voxel) => {
-                            roi_runtime::create_mesh_roi_from_voxel_roi(world, source_roi)
-                                .map_err(|err| match err {
-                                    roi_runtime::VoxelMeshCreationError::MissingRoi => {
-                                        "Cannot create mesh ROI: active ROI is missing from the scene."
-                                            .to_string()
-                                    }
-                                    roi_runtime::VoxelMeshCreationError::NotVoxelRoi => {
-                                        "Cannot create mesh ROI: active ROI is not voxel-primary."
-                                            .to_string()
-                                    }
-                                    roi_runtime::VoxelMeshCreationError::MissingMainVolume => {
-                                        "Cannot create mesh ROI: main display volume is unavailable."
-                                            .to_string()
-                                    }
-                                    roi_runtime::VoxelMeshCreationError::EmptyMeshFromNonEmptySource => {
-                                        "Cannot create mesh ROI: mesh extraction produced no surface from a non-empty voxel ROI.".to_string()
-                                    }
-                                    roi_runtime::VoxelMeshCreationError::ExtractionFailed(err) => {
-                                        format!("Mesh extraction failed: {err:?}.")
-                                    }
-                                })
-                        }
-                        Some(PrimaryRepresentation::Contour) => {
-                            roi_runtime::create_mesh_roi_from_contour_roi(world, source_roi)
-                                .map_err(|err| match err {
-                                    roi_runtime::ContourMeshCreationError::MissingRoi => {
-                                        "Cannot create mesh ROI: active ROI is missing from the scene."
-                                            .to_string()
-                                    }
-                                    roi_runtime::ContourMeshCreationError::NotContourRoi => {
-                                        "Cannot create mesh ROI: active ROI is not contour-primary."
-                                            .to_string()
-                                    }
-                                    roi_runtime::ContourMeshCreationError::MissingCurrentVoxelCache => {
-                                        "Cannot create mesh ROI: contour ROI has no current voxel cache."
-                                            .to_string()
-                                    }
-                                    roi_runtime::ContourMeshCreationError::ExtractionFailed(err) => {
-                                        format!("Mesh extraction failed: {err:?}.")
-                                    }
-                                })
-                        }
-                        Some(PrimaryRepresentation::Mesh) => {
-                            Err("Cannot create mesh ROI: active ROI is already mesh-primary."
-                                .to_string())
-                        }
-                        None => Err(
-                            "Cannot create mesh ROI: active ROI is missing from the scene."
-                                .to_string(),
+                            format!("Voxel promotion failed: {error:?}."),
                         ),
-                    };
-
-                    match result {
-                        Ok(new_entity) => {
-                            new_active_roi = Some(new_entity);
-                            let source_name = world
-                                .get::<&Roi>(source_roi)
-                                .ok()
-                                .map(|roi| roi.metadata.name.clone())
-                                .unwrap_or_else(|| "ROI".to_string());
-                            let new_name = world
-                                .get::<&Roi>(new_entity)
-                                .ok()
-                                .map(|roi| roi.metadata.name.clone())
-                                .unwrap_or_else(|| "Mesh ROI".to_string());
+                    }
+                }
+                if ui
+                    .add_enabled(
+                        voxel_ready || primary == PrimaryRepresentation::Contour,
+                        egui::Button::new("Contour")
+                            .small()
+                            .selected(primary == PrimaryRepresentation::Contour),
+                    )
+                    .on_hover_text(if voxel_ready || primary == PrimaryRepresentation::Contour {
+                        "Use contours from the active 2D plane family as authority."
+                    } else {
+                        "Voxel representation must be current before contour conversion."
+                    })
+                    .clicked()
+                    && primary != PrimaryRepresentation::Contour
+                {
+                    match roi_runtime::promote_roi_to_contour_authority(
+                        world,
+                        roi_entity,
+                        target_contour_family,
+                    ) {
+                        Ok(()) => {
+                            focus_cursor_on_first_extracted_slice(world, entities, roi_entity);
+                            activate_promoted_edit_tool(
+                                world,
+                                entities,
+                                EditorTool::ContourSelect,
+                            );
                             handlers::set_status_message(
                                 world,
                                 entities,
                                 format!(
-                                    "Created mesh ROI '{new_name}' from all non-zero voxels in '{source_name}'."
+                                    "Switched ROI to {target_contour_family:?} contour authority."
                                 ),
                             );
+                            let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
                         }
-                        Err(message) => handlers::set_status_message(world, entities, message),
+                        Err(error) => handlers::set_status_message(
+                            world,
+                            entities,
+                            format!("Contour promotion failed: {error:?}."),
+                        ),
                     }
+                }
+                let mesh_hover = if mesh_ready {
+                    "Use the current mesh representation as authority.".to_string()
                 } else {
-                    handlers::set_status_message(
-                        world,
-                        entities,
-                        "Cannot create mesh ROI: no active ROI selected.".to_string(),
-                    );
+                    format!("Mesh representation is {}.", mesh_status.state.as_str())
+                };
+                if ui
+                    .add_enabled(
+                        mesh_ready,
+                        egui::Button::new("Mesh")
+                            .small()
+                            .selected(primary == PrimaryRepresentation::Mesh),
+                    )
+                    .on_hover_text(mesh_hover)
+                    .clicked()
+                    && primary != PrimaryRepresentation::Mesh
+                {
+                    match roi_runtime::promote_current_mesh_cache_to_authority(world, roi_entity) {
+                        Ok(()) => {
+                            activate_promoted_edit_tool(world, entities, EditorTool::MeshDeform);
+                            handlers::set_status_message(
+                                world,
+                                entities,
+                                "Switched ROI to mesh authority.".to_string(),
+                            );
+                            let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
+                        }
+                        Err(error) => handlers::set_status_message(
+                            world,
+                            entities,
+                            format!("Mesh promotion failed: {error:?}."),
+                        ),
+                    }
+                }
+            });
+        }
+
+        let active_mesh_roi = new_active_roi.filter(|entity| {
+            world.get::<&Roi>(*entity).is_ok_and(|roi| {
+                roi.primary_representation == PrimaryRepresentation::Mesh
+            })
+        });
+        if let Some(mesh_entity) = active_mesh_roi {
+            let (has_mesh_preview, mut brush_radius_mm, mut brush_strength) = world
+                .get::<&EditorState>(entities.editor)
+                .map(|editor| {
+                    (
+                        editor
+                            .mesh_edit_preview
+                            .as_ref()
+                            .is_some_and(|preview| preview.roi_entity == mesh_entity),
+                        editor.mesh_brush_radius_mm,
+                        editor.mesh_brush_strength,
+                    )
+                })
+                .unwrap_or((false, 12.0, 1.0));
+            let radius_changed = ui
+                .add(egui::Slider::new(&mut brush_radius_mm, 1.0..=50.0).text("Brush radius mm"))
+                .changed();
+            let strength_changed = ui
+                .add(egui::Slider::new(&mut brush_strength, 0.1..=2.0).text("Strength"))
+                .changed();
+            if radius_changed || strength_changed {
+                if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
+                    editor.mesh_brush_radius_mm = brush_radius_mm;
+                    editor.mesh_brush_strength = brush_strength;
                 }
             }
-        });
+            ui.horizontal(|ui| {
+                if has_mesh_preview {
+                    if ui.small_button("Commit").clicked() {
+                        if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+                            input.mesh_move_pending_commit = false;
+                        }
+                        match roi_runtime::commit_mesh_edit_preview(world, entities.editor) {
+                            Ok(()) => {
+                                handlers::set_status_message(
+                                    world,
+                                    entities,
+                                    "Committed mesh edit; derived voxel/contour views queued."
+                                        .to_string(),
+                                );
+                                ctx.request_repaint();
+                            }
+                            Err(error) => handlers::set_status_message(
+                                world,
+                                entities,
+                                format!("Mesh commit failed: {error:?}."),
+                            ),
+                        }
+                    }
+                    if ui.small_button("Cancel").clicked() {
+                        if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+                            input.mesh_move_pending_commit = false;
+                        }
+                        match roi_runtime::cancel_mesh_edit_preview(world, entities.editor) {
+                            Ok(()) => {
+                                handlers::set_status_message(
+                                    world,
+                                    entities,
+                                    "Cancelled mesh edit preview.".to_string(),
+                                );
+                                ctx.request_repaint();
+                            }
+                            Err(error) => handlers::set_status_message(
+                                world,
+                                entities,
+                                format!("Mesh preview cancel failed: {error:?}."),
+                            ),
+                        }
+                    }
+                }
+            });
+        }
 
         let mut active_contour_plane_family = new_active_roi.and_then(|entity| {
             world
@@ -506,21 +521,120 @@ pub fn draw_sidebar(
 
             if active_contour_plane_family != Some(current_family) {
                 if let Some(new_family) = active_contour_plane_family {
-                    if let Err(err) =
-                        roi_runtime::set_active_contour_plane_family(world, entity, new_family)
-                    {
-                        let message = match err {
-                            roi_runtime::ContourPlaneFamilySwitchError::MissingRoi => {
-                                "Cannot set contour plane family: active ROI is missing.".to_string()
+                    match roi_runtime::set_active_contour_plane_family(world, entity, new_family) {
+                        Ok(()) => {}
+                        Err(roi_runtime::ContourPlaneFamilySwitchError::RequiresConversion) => {
+                            match promote_contour_family_for_active_view(
+                                world, entities, entity, new_family,
+                            ) {
+                                Ok(()) => {
+                                    roi_runtime::clear_roi_edit_history_for_roi(
+                                        world,
+                                        entities.editor,
+                                        entity,
+                                    );
+                                    handlers::set_status_message(
+                                        world,
+                                        entities,
+                                        format!("Switched contour authority to {new_family:?}."),
+                                    )
+                                }
+                                Err(error) => handlers::set_status_message(
+                                    world,
+                                    entities,
+                                    format!("Contour family switch failed: {error}."),
+                                ),
                             }
-                            roi_runtime::ContourPlaneFamilySwitchError::NotContourRoi => {
+                        }
+                        Err(roi_runtime::ContourPlaneFamilySwitchError::MissingRoi) => {
+                            handlers::set_status_message(
+                                world,
+                                entities,
+                                "Cannot set contour plane family: active ROI is missing."
+                                    .to_string(),
+                            )
+                        }
+                        Err(roi_runtime::ContourPlaneFamilySwitchError::NotContourRoi) => {
+                            handlers::set_status_message(
+                                world,
+                                entities,
                                 "Cannot set contour plane family: active ROI is not contour-primary."
+                                    .to_string(),
+                            )
+                        }
+                    }
+                }
+            }
+
+            if let Some(view_key) = active_viewport_contour_view_key(world, entities, entity) {
+                let contour_status = roi_runtime::request_contour_view_state(world, entity, &view_key);
+                ui.label(format!(
+                    "Displayed view: {:?} ({})",
+                    view_key.family,
+                    contour_status.request.state.as_str()
+                ));
+                if let Some(reason) = contour_status.request.reason.as_deref() {
+                    ui.small(reason);
+                }
+                if view_key.family != current_family
+                    && ui.small_button("Make displayed view editable").clicked()
+                {
+                    if contour_status.promotable {
+                        match roi_runtime::promote_contour_view_to_authoritative(
+                            world, entity, &view_key,
+                        ) {
+                            Ok(()) => {
+                                roi_runtime::clear_roi_edit_history_for_roi(
+                                    world,
+                                    entities.editor,
+                                    entity,
+                                );
+                                handlers::set_status_message(
+                                    world,
+                                    entities,
+                                    format!(
+                                        "Promoted {:?} contour view to authoritative editing.",
+                                        view_key.family
+                                    ),
+                                );
+                                ctx.request_repaint();
+                            }
+                            Err(err) => handlers::set_status_message(
+                                world,
+                                entities,
+                                format!("Contour view promotion failed: {err:?}."),
+                            ),
+                        }
+                    } else {
+                        let message = match contour_status.request.state {
+                            roi_runtime::RepresentationRequestState::Current => {
+                                "Displayed contour view is already authoritative.".to_string()
+                            }
+                            roi_runtime::RepresentationRequestState::Stale => {
+                                "Displayed contour view is stale; rebuild the voxel cache before promotion."
                                     .to_string()
                             }
-                            roi_runtime::ContourPlaneFamilySwitchError::RequiresConversion => {
-                                "Cannot switch contour plane family when contour loops already exist."
+                            roi_runtime::RepresentationRequestState::Preview => {
+                                "Displayed contour view is a live preview; commit and wait for the current cache before promotion."
                                     .to_string()
                             }
+                            roi_runtime::RepresentationRequestState::Queued => {
+                                "Displayed contour view rebuild is queued; wait for current data before promotion."
+                                    .to_string()
+                            }
+                            roi_runtime::RepresentationRequestState::Rebuilding => {
+                                "Displayed contour view is rebuilding; wait for the voxel cache rebuild to finish."
+                                    .to_string()
+                            }
+                            roi_runtime::RepresentationRequestState::Blocked
+                            | roi_runtime::RepresentationRequestState::Unsupported => format!(
+                                "Displayed contour view cannot be promoted: {}.",
+                                contour_status
+                                    .request
+                                    .reason
+                                    .as_deref()
+                                    .unwrap_or("no promotable derived view is available")
+                            ),
                         };
                         handlers::set_status_message(world, entities, message);
                     }
@@ -576,25 +690,15 @@ pub fn draw_sidebar(
                 }
             });
 
-            if ui
-                .small_button("Insert test contour (dev)")
-                .on_hover_text("Temporary helper: seed a closed contour loop on the active contour plane.")
-                .clicked()
-            {
-                match insert_test_contour_loop(world, entities, entity) {
-                    Ok(()) => {
-                        handlers::set_status_message(
-                            world,
-                            entities,
-                            "Inserted test contour loop for active ROI.".to_string(),
-                        );
-                        ctx.request_repaint();
-                    }
-                    Err(message) => handlers::set_status_message(world, entities, message),
-                }
-            }
-
-            ui.horizontal(|ui| {
+            let show_contour_point_controls = Some(entity) == new_active_roi
+                && world.get::<&Roi>(entity).is_ok_and(|roi| {
+                    roi.primary_representation == PrimaryRepresentation::Contour
+                })
+                && world
+                    .get::<&EditorState>(entities.editor)
+                    .is_ok_and(|editor| editor.active_tool == EditorTool::ContourSelect);
+            if show_contour_point_controls {
+                ui.horizontal(|ui| {
                 if ui
                     .small_button("Insert Point")
                     .on_hover_text("Insert a point in the selected loop.")
@@ -643,10 +747,15 @@ pub fn draw_sidebar(
                         ),
                     }
                 }
-            });
+                });
+            }
         }
 
         if new_active_roi != active_roi {
+            if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+                input.contour_move_pending_commit = false;
+                input.mesh_move_pending_commit = false;
+            }
             crate::systems::clear_contour_draft_for_roi_change(
                 world,
                 entities.editor,
@@ -732,7 +841,7 @@ pub fn draw_sidebar(
     ui.collapsing("⌨ Controls", |ui| {
         ui.label("LMB: Set crosshair");
         ui.label("MMB: Pan");
-        ui.label("RMB: Rotate (3D)");
+        ui.label("RMB: Rotate (3D / Oblique)");
         ui.label("Scroll: Zoom / Slice");
         ui.label("Ctrl+Scroll: 2D Zoom");
     });

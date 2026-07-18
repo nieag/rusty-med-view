@@ -89,6 +89,15 @@ pub struct QaSnapshotRoi {
     pub overlay_slot: Option<u32>,
     pub voxel_dimensions: Option<[u32; 3]>,
     pub non_empty_voxel_bounds: Option<[[u32; 3]; 2]>,
+    pub preview_active: bool,
+    pub preview_revision: u64,
+    pub running_job: Option<String>,
+    pub pending_jobs: Vec<String>,
+    pub completed_job_count: u64,
+    pub discarded_job_count: u64,
+    pub failed_job_count: u64,
+    pub last_job_duration_ms: f32,
+    pub max_job_queue_depth: usize,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -122,6 +131,8 @@ pub struct QaSnapshotRender {
     pub overlay_slots_max: u32,
     pub contour_batch_count: u32,
     pub mesh_batch_count: u32,
+    pub mesh_chunks_uploaded: u32,
+    pub mesh_chunks_reused: u32,
     pub last_warning: Option<String>,
     pub last_error: Option<String>,
 }
@@ -200,6 +211,8 @@ pub struct QaRuntime {
     pub viewport_uniform_count: u32,
     pub contour_batch_count: u32,
     pub mesh_batch_count: u32,
+    pub mesh_chunks_uploaded: u32,
+    pub mesh_chunks_reused: u32,
     pub last_render_warning: Option<String>,
     pub last_render_error: Option<String>,
 }
@@ -248,6 +261,8 @@ impl QaRuntime {
             viewport_uniform_count: 0,
             contour_batch_count: 0,
             mesh_batch_count: 0,
+            mesh_chunks_uploaded: 0,
+            mesh_chunks_reused: 0,
             last_render_warning: None,
             last_render_error: None,
         }

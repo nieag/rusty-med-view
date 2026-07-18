@@ -18,6 +18,16 @@ pub fn get_protocol_registry() -> Vec<HangingProtocol> {
             ],
         },
         HangingProtocol {
+            name: "ROI MPR + Oblique".to_string(),
+            viewports: vec![
+                (ViewMode::Axial, [0.0, 0.0, 1.0 / 3.0, 0.5]),
+                (ViewMode::Coronal, [1.0 / 3.0, 0.0, 1.0 / 3.0, 0.5]),
+                (ViewMode::Sagittal, [2.0 / 3.0, 0.0, 1.0 / 3.0, 0.5]),
+                (ViewMode::Oblique, [0.0, 0.5, 0.5, 0.5]),
+                (ViewMode::ThreeD, [0.5, 0.5, 0.5, 0.5]),
+            ],
+        },
+        HangingProtocol {
             name: "Single Axial".to_string(),
             viewports: vec![(ViewMode::Axial, [0.0, 0.0, 1.0, 1.0])],
         },
@@ -184,5 +194,35 @@ pub fn swap_viewports(
         };
         vp_b.mode = mode_a;
         *vs_b = state_a;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_roi_mpr_protocol_exposes_oblique_rotation_with_other_views() {
+        let registry = get_protocol_registry();
+        let protocol = registry
+            .iter()
+            .find(|protocol| protocol.name == "ROI MPR + Oblique")
+            .expect("ROI MPR protocol");
+
+        for mode in [
+            ViewMode::Axial,
+            ViewMode::Coronal,
+            ViewMode::Sagittal,
+            ViewMode::Oblique,
+            ViewMode::ThreeD,
+        ] {
+            assert!(
+                protocol
+                    .viewports
+                    .iter()
+                    .any(|(viewport_mode, _)| *viewport_mode == mode),
+                "missing {mode:?} viewport"
+            );
+        }
     }
 }

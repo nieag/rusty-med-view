@@ -189,3 +189,19 @@ Manual checks:
 - Mesh-derived contour views route through voxel cache.
 - 2D MPR + 3D state remains coherent.
 - Unsupported/invalid mesh cases report blockers, not silent failure.
+
+## Implementation Status
+
+Status: complete through ROI closeout R2/R3 engine checkpoints.
+
+Completed:
+
+- target grid uses explicit main-volume geometry
+- closed/non-manifold/inconsistent mesh validation
+- deterministic mesh-to-voxel conversion through ROI world/index transforms
+- queued CPU rebuild, GPU upload, bind-group refresh, overlay, and stats
+- mesh-derived contour views through current voxel cache
+- minimal mesh translation mutation with generation invalidation
+- non-authoritative mesh preview with commit/cancel
+- direct mesh-plane preview contours before exact voxel-mediated reconciliation
+- native and WASM unit/compile coverage

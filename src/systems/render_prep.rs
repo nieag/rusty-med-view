@@ -76,18 +76,32 @@ pub fn sys_prepare_render_data(
     } else {
         user_rotation
     };
+    let mut oblique_origin_uv = [0.0; 4];
+    let mut oblique_u_dir_length = [0.0; 4];
+    let mut oblique_v_dir_length = [0.0; 4];
+    if view_mode == ViewMode::Oblique as u32 {
+        if let Some(geometry) = main_geometry {
+            if let Some(plane) = crate::convert::oblique_plane_from_view_rotation(
+                [cursor_pos[0], cursor_pos[1], cursor_pos[2]],
+                user_rotation,
+                geometry,
+            ) {
+                if let Some((u_dir, v_dir, u_length, v_length)) =
+                    crate::convert::oblique_volume_uv_basis_and_lengths(plane, geometry)
+                {
+                    let origin_uv =
+                        crate::convert::world_mm_to_volume_uv(plane.origin_mm, geometry);
+                    oblique_origin_uv = [origin_uv[0], origin_uv[1], origin_uv[2], 0.0];
+                    oblique_u_dir_length = [u_dir[0], u_dir[1], u_dir[2], u_length];
+                    oblique_v_dir_length = [v_dir[0], v_dir[1], v_dir[2], v_length];
+                }
+            }
+        }
+    }
 
     // 6. Get Overlay Info
     let mut overlay_flags = 0u32;
-    let mut overlay_opacities = [0.0f32; 4];
-    let mut overlay1_dims = [0u32; 4];
-    let mut overlay2_dims = [0u32; 4];
-    let mut overlay1_main_to_roi_row0 = [0.0, 0.0, 0.0, 0.0];
-    let mut overlay1_main_to_roi_row1 = [0.0, 0.0, 0.0, 0.0];
-    let mut overlay1_main_to_roi_row2 = [0.0, 0.0, 0.0, 0.0];
-    let mut overlay2_main_to_roi_row0 = [0.0, 0.0, 0.0, 0.0];
-    let mut overlay2_main_to_roi_row1 = [0.0, 0.0, 0.0, 0.0];
-    let mut overlay2_main_to_roi_row2 = [0.0, 0.0, 0.0, 0.0];
+    let mut voxel_overlays = [VoxelOverlayUniform::default(); MAX_VOXEL_OVERLAY_SLOTS];
     let active_roi = world
         .get::<&EditorState>(entities.editor)
         .ok()
@@ -97,8 +111,9 @@ pub fn sys_prepare_render_data(
             .into_iter()
             .enumerate()
     {
-        overlay_flags |= 1 << layer_count;
-        overlay_opacities[layer_count] = overlay.opacity;
+        if layer_count >= MAX_VOXEL_OVERLAY_SLOTS {
+            break;
+        }
         let Some(main_geometry) = main_geometry else {
             continue;
         };
@@ -114,31 +129,19 @@ pub fn sys_prepare_render_data(
         else {
             continue;
         };
-        match layer_count {
-            0 => {
-                overlay1_dims = [
-                    roi_geometry.dimensions[0],
-                    roi_geometry.dimensions[1],
-                    roi_geometry.dimensions[2],
-                    0,
-                ];
-                overlay1_main_to_roi_row0 = main_to_roi[0];
-                overlay1_main_to_roi_row1 = main_to_roi[1];
-                overlay1_main_to_roi_row2 = main_to_roi[2];
-            }
-            1 => {
-                overlay2_dims = [
-                    roi_geometry.dimensions[0],
-                    roi_geometry.dimensions[1],
-                    roi_geometry.dimensions[2],
-                    0,
-                ];
-                overlay2_main_to_roi_row0 = main_to_roi[0];
-                overlay2_main_to_roi_row1 = main_to_roi[1];
-                overlay2_main_to_roi_row2 = main_to_roi[2];
-            }
-            _ => {}
-        }
+        overlay_flags |= 1 << layer_count;
+        voxel_overlays[layer_count] = VoxelOverlayUniform {
+            dimensions: [
+                roi_geometry.dimensions[0],
+                roi_geometry.dimensions[1],
+                roi_geometry.dimensions[2],
+                0,
+            ],
+            opacity: [overlay.opacity, 0.0, 0.0, 0.0],
+            main_to_roi_row0: main_to_roi[0],
+            main_to_roi_row1: main_to_roi[1],
+            main_to_roi_row2: main_to_roi[2],
+        };
     }
 
     // 7. Get Windowing Info (HU-based)
@@ -157,21 +160,16 @@ pub fn sys_prepare_render_data(
         cursor_pos,
         volume_dims,
         volume_spacing,
-        overlay1_dims,
-        overlay2_dims,
-        overlay_opacities,
-        overlay1_main_to_roi_row0,
-        overlay1_main_to_roi_row1,
-        overlay1_main_to_roi_row2,
-        overlay2_main_to_roi_row0,
-        overlay2_main_to_roi_row1,
-        overlay2_main_to_roi_row2,
+        voxel_overlays,
         window_params,
         resolution,
         mouse_uv,
         pan,
         zoom_pivot,
         rotation: composed_rotation,
+        oblique_origin_uv,
+        oblique_u_dir_length,
+        oblique_v_dir_length,
         overlay_mouse_uv: mouse_uv,
         overlay_primitive_count: 0,
         overlay_dragging_idx: u32::MAX,

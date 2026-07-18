@@ -24,7 +24,7 @@ Each ROI has exactly one authoritative representation at a time. Other represent
 - Treat mesh editing as an explicit mesh-primary deformation workflow, not a general-purpose mesh editor.
 - Allow only one active contour plane family to be editable at a time per ROI.
 - Authoritative voxel ROI state must carry its own spatial metadata; later phases must not rely on borrowing geometry from the current main volume by convention.
-- The current renderer only supports two simultaneous ROI overlay textures; until that changes, the limit must be explicit in the runtime or UI rather than silently truncating visible ROIs.
+- The renderer supports eight simultaneous ROI overlay textures in one pass; additional visible voxel ROIs remain explicitly truncated in runtime and QA state.
 - `egui` is GUI only; ROI geometry, contours, mesh surfaces/wireframes, segmentation overlays, and viewport clipping must use native wgpu renderer paths. See [docs/rendering-architecture.md](/Users/nieage/dev/git/rust_starter_app/docs/rendering-architecture.md:1).
 - ROI/image spatial alignment must use one central geometry contract: representation-native index/point space -> representation geometry -> patient/world millimetres -> viewport projection. Voxel overlays, contours, meshes, picking, and conversion helpers must not each invent local coordinate paths.
 
@@ -504,6 +504,20 @@ Acceptance:
 - cache growth is bounded
 - conversion work remains observable and incremental
 
+### ROI Multi-Representation Closeout
+
+The original Subplan 9.3 and Subplan 10 scopes are necessary but not sufficient for live bidirectional editing. The canonical closeout sequence is now defined in [docs/roi-multi-representation-closeout-plan.md](/Users/nieage/dev/git/rust_starter_app/docs/roi-multi-representation-closeout-plan.md:1).
+
+It adds:
+
+- preview versus committed consistency semantics
+- dependency-aware conversion scheduling and supersession
+- mesh-to-voxel correctness plus direct mesh-plane preview intersections
+- incremental contour-to-voxel-to-mesh updates
+- measurable interactive latency gates
+- multi-ROI and oblique rendering completion
+- screenshot-assisted browser visual QA
+
 ## Dependency Order
 
 Required implementation order:
@@ -600,9 +614,22 @@ Current Phase:
 - `Subplan 8.1 Spatial Geometry Contract` complete from [docs/subplan-8-1-spatial-geometry-contract-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-8-1-spatial-geometry-contract-handoff.md:1)
 - `Subplan 9: Rendering Integration Layer` complete (render-view adapters wired through runtime/render prep/QA facts; overlay cap explicit and asserted)
 - `Subplan 9.1: Representation Orchestration and Contour View Caches` complete from [docs/subplan-9-1-representation-orchestration-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-9-1-representation-orchestration-handoff.md:1)
-- `Subplan 9.2: Voxel/Contour Functional Closeout` implementation handoff written in [docs/subplan-9-2-voxel-contour-functional-closeout-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-9-2-voxel-contour-functional-closeout-handoff.md:1)
+- `Subplan 9.2: Voxel/Contour Functional Closeout` complete from [docs/subplan-9-2-voxel-contour-functional-closeout-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-9-2-voxel-contour-functional-closeout-handoff.md:1)
+- post-9.2 review fixes complete: main-display contour projection, requested-slice extraction, hole-preserving topology, cache/GPU state separation, adapter alignment, visibility, and contour scissoring
 - `Subplan 9.3: Mesh-Primary Functional Closeout` implementation handoff written in [docs/subplan-9-3-mesh-primary-functional-closeout-handoff.md](/Users/nieage/dev/git/rust_starter_app/docs/subplan-9-3-mesh-primary-functional-closeout-handoff.md:1)
-- next checkpoint: `Subplan 9.2: Voxel/Contour Functional Closeout`
+- `ROI Multi-Representation Closeout R1-R3` complete
+- `ROI Multi-Representation Closeout R4` implementation complete: contour preview raster/cross-plane path, dirty-AABB chunked mesh extraction, four-millisecond resumable execution, and retained changed-chunk GPU uploads
+- `ROI Multi-Representation Closeout R5` bidirectional editing core complete: projected 3D vertex selection, radius/strength mesh brush, revisioned preview, direct 2D intersections, WGPU handle, and release commit
+- same-ROI authority promotion complete for voxel-derived contour families and current derived meshes; identity, metadata, and compatible caches are retained
+- cache-gated reverse promotion complete: contour or mesh authority can return to current voxel authority, then reuse current contour/mesh representations without creating another ROI
+- contour interaction fixup complete: egui-consumed pointer motion no longer leaves stale scene coordinates; axial/coronal/sagittal commits update retained voxel slabs and committed mesh extraction is frame-budgeted
+- R5 authoritative commit undo/redo complete for contour and mesh edits; previews are excluded, history is bounded, and restores use normal cache invalidation/rebuild
+- R6 eight-ROI voxel compositing complete: one shared LUT, per-ROI geometry/opacity uniforms, deterministic active-first ordering, and explicit ninth-overlay truncation
+- R6 multi-contour rendering complete: all visible contour ROIs render with stable active-first ordering and per-layer opacity, while editing affordances remain active-only
+- R6 oblique spatial/rendering path complete: shared CPU/GPU plane basis, geometry-aware voxel sampling, view-specific contour extraction, exact displayed-view promotion, and multi-plane-safe committed rasterization
+- R6 ROI MPR protocol complete: axial, coronal, sagittal, RMB-rotatable oblique, and 3D viewports are simultaneously available in the QA workflow
+- oblique dirty-slice edits currently use a correctness-first full-contour voxel rebuild; incremental arbitrary-plane rasterization remains performance work
+- next checkpoint: manual oblique alignment acceptance, then representative-volume R7 performance/closeout QA
 
 Completed:
 - `1453511` Baseline: remove legacy segmentation stack

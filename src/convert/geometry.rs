@@ -172,6 +172,15 @@ pub fn world_mm_to_plane_local_mm(world: [f32; 3], plane: PlaneDefinition) -> [f
     [delta.dot(u_axis), delta.dot(v_axis)]
 }
 
+pub fn reproject_plane_local_mm(
+    local: [f32; 2],
+    source_plane: PlaneDefinition,
+    target_plane: PlaneDefinition,
+) -> [f32; 2] {
+    let world = plane_local_mm_to_world_mm(local, source_plane);
+    world_mm_to_plane_local_mm(world, target_plane)
+}
+
 fn orthogonal_family(plane: PlaneDefinition) -> Option<PlaneFamily> {
     match plane.family {
         PlaneFamily::Axial | PlaneFamily::Coronal | PlaneFamily::Sagittal => Some(plane.family),
@@ -246,6 +255,17 @@ fn oblique_uv_basis_and_lengths(
     .length()
     .max(1e-3);
     Some((u_dir, v_dir, lu, lv))
+}
+
+pub fn oblique_volume_uv_basis_and_lengths(
+    plane: PlaneDefinition,
+    geometry: VoxelGeometry,
+) -> Option<([f32; 3], [f32; 3], f32, f32)> {
+    if plane.family != PlaneFamily::Oblique {
+        return None;
+    }
+    let (u_dir, v_dir, u_length, v_length) = oblique_uv_basis_and_lengths(plane, geometry)?;
+    Some((u_dir.to_array(), v_dir.to_array(), u_length, v_length))
 }
 
 fn screen_uv_to_volume_uv_for_family(
@@ -687,6 +707,27 @@ mod tests {
         assert!(approx_eq_scalar(local_roundtrip[1], local[1], 1e-6));
     }
 
+    #[test]
+    fn test_reproject_plane_local_mm_preserves_world_position_across_coplanar_frames() {
+        let geometry = identity_geometry();
+        let source =
+            orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.2], geometry).unwrap();
+        let source_u = Vec3::from_array(source.u_axis_mm);
+        let source_v = Vec3::from_array(source.v_axis_mm);
+        let mut target = source;
+        target.origin_mm =
+            (Vec3::from_array(source.origin_mm) + source_u * 12.0 + source_v * 7.0).to_array();
+        target.u_axis_mm = source_v.to_array();
+        target.v_axis_mm = (-source_u).to_array();
+        let source_local = [3.0, -4.0];
+
+        let target_local = reproject_plane_local_mm(source_local, source, target);
+
+        let source_world = plane_local_mm_to_world_mm(source_local, source);
+        let target_world = plane_local_mm_to_world_mm(target_local, target);
+        assert!(approx_eq(source_world, target_world, 1e-5));
+    }
+
     fn legacy_viewport_uv_to_volume_uv(
         family: PlaneFamily,
         viewport_uv: [f32; 2],
@@ -961,5 +1002,47 @@ mod tests {
             rotation,
         );
         assert!(approx_eq(new_pos, legacy_pos, 1e-5));
+    }
+
+    #[test]
+    fn test_shared_oblique_uniform_basis_matches_viewport_mapping_for_oriented_geometry() {
+        let geometry = VoxelGeometry {
+            dimensions: [120, 96, 84],
+            spacing: [0.7, 1.0, 1.4],
+            origin: [12.0, -7.0, 3.0],
+            orientation: Quat::from_euler(glam::EulerRot::XYZ, 0.2, -0.3, 0.1).to_array(),
+        };
+        let cursor_uv = [0.45, 0.55, 0.4];
+        let plane = oblique_plane_from_view_rotation(
+            cursor_uv,
+            Quat::from_euler(glam::EulerRot::XYZ, 0.35, -0.2, 0.45).to_array(),
+            geometry,
+        )
+        .unwrap();
+        let mapping = ViewportMapping {
+            zoom: 1.2,
+            pan: [0.03, -0.04],
+            pivot: [0.5, 0.5],
+            screen_aspect: 16.0 / 10.0,
+        };
+        let viewport_uv = [0.2, 0.75];
+        let expected = viewport_uv_to_volume_uv(viewport_uv, plane, geometry, mapping).unwrap();
+        let (u_dir, v_dir, u_length, v_length) =
+            oblique_volume_uv_basis_and_lengths(plane, geometry).unwrap();
+        let slice_aspect = u_length / v_length;
+        let k = mapping.screen_aspect / slice_aspect;
+        let screen_uv = [
+            ((viewport_uv[0] - mapping.pivot[0]) * k) / mapping.zoom
+                + mapping.pivot[0]
+                + mapping.pan[0],
+            (viewport_uv[1] - mapping.pivot[1]) / mapping.zoom + mapping.pivot[1] + mapping.pan[1],
+        ];
+        let origin_uv = world_mm_to_volume_uv(plane.origin_mm, geometry);
+        let shader_equivalent = (Vec3::from_array(origin_uv)
+            + Vec3::from_array(u_dir) * ((0.5 - screen_uv[0]) * u_length)
+            + Vec3::from_array(v_dir) * ((0.5 - screen_uv[1]) * v_length))
+            .to_array();
+
+        assert!(approx_eq(shader_equivalent, expected, 1e-5));
     }
 }

@@ -7,6 +7,18 @@ use hecs::World;
 use winit::event::{ElementState, MouseButton};
 use winit::keyboard::ModifiersState;
 
+const CONTOUR_DRAG_THRESHOLD_PX: f32 = 2.0;
+
+fn drag_exceeds_threshold_px(
+    start_uv: [f32; 2],
+    current_uv: [f32; 2],
+    viewport_size_px: [f32; 2],
+) -> bool {
+    let delta_x = (current_uv[0] - start_uv[0]) * viewport_size_px[0];
+    let delta_y = (current_uv[1] - start_uv[1]) * viewport_size_px[1];
+    delta_x * delta_x + delta_y * delta_y >= CONTOUR_DRAG_THRESHOLD_PX * CONTOUR_DRAG_THRESHOLD_PX
+}
+
 fn set_status_message(world: &mut World, entities: &AppEntities, message: String) {
     if let Ok(mut gui_state) = world.get::<&mut GuiState>(entities.gui_state) {
         gui_state.status_message = Some(message);
@@ -62,6 +74,7 @@ pub fn sys_handle_mouse_button(
     let mut active_vp = None;
     let mut alt_pressed = false;
     let mut finalize_contour_move = false;
+    let mut finalize_mesh_move = false;
 
     if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
         active_vp = input.active_viewport;
@@ -104,11 +117,29 @@ pub fn sys_handle_mouse_button(
                 finalize_contour_move = true;
                 input.contour_move_pending_commit = false;
             }
+            if input.mesh_move_pending_commit {
+                finalize_mesh_move = true;
+                input.mesh_move_pending_commit = false;
+            }
         }
     }
 
     if finalize_contour_move {
         let _ = crate::systems::finalize_selected_point_move(world, entities);
+    }
+    if finalize_mesh_move {
+        match crate::app::roi_runtime::commit_mesh_edit_preview(world, entities.editor) {
+            Ok(()) => set_status_message(
+                world,
+                entities,
+                "Committed mesh deformation; exact derived views queued.".to_string(),
+            ),
+            Err(error) => set_status_message(
+                world,
+                entities,
+                format!("Mesh deformation commit failed: {error:?}."),
+            ),
+        }
     }
 
     let ctrl_pressed = if let Ok(input) = world.get::<&InputState>(entities.input) {
@@ -206,6 +237,24 @@ pub fn sys_handle_mouse_button(
                     );
                 }
                 Err(_) => {}
+            }
+            return;
+        }
+        if active_tool == EditorTool::MeshDeform {
+            let click_pos = world
+                .get::<&InputState>(entities.input)
+                .map(|input| input.mouse_uv)
+                .unwrap_or([0.5, 0.5]);
+            match crate::systems::select_mesh_vertex(world, entities, click_pos) {
+                Ok(Some(_)) => {
+                    set_status_message(world, entities, "Selected mesh vertex.".to_string())
+                }
+                Ok(None) => {}
+                Err(error) => set_status_message(
+                    world,
+                    entities,
+                    format!("Mesh selection blocked: {error:?}."),
+                ),
             }
             return;
         }
@@ -358,6 +407,7 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
 
     let mut crosshair_update = None;
     let mut contour_move_update = None;
+    let mut mesh_move_update = None;
 
     if let (Ok(vp), Ok(mut vs)) = (
         world.get::<&Viewport>(avp),
@@ -385,8 +435,22 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
             if is_dragging && !is_panning && !is_rotating {
                 if active_tool == EditorTool::Navigation {
                     crosshair_update = Some((avp, input.mouse_uv));
-                } else if active_tool == EditorTool::ContourSelect {
+                } else if active_tool == EditorTool::ContourSelect
+                    && drag_exceeds_threshold_px(
+                        input.drag_start_pos,
+                        input.mouse_uv,
+                        [vp.rect[2], vp.rect[3]],
+                    )
+                {
                     contour_move_update = Some(input.mouse_uv);
+                } else if active_tool == EditorTool::MeshDeform
+                    && drag_exceeds_threshold_px(
+                        input.drag_start_pos,
+                        input.mouse_uv,
+                        [vp.rect[2], vp.rect[3]],
+                    )
+                {
+                    mesh_move_update = Some(input.mouse_uv);
                 }
             }
         }
@@ -450,5 +514,76 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
                 input.contour_move_pending_commit = true;
             }
         }
+    }
+    if let Some(uv) = mesh_move_update {
+        if crate::systems::update_selected_mesh_deform_preview(world, entities, uv).is_ok() {
+            if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+                input.mesh_move_pending_commit = true;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hecs::Entity;
+
+    #[test]
+    fn test_contour_selection_click_does_not_cross_drag_threshold() {
+        assert!(!drag_exceeds_threshold_px(
+            [0.5, 0.5],
+            [0.501, 0.501],
+            [500.0, 500.0],
+        ));
+    }
+
+    #[test]
+    fn test_contour_point_motion_crosses_drag_threshold() {
+        assert!(drag_exceeds_threshold_px(
+            [0.5, 0.5],
+            [0.51, 0.5],
+            [500.0, 500.0],
+        ));
+    }
+
+    #[test]
+    fn test_mouse_drag_rotates_oblique_viewport() {
+        let mut world = World::new();
+        let viewport = world.spawn((
+            Viewport {
+                mode: ViewMode::Oblique,
+                rect: [0.0, 0.0, 500.0, 500.0],
+                uniform_index: 0,
+            },
+            ViewportState::default(),
+        ));
+        let input = world.spawn((InputState {
+            active_viewport: Some(viewport),
+            mouse_uv: [0.65, 0.4],
+            is_dragging: true,
+            is_rotating: true,
+            rotation_start_pos: [0.5, 0.5],
+            rotation_start_val: [0.0, 0.0, 0.0, 1.0],
+            ..InputState::default()
+        },));
+        let editor = world.spawn((EditorState::default(),));
+        let entities = AppEntities {
+            input,
+            editor,
+            gui_state: Entity::DANGLING,
+            volume_windowing: Entity::DANGLING,
+            annotations: Entity::DANGLING,
+            overlay: Entity::DANGLING,
+            protocol: Entity::DANGLING,
+            cursor: Entity::DANGLING,
+            window_settings: Entity::DANGLING,
+        };
+
+        sys_handle_mouse_drag(&mut world, &entities);
+
+        let rotation = world.get::<&ViewportState>(viewport).unwrap().user_rotation;
+        assert_ne!(rotation, [0.0, 0.0, 0.0, 1.0]);
+        assert!((Quat::from_array(rotation).length() - 1.0).abs() < 1e-6);
     }
 }

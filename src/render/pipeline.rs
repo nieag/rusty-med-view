@@ -14,97 +14,73 @@ use wgpu::util::DeviceExt;
 use winit::window::Window;
 
 /// Create the bind group layout for volume rendering.
-/// Supports main volume + 2 overlay labelmaps with LUTs.
+/// Supports main volume + eight overlay labelmaps with one shared LUT.
 pub fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    let mut entries = vec![
+        wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                multisampled: false,
+                view_dimension: wgpu::TextureViewDimension::D3,
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            },
+            count: None,
+        },
+        wgpu::BindGroupLayoutEntry {
+            binding: 1,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+            count: None,
+        },
+        wgpu::BindGroupLayoutEntry {
+            binding: 2,
+            visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: true,
+                min_binding_size: Some(
+                    std::num::NonZeroU64::new(std::mem::size_of::<Uniforms>() as u64).unwrap(),
+                ),
+            },
+            count: None,
+        },
+    ];
+    entries.extend(
+        (0..MAX_VOXEL_OVERLAY_SLOTS).map(|slot| wgpu::BindGroupLayoutEntry {
+            binding: 3 + slot as u32,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                multisampled: false,
+                view_dimension: wgpu::TextureViewDimension::D3,
+                sample_type: wgpu::TextureSampleType::Uint,
+            },
+            count: None,
+        }),
+    );
+    entries.push(wgpu::BindGroupLayoutEntry {
+        binding: 11,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            multisampled: false,
+            view_dimension: wgpu::TextureViewDimension::D1,
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+        },
+        count: None,
+    });
+    entries.push(wgpu::BindGroupLayoutEntry {
+        binding: 12,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    });
+
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        entries: &[
-            // 0: Main Volume Texture (R32Float - non-filterable on WebGL2)
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    multisampled: false,
-                    view_dimension: wgpu::TextureViewDimension::D3,
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                },
-                count: None,
-            },
-            // 1: Main Volume Sampler (Non-filtering for R32Float)
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
-                count: None,
-            },
-            // 2: Uniforms
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: true,
-                    min_binding_size: Some(
-                        std::num::NonZeroU64::new(std::mem::size_of::<Uniforms>() as u64).unwrap(),
-                    ),
-                },
-                count: None,
-            },
-            // 3: Overlay 1 Texture (R8Uint)
-            wgpu::BindGroupLayoutEntry {
-                binding: 3,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    multisampled: false,
-                    view_dimension: wgpu::TextureViewDimension::D3,
-                    sample_type: wgpu::TextureSampleType::Uint,
-                },
-                count: None,
-            },
-            // 4: Overlay 1 LUT (RGBA8)
-            wgpu::BindGroupLayoutEntry {
-                binding: 4,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    multisampled: false,
-                    view_dimension: wgpu::TextureViewDimension::D1,
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                },
-                count: None,
-            },
-            // 5: Overlay 2 Texture (R8Uint)
-            wgpu::BindGroupLayoutEntry {
-                binding: 5,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    multisampled: false,
-                    view_dimension: wgpu::TextureViewDimension::D3,
-                    sample_type: wgpu::TextureSampleType::Uint,
-                },
-                count: None,
-            },
-            // 6: Overlay 2 LUT (RGBA8)
-            wgpu::BindGroupLayoutEntry {
-                binding: 6,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    multisampled: false,
-                    view_dimension: wgpu::TextureViewDimension::D1,
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                },
-                count: None,
-            },
-            // 7: Overlay Primitives Storage Buffer
-            wgpu::BindGroupLayoutEntry {
-                binding: 7,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-        ],
+        entries: &entries,
         label: Some("texture_bind_group_layout"),
     })
 }
@@ -114,8 +90,8 @@ const MAX_OVERLAY_PRIMITIVES: usize = 64;
 /// WebGPU minimum uniform buffer offset alignment (bytes).
 /// TODO: query from device.limits().min_uniform_buffer_offset_alignment at runtime.
 const UNIFORM_ALIGNMENT: u64 = 256;
-/// Number of viewports in the layout protocol.
-const MAX_VIEWPORTS: u64 = 4;
+/// Maximum number of viewports exposed by a hanging protocol.
+const MAX_VIEWPORTS: u64 = 5;
 
 const fn align_to(value: u64, alignment: u64) -> u64 {
     value.div_ceil(alignment) * alignment
@@ -188,7 +164,7 @@ pub fn create_render_pipeline(
     })
 }
 
-/// Create the uniform buffer with proper alignment for 4 viewports.
+/// Create the uniform buffer with proper alignment for all protocol viewports.
 pub fn create_uniform_buffer(device: &wgpu::Device) -> wgpu::Buffer {
     let uniform_buffer_size = UNIFORM_STRIDE * MAX_VIEWPORTS;
     device.create_buffer(&wgpu::BufferDescriptor {
@@ -220,10 +196,8 @@ pub struct SceneTextureViews<'a> {
     pub volume_view: &'a wgpu::TextureView,
     pub volume_sampler: &'a wgpu::Sampler,
     pub uniform_buffer: &'a wgpu::Buffer,
-    pub overlay1_view: &'a wgpu::TextureView,
-    pub overlay1_lut: &'a wgpu::TextureView,
-    pub overlay2_view: &'a wgpu::TextureView,
-    pub overlay2_lut: &'a wgpu::TextureView,
+    pub overlay_views: [&'a wgpu::TextureView; MAX_VOXEL_OVERLAY_SLOTS],
+    pub overlay_lut: &'a wgpu::TextureView,
     pub overlay_buffer: &'a wgpu::Buffer,
 }
 
@@ -233,52 +207,48 @@ pub fn create_scene_bind_group(
     layout: &wgpu::BindGroupLayout,
     views: &SceneTextureViews<'_>,
 ) -> wgpu::BindGroup {
+    let mut entries = vec![
+        wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(views.volume_view),
+        },
+        wgpu::BindGroupEntry {
+            binding: 1,
+            resource: wgpu::BindingResource::Sampler(views.volume_sampler),
+        },
+        wgpu::BindGroupEntry {
+            binding: 2,
+            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: views.uniform_buffer,
+                offset: 0,
+                size: Some(
+                    std::num::NonZeroU64::new(std::mem::size_of::<Uniforms>() as u64).unwrap(),
+                ),
+            }),
+        },
+    ];
+    entries.extend(views.overlay_views.iter().enumerate().map(|(slot, view)| {
+        wgpu::BindGroupEntry {
+            binding: 3 + slot as u32,
+            resource: wgpu::BindingResource::TextureView(view),
+        }
+    }));
+    entries.push(wgpu::BindGroupEntry {
+        binding: 11,
+        resource: wgpu::BindingResource::TextureView(views.overlay_lut),
+    });
+    entries.push(wgpu::BindGroupEntry {
+        binding: 12,
+        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+            buffer: views.overlay_buffer,
+            offset: 0,
+            size: None,
+        }),
+    });
+
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(views.volume_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(views.volume_sampler),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: views.uniform_buffer,
-                    offset: 0,
-                    size: Some(
-                        std::num::NonZeroU64::new(std::mem::size_of::<Uniforms>() as u64).unwrap(),
-                    ),
-                }),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: wgpu::BindingResource::TextureView(views.overlay1_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 4,
-                resource: wgpu::BindingResource::TextureView(views.overlay1_lut),
-            },
-            wgpu::BindGroupEntry {
-                binding: 5,
-                resource: wgpu::BindingResource::TextureView(views.overlay2_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 6,
-                resource: wgpu::BindingResource::TextureView(views.overlay2_lut),
-            },
-            wgpu::BindGroupEntry {
-                binding: 7,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: views.overlay_buffer,
-                    offset: 0,
-                    size: None,
-                }),
-            },
-        ],
+        entries: &entries,
         label: Some("diffuse_bind_group"),
     })
 }
@@ -291,6 +261,8 @@ pub struct RenderFrameStats {
     pub viewport_uniform_count: u32,
     pub contour_batch_count: u32,
     pub mesh_batch_count: u32,
+    pub mesh_chunks_uploaded: u32,
+    pub mesh_chunks_reused: u32,
     pub last_warning: Option<&'static str>,
     pub last_error: Option<&'static str>,
 }
@@ -309,6 +281,7 @@ fn run_frame_systems(
         .get::<&EditorState>(scene.entities.editor)
         .ok()
         .and_then(|editor| editor.active_roi);
+    crate::app::roi_runtime::process_voxel_mesh_rebuild_jobs(&mut scene.world);
     crate::app::roi_runtime::process_contour_voxel_rebuild_jobs_with_gpu(
         &gpu.device,
         &gpu.queue,
@@ -323,6 +296,22 @@ fn run_frame_systems(
         },
         active_roi,
     );
+    crate::app::roi_runtime::process_mesh_voxel_rebuild_jobs_with_gpu(
+        &gpu.device,
+        &gpu.queue,
+        &mut scene.world,
+        &crate::app::roi_runtime::BindGroupResources {
+            layout: &volume_res.texture_bind_group_layout,
+            uniform_buffer: &volume_res.uniform_buffer,
+            dummy_view: &volume_res.dummy_r8.1,
+            dummy_sampler: &volume_res.dummy_r8.2,
+            default_lut_view: &volume_res.default_lut.1,
+            overlay_buffer: &volume_res.overlay_buffer,
+        },
+        active_roi,
+    );
+    crate::app::roi_runtime::sync_active_roi_contour_view_caches_for_viewports(&mut scene.world);
+    crate::app::roi_runtime::sync_active_roi_mesh_cache_for_viewports(&mut scene.world);
     systems::sys_handle_mouse_drag(&mut scene.world, &scene.entities);
     gui.prepare(window, &mut scene.world, &scene.entities, event_proxy);
     systems::sys_sync_annotations_to_overlay(&mut scene.world, &scene.entities);
@@ -501,21 +490,19 @@ pub fn render_frame(
     );
 
     let mesh_data = crate::render::meshes::prepare_mesh_render_data(&scene.world, &scene.entities);
-    stats.mesh_batch_count = mesh_data.batches.len() as u32;
+    stats.mesh_batch_count = mesh_data.batch_count() as u32;
     crate::render::meshes::upload_mesh_render_data(
         &gpu.device,
         &gpu.queue,
         &mut pipelines.mesh_overlay,
         &mesh_data,
     );
+    stats.mesh_chunks_uploaded = pipelines.mesh_overlay.uploaded_chunks_last_frame;
+    stats.mesh_chunks_reused = pipelines.mesh_overlay.reused_chunks_last_frame;
     crate::render::meshes::render_meshes(&mut encoder, &view, &pipelines.mesh_overlay);
 
     let contour_data = contours::prepare_contour_render_data(&scene.world, &scene.entities);
-    stats.contour_batch_count = if contour_data.vertices.is_empty() {
-        0
-    } else {
-        1
-    };
+    stats.contour_batch_count = contour_data.batches.len() as u32;
     contours::upload_contour_render_data(
         &gpu.device,
         &gpu.queue,
@@ -553,10 +540,52 @@ mod tests {
     }
 
     #[test]
+    fn test_eight_overlay_uniform_array_matches_wgsl_alignment() {
+        assert_eq!(std::mem::size_of::<VoxelOverlayUniform>(), 80);
+        assert_eq!(std::mem::size_of::<Uniforms>(), 832);
+        assert_eq!(std::mem::offset_of!(Uniforms, voxel_overlays), 48);
+        assert_eq!(std::mem::offset_of!(Uniforms, window_params), 688);
+        assert_eq!(std::mem::offset_of!(Uniforms, oblique_origin_uv), 752);
+        assert_eq!(std::mem::offset_of!(Uniforms, oblique_u_dir_length), 768);
+        assert_eq!(std::mem::offset_of!(Uniforms, oblique_v_dir_length), 784);
+        assert_eq!(std::mem::offset_of!(Uniforms, voxel_overlays) % 16, 0);
+        assert_eq!(std::mem::offset_of!(Uniforms, window_params) % 16, 0);
+        assert_eq!(std::mem::offset_of!(Uniforms, oblique_origin_uv) % 16, 0);
+        assert_eq!(std::mem::offset_of!(Uniforms, oblique_u_dir_length) % 16, 0);
+        assert_eq!(std::mem::offset_of!(Uniforms, oblique_v_dir_length) % 16, 0);
+    }
+
+    #[test]
     fn test_uniform_buffer_size_covers_all_viewport_slots() {
         let last_viewport_offset = (MAX_VIEWPORTS - 1) * UNIFORM_STRIDE;
         let uniform_size = std::mem::size_of::<Uniforms>() as u64;
         let buffer_size = UNIFORM_STRIDE * MAX_VIEWPORTS;
         assert!(last_viewport_offset + uniform_size <= buffer_size);
+    }
+
+    #[test]
+    fn test_main_shader_and_eight_overlay_bindings_validate() {
+        let instance = wgpu::Instance::default();
+        let Ok(adapter) =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                compatible_surface: None,
+                force_fallback_adapter: true,
+            }))
+        else {
+            return;
+        };
+        let Ok((device, _queue)) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        else {
+            return;
+        };
+
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let layout = create_bind_group_layout(&device);
+        let _pipeline = create_render_pipeline(&device, &layout, wgpu::TextureFormat::Rgba8Unorm);
+        let error = pollster::block_on(device.pop_error_scope());
+
+        assert!(error.is_none(), "main shader validation failed: {error:?}");
     }
 }

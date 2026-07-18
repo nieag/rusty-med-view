@@ -1,5 +1,8 @@
 use crate::components::{ContourData, VoxelData, VoxelGeometry};
-use crate::convert::{voxel_index_to_world_mm, world_mm_to_plane_local_mm, PlaneDefinition};
+use crate::convert::{
+    plane_local_mm_to_world_mm, voxel_index_to_world_mm, world_mm_to_plane_local_mm,
+    world_mm_to_voxel_index, PlaneDefinition, PlaneFamily,
+};
 use glam::Vec3;
 
 const EPSILON: f32 = 1e-6;
@@ -8,6 +11,100 @@ const EPSILON: f32 = 1e-6;
 pub enum ContourRasterizationError {
     InvalidTargetGeometry,
     InvalidSlicePlane { slice_index: usize },
+}
+
+/// Returns max-exclusive voxel bounds affected by the supplied contour slices.
+/// Orthogonal slices map to their exact voxel slabs. Oblique slices remain a
+/// conservative full-volume invalidation until oblique rasterization is chunked.
+pub fn contour_slices_voxel_aabb(
+    contour: &ContourData,
+    target_geometry: VoxelGeometry,
+) -> Option<([u32; 3], [u32; 3])> {
+    if contour.slices.is_empty() || target_geometry.dimensions.contains(&0) {
+        return None;
+    }
+    if contour.active_plane_family == PlaneFamily::Oblique {
+        return Some(([0, 0, 0], target_geometry.dimensions));
+    }
+
+    let depth_axis = match contour.active_plane_family {
+        PlaneFamily::Axial => 2,
+        PlaneFamily::Coronal => 1,
+        PlaneFamily::Sagittal => 0,
+        PlaneFamily::Oblique => unreachable!(),
+    };
+    let dimension = target_geometry.dimensions[depth_axis];
+    let mut first_depth = dimension;
+    let mut last_depth = 0;
+    for slice in &contour.slices {
+        let voxel_index = world_mm_to_voxel_index(slice.plane.origin_mm, target_geometry);
+        let depth = voxel_index[depth_axis]
+            .round()
+            .clamp(0.0, dimension.saturating_sub(1) as f32) as u32;
+        first_depth = first_depth.min(depth);
+        last_depth = last_depth.max(depth);
+    }
+
+    let mut min = [0, 0, 0];
+    let mut max = target_geometry.dimensions;
+    min[depth_axis] = first_depth;
+    max[depth_axis] = last_depth.saturating_add(1).min(dimension);
+    Some((min, max))
+}
+
+/// Tight max-exclusive bounds for contour loop geometry. Callers rebuilding an
+/// edit must merge bounds from both the committed and preview contours so erased
+/// voxels are included.
+pub fn contour_geometry_voxel_aabb(
+    contour: &ContourData,
+    target_geometry: VoxelGeometry,
+) -> Option<([u32; 3], [u32; 3])> {
+    let slab = contour_slices_voxel_aabb(contour, target_geometry)?;
+    if contour.active_plane_family == PlaneFamily::Oblique {
+        return Some(slab);
+    }
+
+    let depth_axis = match contour.active_plane_family {
+        PlaneFamily::Axial => 2,
+        PlaneFamily::Coronal => 1,
+        PlaneFamily::Sagittal => 0,
+        PlaneFamily::Oblique => unreachable!(),
+    };
+    let mut min = target_geometry.dimensions;
+    let mut max = [0; 3];
+    let mut found_point = false;
+    for slice in &contour.slices {
+        for contour_loop in &slice.loops {
+            for point in &contour_loop.points {
+                let world = plane_local_mm_to_world_mm(point.local_mm, slice.plane);
+                let index = world_mm_to_voxel_index(world, target_geometry);
+                if index.iter().any(|value| !value.is_finite()) {
+                    continue;
+                }
+                found_point = true;
+                for axis in 0..3 {
+                    if axis == depth_axis {
+                        continue;
+                    }
+                    let dimension = target_geometry.dimensions[axis];
+                    let point_min = index[axis].floor().max(0.0) as u32;
+                    let point_max = (index[axis].ceil() as u32).saturating_add(1).min(dimension);
+                    min[axis] = min[axis].min(point_min.min(dimension));
+                    max[axis] = max[axis].max(point_max);
+                }
+            }
+        }
+    }
+    if !found_point {
+        return Some(slab);
+    }
+    min[depth_axis] = slab.0[depth_axis];
+    max[depth_axis] = slab.1[depth_axis];
+    if (0..3).any(|axis| min[axis] >= max[axis]) {
+        Some(slab)
+    } else {
+        Some((min, max))
+    }
 }
 
 struct RasterSlice {
@@ -74,6 +171,69 @@ pub fn rasterize_contours_to_voxel_data(
                 if filled {
                     let idx = voxel_linear_index([x, y, z], target_geometry.dimensions);
                     raw_data[idx] = 1;
+                }
+            }
+        }
+    }
+
+    Ok(VoxelData {
+        geometry: target_geometry,
+        raw_data,
+    })
+}
+
+pub fn rasterize_contour_preview_slices_to_voxel_data(
+    contour: &ContourData,
+    base: &VoxelData,
+) -> Result<VoxelData, ContourRasterizationError> {
+    let target_geometry = base.geometry;
+    let expected_len = voxel_count(target_geometry.dimensions)
+        .ok_or(ContourRasterizationError::InvalidTargetGeometry)?;
+    if base.raw_data.len() != expected_len {
+        return Err(ContourRasterizationError::InvalidTargetGeometry);
+    }
+    if contour.active_plane_family == PlaneFamily::Oblique {
+        return rasterize_contours_to_voxel_data(contour, target_geometry);
+    }
+    let slices = prepare_slices(contour, target_geometry)?;
+    let mut raw_data = base.raw_data.clone();
+    let dimensions = target_geometry.dimensions;
+
+    for slice in slices {
+        let depth_index = world_mm_to_voxel_index(slice.plane.origin_mm, target_geometry);
+        let depth_axis = match contour.active_plane_family {
+            PlaneFamily::Axial => 2,
+            PlaneFamily::Coronal => 1,
+            PlaneFamily::Sagittal => 0,
+            PlaneFamily::Oblique => unreachable!(),
+        };
+        let depth = depth_index[depth_axis]
+            .round()
+            .clamp(0.0, dimensions[depth_axis].saturating_sub(1) as f32) as u32;
+
+        let (width, height) = match contour.active_plane_family {
+            PlaneFamily::Axial => (dimensions[0], dimensions[1]),
+            PlaneFamily::Coronal => (dimensions[0], dimensions[2]),
+            PlaneFamily::Sagittal => (dimensions[1], dimensions[2]),
+            PlaneFamily::Oblique => unreachable!(),
+        };
+        for v in 0..height {
+            for u in 0..width {
+                let index = match contour.active_plane_family {
+                    PlaneFamily::Axial => [u, v, depth],
+                    PlaneFamily::Coronal => [u, depth, v],
+                    PlaneFamily::Sagittal => [depth, u, v],
+                    PlaneFamily::Oblique => unreachable!(),
+                };
+                let linear = voxel_linear_index(index, dimensions);
+                raw_data[linear] = 0;
+                let world_center = voxel_index_to_world_mm(
+                    [index[0] as f32, index[1] as f32, index[2] as f32],
+                    target_geometry,
+                );
+                let local = world_mm_to_plane_local_mm(world_center, slice.plane);
+                if point_in_loops_even_odd(local, &slice.loops) {
+                    raw_data[linear] = 1;
                 }
             }
         }
@@ -360,5 +520,132 @@ mod tests {
 
         let voxel = rasterize_contours_to_voxel_data(&contour, geometry).expect("raster succeeds");
         assert_eq!(voxel.geometry, geometry);
+    }
+
+    #[test]
+    fn test_preview_slice_raster_preserves_unaffected_voxel_slices() {
+        let geometry = identity_geometry([4, 4, 4]);
+        let plane =
+            orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 1.0 / 3.0], geometry)
+                .unwrap();
+        let contour = ContourData {
+            active_plane_family: PlaneFamily::Axial,
+            slices: vec![ContourSlice {
+                plane,
+                loops: vec![square_loop(1.25)],
+            }],
+        };
+        let mut base = VoxelData {
+            geometry,
+            raw_data: vec![0; 64],
+        };
+        base.raw_data[index(geometry.dimensions, 0, 0, 2)] = 1;
+
+        let preview = rasterize_contour_preview_slices_to_voxel_data(&contour, &base).unwrap();
+
+        assert_eq!(preview.raw_data[index(geometry.dimensions, 0, 0, 2)], 1);
+        assert!(preview.raw_data[16..32].iter().any(|value| *value != 0));
+        assert!(preview.raw_data[..16].iter().all(|value| *value == 0));
+    }
+
+    #[test]
+    fn test_preview_slice_raster_updates_coronal_and_sagittal_depth_axes() {
+        let geometry = identity_geometry([5, 6, 7]);
+        for (family, depth_axis, depth, cursor_uv) in [
+            (PlaneFamily::Coronal, 1, 2, [0.5, 2.0 / 5.0, 0.5]),
+            (PlaneFamily::Sagittal, 0, 3, [3.0 / 4.0, 0.5, 0.5]),
+        ] {
+            let plane = orthogonal_plane_from_volume_uv(family, cursor_uv, geometry).unwrap();
+            let contour = ContourData {
+                active_plane_family: family,
+                slices: vec![ContourSlice {
+                    plane,
+                    loops: vec![square_loop(1.5)],
+                }],
+            };
+            let base = VoxelData {
+                geometry,
+                raw_data: vec![0; 5 * 6 * 7],
+            };
+
+            let preview = rasterize_contour_preview_slices_to_voxel_data(&contour, &base).unwrap();
+
+            let mut occupied = 0;
+            for z in 0..7 {
+                for y in 0..6 {
+                    for x in 0..5 {
+                        if preview.raw_data[index(geometry.dimensions, x, y, z)] == 0 {
+                            continue;
+                        }
+                        occupied += 1;
+                        assert_eq!([x, y, z][depth_axis], depth);
+                    }
+                }
+            }
+            assert!(
+                occupied > 0,
+                "{family:?} preview should fill its edited slab"
+            );
+        }
+    }
+
+    #[test]
+    fn test_contour_slice_aabb_is_one_max_exclusive_voxel_slab() {
+        let geometry = identity_geometry([8, 7, 6]);
+        let plane =
+            orthogonal_plane_from_volume_uv(PlaneFamily::Coronal, [0.5, 3.0 / 6.0, 0.5], geometry)
+                .unwrap();
+        let contour = ContourData {
+            active_plane_family: PlaneFamily::Coronal,
+            slices: vec![ContourSlice {
+                plane,
+                loops: vec![square_loop(1.0)],
+            }],
+        };
+
+        assert_eq!(
+            contour_slices_voxel_aabb(&contour, geometry),
+            Some(([0, 3, 0], [8, 4, 6]))
+        );
+    }
+
+    #[test]
+    fn test_oblique_contour_aabb_conservatively_covers_volume() {
+        let geometry = identity_geometry([8, 7, 6]);
+        let mut plane =
+            orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry).unwrap();
+        plane.family = PlaneFamily::Oblique;
+        let contour = ContourData {
+            active_plane_family: PlaneFamily::Oblique,
+            slices: vec![ContourSlice {
+                plane,
+                loops: vec![square_loop(1.0)],
+            }],
+        };
+
+        assert_eq!(
+            contour_slices_voxel_aabb(&contour, geometry),
+            Some(([0, 0, 0], geometry.dimensions))
+        );
+    }
+
+    #[test]
+    fn test_contour_geometry_aabb_tightens_in_plane_bounds() {
+        let geometry = identity_geometry([8, 8, 4]);
+        let plane =
+            orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 1.0 / 3.0], geometry)
+                .unwrap();
+        let contour = ContourData {
+            active_plane_family: PlaneFamily::Axial,
+            slices: vec![ContourSlice {
+                plane,
+                loops: vec![square_loop(1.0)],
+            }],
+        };
+
+        assert_eq!(
+            contour_geometry_voxel_aabb(&contour, geometry),
+            Some(([2, 2, 1], [6, 6, 2]))
+        );
     }
 }

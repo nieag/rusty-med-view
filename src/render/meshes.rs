@@ -1,13 +1,11 @@
-use crate::components::{
-    AppEntities, MeshData, Roi, RoiAuthoritativeData, ViewMode, Viewport, ViewportState,
-};
+use crate::components::{AppEntities, MeshData, Roi, ViewMode, Viewport, ViewportState};
+use crate::convert::{ChunkedMeshData, MeshChunkKey};
 use crate::render::geometry::{
-    build_display_projection_context, world_to_ndc, DisplayProjectionContext,
+    build_display_projection_context, project_world_mm_to_viewport_uv_3d, DisplayProjectionContext,
 };
 use crate::render::roi_views::{RenderRepresentationRequest, RoiRenderViews};
-use glam::Vec3;
-use hecs::World;
-use wgpu::util::DeviceExt;
+use hecs::{Entity, World};
+use std::collections::{HashMap, HashSet};
 
 const INITIAL_VERTEX_CAPACITY: usize = 256;
 
@@ -41,23 +39,55 @@ impl MeshVertex2d {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MeshRenderBatch {
-    pub start_vertex: u32,
+    pub key: MeshRenderChunkKey,
     pub vertex_count: u32,
+    pub scissor_rect: [u32; 4],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MeshRenderPartKey {
+    Full,
+    Chunk(MeshChunkKey),
+    Handle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MeshRenderChunkKey {
+    pub roi_entity: Entity,
+    pub viewport_entity: Entity,
+    pub part: MeshRenderPartKey,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeshRenderChunkData {
+    pub key: MeshRenderChunkKey,
+    pub vertices: Vec<MeshVertex2d>,
     pub scissor_rect: [u32; 4],
 }
 
 #[derive(Default, Debug, Clone)]
 pub struct MeshRenderData {
-    pub vertices: Vec<MeshVertex2d>,
-    pub batches: Vec<MeshRenderBatch>,
+    pub chunks: Vec<MeshRenderChunkData>,
+}
+
+impl MeshRenderData {
+    pub fn batch_count(&self) -> usize {
+        self.chunks.len()
+    }
+}
+
+struct GpuMeshChunk {
+    vertex_buffer: wgpu::Buffer,
+    vertex_capacity: usize,
+    vertices: Vec<MeshVertex2d>,
 }
 
 pub struct MeshRenderer {
     pub pipeline: wgpu::RenderPipeline,
-    pub vertex_buffer: wgpu::Buffer,
-    pub vertex_capacity: usize,
-    pub vertex_count: u32,
+    chunks: HashMap<MeshRenderChunkKey, GpuMeshChunk>,
     pub batches: Vec<MeshRenderBatch>,
+    pub uploaded_chunks_last_frame: u32,
+    pub reused_chunks_last_frame: u32,
 }
 
 pub fn create_mesh_renderer(
@@ -111,31 +141,32 @@ pub fn create_mesh_renderer(
         cache: None,
     });
 
-    let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Mesh Overlay Vertex Buffer"),
-        contents: bytemuck::cast_slice(&vec![
-            MeshVertex2d {
-                position_ndc: [0.0, 0.0],
-                color: [0.0, 0.0, 0.0, 0.0],
-            };
-            INITIAL_VERTEX_CAPACITY
-        ]),
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-    });
-
     MeshRenderer {
         pipeline,
-        vertex_buffer,
-        vertex_capacity: INITIAL_VERTEX_CAPACITY,
-        vertex_count: 0,
+        chunks: HashMap::new(),
         batches: Vec::new(),
+        uploaded_chunks_last_frame: 0,
+        reused_chunks_last_frame: 0,
     }
 }
 
 pub fn prepare_mesh_render_data(world: &World, entities: &AppEntities) -> MeshRenderData {
     let mut data = MeshRenderData::default();
     let roi_views = RoiRenderViews::for_world(world, RenderRepresentationRequest::default());
-    for (_, (viewport, viewport_state)) in world.query::<(&Viewport, &ViewportState)>().iter() {
+    let (mesh_preview, mesh_selection, active_tool) = world
+        .get::<&crate::components::EditorState>(entities.editor)
+        .ok()
+        .map(|editor| {
+            (
+                editor.mesh_edit_preview.clone(),
+                editor.mesh_selection,
+                editor.active_tool,
+            )
+        })
+        .unwrap_or((None, None, crate::components::EditorTool::Navigation));
+    for (viewport_entity, (viewport, viewport_state)) in
+        world.query::<(&Viewport, &ViewportState)>().iter()
+    {
         if viewport.mode != ViewMode::ThreeD {
             continue;
         }
@@ -145,42 +176,179 @@ pub fn prepare_mesh_render_data(world: &World, entities: &AppEntities) -> MeshRe
             continue;
         };
 
-        let batch_start = data.vertices.len() as u32;
-
-        for mesh_view in &roi_views.mesh_overlays {
-            let Ok(roi) = world.get::<&Roi>(mesh_view.entity) else {
-                continue;
-            };
-            let Some(mesh) = mesh_data_for_render(&roi) else {
-                continue;
-            };
-            append_projected_mesh(mesh, roi.metadata.color, projection_ctx, &mut data.vertices);
-        }
-
-        let batch_count = data.vertices.len() as u32 - batch_start;
-        if batch_count == 0 {
-            continue;
-        }
         let scissor =
             viewport_scissor_rect(projection_ctx.viewport_rect, projection_ctx.window_size);
         if scissor[2] == 0 || scissor[3] == 0 {
             continue;
         }
-        data.batches.push(MeshRenderBatch {
-            start_vertex: batch_start,
-            vertex_count: batch_count,
-            scissor_rect: scissor,
-        });
+
+        for mesh_view in &roi_views.mesh_overlays {
+            let Ok(roi) = world.get::<&Roi>(mesh_view.entity) else {
+                continue;
+            };
+            if let Some(preview) = mesh_preview
+                .as_ref()
+                .filter(|preview| preview.roi_entity == mesh_view.entity)
+            {
+                append_render_chunk(
+                    mesh_view.entity,
+                    viewport_entity,
+                    MeshRenderPartKey::Full,
+                    &preview.mesh_data,
+                    roi.metadata.color,
+                    projection_ctx,
+                    scissor,
+                    &mut data,
+                );
+            } else if let Some(chunked) = chunked_mesh_for_render(&roi) {
+                for chunk in &chunked.chunks {
+                    append_render_chunk(
+                        mesh_view.entity,
+                        viewport_entity,
+                        MeshRenderPartKey::Chunk(chunk.key),
+                        &chunk.data,
+                        roi.metadata.color,
+                        projection_ctx,
+                        scissor,
+                        &mut data,
+                    );
+                }
+            } else if let Some(mesh) = mesh_data_for_render(&roi) {
+                append_render_chunk(
+                    mesh_view.entity,
+                    viewport_entity,
+                    MeshRenderPartKey::Full,
+                    mesh,
+                    roi.metadata.color,
+                    projection_ctx,
+                    scissor,
+                    &mut data,
+                );
+            }
+        }
+        if active_tool == crate::components::EditorTool::MeshDeform {
+            if let Some(selection) = mesh_selection {
+                if let Ok(roi) = world.get::<&Roi>(selection.roi_entity) {
+                    if roi.metadata.is_visible {
+                        let mesh = mesh_preview
+                            .as_ref()
+                            .filter(|preview| preview.roi_entity == selection.roi_entity)
+                            .map(|preview| &preview.mesh_data)
+                            .or_else(|| roi.mesh_data());
+                        if let Some(world_mm) = mesh.and_then(|mesh| {
+                            mesh.vertices
+                                .get(selection.vertex_index)
+                                .map(|vertex| vertex.world_mm)
+                        }) {
+                            append_mesh_handle(
+                                selection.roi_entity,
+                                viewport_entity,
+                                world_mm,
+                                projection_ctx,
+                                scissor,
+                                &mut data,
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     data
 }
 
 fn mesh_data_for_render(roi: &Roi) -> Option<&MeshData> {
-    match &roi.authoritative_data {
-        RoiAuthoritativeData::Mesh(mesh) => Some(mesh),
-        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Contour(_) => None,
+    crate::render::roi_views::mesh_data_for_adapter(roi)
+}
+
+fn chunked_mesh_for_render(roi: &Roi) -> Option<&ChunkedMeshData> {
+    if roi.preview_state.active {
+        if let Some(preview) = roi.session_caches.preview_mesh.as_ref().filter(|cache| {
+            cache.source_generation == roi.dirty_state.generations.authoritative
+                && cache.preview_revision == roi.preview_state.revision
+        }) {
+            return preview.chunks.as_ref();
+        }
     }
+    if matches!(
+        roi.authoritative_data,
+        crate::components::RoiAuthoritativeData::Mesh(_)
+    ) {
+        return None;
+    }
+    roi.is_cache_current(crate::components::RoiCacheKind::Mesh)
+        .then(|| roi.mesh_cache().and_then(|cache| cache.chunks.as_ref()))
+        .flatten()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_render_chunk(
+    roi_entity: Entity,
+    viewport_entity: Entity,
+    part: MeshRenderPartKey,
+    mesh: &MeshData,
+    color: [f32; 4],
+    projection_ctx: DisplayProjectionContext,
+    scissor_rect: [u32; 4],
+    data: &mut MeshRenderData,
+) {
+    let mut vertices = Vec::with_capacity(mesh.faces.len().saturating_mul(3));
+    append_projected_mesh(mesh, color, projection_ctx, &mut vertices);
+    if vertices.is_empty() {
+        return;
+    }
+    data.chunks.push(MeshRenderChunkData {
+        key: MeshRenderChunkKey {
+            roi_entity,
+            viewport_entity,
+            part,
+        },
+        vertices,
+        scissor_rect,
+    });
+}
+
+fn append_mesh_handle(
+    roi_entity: Entity,
+    viewport_entity: Entity,
+    world_mm: [f32; 3],
+    projection_ctx: DisplayProjectionContext,
+    scissor_rect: [u32; 4],
+    data: &mut MeshRenderData,
+) {
+    let Some(center) = project_world_vertex(world_mm, projection_ctx) else {
+        return;
+    };
+    let [window_width, window_height] = projection_ctx.window_size;
+    if window_width <= 0.0 || window_height <= 0.0 {
+        return;
+    }
+    let half_size_ndc = [12.0 / window_width, 12.0 / window_height];
+    let [dx, dy] = half_size_ndc;
+    let color = [1.0, 0.85, 0.1, 1.0];
+    let corners = [
+        [center[0] - dx, center[1] - dy],
+        [center[0] + dx, center[1] - dy],
+        [center[0] + dx, center[1] + dy],
+        [center[0] - dx, center[1] + dy],
+    ];
+    let vertices = [0, 1, 2, 0, 2, 3]
+        .into_iter()
+        .map(|index| MeshVertex2d {
+            position_ndc: corners[index],
+            color,
+        })
+        .collect();
+    data.chunks.push(MeshRenderChunkData {
+        key: MeshRenderChunkKey {
+            roi_entity,
+            viewport_entity,
+            part: MeshRenderPartKey::Handle,
+        },
+        vertices,
+        scissor_rect,
+    });
 }
 
 fn append_projected_mesh(
@@ -226,14 +394,7 @@ fn project_world_vertex(
     world_mm: [f32; 3],
     projection_ctx: DisplayProjectionContext,
 ) -> Option<[f32; 2]> {
-    let uv = crate::convert::world_mm_to_volume_uv(world_mm, projection_ctx.main_geometry);
-    let projection = projection_ctx.view_projection_3d();
-    let viewport_uv = world_to_ndc(
-        Vec3::from_array(uv),
-        ViewMode::ThreeD,
-        &projection,
-        projection_ctx.screen_aspect,
-    )?;
+    let viewport_uv = project_world_mm_to_viewport_uv_3d(world_mm, projection_ctx)?;
     viewport_uv_to_full_ndc(
         viewport_uv,
         projection_ctx.viewport_rect,
@@ -281,27 +442,59 @@ pub fn upload_mesh_render_data(
     renderer: &mut MeshRenderer,
     data: &MeshRenderData,
 ) {
-    renderer.vertex_count = data.vertices.len() as u32;
-    renderer.batches = data.batches.clone();
-    if data.vertices.is_empty() {
-        return;
-    }
+    renderer.batches.clear();
+    renderer.uploaded_chunks_last_frame = 0;
+    renderer.reused_chunks_last_frame = 0;
+    let mut live_keys = HashSet::with_capacity(data.chunks.len());
 
-    if data.vertices.len() > renderer.vertex_capacity {
-        renderer.vertex_capacity = data.vertices.len().next_power_of_two();
-        renderer.vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Mesh Overlay Vertex Buffer"),
-            size: (renderer.vertex_capacity * std::mem::size_of::<MeshVertex2d>()) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+    for chunk in &data.chunks {
+        live_keys.insert(chunk.key);
+        let required_capacity = mesh_vertex_capacity(chunk.vertices.len());
+        let gpu_chunk = renderer
+            .chunks
+            .entry(chunk.key)
+            .or_insert_with(|| GpuMeshChunk {
+                vertex_buffer: create_mesh_vertex_buffer(device, required_capacity),
+                vertex_capacity: required_capacity,
+                vertices: Vec::new(),
+            });
+        if chunk.vertices.len() > gpu_chunk.vertex_capacity {
+            gpu_chunk.vertex_capacity = required_capacity;
+            gpu_chunk.vertex_buffer = create_mesh_vertex_buffer(device, required_capacity);
+        }
+        if gpu_chunk.vertices != chunk.vertices {
+            queue.write_buffer(
+                &gpu_chunk.vertex_buffer,
+                0,
+                bytemuck::cast_slice(&chunk.vertices),
+            );
+            gpu_chunk.vertices.clone_from(&chunk.vertices);
+            renderer.uploaded_chunks_last_frame += 1;
+        } else {
+            renderer.reused_chunks_last_frame += 1;
+        }
+        renderer.batches.push(MeshRenderBatch {
+            key: chunk.key,
+            vertex_count: chunk.vertices.len() as u32,
+            scissor_rect: chunk.scissor_rect,
         });
     }
+    renderer.chunks.retain(|key, _| live_keys.contains(key));
+}
 
-    queue.write_buffer(
-        &renderer.vertex_buffer,
-        0,
-        bytemuck::cast_slice(&data.vertices),
-    );
+fn create_mesh_vertex_buffer(device: &wgpu::Device, vertex_capacity: usize) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Mesh Overlay Chunk Vertex Buffer"),
+        size: (vertex_capacity * std::mem::size_of::<MeshVertex2d>()) as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+fn mesh_vertex_capacity(vertex_count: usize) -> usize {
+    vertex_count
+        .max(INITIAL_VERTEX_CAPACITY)
+        .next_power_of_two()
 }
 
 pub fn render_meshes(
@@ -309,7 +502,7 @@ pub fn render_meshes(
     view: &wgpu::TextureView,
     renderer: &MeshRenderer,
 ) {
-    if renderer.vertex_count == 0 || renderer.batches.is_empty() {
+    if renderer.batches.is_empty() {
         return;
     }
 
@@ -330,21 +523,21 @@ pub fn render_meshes(
     });
 
     pass.set_pipeline(&renderer.pipeline);
-    pass.set_vertex_buffer(0, renderer.vertex_buffer.slice(..));
     for batch in &renderer.batches {
         if batch.vertex_count == 0 || batch.scissor_rect[2] == 0 || batch.scissor_rect[3] == 0 {
             continue;
         }
+        let Some(chunk) = renderer.chunks.get(&batch.key) else {
+            continue;
+        };
+        pass.set_vertex_buffer(0, chunk.vertex_buffer.slice(..));
         pass.set_scissor_rect(
             batch.scissor_rect[0],
             batch.scissor_rect[1],
             batch.scissor_rect[2],
             batch.scissor_rect[3],
         );
-        pass.draw(
-            batch.start_vertex..(batch.start_vertex + batch.vertex_count),
-            0..1,
-        );
+        pass.draw(0..batch.vertex_count, 0..1);
     }
 }
 
@@ -352,9 +545,13 @@ pub fn render_meshes(
 mod tests {
     use super::*;
     use crate::components::{
-        MainVolumeTag, MeshFace, MeshVertex, RoiId, Transform, VolumeData, WindowSettings,
+        ContourData, MainVolumeTag, MeshCache, MeshFace, MeshVertex, RoiId, Transform, VolumeData,
+        VoxelData, VoxelGeometry, WindowSettings,
     };
+    use crate::convert::PlaneFamily;
+    use crate::render::geometry::world_to_ndc;
     use crate::render::geometry::ViewProjection;
+    use glam::Vec3;
 
     fn spawn_world_base() -> (World, AppEntities) {
         let mut world = World::new();
@@ -417,8 +614,7 @@ mod tests {
             window_settings: hecs::Entity::DANGLING,
         };
         let data = prepare_mesh_render_data(&world, &entities);
-        assert!(data.vertices.is_empty());
-        assert!(data.batches.is_empty());
+        assert!(data.chunks.is_empty());
     }
 
     #[test]
@@ -453,8 +649,7 @@ mod tests {
             },
         ),));
         let data = prepare_mesh_render_data(&world, &entities);
-        assert!(data.vertices.is_empty());
-        assert!(data.batches.is_empty());
+        assert!(data.chunks.is_empty());
     }
 
     #[test]
@@ -499,8 +694,8 @@ mod tests {
             },
         ),));
         let data = prepare_mesh_render_data(&world, &entities);
-        assert_eq!(data.batches.len(), 1);
-        assert_eq!(data.batches[0].vertex_count, 3);
+        assert_eq!(data.chunks.len(), 1);
+        assert_eq!(data.chunks[0].vertices.len(), 3);
 
         let main_geometry = crate::app::roi_runtime::main_volume_geometry(&world).unwrap();
         let viewport_rect = {
@@ -540,7 +735,7 @@ mod tests {
         .unwrap();
         let composed_ndc =
             viewport_uv_to_full_ndc(composed_uv, viewport_rect, [800.0, 600.0]).unwrap();
-        assert_eq!(data.vertices[0].position_ndc, composed_ndc);
+        assert_eq!(data.chunks[0].vertices[0].position_ndc, composed_ndc);
 
         let raw_projection = ViewProjection {
             rotation: viewport_state.user_rotation,
@@ -554,7 +749,67 @@ mod tests {
         )
         .unwrap();
         let raw_ndc = viewport_uv_to_full_ndc(raw_uv, viewport_rect, [800.0, 600.0]).unwrap();
-        assert_ne!(data.vertices[0].position_ndc, raw_ndc);
+        assert_ne!(data.chunks[0].vertices[0].position_ndc, raw_ndc);
+    }
+
+    #[test]
+    fn test_prepare_mesh_render_data_emits_wgpu_handle_for_selected_mesh_vertex() {
+        let (mut world, entities) = spawn_world_base();
+        let viewport_entity = world.spawn((
+            Viewport {
+                mode: ViewMode::ThreeD,
+                rect: [0.0, 0.0, 400.0, 300.0],
+                uniform_index: 0,
+            },
+            ViewportState::default(),
+        ));
+        let roi_entity = world.spawn((Roi::new_mesh(
+            RoiId(22),
+            "Selected mesh".to_string(),
+            MeshData {
+                vertices: vec![
+                    MeshVertex {
+                        world_mm: [4.0, 4.0, 4.0],
+                    },
+                    MeshVertex {
+                        world_mm: [5.0, 4.0, 4.0],
+                    },
+                    MeshVertex {
+                        world_mm: [4.0, 5.0, 4.0],
+                    },
+                ],
+                faces: vec![MeshFace {
+                    vertex_indices: [0, 1, 2],
+                }],
+            },
+        ),));
+        {
+            let mut editor = world
+                .get::<&mut crate::components::EditorState>(entities.editor)
+                .unwrap();
+            editor.active_roi = Some(roi_entity);
+            editor.active_tool = crate::components::EditorTool::MeshDeform;
+            editor.mesh_selection = Some(crate::components::MeshSelection {
+                roi_entity,
+                vertex_index: 0,
+            });
+        }
+
+        let data = prepare_mesh_render_data(&world, &entities);
+        let handle = data
+            .chunks
+            .iter()
+            .find(|chunk| {
+                chunk.key.roi_entity == roi_entity
+                    && chunk.key.viewport_entity == viewport_entity
+                    && chunk.key.part == MeshRenderPartKey::Handle
+            })
+            .expect("selected vertex handle");
+        assert_eq!(handle.vertices.len(), 6);
+        assert!(handle
+            .vertices
+            .iter()
+            .all(|vertex| vertex.color == [1.0, 0.85, 0.1, 1.0]));
     }
 
     #[test]
@@ -581,6 +836,83 @@ mod tests {
             },
         ),));
         let data = prepare_mesh_render_data(&world, &entities);
-        assert!(data.vertices.is_empty());
+        assert!(data.chunks.is_empty());
+    }
+
+    #[test]
+    fn test_prepare_mesh_render_data_preserves_unchanged_chunk_identity_and_vertices() {
+        let (mut world, entities) = spawn_world_base();
+        world.spawn((
+            Viewport {
+                mode: ViewMode::ThreeD,
+                rect: [0.0, 0.0, 400.0, 300.0],
+                uniform_index: 0,
+            },
+            ViewportState::default(),
+        ));
+        let geometry = VoxelGeometry {
+            dimensions: [32, 2, 1],
+            spacing: [1.0; 3],
+            origin: [0.0; 3],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+        let mut voxel = VoxelData {
+            geometry,
+            raw_data: vec![0; 64],
+        };
+        voxel.raw_data[1] = 1;
+        voxel.raw_data[20] = 1;
+        let chunked = crate::convert::extract_chunked_mesh_from_voxel_data(&voxel, 16).unwrap();
+        let mut roi = Roi::new_contour(
+            RoiId(4),
+            "Contour".to_string(),
+            ContourData {
+                active_plane_family: PlaneFamily::Axial,
+                slices: Vec::new(),
+            },
+        );
+        roi.session_caches.voxel = Some(crate::components::VoxelCache {
+            data: voxel.clone(),
+            gpu_resources: None,
+        });
+        roi.session_caches.mesh = Some(MeshCache {
+            data: chunked.merged_mesh(),
+            chunks: Some(chunked),
+        });
+        roi.dirty_state.voxel_cache_dirty = false;
+        roi.dirty_state.mesh_cache_dirty = false;
+        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        let roi_entity = world.spawn((roi,));
+
+        let before = prepare_mesh_render_data(&world, &entities);
+        let before_by_part = before
+            .chunks
+            .iter()
+            .map(|chunk| (chunk.key.part, chunk.vertices.clone()))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(before_by_part.len(), 2);
+
+        voxel.raw_data[2] = 1;
+        let rebuilt = crate::convert::extract_chunked_mesh_from_voxel_data(&voxel, 16).unwrap();
+        {
+            let mut roi = world.get::<&mut Roi>(roi_entity).unwrap();
+            roi.session_caches.voxel.as_mut().unwrap().data = voxel;
+            roi.session_caches.mesh = Some(MeshCache {
+                data: rebuilt.merged_mesh(),
+                chunks: Some(rebuilt),
+            });
+        }
+        let after = prepare_mesh_render_data(&world, &entities);
+        let after_by_part = after
+            .chunks
+            .iter()
+            .map(|chunk| (chunk.key.part, chunk.vertices.clone()))
+            .collect::<HashMap<_, _>>();
+
+        let first = MeshRenderPartKey::Chunk(MeshChunkKey { index: [0, 0, 0] });
+        let second = MeshRenderPartKey::Chunk(MeshChunkKey { index: [1, 0, 0] });
+        assert_ne!(before_by_part[&first], after_by_part[&first]);
+        assert_eq!(before_by_part[&second], after_by_part[&second]);
     }
 }

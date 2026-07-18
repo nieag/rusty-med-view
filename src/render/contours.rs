@@ -1,9 +1,8 @@
 use crate::components::*;
 use crate::convert::{
-    oblique_plane_from_view_rotation, orthogonal_plane_from_volume_uv, plane_local_mm_to_world_mm,
-    volume_uv_to_viewport_uv, world_mm_to_volume_uv, PlaneDefinition, PlaneFamily, ViewportMapping,
+    plane_local_mm_to_world_mm, volume_uv_to_viewport_uv, world_mm_to_volume_uv, PlaneDefinition,
+    ViewportMapping,
 };
-use crate::render::roi_views::{RenderRepresentationRequest, RoiRenderViews};
 use hecs::World;
 use wgpu::util::DeviceExt;
 
@@ -44,6 +43,14 @@ impl ContourVertex {
 #[derive(Default, Debug, Clone)]
 pub struct ContourRenderData {
     pub vertices: Vec<ContourVertex>,
+    pub batches: Vec<ContourRenderBatch>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContourRenderBatch {
+    pub start_vertex: u32,
+    pub vertex_count: u32,
+    pub scissor_rect: [u32; 4],
 }
 
 pub struct ContourRenderer {
@@ -51,6 +58,7 @@ pub struct ContourRenderer {
     pub vertex_buffer: wgpu::Buffer,
     pub vertex_capacity: usize,
     pub vertex_count: u32,
+    pub batches: Vec<ContourRenderBatch>,
 }
 
 pub fn create_contour_renderer(
@@ -121,6 +129,7 @@ pub fn create_contour_renderer(
         vertex_buffer,
         vertex_capacity: INITIAL_VERTEX_CAPACITY,
         vertex_count: 0,
+        batches: Vec::new(),
     }
 }
 
@@ -260,25 +269,6 @@ fn planes_are_slice_compatible(displayed: PlaneDefinition, stored: PlaneDefiniti
     signed_distance <= PLANE_ORIGIN_TOLERANCE_MM
 }
 
-fn displayed_plane_for_viewport(
-    mode: ViewMode,
-    cursor_uv: [f32; 3],
-    user_rotation: [f32; 4],
-    geometry: VoxelGeometry,
-) -> Option<PlaneDefinition> {
-    match mode {
-        ViewMode::Axial => orthogonal_plane_from_volume_uv(PlaneFamily::Axial, cursor_uv, geometry),
-        ViewMode::Coronal => {
-            orthogonal_plane_from_volume_uv(PlaneFamily::Coronal, cursor_uv, geometry)
-        }
-        ViewMode::Sagittal => {
-            orthogonal_plane_from_volume_uv(PlaneFamily::Sagittal, cursor_uv, geometry)
-        }
-        ViewMode::Oblique => oblique_plane_from_view_rotation(cursor_uv, user_rotation, geometry),
-        ViewMode::ThreeD => None,
-    }
-}
-
 fn viewport_uv_to_ndc(
     viewport_uv: [f32; 2],
     viewport_rect: [f32; 4],
@@ -297,65 +287,226 @@ fn viewport_uv_to_ndc(
     ])
 }
 
+fn viewport_scissor_rect(viewport_rect: [f32; 4], window_size: [f32; 2]) -> [u32; 4] {
+    let [window_w, window_h] = window_size;
+    let x0 = viewport_rect[0].clamp(0.0, window_w);
+    let y0 = viewport_rect[1].clamp(0.0, window_h);
+    let x1 = (viewport_rect[0] + viewport_rect[2]).clamp(0.0, window_w);
+    let y1 = (viewport_rect[1] + viewport_rect[3]).clamp(0.0, window_h);
+    [
+        x0 as u32,
+        y0 as u32,
+        (x1 - x0).max(0.0) as u32,
+        (y1 - y0).max(0.0) as u32,
+    ]
+}
+
+struct ContourInteraction<'a> {
+    active_roi: Option<hecs::Entity>,
+    active_tool: EditorTool,
+    draft: Option<&'a ContourDraft>,
+    selection: Option<&'a ContourSelection>,
+    move_preview: Option<&'a ContourMovePreview>,
+}
+
+struct ContourViewportContext<'a> {
+    viewport: &'a Viewport,
+    viewport_state: &'a ViewportState,
+    displayed_plane: PlaneDefinition,
+    geometry: VoxelGeometry,
+    window_size: [f32; 2],
+    line_width_ndc: f32,
+    point_size_ndc: f32,
+}
+
+fn append_roi_contour_vertices(
+    vertices: &mut Vec<ContourVertex>,
+    roi_entity: hecs::Entity,
+    roi: &Roi,
+    roi_color: [f32; 4],
+    interaction: &ContourInteraction<'_>,
+    context: &ContourViewportContext<'_>,
+) {
+    let displayed_plane = context.displayed_plane;
+    let view_key = ContourViewKey::from_plane(displayed_plane);
+    let is_active = interaction.active_roi == Some(roi_entity);
+    let preview_contour_data = interaction
+        .move_preview
+        .filter(|preview| is_active && preview.roi_entity == roi_entity)
+        .filter(|_| {
+            roi.contour_data()
+                .is_some_and(|contour| contour.active_plane_family == displayed_plane.family)
+        })
+        .map(|preview| &preview.contour_data);
+    let contour_data = preview_contour_data.or_else(|| roi.contour_view_data_for_render(&view_key));
+    let editable_view = is_active
+        && roi
+            .contour_data()
+            .is_some_and(|contour| contour.active_plane_family == displayed_plane.family);
+    let mapping = ViewportMapping {
+        zoom: context.viewport_state.zoom,
+        pan: context.viewport_state.pan,
+        pivot: context.viewport_state.pivot,
+        screen_aspect: if context.viewport.rect[3] > 0.0 {
+            context.viewport.rect[2] / context.viewport.rect[3]
+        } else {
+            1.0
+        },
+    };
+
+    if let Some(contour_data) = contour_data {
+        for (slice_idx, contour_slice) in contour_data.slices.iter().enumerate() {
+            if !planes_are_slice_compatible(displayed_plane, contour_slice.plane) {
+                continue;
+            }
+
+            for (loop_idx, contour_loop) in contour_slice.loops.iter().enumerate() {
+                let mut loop_ndc_points = Vec::with_capacity(contour_loop.points.len());
+                for point in &contour_loop.points {
+                    let world_mm = plane_local_mm_to_world_mm(point.local_mm, contour_slice.plane);
+                    let volume_uv = world_mm_to_volume_uv(world_mm, context.geometry);
+                    let Some(viewport_uv) = volume_uv_to_viewport_uv(
+                        volume_uv,
+                        displayed_plane,
+                        context.geometry,
+                        mapping,
+                    ) else {
+                        continue;
+                    };
+                    let Some(ndc) =
+                        viewport_uv_to_ndc(viewport_uv, context.viewport.rect, context.window_size)
+                    else {
+                        continue;
+                    };
+                    if ndc[0].is_finite() && ndc[1].is_finite() {
+                        loop_ndc_points.push(ndc);
+                    }
+                }
+
+                if loop_ndc_points.len() < 2 {
+                    continue;
+                }
+
+                let is_selected_loop = editable_view
+                    && interaction.selection.is_some_and(|selection| {
+                        selection.roi_entity == roi_entity
+                            && selection.slice_index == slice_idx
+                            && selection.loop_index == loop_idx
+                    });
+                let loop_color = if is_selected_loop {
+                    [1.0, 0.9, 0.2, 1.0]
+                } else {
+                    roi_color
+                };
+
+                vertices.extend(build_polyline_triangles_ndc(
+                    &loop_ndc_points,
+                    context.line_width_ndc,
+                    loop_color,
+                ));
+                if contour_loop.is_closed {
+                    vertices.extend(build_polyline_triangles_ndc(
+                        &[
+                            loop_ndc_points[loop_ndc_points.len() - 1],
+                            loop_ndc_points[0],
+                        ],
+                        context.line_width_ndc,
+                        loop_color,
+                    ));
+                }
+
+                if editable_view && interaction.active_tool == EditorTool::ContourSelect {
+                    for (point_idx, point_ndc) in loop_ndc_points.into_iter().enumerate() {
+                        let is_selected_point = interaction.selection.is_some_and(|selection| {
+                            selection.roi_entity == roi_entity
+                                && selection.slice_index == slice_idx
+                                && selection.loop_index == loop_idx
+                                && selection.point_index == Some(point_idx)
+                        });
+                        vertices.extend(build_point_marker_triangles_ndc(
+                            point_ndc,
+                            if is_selected_point {
+                                context.point_size_ndc * 1.4
+                            } else {
+                                context.point_size_ndc
+                            },
+                            if is_selected_point {
+                                [1.0, 1.0, 0.0, 1.0]
+                            } else {
+                                loop_color
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(draft) = interaction.draft.filter(|draft| {
+        editable_view
+            && draft.roi_entity == roi_entity
+            && draft.plane.family == displayed_plane.family
+    }) {
+        let mut draft_points_ndc = Vec::with_capacity(draft.points.len());
+        for point in &draft.points {
+            let world_mm = plane_local_mm_to_world_mm(point.local_mm, draft.plane);
+            let volume_uv = world_mm_to_volume_uv(world_mm, context.geometry);
+            let Some(viewport_uv) =
+                volume_uv_to_viewport_uv(volume_uv, displayed_plane, context.geometry, mapping)
+            else {
+                continue;
+            };
+            let Some(ndc) =
+                viewport_uv_to_ndc(viewport_uv, context.viewport.rect, context.window_size)
+            else {
+                continue;
+            };
+            draft_points_ndc.push(ndc);
+        }
+
+        let draft_color = [
+            roi_color[0],
+            roi_color[1],
+            roi_color[2],
+            roi_color[3] * 0.85,
+        ];
+        vertices.extend(build_polyline_triangles_ndc(
+            &draft_points_ndc,
+            context.line_width_ndc,
+            draft_color,
+        ));
+        for point_ndc in draft_points_ndc {
+            vertices.extend(build_point_marker_triangles_ndc(
+                point_ndc,
+                context.point_size_ndc,
+                draft_color,
+            ));
+        }
+    }
+}
+
 pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> ContourRenderData {
-    let (active_roi, contour_draft, contour_selection, contour_move_preview) =
-        match world.get::<&EditorState>(entities.editor).map(|editor| {
+    let (active_roi, active_tool, contour_draft, contour_selection, contour_move_preview) = world
+        .get::<&EditorState>(entities.editor)
+        .map(|editor| {
             (
                 editor.active_roi,
+                editor.active_tool,
                 editor.contour_draft.clone(),
                 editor.contour_selection.clone(),
                 editor.contour_move_preview.clone(),
             )
-        }) {
-            Ok((Some(active_roi), draft, selection, preview)) => {
-                (active_roi, draft, selection, preview)
-            }
-            Err(_) | Ok((None, _, _, _)) => return ContourRenderData::default(),
-        };
-
-    let roi_views = RoiRenderViews::for_world(
-        world,
-        RenderRepresentationRequest {
-            active_roi: Some(active_roi),
-            ..RenderRepresentationRequest::default()
-        },
-    );
-    if !roi_views
-        .contour_overlays
-        .iter()
-        .any(|overlay| overlay.entity == active_roi)
-    {
-        return ContourRenderData::default();
-    }
-    let roi = match world.get::<&Roi>(active_roi) {
-        Ok(roi) => roi,
-        Err(_) => return ContourRenderData::default(),
+        })
+        .unwrap_or((None, EditorTool::Navigation, None, None, None));
+    let main_geometry = {
+        let mut volume_query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
+        volume_query.iter().next().map(|(_, volume)| VoxelGeometry {
+            dimensions: volume.dimensions,
+            spacing: volume.spacing,
+            origin: volume.origin,
+            orientation: volume.orientation,
+        })
     };
-    let preview_contour_data = contour_move_preview
-        .as_ref()
-        .filter(|preview| preview.roi_entity == active_roi)
-        .map(|preview| &preview.contour_data);
-    let Some(contour_data) = preview_contour_data.or_else(|| roi.contour_data()) else {
-        return ContourRenderData::default();
-    };
-
-    let geometry = roi
-        .voxel_cache()
-        .map(|cache| cache.data.geometry)
-        .or_else(|| {
-            let mut volume_query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
-            let (_, volume) = volume_query.iter().next()?;
-            Some(VoxelGeometry {
-                dimensions: volume.dimensions,
-                spacing: volume.spacing,
-                origin: volume.origin,
-                orientation: volume.orientation,
-            })
-        });
-    let Some(geometry) = geometry else {
-        return ContourRenderData::default();
-    };
-
     let cursor_uv = world
         .get::<&Transform>(entities.cursor)
         .map(|cursor| cursor.position)
@@ -371,157 +522,99 @@ pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> Con
     let point_size_ndc = POINT_MARKER_SIZE_PX * px_to_ndc;
 
     let mut vertices = Vec::new();
-    let roi_color = roi.metadata.color;
+    let mut batches = Vec::new();
+    let roi_views = crate::render::roi_views::RoiRenderViews::for_world(
+        world,
+        crate::render::roi_views::RenderRepresentationRequest {
+            active_roi,
+            contour_active_only: false,
+            ..Default::default()
+        },
+    );
+    let mut contour_entities: Vec<_> = roi_views
+        .contour_overlays
+        .into_iter()
+        .map(|view| view.entity)
+        .collect();
+    if let Some(active_roi) = active_roi {
+        let needs_active_preview = !contour_entities.contains(&active_roi)
+            && world
+                .get::<&Roi>(active_roi)
+                .is_ok_and(|roi| roi.metadata.is_visible)
+            && (contour_draft.is_some() || contour_move_preview.is_some());
+        if needs_active_preview {
+            contour_entities.insert(0, active_roi);
+        }
+    }
+    let interaction = ContourInteraction {
+        active_roi,
+        active_tool,
+        draft: contour_draft.as_ref(),
+        selection: contour_selection.as_ref(),
+        move_preview: contour_move_preview.as_ref(),
+    };
 
     for (_, (viewport, viewport_state)) in world.query::<(&Viewport, &ViewportState)>().iter() {
         if viewport.mode == ViewMode::ThreeD {
             continue;
         }
 
-        let Some(displayed_plane) = displayed_plane_for_viewport(
-            viewport.mode,
-            cursor_uv,
-            viewport_state.user_rotation,
-            geometry,
-        ) else {
-            continue;
-        };
-        if displayed_plane.family != contour_data.active_plane_family {
-            continue;
-        }
-
-        let mapping = ViewportMapping {
-            zoom: viewport_state.zoom,
-            pan: viewport_state.pan,
-            pivot: viewport_state.pivot,
-            screen_aspect: if viewport.rect[3] > 0.0 {
-                viewport.rect[2] / viewport.rect[3]
-            } else {
-                1.0
-            },
-        };
-
-        for (slice_idx, contour_slice) in contour_data.slices.iter().enumerate() {
-            if !planes_are_slice_compatible(displayed_plane, contour_slice.plane) {
+        let batch_start = vertices.len();
+        for roi_entity in &contour_entities {
+            let Ok(roi) = world.get::<&Roi>(*roi_entity) else {
                 continue;
+            };
+            let Some(geometry) =
+                main_geometry.or_else(|| roi.voxel_cache().map(|cache| cache.data.geometry))
+            else {
+                continue;
+            };
+            let Some(displayed_plane) = crate::render::roi_views::displayed_plane_for_viewport(
+                viewport.mode,
+                cursor_uv,
+                viewport_state.user_rotation,
+                geometry,
+            ) else {
+                continue;
+            };
+            let mut roi_color = roi.metadata.color;
+            if let Ok(settings) = world.get::<&LayerSettings>(*roi_entity) {
+                roi_color[3] *= settings.opacity;
             }
-
-            for (loop_idx, contour_loop) in contour_slice.loops.iter().enumerate() {
-                let mut loop_ndc_points = Vec::with_capacity(contour_loop.points.len());
-                for point in &contour_loop.points {
-                    let world_mm = plane_local_mm_to_world_mm(point.local_mm, contour_slice.plane);
-                    let volume_uv = world_mm_to_volume_uv(world_mm, geometry);
-                    let Some(viewport_uv) =
-                        volume_uv_to_viewport_uv(volume_uv, displayed_plane, geometry, mapping)
-                    else {
-                        continue;
-                    };
-                    let Some(ndc) = viewport_uv_to_ndc(viewport_uv, viewport.rect, window_size)
-                    else {
-                        continue;
-                    };
-                    if !ndc[0].is_finite() || !ndc[1].is_finite() {
-                        continue;
-                    }
-                    loop_ndc_points.push(ndc);
-                }
-
-                if loop_ndc_points.len() < 2 {
-                    continue;
-                }
-
-                let is_selected_loop = contour_selection.as_ref().is_some_and(|selection| {
-                    selection.roi_entity == active_roi
-                        && selection.slice_index == slice_idx
-                        && selection.loop_index == loop_idx
-                });
-                let loop_color = if is_selected_loop {
-                    [1.0, 0.9, 0.2, 1.0]
-                } else {
-                    roi_color
-                };
-
-                vertices.extend(build_polyline_triangles_ndc(
-                    &loop_ndc_points,
+            append_roi_contour_vertices(
+                &mut vertices,
+                *roi_entity,
+                &roi,
+                roi_color,
+                &interaction,
+                &ContourViewportContext {
+                    viewport,
+                    viewport_state,
+                    displayed_plane,
+                    geometry,
+                    window_size,
                     line_width_ndc,
-                    loop_color,
-                ));
-                if contour_loop.is_closed {
-                    let closing = [
-                        loop_ndc_points[loop_ndc_points.len() - 1],
-                        loop_ndc_points[0],
-                    ];
-                    vertices.extend(build_polyline_triangles_ndc(
-                        &closing,
-                        line_width_ndc,
-                        loop_color,
-                    ));
-                }
-
-                for (point_idx, point_ndc) in loop_ndc_points.into_iter().enumerate() {
-                    let is_selected_point = contour_selection.as_ref().is_some_and(|selection| {
-                        selection.roi_entity == active_roi
-                            && selection.slice_index == slice_idx
-                            && selection.loop_index == loop_idx
-                            && selection.point_index == Some(point_idx)
-                    });
-                    vertices.extend(build_point_marker_triangles_ndc(
-                        point_ndc,
-                        if is_selected_point {
-                            point_size_ndc * 1.4
-                        } else {
-                            point_size_ndc
-                        },
-                        if is_selected_point {
-                            [1.0, 1.0, 0.0, 1.0]
-                        } else {
-                            loop_color
-                        },
-                    ));
-                }
-            }
+                    point_size_ndc,
+                },
+            );
         }
 
-        if let Some(draft) = contour_draft.as_ref().filter(|draft| {
-            draft.roi_entity == active_roi && draft.plane.family == displayed_plane.family
-        }) {
-            let mut draft_points_ndc = Vec::with_capacity(draft.points.len());
-            for point in &draft.points {
-                let world_mm = plane_local_mm_to_world_mm(point.local_mm, draft.plane);
-                let volume_uv = world_mm_to_volume_uv(world_mm, geometry);
-                let Some(viewport_uv) =
-                    volume_uv_to_viewport_uv(volume_uv, displayed_plane, geometry, mapping)
-                else {
-                    continue;
-                };
-                let Some(ndc) = viewport_uv_to_ndc(viewport_uv, viewport.rect, window_size) else {
-                    continue;
-                };
-                draft_points_ndc.push(ndc);
-            }
-
-            let draft_color = [
-                roi_color[0],
-                roi_color[1],
-                roi_color[2],
-                roi_color[3] * 0.85,
-            ];
-            vertices.extend(build_polyline_triangles_ndc(
-                &draft_points_ndc,
-                line_width_ndc,
-                draft_color,
-            ));
-            for point_ndc in draft_points_ndc {
-                vertices.extend(build_point_marker_triangles_ndc(
-                    point_ndc,
-                    point_size_ndc,
-                    draft_color,
-                ));
+        let batch_count = vertices.len() - batch_start;
+        if batch_count > 0 {
+            let scissor_rect = viewport_scissor_rect(viewport.rect, window_size);
+            if scissor_rect[2] > 0 && scissor_rect[3] > 0 {
+                batches.push(ContourRenderBatch {
+                    start_vertex: batch_start as u32,
+                    vertex_count: batch_count as u32,
+                    scissor_rect,
+                });
+            } else {
+                vertices.truncate(batch_start);
             }
         }
     }
 
-    ContourRenderData { vertices }
+    ContourRenderData { vertices, batches }
 }
 
 pub fn upload_contour_render_data(
@@ -531,6 +624,7 @@ pub fn upload_contour_render_data(
     data: &ContourRenderData,
 ) {
     renderer.vertex_count = data.vertices.len() as u32;
+    renderer.batches = data.batches.clone();
     if data.vertices.is_empty() {
         return;
     }
@@ -557,7 +651,7 @@ pub fn render_contours(
     view: &wgpu::TextureView,
     renderer: &ContourRenderer,
 ) {
-    if renderer.vertex_count == 0 {
+    if renderer.vertex_count == 0 || renderer.batches.is_empty() {
         return;
     }
 
@@ -579,13 +673,24 @@ pub fn render_contours(
 
     pass.set_pipeline(&renderer.pipeline);
     pass.set_vertex_buffer(0, renderer.vertex_buffer.slice(..));
-    pass.draw(0..renderer.vertex_count, 0..1);
+    for batch in &renderer.batches {
+        pass.set_scissor_rect(
+            batch.scissor_rect[0],
+            batch.scissor_rect[1],
+            batch.scissor_rect[2],
+            batch.scissor_rect[3],
+        );
+        pass.draw(
+            batch.start_vertex..batch.start_vertex + batch.vertex_count,
+            0..1,
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::convert::orthogonal_plane_from_volume_uv;
+    use crate::convert::{orthogonal_plane_from_volume_uv, PlaneFamily};
 
     fn approx_eq(a: [f32; 2], b: [f32; 2], epsilon: f32) -> bool {
         (a[0] - b[0]).abs() <= epsilon && (a[1] - b[1]).abs() <= epsilon
@@ -667,7 +772,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prepare_contour_render_data_is_empty_when_no_active_contour_roi() {
+    fn test_prepare_contour_render_data_is_empty_when_no_visible_contour_roi() {
         let world = World::new();
         let entities = AppEntities {
             input: hecs::Entity::DANGLING,
@@ -702,6 +807,8 @@ mod tests {
             contour_draft: None,
             contour_selection: None,
             contour_move_preview: None,
+            mesh_edit_preview: None,
+            ..EditorState::default()
         },));
         let viewport = world.spawn((
             Viewport {
@@ -738,7 +845,7 @@ mod tests {
         };
         let plane =
             orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry).unwrap();
-        let roi = Roi::new_contour(
+        let mut roi = Roi::new_contour(
             RoiId(1),
             "Contour".to_string(),
             ContourData {
@@ -762,6 +869,18 @@ mod tests {
                 }],
             },
         );
+        roi.session_caches.voxel = Some(VoxelCache {
+            data: VoxelData {
+                geometry: VoxelGeometry {
+                    dimensions: [16, 16, 16],
+                    spacing: [2.0, 2.0, 2.0],
+                    origin: [100.0, 100.0, 100.0],
+                    orientation: [0.0, 0.0, 0.0, 1.0],
+                },
+                raw_data: vec![0; 16 * 16 * 16],
+            },
+            gpu_resources: None,
+        });
         let roi_entity = world.spawn((roi, LayerSettings { opacity: 1.0 }, RoiTag));
         world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(roi_entity);
 
@@ -779,6 +898,46 @@ mod tests {
 
         let data = prepare_contour_render_data(&world, &entities);
         assert!(!data.vertices.is_empty());
+        assert_eq!(data.batches.len(), 1);
+        assert_eq!(data.batches[0].scissor_rect, [0, 0, 800, 600]);
+
+        let second_contour = world
+            .get::<&Roi>(roi_entity)
+            .unwrap()
+            .contour_data()
+            .unwrap()
+            .clone();
+        let mut second_roi =
+            Roi::new_contour(RoiId(2), "Second contour".to_string(), second_contour);
+        second_roi.metadata.color = [0.1, 0.7, 0.2, 0.8];
+        world.spawn((second_roi, LayerSettings { opacity: 0.5 }, RoiTag));
+        {
+            let mut editor_state = world.get::<&mut EditorState>(editor).unwrap();
+            editor_state.active_roi = None;
+            editor_state.active_tool = EditorTool::ContourSelect;
+        }
+
+        let multi_roi_data = prepare_contour_render_data(&world, &entities);
+        assert_eq!(multi_roi_data.batches.len(), 1);
+        assert!(multi_roi_data
+            .vertices
+            .iter()
+            .any(|vertex| vertex.color == [0.1, 0.7, 0.2, 0.4]));
+        let second_roi_vertex_count = multi_roi_data
+            .vertices
+            .iter()
+            .filter(|vertex| vertex.color == [0.1, 0.7, 0.2, 0.4])
+            .count();
+        assert_eq!(second_roi_vertex_count, 18);
+
+        world
+            .get::<&mut Roi>(roi_entity)
+            .unwrap()
+            .metadata
+            .is_visible = false;
+        let hidden_data = prepare_contour_render_data(&world, &entities);
+        assert!(!hidden_data.vertices.is_empty());
+        assert_eq!(hidden_data.batches.len(), 1);
     }
 
     #[test]
@@ -798,6 +957,8 @@ mod tests {
             contour_draft: None,
             contour_selection: None,
             contour_move_preview: None,
+            mesh_edit_preview: None,
+            ..EditorState::default()
         },));
         world.spawn((
             Viewport {
@@ -869,5 +1030,102 @@ mod tests {
 
         let data = prepare_contour_render_data(&world, &entities);
         assert!(!data.vertices.is_empty());
+    }
+
+    #[test]
+    fn test_voxel_primary_oblique_view_cache_emits_contour_vertices() {
+        let mut world = World::new();
+        let geometry = VoxelGeometry {
+            dimensions: [8, 8, 8],
+            spacing: [1.0, 1.0, 1.0],
+            origin: [0.0, 0.0, 0.0],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+        world.spawn((
+            VolumeData {
+                dimensions: geometry.dimensions,
+                spacing: geometry.spacing,
+                origin: geometry.origin,
+                intensities: Vec::new(),
+                intensity_range: [0.0, 1.0],
+                orientation: geometry.orientation,
+            },
+            MainVolumeTag,
+        ));
+        let cursor = world.spawn((Transform {
+            position: [0.5, 0.5, 0.5],
+        },));
+        let window_settings = world.spawn((WindowSettings {
+            width: 800,
+            height: 600,
+            viewport_rect: [0.0, 0.0, 800.0, 600.0],
+        },));
+        let editor = world.spawn((EditorState::default(),));
+        world.spawn((
+            Viewport {
+                mode: ViewMode::Oblique,
+                rect: [0.0, 0.0, 800.0, 600.0],
+                uniform_index: 0,
+            },
+            ViewportState {
+                user_rotation: glam::Quat::from_rotation_y(0.35).to_array(),
+                ..ViewportState::default()
+            },
+        ));
+        let mut raw_data = vec![0; 8 * 8 * 8];
+        for z in 2..=5 {
+            for y in 2..=5 {
+                for x in 2..=5 {
+                    raw_data[(z * 64 + y * 8 + x) as usize] = 1;
+                }
+            }
+        }
+        let mut roi = Roi::new_voxel_with_cache(
+            RoiId(77),
+            "Oblique cube".to_string(),
+            geometry,
+            raw_data,
+            None,
+        );
+        let axial_plane =
+            orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry).unwrap();
+        roi.upsert_contour_view_cache(
+            ContourViewKey::from_plane(axial_plane),
+            ContourData {
+                active_plane_family: PlaneFamily::Axial,
+                slices: vec![ContourSlice {
+                    plane: axial_plane,
+                    loops: Vec::new(),
+                }],
+            },
+            roi.dirty_state.generations.authoritative,
+            CacheViewState::Current,
+        );
+        let roi_entity = world.spawn((roi, LayerSettings { opacity: 0.5 }, RoiTag));
+        world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(roi_entity);
+        let entities = AppEntities {
+            input: hecs::Entity::DANGLING,
+            editor,
+            gui_state: hecs::Entity::DANGLING,
+            volume_windowing: hecs::Entity::DANGLING,
+            annotations: hecs::Entity::DANGLING,
+            overlay: hecs::Entity::DANGLING,
+            protocol: hecs::Entity::DANGLING,
+            cursor,
+            window_settings,
+        };
+
+        crate::app::roi_runtime::sync_active_roi_contour_view_caches_for_viewports(&mut world);
+        let data = prepare_contour_render_data(&world, &entities);
+
+        let roi = world.get::<&Roi>(roi_entity).unwrap();
+        assert!(roi
+            .contour_cache()
+            .is_some_and(|cache| cache
+                .views
+                .iter()
+                .any(|view| view.key.family == PlaneFamily::Oblique && view.data.has_loops())));
+        assert!(!data.vertices.is_empty());
+        assert_eq!(data.batches.len(), 1);
     }
 }

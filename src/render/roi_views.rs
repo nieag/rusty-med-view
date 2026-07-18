@@ -1,9 +1,10 @@
 use crate::app::components::{
-    ContourData, LayerSettings, MeshData, Roi, RoiAuthoritativeData, RoiCacheKind,
+    CacheViewState, ContourData, LayerSettings, MeshData, Roi, RoiAuthoritativeData, RoiCacheKind,
+    MAX_VOXEL_OVERLAY_SLOTS,
 };
 use hecs::{Entity, World};
 
-pub const DEFAULT_MAX_VOXEL_OVERLAYS: usize = 2;
+pub const DEFAULT_MAX_VOXEL_OVERLAYS: usize = MAX_VOXEL_OVERLAY_SLOTS;
 const PLANE_ORIGIN_TOLERANCE_MM: f32 = 0.5;
 const PLANE_NORMAL_ALIGNMENT_COS: f32 = 0.999;
 
@@ -85,7 +86,7 @@ impl RoiRenderViews {
             if let Ok(active_roi) = world.get::<&Roi>(active) {
                 if let Some(overlay) = voxel_overlay_candidate(world, active) {
                     voxel_candidates.push(overlay);
-                } else if active_roi.metadata.is_visible && is_voxel_authoritative(&active_roi) {
+                } else if active_roi.metadata.is_visible {
                     views.voxel_skips.push(RoiRenderSkip {
                         entity: active,
                         reason: voxel_non_renderable_reason(&active_roi),
@@ -117,13 +118,13 @@ impl RoiRenderViews {
                         entity,
                         opacity: settings.opacity,
                     });
-                } else if roi.metadata.is_visible && is_voxel_authoritative(roi) {
+                } else if roi.metadata.is_visible {
                     views.voxel_skips.push(RoiRenderSkip {
                         entity,
                         reason: voxel_non_renderable_reason(roi),
                     });
                 }
-            } else if roi.metadata.is_visible && is_voxel_authoritative(roi) {
+            } else if roi.metadata.is_visible {
                 views.voxel_skips.push(RoiRenderSkip {
                     entity,
                     reason: voxel_non_renderable_reason(roi),
@@ -138,6 +139,37 @@ impl RoiRenderViews {
                 &mut contour_mesh_acc,
             );
         }
+
+        let active_prefix = usize::from(
+            request.active_roi.is_some()
+                && voxel_candidates
+                    .first()
+                    .is_some_and(|candidate| Some(candidate.entity) == request.active_roi),
+        );
+        voxel_candidates[active_prefix..].sort_by_key(|candidate| {
+            world
+                .get::<&Roi>(candidate.entity)
+                .map(|roi| roi.metadata.roi_id.0)
+                .unwrap_or(u64::MAX)
+        });
+        views.contour_overlays.sort_by_key(|view| {
+            (
+                Some(view.entity) != request.active_roi,
+                world
+                    .get::<&Roi>(view.entity)
+                    .map(|roi| roi.metadata.roi_id.0)
+                    .unwrap_or(u64::MAX),
+            )
+        });
+        views.mesh_overlays.sort_by_key(|view| {
+            (
+                Some(view.entity) != request.active_roi,
+                world
+                    .get::<&Roi>(view.entity)
+                    .map(|roi| roi.metadata.roi_id.0)
+                    .unwrap_or(u64::MAX),
+            )
+        });
 
         let selected = voxel_candidates.len().min(request.max_voxel_overlays);
         let truncated = voxel_candidates.len().saturating_sub(selected);
@@ -169,10 +201,6 @@ fn voxel_overlay_candidate(world: &World, entity: Entity) -> Option<VoxelOverlay
         entity,
         opacity: settings.opacity,
     })
-}
-
-fn is_voxel_authoritative(roi: &Roi) -> bool {
-    matches!(roi.authoritative_data, RoiAuthoritativeData::Voxel(_))
 }
 
 fn voxel_non_renderable_reason(roi: &Roi) -> &'static str {
@@ -209,7 +237,7 @@ fn normalized(v: [f32; 3]) -> Option<glam::Vec3> {
     }
 }
 
-fn planes_are_slice_compatible(
+pub(crate) fn planes_are_slice_compatible(
     displayed: crate::convert::PlaneDefinition,
     stored: crate::convert::PlaneDefinition,
 ) -> bool {
@@ -233,6 +261,39 @@ fn planes_are_slice_compatible(
     signed_distance <= PLANE_ORIGIN_TOLERANCE_MM
 }
 
+pub fn displayed_plane_for_viewport(
+    mode: crate::app::components::ViewMode,
+    cursor_uv: [f32; 3],
+    user_rotation: [f32; 4],
+    geometry: crate::app::components::VoxelGeometry,
+) -> Option<crate::convert::PlaneDefinition> {
+    match mode {
+        crate::app::components::ViewMode::Axial => crate::convert::orthogonal_plane_from_volume_uv(
+            crate::convert::PlaneFamily::Axial,
+            cursor_uv,
+            geometry,
+        ),
+        crate::app::components::ViewMode::Coronal => {
+            crate::convert::orthogonal_plane_from_volume_uv(
+                crate::convert::PlaneFamily::Coronal,
+                cursor_uv,
+                geometry,
+            )
+        }
+        crate::app::components::ViewMode::Sagittal => {
+            crate::convert::orthogonal_plane_from_volume_uv(
+                crate::convert::PlaneFamily::Sagittal,
+                cursor_uv,
+                geometry,
+            )
+        }
+        crate::app::components::ViewMode::Oblique => {
+            crate::convert::oblique_plane_from_view_rotation(cursor_uv, user_rotation, geometry)
+        }
+        crate::app::components::ViewMode::ThreeD => None,
+    }
+}
+
 fn collect_contour_and_mesh_views(
     roi: &Roi,
     entity: Entity,
@@ -243,33 +304,83 @@ fn collect_contour_and_mesh_views(
     if !roi.metadata.is_visible {
         return;
     }
+    if let Some(contour) = contour_data_for_adapter(roi) {
+        if !has_contour_loops(contour) {
+            acc.contour_skips.push(RoiRenderSkip {
+                entity,
+                reason: "contour_data_missing_or_empty",
+            });
+        } else if contour_active_only && Some(entity) != active_roi {
+            acc.contour_skips.push(RoiRenderSkip {
+                entity,
+                reason: "contour_inactive",
+            });
+        } else {
+            acc.contour_views.push(ContourOverlayView { entity });
+        }
+    } else if matches!(roi.authoritative_data, RoiAuthoritativeData::Contour(_))
+        || roi.contour_cache().is_some()
+    {
+        acc.contour_skips.push(RoiRenderSkip {
+            entity,
+            reason: "contour_data_missing_or_empty",
+        });
+    }
+
+    if let Some(mesh) = mesh_data_for_adapter(roi) {
+        if has_mesh_geometry(mesh) {
+            acc.mesh_views.push(MeshOverlayView { entity });
+        } else {
+            acc.mesh_skips.push(RoiRenderSkip {
+                entity,
+                reason: "mesh_data_missing_or_empty",
+            });
+        }
+    } else if matches!(roi.authoritative_data, RoiAuthoritativeData::Mesh(_))
+        || roi.mesh_cache().is_some()
+    {
+        acc.mesh_skips.push(RoiRenderSkip {
+            entity,
+            reason: "mesh_data_missing_or_empty",
+        });
+    }
+}
+
+fn contour_data_for_adapter(roi: &Roi) -> Option<&ContourData> {
     match &roi.authoritative_data {
-        RoiAuthoritativeData::Contour(contour) => {
-            if !has_contour_loops(contour) {
-                acc.contour_skips.push(RoiRenderSkip {
-                    entity,
-                    reason: "contour_data_missing_or_empty",
-                });
-            } else if contour_active_only && Some(entity) != active_roi {
-                acc.contour_skips.push(RoiRenderSkip {
-                    entity,
-                    reason: "contour_inactive",
-                });
+        RoiAuthoritativeData::Contour(contour) => Some(contour),
+        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Mesh(_) => roi
+            .contour_cache()?
+            .views
+            .iter()
+            .find(|view| {
+                !matches!(
+                    view.state,
+                    CacheViewState::Blocked { .. } | CacheViewState::Unsupported { .. }
+                ) && has_contour_loops(&view.data)
+            })
+            .map(|view| &view.data),
+    }
+}
+
+pub(crate) fn mesh_data_for_adapter(roi: &Roi) -> Option<&MeshData> {
+    if roi.preview_state.active {
+        if let Some(preview) = roi.session_caches.preview_mesh.as_ref().filter(|cache| {
+            cache.source_generation == roi.dirty_state.generations.authoritative
+                && cache.preview_revision == roi.preview_state.revision
+        }) {
+            return Some(&preview.data);
+        }
+    }
+    match &roi.authoritative_data {
+        RoiAuthoritativeData::Mesh(mesh) => Some(mesh),
+        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Contour(_) => {
+            if roi.is_cache_current(RoiCacheKind::Mesh) {
+                roi.mesh_cache().map(|cache| &cache.data)
             } else {
-                acc.contour_views.push(ContourOverlayView { entity });
+                None
             }
         }
-        RoiAuthoritativeData::Mesh(mesh) => {
-            if has_mesh_geometry(mesh) {
-                acc.mesh_views.push(MeshOverlayView { entity });
-            } else {
-                acc.mesh_skips.push(RoiRenderSkip {
-                    entity,
-                    reason: "mesh_data_missing_or_empty",
-                });
-            }
-        }
-        RoiAuthoritativeData::Voxel(_) => {}
     }
 }
 
@@ -294,64 +405,38 @@ pub fn contour_renderable_in_viewport(
     if !roi.metadata.is_visible {
         return false;
     }
-    let contour_data = match roi.contour_data() {
-        Some(data) => data,
-        None => return false,
-    };
-    let geometry = roi
-        .voxel_cache()
-        .map(|cache| cache.data.geometry)
-        .or_else(|| {
-            let mut volume_query = world
-                .query::<&crate::app::components::VolumeData>()
-                .with::<&crate::app::components::MainVolumeTag>();
-            let (_, volume) = volume_query.iter().next()?;
-            Some(crate::app::components::VoxelGeometry {
+    let geometry = {
+        let mut volume_query = world
+            .query::<&crate::app::components::VolumeData>()
+            .with::<&crate::app::components::MainVolumeTag>();
+        volume_query
+            .iter()
+            .next()
+            .map(|(_, volume)| crate::app::components::VoxelGeometry {
                 dimensions: volume.dimensions,
                 spacing: volume.spacing,
                 origin: volume.origin,
                 orientation: volume.orientation,
             })
-        });
+    }
+    .or_else(|| roi.voxel_cache().map(|cache| cache.data.geometry));
     let Some(geometry) = geometry else {
         return false;
     };
 
-    let displayed_plane = match viewport.mode {
-        crate::app::components::ViewMode::Axial => crate::convert::orthogonal_plane_from_volume_uv(
-            crate::convert::PlaneFamily::Axial,
-            cursor_uv,
-            geometry,
-        ),
-        crate::app::components::ViewMode::Coronal => {
-            crate::convert::orthogonal_plane_from_volume_uv(
-                crate::convert::PlaneFamily::Coronal,
-                cursor_uv,
-                geometry,
-            )
-        }
-        crate::app::components::ViewMode::Sagittal => {
-            crate::convert::orthogonal_plane_from_volume_uv(
-                crate::convert::PlaneFamily::Sagittal,
-                cursor_uv,
-                geometry,
-            )
-        }
-        crate::app::components::ViewMode::Oblique => {
-            crate::convert::oblique_plane_from_view_rotation(
-                cursor_uv,
-                viewport_state.user_rotation,
-                geometry,
-            )
-        }
-        crate::app::components::ViewMode::ThreeD => None,
-    };
+    let displayed_plane = displayed_plane_for_viewport(
+        viewport.mode,
+        cursor_uv,
+        viewport_state.user_rotation,
+        geometry,
+    );
     let Some(displayed_plane) = displayed_plane else {
         return false;
     };
-    if displayed_plane.family != contour_data.active_plane_family {
+    let key = crate::app::components::ContourViewKey::from_plane(displayed_plane);
+    let Some(contour_data) = roi.contour_view_data_for_render(&key) else {
         return false;
-    }
+    };
 
     contour_data.slices.iter().any(|slice| {
         planes_are_slice_compatible(displayed_plane, slice.plane) && !slice.loops.is_empty()
@@ -520,20 +605,36 @@ mod tests {
     }
 
     #[test]
-    fn test_more_than_two_renderable_voxel_overlays_truncate_with_reason() {
+    fn test_multi_contour_request_keeps_active_first_and_includes_inactive() {
         let mut world = World::new();
-        let a = spawn_voxel(&mut world, 1);
-        let b = spawn_voxel(&mut world, 2);
-        let c = spawn_voxel(&mut world, 3);
-        if !mark_voxel_renderable_with_gpu(&mut world, a)
-            || !mark_voxel_renderable_with_gpu(&mut world, b)
-            || !mark_voxel_renderable_with_gpu(&mut world, c)
-        {
-            return;
+        let active = spawn_contour_with_loops(&mut world, 2);
+        let other = spawn_contour_with_loops(&mut world, 1);
+        let views = RoiRenderViews::for_world(
+            &world,
+            RenderRepresentationRequest {
+                active_roi: Some(active),
+                contour_active_only: false,
+                ..RenderRepresentationRequest::default()
+            },
+        );
+
+        assert_eq!(views.contour_overlays.len(), 2);
+        assert_eq!(views.contour_overlays[0].entity, active);
+        assert_eq!(views.contour_overlays[1].entity, other);
+    }
+
+    #[test]
+    fn test_default_cap_accepts_eight_voxel_overlays_and_truncates_ninth() {
+        let mut world = World::new();
+        let entities: Vec<_> = (1..=9).map(|id| spawn_voxel(&mut world, id)).collect();
+        for entity in entities {
+            if !mark_voxel_renderable_with_gpu(&mut world, entity) {
+                return;
+            }
         }
 
         let views = RoiRenderViews::for_world(&world, RenderRepresentationRequest::default());
-        assert_eq!(views.voxel_overlays.len(), 2);
+        assert_eq!(views.voxel_overlays.len(), MAX_VOXEL_OVERLAY_SLOTS);
         assert_eq!(views.overlay_cap.truncated_count, 1);
         assert!(views
             .voxel_skips
@@ -557,11 +658,13 @@ mod tests {
             &world,
             RenderRepresentationRequest {
                 active_roi: Some(c),
+                max_voxel_overlays: 2,
                 ..RenderRepresentationRequest::default()
             },
         );
         assert_eq!(views.voxel_overlays.len(), 2);
         assert_eq!(views.voxel_overlays[0].entity, c);
+        assert_eq!(views.voxel_overlays[1].entity, a);
         let cap_skip = views
             .voxel_skips
             .iter()

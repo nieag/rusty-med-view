@@ -40,19 +40,20 @@ pub fn get_voxel_at_mouse(
     viewport_entity: hecs::Entity,
     mouse_uv: [f32; 2],
 ) -> Option<[f32; 3]> {
-    let (zoom, pan, user_rotation, mode) = if let (Ok(vp), Ok(vs)) = (
+    let (zoom, pan, user_rotation, mode, viewport_rect) = if let (Ok(vp), Ok(vs)) = (
         world.get::<&Viewport>(viewport_entity),
         world.get::<&ViewportState>(viewport_entity),
     ) {
-        (vs.zoom, vs.pan, vs.user_rotation, vp.mode)
+        (vs.zoom, vs.pan, vs.user_rotation, vp.mode, vp.rect)
     } else {
-        (1.0, [0.0, 0.0], [0.0, 0.0, 0.0, 1.0], ViewMode::ThreeD)
+        (
+            1.0,
+            [0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            ViewMode::ThreeD,
+            [0.0, 0.0, 100.0, 100.0],
+        )
     };
-
-    let viewport_rect = world
-        .get::<&WindowSettings>(entities.window_settings)
-        .map(|w| w.viewport_rect)
-        .unwrap_or([0.0, 0.0, 100.0, 100.0]);
 
     let (vol_aspects, vol_dims, main_geometry) = {
         let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
@@ -309,6 +310,80 @@ pub fn intersect_aabb(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_2d_picking_uses_active_viewport_aspect_ratio() {
+        let mut world = World::new();
+        let geometry = VoxelGeometry {
+            dimensions: [100, 100, 100],
+            spacing: [1.0, 1.0, 1.0],
+            origin: [0.0, 0.0, 0.0],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+        world.spawn((
+            VolumeData {
+                dimensions: geometry.dimensions,
+                spacing: geometry.spacing,
+                origin: geometry.origin,
+                intensities: Vec::new(),
+                intensity_range: [0.0, 1.0],
+                orientation: geometry.orientation,
+            },
+            MainVolumeTag,
+        ));
+        let cursor = world.spawn((Transform {
+            position: [0.5, 0.5, 0.5],
+        },));
+        let window_settings = world.spawn((WindowSettings {
+            width: 900,
+            height: 600,
+            viewport_rect: [0.0, 0.0, 900.0, 600.0],
+        },));
+        let viewport = world.spawn((
+            Viewport {
+                mode: ViewMode::Axial,
+                rect: [0.0, 0.0, 300.0, 300.0],
+                uniform_index: 0,
+            },
+            ViewportState::default(),
+        ));
+        let entities = AppEntities {
+            input: hecs::Entity::DANGLING,
+            editor: hecs::Entity::DANGLING,
+            gui_state: hecs::Entity::DANGLING,
+            volume_windowing: hecs::Entity::DANGLING,
+            annotations: hecs::Entity::DANGLING,
+            overlay: hecs::Entity::DANGLING,
+            protocol: hecs::Entity::DANGLING,
+            cursor,
+            window_settings,
+        };
+        let mouse_uv = [0.75, 0.5];
+        let plane = crate::convert::orthogonal_plane_from_volume_uv(
+            crate::convert::PlaneFamily::Axial,
+            [0.5, 0.5, 0.5],
+            geometry,
+        )
+        .unwrap();
+        let expected = crate::convert::viewport_uv_to_volume_uv(
+            mouse_uv,
+            plane,
+            geometry,
+            crate::convert::ViewportMapping {
+                zoom: 1.0,
+                pan: [0.0, 0.0],
+                pivot: [0.5, 0.5],
+                screen_aspect: 1.0,
+            },
+        )
+        .unwrap();
+
+        let actual = get_voxel_at_mouse(&world, &entities, viewport, mouse_uv).unwrap();
+
+        for axis in 0..3 {
+            assert!((actual[axis] - expected[axis]).abs() < 1e-6);
+        }
+    }
 
     #[test]
     fn test_intersect_aabb_direct_hit() {

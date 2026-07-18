@@ -153,10 +153,8 @@ impl RenderingContext {
                 volume_view: &volume_view,
                 volume_sampler: &volume_sampler,
                 uniform_buffer: &uniform_buffer,
-                overlay1_view: &dummy_r8.1,
-                overlay1_lut: &default_lut.1,
-                overlay2_view: &dummy_r8.1,
-                overlay2_lut: &default_lut.1,
+                overlay_views: [&dummy_r8.1; MAX_VOXEL_OVERLAY_SLOTS],
+                overlay_lut: &default_lut.1,
                 overlay_buffer: &overlay_buffer,
             },
         );

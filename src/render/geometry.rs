@@ -140,6 +140,19 @@ pub fn build_display_projection_context(
     })
 }
 
+pub fn project_world_mm_to_viewport_uv_3d(
+    world_mm: [f32; 3],
+    context: DisplayProjectionContext,
+) -> Option<[f32; 2]> {
+    let uv = crate::convert::world_mm_to_volume_uv(world_mm, context.main_geometry);
+    world_to_ndc(
+        Vec3::from_array(uv),
+        crate::components::ViewMode::ThreeD,
+        &context.view_projection_3d(),
+        context.screen_aspect,
+    )
+}
+
 /// Project a world position (0..1) to Normalized Device Coordinates (0..1 relative to viewport)
 pub fn world_to_ndc(
     pos: Vec3,

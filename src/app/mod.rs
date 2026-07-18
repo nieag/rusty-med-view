@@ -129,7 +129,7 @@ fn apply_image_label_mpr_basic_preset(
     entities: &AppEntities,
     active_roi: hecs::Entity,
 ) -> bool {
-    protocols::apply_protocol(world, entities, "Standard 2x2");
+    protocols::apply_protocol(world, entities, "ROI MPR + Oblique");
     if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
         editor.active_roi = Some(active_roi);
     }
@@ -231,6 +231,7 @@ impl AppState {
                             EditorTool::Navigation => "navigation".to_string(),
                             EditorTool::ContourSelect => "contour_select".to_string(),
                             EditorTool::ContourDraw => "contour_draw".to_string(),
+                            EditorTool::MeshDeform => "mesh_deform".to_string(),
                         }),
                     )
                 })
@@ -243,7 +244,7 @@ impl AppState {
                 RenderRepresentationRequest {
                     active_roi: active_roi_entity,
                     max_voxel_overlays: roi_runtime::MAX_SIMULTANEOUS_ROI_OVERLAYS,
-                    contour_active_only: true,
+                    contour_active_only: false,
                 },
             );
             let mut overlay_slots: std::collections::HashMap<hecs::Entity, u32> =
@@ -286,6 +287,20 @@ impl AppState {
                     overlay_slot: overlay_slots.get(&entity).copied(),
                     voxel_dimensions,
                     non_empty_voxel_bounds: non_empty_bounds,
+                    preview_active: roi.preview_state.active,
+                    preview_revision: roi.preview_state.revision,
+                    running_job: roi.job_state.running.map(|kind| kind.as_str().to_string()),
+                    pending_jobs: roi
+                        .job_state
+                        .pending
+                        .iter()
+                        .map(|request| request.kind.as_str().to_string())
+                        .collect(),
+                    completed_job_count: roi.job_metrics.completed_count,
+                    discarded_job_count: roi.job_metrics.discarded_count,
+                    failed_job_count: roi.job_metrics.failed_count,
+                    last_job_duration_ms: roi.job_metrics.last_duration_ms,
+                    max_job_queue_depth: roi.job_metrics.max_queue_depth,
                 });
             }
 
@@ -403,29 +418,13 @@ impl AppState {
                     if let Some(geometry) = active_roi_geometry
                         .or_else(|| roi_runtime::main_volume_voxel_geometry(&ctx.scene.world))
                     {
-                        let displayed_plane = match vp.mode {
-                            ViewMode::Axial => crate::convert::orthogonal_plane_from_volume_uv(
-                                crate::convert::PlaneFamily::Axial,
-                                cursor_pos,
-                                geometry,
-                            ),
-                            ViewMode::Coronal => crate::convert::orthogonal_plane_from_volume_uv(
-                                crate::convert::PlaneFamily::Coronal,
-                                cursor_pos,
-                                geometry,
-                            ),
-                            ViewMode::Sagittal => crate::convert::orthogonal_plane_from_volume_uv(
-                                crate::convert::PlaneFamily::Sagittal,
-                                cursor_pos,
-                                geometry,
-                            ),
-                            ViewMode::Oblique => crate::convert::oblique_plane_from_view_rotation(
+                        let displayed_plane =
+                            crate::render::roi_views::displayed_plane_for_viewport(
+                                vp.mode,
                                 cursor_pos,
                                 vp_state.user_rotation,
                                 geometry,
-                            ),
-                            ViewMode::ThreeD => None,
-                        };
+                            );
                         if let Some(plane) = displayed_plane {
                             let contour_key = ContourViewKey::from_plane(plane);
                             let contour_req = roi_runtime::request_contour_view_state(
@@ -558,9 +557,46 @@ impl AppState {
                         }
                     }
                     ViewMode::Oblique => {
-                        overlay_blockers.push("overlay_not_supported_in_oblique".to_string());
-                        contour_blockers.push("contour_not_supported_in_oblique".to_string());
-                        mesh_blockers.push("mesh_not_supported_in_oblique".to_string());
+                        mesh_blockers.push("mesh_not_applicable_in_2d_view".to_string());
+                        if !active_roi_visible {
+                            overlay_blockers.push("active_roi_not_visible".to_string());
+                            contour_blockers.push("active_roi_not_visible".to_string());
+                        }
+                        if active_roi_overlay_slot.is_none() {
+                            overlay_blockers.push("active_roi_overlay_slot_missing".to_string());
+                            if let Some(active) = active_roi_entity {
+                                if let Some(skip) = roi_views
+                                    .voxel_skips
+                                    .iter()
+                                    .find(|skip| skip.entity == active)
+                                {
+                                    overlay_blockers.push(skip.reason.to_string());
+                                }
+                            }
+                        }
+                        if !active_roi_has_renderable_cache {
+                            overlay_blockers
+                                .push("active_roi_renderable_voxel_cache_missing".to_string());
+                        }
+                        overlay_renderable = overlay_blockers.is_empty()
+                            && active_roi_has_renderable_cache
+                            && image_renderable;
+                        contour_renderable = active_roi_entity
+                            .map(|active| {
+                                crate::render::roi_views::contour_renderable_in_viewport(
+                                    &ctx.scene.world,
+                                    vp,
+                                    vp_state,
+                                    cursor_pos,
+                                    active,
+                                )
+                            })
+                            .unwrap_or(false);
+                        if !contour_renderable && contour_blockers.is_empty() {
+                            contour_blockers
+                                .push("active_contour_data_missing_or_empty".to_string());
+                        }
+                        contour_renderable = contour_renderable && image_renderable;
                     }
                 }
                 blockers.extend(overlay_blockers);
@@ -583,9 +619,13 @@ impl AppState {
                     mesh_cache_state: mesh_cache_state.clone(),
                     contour_editable,
                     contour_promotable,
-                    stale: voxel_cache_state == "stale"
-                        || contour_view_cache_state == "stale"
-                        || mesh_cache_state == "stale",
+                    stale: [
+                        voxel_cache_state.as_str(),
+                        contour_view_cache_state.as_str(),
+                        mesh_cache_state.as_str(),
+                    ]
+                    .iter()
+                    .any(|state| matches!(*state, "preview" | "stale" | "queued" | "rebuilding")),
                     image_renderable,
                     overlay_renderable,
                     contour_renderable,
@@ -696,6 +736,8 @@ impl AppState {
                 overlay_slots_max: roi_views.overlay_cap.max_count as u32,
                 contour_batch_count: self.qa.contour_batch_count,
                 mesh_batch_count: self.qa.mesh_batch_count,
+                mesh_chunks_uploaded: self.qa.mesh_chunks_uploaded,
+                mesh_chunks_reused: self.qa.mesh_chunks_reused,
                 last_warning: self.qa.last_render_warning.clone(),
                 last_error: self.qa.last_render_error.clone(),
             };
@@ -759,6 +801,8 @@ impl AppState {
                     overlay_slots_max: roi_runtime::MAX_SIMULTANEOUS_ROI_OVERLAYS as u32,
                     contour_batch_count: self.qa.contour_batch_count,
                     mesh_batch_count: self.qa.mesh_batch_count,
+                    mesh_chunks_uploaded: self.qa.mesh_chunks_uploaded,
+                    mesh_chunks_reused: self.qa.mesh_chunks_reused,
                     last_warning: self.qa.last_render_warning.clone(),
                     last_error: self.qa.last_render_error.clone(),
                 },
@@ -910,23 +954,26 @@ impl ApplicationHandler<AppEvent> for App {
             return;
         };
 
-        if ctx.gui.handle_event(&ctx.window, &event) {
+        let egui_consumed = ctx.gui.handle_event(&ctx.window, &event);
+        if let WindowEvent::CursorMoved { position, .. } = &event {
+            systems::sys_update_mouse(
+                &mut ctx.scene.world,
+                &ctx.scene.entities,
+                position.x,
+                position.y,
+            );
+            systems::sys_handle_mouse_drag(&mut ctx.scene.world, &ctx.scene.entities);
+            ctx.window.request_redraw();
+            return;
+        }
+        if egui_consumed {
             ctx.window.request_redraw();
             return;
         }
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::CursorMoved { position, .. } => {
-                systems::sys_update_mouse(
-                    &mut ctx.scene.world,
-                    &ctx.scene.entities,
-                    position.x,
-                    position.y,
-                );
-                systems::sys_handle_mouse_drag(&mut ctx.scene.world, &ctx.scene.entities);
-                ctx.window.request_redraw();
-            }
+            WindowEvent::CursorMoved { .. } => unreachable!("cursor events return above"),
             WindowEvent::MouseInput { button, state, .. } => {
                 systems::sys_handle_mouse_button(
                     &mut ctx.scene.world,
@@ -988,6 +1035,8 @@ impl ApplicationHandler<AppEvent> for App {
                 qa_runtime.viewport_uniform_count = frame_stats.viewport_uniform_count;
                 qa_runtime.contour_batch_count = frame_stats.contour_batch_count;
                 qa_runtime.mesh_batch_count = frame_stats.mesh_batch_count;
+                qa_runtime.mesh_chunks_uploaded = frame_stats.mesh_chunks_uploaded;
+                qa_runtime.mesh_chunks_reused = frame_stats.mesh_chunks_reused;
                 if let Some(category) = frame_stats.last_warning {
                     qa_runtime.last_render_warning = Some(category.to_string());
                 }

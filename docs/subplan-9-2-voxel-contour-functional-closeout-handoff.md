@@ -204,6 +204,47 @@ Manual checks:
 - edit oblique contour
 - verify unsupported oblique voxel overlay reports blocker
 
+## Implementation Status
+
+Current state:
+
+- `Step 9.2A` complete
+- `Step 9.2B` complete
+- `Step 9.2C` complete
+- `Step 9.2D` complete
+- `Step 9.2E` complete; arbitrary-plane derived contour views were added during R6 closeout
+- `Step 9.2F` complete for code/docs validation; browser QA remains optional and was not run in sandbox
+
+Completed in this pass:
+
+- added runtime contour-view cache builds for requested orthogonal viewport slices from the current voxel cache
+- wired per-frame active-viewport contour-view cache sync before render prep
+- taught contour render/QA paths to consume derived contour view caches instead of authoritative contour data only
+- added explicit sidebar promotion for the displayed derived contour view with state-driven status messaging
+- preserved contour edit invalidation so voxel cache, derived contour views, and mesh cache report stale/rebuilding/current transitions
+- corrected QA oblique contour reporting so active oblique contour edit/render is no longer reported as silently unsupported
+- corrected contour display/cache planes to use main display geometry while preserving ROI-native voxel extraction
+- replaced full-family extraction for each view request with requested-slice extraction
+- preserved inner voxel-component boundaries as contour hole loops
+- made extracted contour ROI CPU voxel caches immediately current for derived view promotion
+- separated CPU voxel-cache freshness from GPU overlay residency
+- added contour visibility enforcement and renderer-owned per-viewport scissor batches
+- aligned mesh-authoritative request state and render adapters with authoritative/derived data
+- added arbitrary-plane voxel contour extraction and prevented empty orthogonal caches from suppressing valid oblique render views
+
+Retained limitations/blockers:
+
+- arbitrary-plane contour commits use a full-contour voxel rebuild until incremental oblique rasterization is implemented or measured unnecessary
+- mesh-primary roundtrip remains out of scope for `9.2`
+- browser QA (`trunk serve` plus Playwright) was not run in this sandboxed pass
+
+Validation run in this workspace:
+
+- `rtk cargo fmt --all`
+- `rtk cargo test -q`
+- `rtk cargo check --target wasm32-unknown-unknown -q`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+
 ## Do Not Do
 
 - Do not implement mesh-primary full roundtrip here.
