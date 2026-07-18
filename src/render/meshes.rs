@@ -158,7 +158,7 @@ pub fn prepare_mesh_render_data(world: &World, entities: &AppEntities) -> MeshRe
         .ok()
         .map(|editor| {
             (
-                editor.mesh_edit_preview.clone(),
+                editor.mesh_edit_preview().cloned(),
                 editor.mesh_selection,
                 editor.active_tool,
             )

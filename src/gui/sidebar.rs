@@ -19,12 +19,11 @@ fn activate_promoted_edit_tool(world: &mut World, entities: &AppEntities, tool: 
         input.contour_move_pending_commit = false;
         input.mesh_move_pending_commit = false;
     }
+    roi::cancel_roi_edit_preview(world, entities.editor);
     if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
         editor.active_tool = tool;
         editor.contour_draft = None;
         editor.contour_selection = None;
-        editor.contour_move_preview = None;
-        editor.mesh_edit_preview = None;
         editor.mesh_selection = None;
     }
 }
@@ -424,7 +423,7 @@ pub fn draw_sidebar(
                 .map(|editor| {
                     (
                         editor
-                            .mesh_edit_preview
+                            .mesh_edit_preview()
                             .as_ref()
                             .is_some_and(|preview| preview.roi_entity == mesh_entity),
                         editor.mesh_brush_radius_mm,
@@ -450,7 +449,7 @@ pub fn draw_sidebar(
                         if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
                             input.mesh_move_pending_commit = false;
                         }
-                        match roi_runtime::commit_mesh_edit_preview(world, entities.editor) {
+                        match roi::commit_mesh_edit_preview(world, entities.editor) {
                             Ok(()) => {
                                 handlers::set_status_message(
                                     world,
@@ -471,7 +470,7 @@ pub fn draw_sidebar(
                         if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
                             input.mesh_move_pending_commit = false;
                         }
-                        match roi_runtime::cancel_mesh_edit_preview(world, entities.editor) {
+                        match roi::cancel_mesh_edit_preview(world, entities.editor) {
                             Ok(()) => {
                                 handlers::set_status_message(
                                     world,

@@ -19,6 +19,7 @@ pub enum ContourPlaneFamilySwitchError {
 pub enum ContourMutationError {
     MissingRoi,
     MissingEditorState,
+    MissingPreview,
     NotContourRoi,
 }
 

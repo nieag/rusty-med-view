@@ -193,8 +193,7 @@ pub struct EditorState {
     pub active_tool: EditorTool,
     pub contour_draft: Option<ContourDraft>,
     pub contour_selection: Option<ContourSelection>,
-    pub contour_move_preview: Option<ContourMovePreview>,
-    pub mesh_edit_preview: Option<MeshEditPreview>,
+    pub roi_edit_preview: Option<RoiEditPreview>,
     pub mesh_selection: Option<MeshSelection>,
     pub mesh_brush_radius_mm: f32,
     pub mesh_brush_strength: f32,
@@ -209,8 +208,7 @@ impl Default for EditorState {
             active_tool: EditorTool::Navigation,
             contour_draft: None,
             contour_selection: None,
-            contour_move_preview: None,
-            mesh_edit_preview: None,
+            roi_edit_preview: None,
             mesh_selection: None,
             mesh_brush_radius_mm: 12.0,
             mesh_brush_strength: 1.0,
@@ -255,6 +253,12 @@ pub struct ContourMovePreview {
 pub struct MeshEditPreview {
     pub roi_entity: hecs::Entity,
     pub mesh_data: MeshData,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RoiEditPreview {
+    ContourMove(ContourMovePreview),
+    MeshDeform(MeshEditPreview),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -750,18 +754,6 @@ impl Roi {
             .iter()
             .any(|request| request.kind == kind)
             || (self.job_state.pending.is_empty() && self.job_state.queued == Some(kind))
-    }
-
-    pub fn begin_preview(&mut self) -> u64 {
-        self.preview_state.active = true;
-        self.preview_state.revision = self.preview_state.revision.saturating_add(1);
-        self.preview_state.revision
-    }
-
-    pub fn end_preview(&mut self) {
-        self.preview_state.active = false;
-        self.session_caches.preview_voxel = None;
-        self.session_caches.preview_mesh = None;
     }
 }
 

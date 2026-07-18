@@ -2,9 +2,9 @@ use crate::app::roi;
 #[cfg(test)]
 use crate::app::roi_runtime;
 use crate::components::{
-    AppEntities, ContourData, ContourDraft, ContourLoop, ContourMovePreview, ContourPoint,
-    ContourSelection, ContourSlice, EditorState, EditorTool, InputState, MainVolumeTag, Roi,
-    Transform, ViewMode, Viewport, VoxelGeometry,
+    AppEntities, ContourData, ContourDraft, ContourLoop, ContourPoint, ContourSelection,
+    ContourSlice, EditorState, EditorTool, InputState, MainVolumeTag, Roi, Transform, ViewMode,
+    Viewport, VoxelGeometry,
 };
 use crate::convert::{
     contour_slice_contains_point, oblique_plane_from_view_rotation,
@@ -217,24 +217,18 @@ pub fn clear_contour_draft_for_roi_change(
             editor.contour_draft = None;
             editor.mesh_selection = None;
             ended_preview_roi = editor
-                .contour_move_preview
-                .take()
+                .take_contour_move_preview()
                 .map(|preview| preview.roi_entity);
             ended_mesh_preview_roi = editor
-                .mesh_edit_preview
-                .take()
+                .take_mesh_edit_preview()
                 .map(|preview| preview.roi_entity);
         }
     }
     if let Some(roi_entity) = ended_preview_roi {
-        if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-            roi.end_preview();
-        }
+        roi::end_roi_preview(world, roi_entity);
     }
     if let Some(roi_entity) = ended_mesh_preview_roi {
-        if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-            roi.end_preview();
-        }
+        roi::end_roi_preview(world, roi_entity);
     }
 }
 
@@ -249,15 +243,12 @@ pub fn clear_contour_selection_for_roi_change(
             editor.contour_selection = None;
             editor.mesh_selection = None;
             ended_preview_roi = editor
-                .contour_move_preview
-                .take()
+                .take_contour_move_preview()
                 .map(|preview| preview.roi_entity);
         }
     }
     if let Some(roi_entity) = ended_preview_roi {
-        if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-            roi.end_preview();
-        }
+        roi::end_roi_preview(world, roi_entity);
     }
 }
 
@@ -267,15 +258,12 @@ pub fn clear_contour_selection_if_inactive(world: &mut World, editor_entity: hec
         if editor.active_tool != EditorTool::ContourSelect {
             editor.contour_selection = None;
             ended_preview_roi = editor
-                .contour_move_preview
-                .take()
+                .take_contour_move_preview()
                 .map(|preview| preview.roi_entity);
         }
     }
     if let Some(roi_entity) = ended_preview_roi {
-        if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-            roi.end_preview();
-        }
+        roi::end_roi_preview(world, roi_entity);
     }
 }
 
@@ -724,26 +712,15 @@ pub fn move_selected_point_preview(
     let (selection, mut contour_data, viewport) = selected_context(world, entities)?;
     let dirty_plane =
         update_selected_point_in_data(&selection, &mut contour_data, viewport, viewport_uv)?;
-    if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
-        editor.contour_move_preview = Some(ContourMovePreview {
-            roi_entity: selection.roi_entity,
-            contour_data,
-        });
-    }
-    if let Ok(mut roi) = world.get::<&mut Roi>(selection.roi_entity) {
-        let revision = roi.begin_preview();
-        let source_generation = roi.dirty_state.generations.authoritative;
-        roi.enqueue_job(crate::components::RoiJobRequest {
-            kind: crate::components::RoiJobKind::RebuildVoxelCache,
-            source_generation,
-            preview_revision: Some(revision),
-            priority: crate::components::RoiJobPriority::InteractivePreview,
-            dirty_region: crate::components::RoiDirtyRegion::ContourSlice(
-                crate::components::ContourSliceKey::from_plane(dirty_plane),
-            ),
-        });
-    }
-    Ok(())
+    roi::begin_contour_move_preview(
+        world,
+        entities.editor,
+        selection.roi_entity,
+        contour_data,
+        dirty_plane,
+    )
+    .map(|_| ())
+    .map_err(|_| ContourEditOperationError::ReplaceFailed)
 }
 
 fn update_selected_point_in_data(
@@ -785,8 +762,7 @@ pub fn finalize_selected_point_move(
             .get::<&EditorState>(entities.editor)
             .map_err(|_| ContourEditOperationError::MissingSelection)?;
         let preview = editor
-            .contour_move_preview
-            .as_ref()
+            .contour_move_preview()
             .ok_or(ContourEditOperationError::MissingSelection)?;
         let selection = editor
             .contour_selection
@@ -800,27 +776,8 @@ pub fn finalize_selected_point_move(
             .map(|slice| slice.plane)
             .ok_or(ContourEditOperationError::InvalidSelection)?
     };
-    let preview = {
-        let mut editor = world
-            .get::<&mut EditorState>(entities.editor)
-            .map_err(|_| ContourEditOperationError::MissingSelection)?;
-        editor
-            .contour_move_preview
-            .take()
-            .ok_or(ContourEditOperationError::MissingSelection)?
-    };
-    let result = roi::replace_contour_data_for_slice_with_history(
-        world,
-        entities.editor,
-        preview.roi_entity,
-        preview.contour_data,
-        dirty_plane,
-    )
-    .map_err(|_| ContourEditOperationError::ReplaceFailed);
-    if let Ok(mut roi) = world.get::<&mut Roi>(preview.roi_entity) {
-        roi.end_preview();
-    }
-    result
+    roi::commit_contour_move_preview(world, entities.editor, dirty_plane)
+        .map_err(|_| ContourEditOperationError::ReplaceFailed)
 }
 
 pub fn insert_point_into_selected_loop(
@@ -1420,8 +1377,7 @@ mod tests {
                 points: vec![],
             }),
             contour_selection: None,
-            contour_move_preview: None,
-            mesh_edit_preview: None,
+            roi_edit_preview: None,
             ..EditorState::default()
         },));
 
@@ -1620,7 +1576,7 @@ mod tests {
         }
         {
             let editor = world.get::<&EditorState>(entities.editor).unwrap();
-            assert!(editor.contour_move_preview.is_some());
+            assert!(editor.contour_move_preview().is_some());
             assert!(editor.roi_undo_stack.is_empty());
         }
 
@@ -1724,7 +1680,7 @@ mod tests {
         assert!(!roi.preview_state.active);
         {
             let editor = world.get::<&EditorState>(entities.editor).unwrap();
-            assert!(editor.contour_move_preview.is_none());
+            assert!(editor.contour_move_preview().is_none());
             assert_eq!(editor.roi_undo_stack.len(), 1);
         }
         drop(roi);

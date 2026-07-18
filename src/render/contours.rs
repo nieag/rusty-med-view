@@ -494,7 +494,7 @@ pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> Con
                 editor.active_tool,
                 editor.contour_draft.clone(),
                 editor.contour_selection.clone(),
-                editor.contour_move_preview.clone(),
+                editor.contour_move_preview().cloned(),
             )
         })
         .unwrap_or((None, EditorTool::Navigation, None, None, None));
@@ -806,8 +806,7 @@ mod tests {
             active_tool: EditorTool::Navigation,
             contour_draft: None,
             contour_selection: None,
-            contour_move_preview: None,
-            mesh_edit_preview: None,
+            roi_edit_preview: None,
             ..EditorState::default()
         },));
         let viewport = world.spawn((
@@ -956,8 +955,7 @@ mod tests {
             active_tool: EditorTool::Navigation,
             contour_draft: None,
             contour_selection: None,
-            contour_move_preview: None,
-            mesh_edit_preview: None,
+            roi_edit_preview: None,
             ..EditorState::default()
         },));
         world.spawn((

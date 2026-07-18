@@ -71,25 +71,8 @@ fn set_editor_tool(
         editor.contour_draft = None;
         editor.contour_selection = None;
         editor.mesh_selection = None;
-        let preview_roi = editor
-            .contour_move_preview
-            .take()
-            .map(|preview| preview.roi_entity);
-        let mesh_preview_roi = editor
-            .mesh_edit_preview
-            .take()
-            .map(|preview| preview.roi_entity);
         drop(editor);
-        if let Some(roi_entity) = preview_roi {
-            if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-                roi.end_preview();
-            }
-        }
-        if let Some(roi_entity) = mesh_preview_roi {
-            if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-                roi.end_preview();
-            }
-        }
+        crate::app::roi::cancel_roi_edit_preview(world, entities.editor);
         return Ok(());
     }
 
@@ -136,30 +119,17 @@ fn set_editor_tool(
     if requested_tool != EditorTool::ContourSelect {
         editor.contour_selection = None;
     }
-    let preview_roi = if requested_tool != EditorTool::ContourSelect {
-        editor
-            .contour_move_preview
-            .take()
-            .map(|preview| preview.roi_entity)
-    } else {
-        None
-    };
     if requested_tool != EditorTool::MeshDeform {
         editor.mesh_selection = None;
     }
-    let mesh_preview_roi = if requested_tool != EditorTool::MeshDeform {
-        editor
-            .mesh_edit_preview
-            .take()
-            .map(|preview| preview.roi_entity)
-    } else {
-        None
+    let cancel_preview = match editor.roi_edit_preview.as_ref() {
+        Some(RoiEditPreview::ContourMove(_)) => requested_tool != EditorTool::ContourSelect,
+        Some(RoiEditPreview::MeshDeform(_)) => requested_tool != EditorTool::MeshDeform,
+        None => false,
     };
     drop(editor);
-    for roi_entity in [preview_roi, mesh_preview_roi].into_iter().flatten() {
-        if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-            roi.end_preview();
-        }
+    if cancel_preview {
+        crate::app::roi::cancel_roi_edit_preview(world, entities.editor);
     }
     Ok(())
 }

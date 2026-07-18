@@ -2,6 +2,7 @@ pub mod authority;
 pub mod cache;
 pub mod history;
 pub mod model;
+pub mod preview;
 pub mod requests;
 
 pub use authority::{
@@ -17,6 +18,11 @@ pub use history::{
     can_redo_roi_edit, can_undo_roi_edit, clear_roi_edit_history_for_roi, redo_roi_edit,
     replace_contour_data_for_slice_with_history, replace_contour_data_with_history,
     replace_mesh_data_with_history, undo_roi_edit, RoiEditHistoryError,
+};
+pub use preview::{
+    begin_contour_move_preview, begin_mesh_edit_preview, cancel_mesh_edit_preview,
+    cancel_roi_edit_preview, commit_contour_move_preview, commit_mesh_edit_preview,
+    end_roi_preview, mesh_edit_preview_for_roi,
 };
 
 pub use model::{

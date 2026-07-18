@@ -1,6 +1,7 @@
+use crate::app::roi;
 use crate::components::{
-    AppEntities, EditorState, EditorTool, MeshData, MeshEditPreview, MeshSelection, Roi,
-    RoiAuthoritativeData, ViewMode, Viewport, ViewportState,
+    AppEntities, EditorState, EditorTool, MeshData, MeshSelection, Roi, RoiAuthoritativeData,
+    ViewMode, Viewport, ViewportState,
 };
 use crate::render::geometry::{
     build_display_projection_context, project_world_mm_to_viewport_uv_3d, DisplayProjectionContext,
@@ -143,16 +144,8 @@ pub fn update_selected_mesh_deform_preview(
         .ok_or(MeshEditInteractionError::ProjectionFailed)?;
     let mesh_data =
         deform_mesh_with_brush(&mesh, anchor_world_mm, delta_world_mm, radius_mm, strength);
-    if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
-        editor.mesh_edit_preview = Some(MeshEditPreview {
-            roi_entity: selection.roi_entity,
-            mesh_data,
-        });
-    }
-    let mut roi = world
-        .get::<&mut Roi>(selection.roi_entity)
-        .map_err(|_| MeshEditInteractionError::MissingActiveRoi)?;
-    Ok(roi.begin_preview())
+    roi::begin_mesh_edit_preview(world, entities.editor, selection.roi_entity, mesh_data)
+        .map_err(|_| MeshEditInteractionError::MissingActiveRoi)
 }
 
 fn nearest_mesh_vertex(
@@ -462,10 +455,7 @@ mod tests {
             .clone();
         assert_eq!(authoritative_after, authoritative_before);
         let editor = world.get::<&EditorState>(entities.editor).unwrap();
-        let preview = editor
-            .mesh_edit_preview
-            .as_ref()
-            .expect("mesh preview data");
+        let preview = editor.mesh_edit_preview().expect("mesh preview data");
         assert_ne!(
             preview.mesh_data.vertices[selection.vertex_index].world_mm,
             authoritative_before.vertices[selection.vertex_index].world_mm

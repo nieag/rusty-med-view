@@ -260,16 +260,7 @@ pub fn ensure_contour_view_cache(
     roi_entity: hecs::Entity,
     view_key: &ContourViewKey,
 ) -> RepresentationRequestStatus {
-    let mesh_preview = world
-        .query::<&EditorState>()
-        .iter()
-        .find_map(|(_, editor)| {
-            editor
-                .mesh_edit_preview
-                .as_ref()
-                .filter(|preview| preview.roi_entity == roi_entity)
-                .map(|preview| preview.mesh_data.clone())
-        });
+    let mesh_preview = crate::app::roi::preview::mesh_edit_preview_for_roi(world, roi_entity);
     let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) else {
         return RepresentationRequestStatus::blocked("roi_missing");
     };
@@ -827,52 +818,21 @@ pub fn begin_mesh_translation_preview(
             *coordinate += delta;
         }
     }
-    let mut editor = world
-        .get::<&mut EditorState>(editor_entity)
-        .map_err(|_| MeshMutationError::MissingEditorState)?;
-    editor.mesh_edit_preview = Some(MeshEditPreview {
-        roi_entity,
-        mesh_data: mesh,
-    });
-    drop(editor);
-    let mut roi = world
-        .get::<&mut Roi>(roi_entity)
-        .map_err(|_| MeshMutationError::MissingRoi)?;
-    Ok(roi.begin_preview())
+    crate::app::roi::preview::begin_mesh_edit_preview(world, editor_entity, roi_entity, mesh)
 }
 
 pub fn commit_mesh_edit_preview(
     world: &mut World,
     editor_entity: hecs::Entity,
 ) -> Result<(), MeshMutationError> {
-    let preview = world
-        .get::<&mut EditorState>(editor_entity)
-        .map_err(|_| MeshMutationError::MissingEditorState)?
-        .mesh_edit_preview
-        .take()
-        .ok_or(MeshMutationError::MissingPreview)?;
-    let result =
-        replace_mesh_data_with_history(world, editor_entity, preview.roi_entity, preview.mesh_data);
-    if let Ok(mut roi) = world.get::<&mut Roi>(preview.roi_entity) {
-        roi.end_preview();
-    }
-    result
+    crate::app::roi::preview::commit_mesh_edit_preview(world, editor_entity)
 }
 
 pub fn cancel_mesh_edit_preview(
     world: &mut World,
     editor_entity: hecs::Entity,
 ) -> Result<(), MeshMutationError> {
-    let preview = world
-        .get::<&mut EditorState>(editor_entity)
-        .map_err(|_| MeshMutationError::MissingEditorState)?
-        .mesh_edit_preview
-        .take()
-        .ok_or(MeshMutationError::MissingPreview)?;
-    if let Ok(mut roi) = world.get::<&mut Roi>(preview.roi_entity) {
-        roi.end_preview();
-    }
-    Ok(())
+    crate::app::roi::preview::cancel_mesh_edit_preview(world, editor_entity)
 }
 
 pub fn request_rebuild_voxel_cache_from_mesh(
@@ -1704,8 +1664,7 @@ fn process_contour_voxel_rebuild_for_entity(
             .iter()
             .find_map(|(_, editor)| {
                 editor
-                    .contour_move_preview
-                    .as_ref()
+                    .contour_move_preview()
                     .filter(|preview| preview.roi_entity == roi_entity)
                     .map(|preview| preview.contour_data.clone())
             });

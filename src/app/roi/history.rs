@@ -218,8 +218,7 @@ fn apply_roi_edit_history(
     editor.active_roi = Some(entry.roi_entity);
     editor.contour_draft = None;
     editor.contour_selection = None;
-    editor.contour_move_preview = None;
-    editor.mesh_edit_preview = None;
+    editor.take_roi_edit_preview();
     editor.mesh_selection = None;
     Ok(entry.roi_entity)
 }

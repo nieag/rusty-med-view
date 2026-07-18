@@ -128,7 +128,7 @@ pub fn sys_handle_mouse_button(
         let _ = crate::systems::finalize_selected_point_move(world, entities);
     }
     if finalize_mesh_move {
-        match crate::app::roi_runtime::commit_mesh_edit_preview(world, entities.editor) {
+        match crate::app::roi::commit_mesh_edit_preview(world, entities.editor) {
             Ok(()) => set_status_message(
                 world,
                 entities,
