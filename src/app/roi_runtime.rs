@@ -320,7 +320,7 @@ pub fn ensure_contour_view_cache(
             }
         };
     }
-    if roi.job_state.running == Some(RoiJobKind::RebuildVoxelCache) {
+    if roi.running_job_kind() == Some(RoiJobKind::RebuildVoxelCache) {
         if let Some(cache) = roi.contour_view_cache_mut(view_key) {
             if !matches!(
                 cache.state,
@@ -486,7 +486,7 @@ pub fn sync_active_roi_mesh_cache_for_viewports(world: &mut World) {
     };
     if matches!(&roi.authoritative_data, RoiAuthoritativeData::Mesh(_))
         || roi.has_queued_job(RoiJobKind::RebuildMeshCache)
-        || roi.job_state.running == Some(RoiJobKind::RebuildMeshCache)
+        || roi.running_job_kind() == Some(RoiJobKind::RebuildMeshCache)
     {
         return;
     }
@@ -1173,7 +1173,7 @@ pub fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
 
     let entity = world.query::<&Roi>().iter().find_map(|(entity, roi)| {
         (!matches!(roi.authoritative_data, RoiAuthoritativeData::Mesh(_))
-            && roi.job_state.running.is_none()
+            && roi.running_job_kind().is_none()
             && roi.has_queued_job(RoiJobKind::RebuildMeshCache)
             && roi.voxel_cache().is_some()
             && roi.is_cache_current(RoiCacheKind::Voxel))
@@ -1336,7 +1336,7 @@ fn process_mesh_voxel_rebuild_jobs_with_context(
         .iter()
         .filter_map(|(entity, roi)| {
             (matches!(roi.authoritative_data, RoiAuthoritativeData::Mesh(_))
-                && roi.job_state.running.is_none()
+                && roi.running_job_kind().is_none()
                 && roi.has_queued_job(RoiJobKind::RebuildVoxelCache))
             .then_some(entity)
         })
@@ -1490,7 +1490,7 @@ fn process_contour_voxel_rebuild_jobs_with_hook(
         if !matches!(roi.authoritative_data, RoiAuthoritativeData::Contour(_)) {
             continue;
         }
-        if roi.job_state.running.is_none() && roi.has_queued_job(RoiJobKind::RebuildVoxelCache) {
+        if roi.running_job_kind().is_none() && roi.has_queued_job(RoiJobKind::RebuildVoxelCache) {
             rebuild_entities.push(entity);
         }
     }
@@ -2232,7 +2232,7 @@ mod tests {
         assert_eq!(job, Some(RoiJobKind::RebuildContourCache));
         assert!(status.is_dirty);
         assert!(!status.is_current);
-        assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildContourCache));
+        assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildContourCache));
     }
 
     #[test]
@@ -2259,7 +2259,7 @@ mod tests {
         let roi = world.get::<&Roi>(entity).unwrap();
         assert!(!status_after.is_dirty);
         assert!(status_after.is_current);
-        assert_eq!(roi.job_state.running, None);
+        assert_eq!(roi.running_job_kind(), None);
     }
 
     #[test]
@@ -2487,7 +2487,7 @@ mod tests {
         assert_eq!(roi.dirty_state.generations.authoritative, 2);
         assert_eq!(roi.voxel_cache().unwrap().data, source_voxel);
         assert!(roi.is_cache_current(RoiCacheKind::Voxel));
-        assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildMeshCache));
+        assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildMeshCache));
     }
 
     #[test]
@@ -2646,7 +2646,7 @@ mod tests {
         assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
         assert!(roi.is_cache_dirty(RoiCacheKind::Contour));
         assert!(!roi.is_cache_dirty(RoiCacheKind::Mesh));
-        assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+        assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
     }
 
     #[test]
@@ -2673,7 +2673,7 @@ mod tests {
         let translated = roi.mesh_data().unwrap();
         assert_eq!(translated.vertices[0].world_mm, [1.0, -2.0, 0.5]);
         assert_eq!(translated.faces, original.faces);
-        assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+        assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
         assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
         assert!(roi.is_cache_dirty(RoiCacheKind::Contour));
     }
@@ -2719,7 +2719,7 @@ mod tests {
         let roi = world.get::<&Roi>(entity).unwrap();
         assert_eq!(roi.mesh_data().unwrap().vertices[0].world_mm[0], 0.25);
         assert!(!roi.preview_state.active);
-        assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+        assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
         drop(roi);
 
         {
@@ -2732,7 +2732,7 @@ mod tests {
         {
             let roi = world.get::<&Roi>(entity).unwrap();
             assert_eq!(roi.mesh_data(), Some(&original));
-            assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+            assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
             assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
             assert!(roi.is_cache_dirty(RoiCacheKind::Contour));
         }
@@ -2768,7 +2768,7 @@ mod tests {
         let roi = world.get::<&Roi>(entity).unwrap();
         assert_eq!(roi.mesh_data(), Some(&original));
         assert!(!roi.preview_state.active);
-        assert_eq!(roi.job_state.queued, None);
+        assert_eq!(roi.queued_job_kind(), None);
     }
 
     #[test]
@@ -2785,7 +2785,7 @@ mod tests {
         assert_eq!(voxel_result, Ok(()));
         {
             let roi = world.get::<&Roi>(entity).unwrap();
-            assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+            assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
         }
         process_mesh_voxel_rebuild_jobs(&mut world);
         let voxel_status = cache_status(&world, entity, RoiCacheKind::Voxel).unwrap();
@@ -2905,7 +2905,7 @@ mod tests {
         let roi = world.get::<&Roi>(created).unwrap();
         assert!(roi.is_cache_current(RoiCacheKind::Voxel));
         assert!(roi.voxel_gpu_cache().is_none());
-        assert_eq!(roi.job_state.queued, None);
+        assert_eq!(roi.queued_job_kind(), None);
     }
 
     #[test]
@@ -3229,7 +3229,7 @@ mod tests {
 
         replace_contour_data(&mut world, extracted, replacement).expect("replace should succeed");
         let roi = world.get::<&Roi>(extracted).unwrap();
-        assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+        assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
         assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
     }
 
@@ -3259,8 +3259,8 @@ mod tests {
             .raw_data
             .iter()
             .any(|v| *v != 0));
-        assert_eq!(roi.job_state.running, None);
-        assert_eq!(roi.job_state.queued, None);
+        assert_eq!(roi.running_job_kind(), None);
+        assert_eq!(roi.queued_job_kind(), None);
         assert!(roi.is_cache_current(RoiCacheKind::Mesh));
         assert!(roi.mesh_cache().is_some_and(|cache| cache.chunks.is_some()));
     }
@@ -3393,7 +3393,7 @@ mod tests {
             assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
             assert!(!roi.is_cache_dirty(RoiCacheKind::Contour));
             assert!(roi.is_cache_dirty(RoiCacheKind::Mesh));
-            assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+            assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
         }
 
         assert_eq!(
@@ -3459,7 +3459,7 @@ mod tests {
                 roi.dirty_state.generations.authoritative,
                 generation_after_commit + 1
             );
-            assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+            assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
             assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
             assert!(roi.is_cache_dirty(RoiCacheKind::Mesh));
         }
@@ -3477,7 +3477,7 @@ mod tests {
                 roi.dirty_state.generations.authoritative,
                 generation_after_commit + 2
             );
-            assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+            assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
         }
         let editor_state = world.get::<&EditorState>(editor).unwrap();
         assert_eq!(editor_state.roi_undo_stack.len(), 1);
@@ -3649,8 +3649,8 @@ mod tests {
         let roi = world.get::<&Roi>(entity).unwrap();
         assert_eq!(roi.contour_data(), Some(&replacement));
         assert!(roi.is_cache_current(RoiCacheKind::Voxel));
-        assert_eq!(roi.job_state.running, None);
-        assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildMeshCache));
+        assert_eq!(roi.running_job_kind(), None);
+        assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildMeshCache));
         let voxel_cache = roi.voxel_cache().expect("voxel cache should exist");
         assert_eq!(voxel_cache.data.geometry.dimensions, [4, 4, 4]);
         assert!(voxel_cache.data.raw_data.iter().any(|v| *v != 0));
@@ -3762,8 +3762,8 @@ mod tests {
         assert_eq!(roi.contour_data(), Some(&contour_before));
         assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
         assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
-        assert_eq!(roi.job_state.running, None);
-        assert_eq!(roi.job_state.queued, None);
+        assert_eq!(roi.running_job_kind(), None);
+        assert_eq!(roi.queued_job_kind(), None);
     }
 
     #[test]
@@ -3793,8 +3793,8 @@ mod tests {
         let roi = world.get::<&Roi>(entity).unwrap();
         assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
         assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
-        assert_eq!(roi.job_state.running, None);
-        assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+        assert_eq!(roi.running_job_kind(), None);
+        assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
     }
 
     #[test]
@@ -3808,8 +3808,8 @@ mod tests {
         process_contour_voxel_rebuild_jobs(&mut world);
 
         let roi = world.get::<&Roi>(entity).unwrap();
-        assert_eq!(roi.job_state.running, None);
-        assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildMeshCache));
+        assert_eq!(roi.running_job_kind(), None);
+        assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildMeshCache));
         assert!(roi.is_cache_current(RoiCacheKind::Voxel));
         assert_eq!(
             roi.cache_generation(RoiCacheKind::Voxel),
@@ -3916,8 +3916,8 @@ mod tests {
 
         let roi = world.get::<&Roi>(entity).unwrap();
         assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
-        assert_eq!(roi.job_state.running, None);
-        assert_eq!(roi.job_state.queued, None);
+        assert_eq!(roi.running_job_kind(), None);
+        assert_eq!(roi.queued_job_kind(), None);
     }
 
     #[test]
@@ -3943,12 +3943,12 @@ mod tests {
         assert!(!contour_roi.is_cache_current(RoiCacheKind::Voxel));
         assert!(contour_roi.voxel_cache().is_none());
         assert_eq!(
-            contour_roi.job_state.queued,
+            contour_roi.queued_job_kind(),
             Some(RoiJobKind::RebuildVoxelCache)
         );
 
         let voxel_roi = world.get::<&Roi>(voxel_entity).unwrap();
-        assert_eq!(voxel_roi.job_state.queued, None);
+        assert_eq!(voxel_roi.queued_job_kind(), None);
     }
 
     #[test]
@@ -4180,7 +4180,13 @@ mod tests {
 
         {
             let mut roi = world.get::<&mut Roi>(entity).unwrap();
-            roi.job_state.running = Some(RoiJobKind::RebuildVoxelCache);
+            roi.job_state.running_request = Some(RoiJobRequest {
+                kind: RoiJobKind::RebuildVoxelCache,
+                source_generation: roi.dirty_state.generations.authoritative,
+                preview_revision: None,
+                priority: RoiJobPriority::VisibleCommitted,
+                dirty_region: RoiDirtyRegion::Full,
+            });
         }
 
         let rebuilding = request_contour_view_state(&world, entity, &key);
@@ -4229,7 +4235,7 @@ mod tests {
         assert_eq!(contour.active_plane_family, PlaneFamily::Coronal);
         assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
         assert!(roi.is_cache_dirty(RoiCacheKind::Mesh));
-        assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+        assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
         assert_eq!(
             roi.contour_view_cache(&sagittal_key).unwrap().state,
             CacheViewState::Stale

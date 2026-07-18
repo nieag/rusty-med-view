@@ -124,7 +124,7 @@ pub fn request_voxel_overlay_state(
     if roi.voxel_cache().is_none() {
         return RepresentationRequestStatus::blocked("voxel_cache_missing");
     }
-    if roi.job_state.running == Some(RoiJobKind::RebuildVoxelCache) {
+    if roi.running_job_kind() == Some(RoiJobKind::RebuildVoxelCache) {
         return RepresentationRequestStatus::rebuilding("voxel_cache_rebuilding");
     }
     if roi.has_queued_job(RoiJobKind::RebuildVoxelCache) {
@@ -150,7 +150,7 @@ pub fn request_mesh_cache_state(
         return RepresentationRequestStatus::current();
     }
     if roi.mesh_cache().is_none() {
-        if roi.job_state.running == Some(RoiJobKind::RebuildMeshCache) {
+        if roi.running_job_kind() == Some(RoiJobKind::RebuildMeshCache) {
             return RepresentationRequestStatus::rebuilding("mesh_cache_rebuilding");
         }
         if roi.has_queued_job(RoiJobKind::RebuildMeshCache) {
@@ -158,7 +158,7 @@ pub fn request_mesh_cache_state(
         }
         return RepresentationRequestStatus::blocked("mesh_cache_missing");
     }
-    if roi.job_state.running == Some(RoiJobKind::RebuildMeshCache) {
+    if roi.running_job_kind() == Some(RoiJobKind::RebuildMeshCache) {
         return RepresentationRequestStatus::rebuilding("mesh_cache_rebuilding");
     }
     if roi.has_queued_job(RoiJobKind::RebuildMeshCache) {
@@ -195,7 +195,7 @@ pub fn request_contour_view_state(
     }
 
     let Some(view_cache) = roi.contour_view_cache(view_key) else {
-        if roi.job_state.running == Some(RoiJobKind::RebuildVoxelCache) {
+        if roi.running_job_kind() == Some(RoiJobKind::RebuildVoxelCache) {
             return ContourRepresentationStatus {
                 request: RepresentationRequestStatus::rebuilding(
                     "voxel_cache_rebuilding_for_contour_view",
@@ -244,7 +244,7 @@ pub fn request_contour_view_state(
 
     let request = match &view_cache.state {
         CacheViewState::Current => {
-            if roi.job_state.running == Some(RoiJobKind::RebuildVoxelCache) {
+            if roi.running_job_kind() == Some(RoiJobKind::RebuildVoxelCache) {
                 RepresentationRequestStatus::rebuilding("voxel_cache_rebuilding_for_contour_view")
             } else if roi.has_queued_job(RoiJobKind::RebuildVoxelCache) {
                 RepresentationRequestStatus::queued("voxel_cache_queued_for_contour_view")

@@ -423,14 +423,6 @@ impl RoiJobKind {
             Self::RebuildMeshCache => "rebuild_mesh_cache",
         }
     }
-
-    fn dependency_rank(self) -> u8 {
-        match self {
-            Self::RebuildVoxelCache => 0,
-            Self::RebuildContourCache => 1,
-            Self::RebuildMeshCache => 2,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -440,58 +432,12 @@ pub enum RoiJobPriority {
     Background,
 }
 
-impl RoiJobPriority {
-    fn rank(self) -> u8 {
-        match self {
-            Self::InteractivePreview => 0,
-            Self::VisibleCommitted => 1,
-            Self::Background => 2,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoiDirtyRegion {
     Full,
     VoxelAabb { min: [u32; 3], max: [u32; 3] },
     ContourSlice(ContourSliceKey),
     MeshChunkAabb { min: [u32; 3], max: [u32; 3] },
-}
-
-impl RoiDirtyRegion {
-    fn merged(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::Full, _) | (_, Self::Full) => Self::Full,
-            (
-                Self::VoxelAabb {
-                    min: a_min,
-                    max: a_max,
-                },
-                Self::VoxelAabb {
-                    min: b_min,
-                    max: b_max,
-                },
-            ) => Self::VoxelAabb {
-                min: std::array::from_fn(|axis| a_min[axis].min(b_min[axis])),
-                max: std::array::from_fn(|axis| a_max[axis].max(b_max[axis])),
-            },
-            (
-                Self::MeshChunkAabb {
-                    min: a_min,
-                    max: a_max,
-                },
-                Self::MeshChunkAabb {
-                    min: b_min,
-                    max: b_max,
-                },
-            ) => Self::MeshChunkAabb {
-                min: std::array::from_fn(|axis| a_min[axis].min(b_min[axis])),
-                max: std::array::from_fn(|axis| a_max[axis].max(b_max[axis])),
-            },
-            (left, right) if left == right => left,
-            _ => Self::Full,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -520,10 +466,6 @@ pub struct RoiPreviewState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RoiJobState {
-    /// Compatibility projection of `running_request`.
-    pub running: Option<RoiJobKind>,
-    /// Compatibility projection of the highest-priority pending request.
-    pub queued: Option<RoiJobKind>,
     pub running_request: Option<RoiJobRequest>,
     pub pending: Vec<RoiJobRequest>,
 }
@@ -667,93 +609,6 @@ impl Roi {
             RoiAuthoritativeData::Mesh(mesh) => Some(mesh),
             RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Contour(_) => None,
         }
-    }
-
-    pub fn enqueue_rebuild(&mut self, kind: RoiJobKind) {
-        self.enqueue_job(RoiJobRequest {
-            kind,
-            source_generation: self.dirty_state.generations.authoritative,
-            preview_revision: None,
-            priority: RoiJobPriority::VisibleCommitted,
-            dirty_region: RoiDirtyRegion::Full,
-        });
-    }
-
-    pub fn enqueue_job(&mut self, request: RoiJobRequest) {
-        if self.job_state.running_request == Some(request) {
-            return;
-        }
-
-        if let Some(index) = self
-            .job_state
-            .pending
-            .iter()
-            .position(|queued| queued.kind == request.kind)
-        {
-            let queued = self.job_state.pending[index];
-            if queued.source_generation > request.source_generation
-                || (queued.source_generation == request.source_generation
-                    && queued.preview_revision > request.preview_revision)
-            {
-                return;
-            }
-            self.job_state.pending[index] = RoiJobRequest {
-                dirty_region: queued.dirty_region.merged(request.dirty_region),
-                priority: if queued.priority.rank() <= request.priority.rank() {
-                    queued.priority
-                } else {
-                    request.priority
-                },
-                ..request
-            };
-        } else {
-            self.job_state.pending.push(request);
-        }
-        self.job_state
-            .pending
-            .sort_by_key(|request| (request.priority.rank(), request.kind.dependency_rank()));
-        self.job_state.queued = self.job_state.pending.first().map(|request| request.kind);
-        self.job_metrics.max_queue_depth = self
-            .job_metrics
-            .max_queue_depth
-            .max(self.job_state.pending.len());
-    }
-
-    pub fn start_queued_job(&mut self) -> Option<RoiJobKind> {
-        if self.job_state.running.is_some() {
-            return None;
-        }
-        let request = if self.job_state.pending.is_empty() {
-            let kind = self.job_state.queued.take()?;
-            RoiJobRequest {
-                kind,
-                source_generation: self.dirty_state.generations.authoritative,
-                preview_revision: None,
-                priority: RoiJobPriority::VisibleCommitted,
-                dirty_region: RoiDirtyRegion::Full,
-            }
-        } else {
-            self.job_state.pending.remove(0)
-        };
-        self.job_state.running = Some(request.kind);
-        self.job_state.running_request = Some(request);
-        self.job_state.queued = self.job_state.pending.first().map(|request| request.kind);
-        Some(request.kind)
-    }
-
-    pub fn finish_job(&mut self, kind: RoiJobKind) {
-        if self.job_state.running == Some(kind) {
-            self.job_state.running = None;
-            self.job_state.running_request = None;
-        }
-    }
-
-    pub fn has_queued_job(&self, kind: RoiJobKind) -> bool {
-        self.job_state
-            .pending
-            .iter()
-            .any(|request| request.kind == kind)
-            || (self.job_state.pending.is_empty() && self.job_state.queued == Some(kind))
     }
 }
 
@@ -1207,14 +1062,17 @@ mod tests {
         roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
 
         assert_eq!(roi.job_state.pending.len(), 2);
-        assert_eq!(roi.job_state.queued, Some(RoiJobKind::RebuildVoxelCache));
+        assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
         assert_eq!(roi.start_queued_job(), Some(RoiJobKind::RebuildVoxelCache));
         roi.finish_job(RoiJobKind::RebuildVoxelCache);
         assert_eq!(
             roi.start_queued_job(),
             Some(RoiJobKind::RebuildContourCache)
         );
-        assert_eq!(roi.job_state.running, Some(RoiJobKind::RebuildContourCache));
+        assert_eq!(
+            roi.running_job_kind(),
+            Some(RoiJobKind::RebuildContourCache)
+        );
     }
 
     #[test]
@@ -1332,7 +1190,7 @@ mod tests {
         assert!(!roi.dirty_state.authoritative_dirty);
         assert!(!roi.is_cache_dirty(RoiCacheKind::Voxel));
         assert!(roi.is_cache_current(RoiCacheKind::Voxel));
-        assert_eq!(roi.job_state.running, None);
+        assert_eq!(roi.running_job_kind(), None);
     }
 
     #[test]
@@ -1657,6 +1515,6 @@ mod tests {
             roi.cache_generation(RoiCacheKind::Mesh),
             roi.dirty_state.generations.authoritative
         );
-        assert_eq!(roi.job_state.running, None);
+        assert_eq!(roi.running_job_kind(), None);
     }
 }

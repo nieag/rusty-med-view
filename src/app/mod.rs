@@ -290,7 +290,7 @@ impl AppState {
                     non_empty_voxel_bounds: non_empty_bounds,
                     preview_active: roi.preview_state.active,
                     preview_revision: roi.preview_state.revision,
-                    running_job: roi.job_state.running.map(|kind| kind.as_str().to_string()),
+                    running_job: roi.running_job_kind().map(|kind| kind.as_str().to_string()),
                     pending_jobs: roi
                         .job_state
                         .pending

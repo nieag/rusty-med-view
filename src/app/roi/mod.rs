@@ -4,6 +4,7 @@ pub mod history;
 pub mod model;
 pub mod preview;
 pub mod requests;
+pub mod scheduler;
 
 pub use authority::{
     promote_contour_view_to_authoritative, promote_current_mesh_cache_to_authority,
