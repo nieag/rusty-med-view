@@ -151,6 +151,7 @@ impl Roi {
     pub fn is_cache_current(&self, kind: RoiCacheKind) -> bool {
         !self.is_cache_dirty(kind)
             && self.cache_generation(kind) == self.dirty_state.generations.authoritative
+            && self.cache_geometry_matches(kind)
     }
 
     pub fn mark_authoritative_changed(&mut self) {
@@ -429,6 +430,25 @@ impl Roi {
         self.validate_voxel_data_geometry(&cache.data)
     }
 
+    fn cache_geometry_matches(&self, kind: RoiCacheKind) -> bool {
+        match kind {
+            RoiCacheKind::Voxel => self
+                .voxel_cache()
+                .is_none_or(|cache| self.validate_voxel_cache_geometry(cache).is_ok()),
+            RoiCacheKind::Contour => self.contour_cache().is_none_or(|cache| {
+                cache
+                    .views
+                    .iter()
+                    .all(|view| view.geometry_identity == self.reference_geometry().identity())
+            }),
+            // Test fixtures may install a mesh directly. Production installation stamps it.
+            RoiCacheKind::Mesh => self
+                .session_caches
+                .mesh_geometry_identity
+                .is_none_or(|identity| identity == self.reference_geometry().identity()),
+        }
+    }
+
     fn validate_voxel_data_geometry(&self, data: &VoxelData) -> Result<(), CacheInstallError> {
         let reference = self.reference_geometry();
         let actual = RoiGeometry::from_legacy_parts(
@@ -641,5 +661,29 @@ mod tests {
             roi.contour_view_cache(&key).unwrap().geometry_identity,
             roi.reference_geometry().identity()
         );
+    }
+
+    #[test]
+    fn test_mismatched_mesh_geometry_stamp_is_not_current() {
+        let mut roi = test_roi();
+        let generation = roi.dirty_state.generations.authoritative;
+        roi.install_mesh_cache_result(
+            MeshCache {
+                data: crate::app::roi::MeshData {
+                    vertices: Vec::new(),
+                    faces: Vec::new(),
+                },
+                chunks: None,
+            },
+            generation,
+        )
+        .unwrap();
+        roi.session_caches.mesh_geometry_identity = Some(
+            RoiGeometry::from_legacy_parts([2, 1, 1], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0])
+                .unwrap()
+                .identity(),
+        );
+
+        assert!(!roi.is_cache_current(RoiCacheKind::Mesh));
     }
 }
