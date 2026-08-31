@@ -427,6 +427,7 @@ Completed:
 - [x] Main-volume changes no longer invalidate contour ROI caches that own reference geometry
 - [x] Added `advance_roi_work` as the single render-frame ROI work coordinator
 - [x] Pending ROI work now requests another frame independently of GUI repaint timing
+- [x] Reject voxel and preview-voxel cache installation when geometry differs from ROI reference
 
 Pending:
 
@@ -434,7 +435,7 @@ Pending:
 - [ ] Phase 0: add end-to-end contour-to-mesh acceptance coverage
 - [x] Phase 0: expose ROI geometry identity and dimensions through QA
 - [ ] Phase 1: attach validated geometry to every ROI and import path
-- [ ] Phase 2: stamp cache acceptance with geometry identity and migrate validated plane frames
+- [ ] Phase 2: carry geometry identity on every cache and migrate validated plane frames
 - [ ] Phase 3: move remaining direct processor callers behind the coordinator
 - [ ] Phase 4: remaining authority paths
 - [ ] Phase 5: transitional deletion

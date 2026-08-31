@@ -3,12 +3,14 @@ use crate::app::components::{
     GpuVolumeResources, MeshCache, PreviewMeshCache, PreviewVoxelCache, Roi, RoiCacheKind,
     RoiDirtyState, RoiJobKind, VoxelCache, VoxelData, MAX_CONTOUR_VIEW_CACHE_ENTRIES,
 };
+use crate::convert::RoiGeometry;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheInstallError {
     StaleGeneration { expected: u64, actual: u64 },
     PreviewInactive,
     StalePreviewRevision { expected: u64, actual: u64 },
+    GeometryMismatch,
 }
 
 impl Roi {
@@ -212,6 +214,7 @@ impl Roi {
         source_generation: u64,
     ) -> Result<(), CacheInstallError> {
         self.validate_source_generation(source_generation)?;
+        self.validate_voxel_cache_geometry(&cache)?;
         self.session_caches.voxel = Some(cache);
         self.finish_cache_rebuild(RoiCacheKind::Voxel);
         Ok(())
@@ -369,6 +372,7 @@ impl Roi {
         cache: PreviewVoxelCache,
     ) -> Result<(), CacheInstallError> {
         self.validate_preview_source(cache.source_generation, cache.preview_revision)?;
+        self.validate_voxel_data_geometry(&cache.data)?;
         self.session_caches.preview_voxel = Some(cache);
         Ok(())
     }
@@ -405,6 +409,26 @@ impl Roi {
             });
         }
         Ok(())
+    }
+
+    fn validate_voxel_cache_geometry(&self, cache: &VoxelCache) -> Result<(), CacheInstallError> {
+        self.validate_voxel_data_geometry(&cache.data)
+    }
+
+    fn validate_voxel_data_geometry(&self, data: &VoxelData) -> Result<(), CacheInstallError> {
+        let Some(reference) = self.reference_geometry() else {
+            return Ok(());
+        };
+        let actual = RoiGeometry::from_legacy_parts(
+            data.geometry.dimensions,
+            data.geometry.spacing,
+            data.geometry.origin,
+            data.geometry.orientation,
+        )
+        .map_err(|_| CacheInstallError::GeometryMismatch)?;
+        (actual.identity() == reference.identity())
+            .then_some(())
+            .ok_or(CacheInstallError::GeometryMismatch)
     }
 
     fn next_authoritative_generation(&self) -> u64 {
@@ -461,6 +485,32 @@ mod tests {
             },
             gpu_resources: None,
         }
+    }
+
+    #[test]
+    fn test_voxel_cache_result_with_mismatched_reference_geometry_is_rejected() {
+        let reference_geometry = RoiGeometry::from_legacy_parts(
+            [2, 2, 2],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap();
+        let mut roi = Roi::new_contour_with_geometry(
+            RoiId(1),
+            "test".to_string(),
+            reference_geometry,
+            ContourData {
+                active_plane_family: PlaneFamily::Axial,
+                slices: Vec::new(),
+            },
+        );
+        let generation = roi.dirty_state.generations.authoritative;
+
+        let result = roi.install_voxel_cache_result(test_voxel_cache(1), generation);
+
+        assert_eq!(result, Err(CacheInstallError::GeometryMismatch));
+        assert!(roi.voxel_cache().is_none());
     }
 
     #[test]
