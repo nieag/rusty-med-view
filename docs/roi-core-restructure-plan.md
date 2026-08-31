@@ -430,11 +430,12 @@ Completed:
 - [x] Reject voxel and preview-voxel cache installation when geometry differs from ROI reference
 - [x] Mesh-authoritative voxel rebuilds use the ROI cache grid, not the displayed main-volume grid
 - [x] Legacy voxel-to-contour and voxel-to-mesh conversions snapshot the source grid and work without a displayed main volume
+- [x] Coordinator-level contour commit acceptance coverage reaches current voxel and mesh caches
 
 Pending:
 
 - [x] Accept plan and begin implementation
-- [ ] Phase 0: add end-to-end contour-to-mesh acceptance coverage
+- [x] Phase 0: add end-to-end contour-to-mesh acceptance coverage
 - [x] Phase 0: expose ROI geometry identity and dimensions through QA
 - [ ] Phase 1: attach validated geometry to every ROI and import path
 - [ ] Phase 2: carry geometry identity on every cache and migrate validated plane frames

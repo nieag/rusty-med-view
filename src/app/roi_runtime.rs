@@ -3435,7 +3435,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extracted_contour_roi_remains_valid_after_edit_and_rebuild_cycle() {
+    fn test_contour_commit_converges_voxel_and_mesh_through_work_coordinator() {
         let mut world = World::new();
         spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
         let source = spawn_sparse_voxel_roi(&mut world);
@@ -3445,8 +3445,11 @@ mod tests {
         let replacement = square_contour_data_for_main_volume(&world, 1.2);
         replace_contour_data(&mut world, extracted, replacement.clone())
             .expect("replace should succeed");
-        process_contour_voxel_rebuild_jobs(&mut world);
-        process_voxel_mesh_rebuild_jobs(&mut world);
+        for _ in 0..32 {
+            if !advance_roi_work(&mut world, None).pending {
+                break;
+            }
+        }
 
         let roi = world.get::<&Roi>(extracted).unwrap();
         assert_eq!(roi.primary_representation(), PrimaryRepresentation::Contour);
