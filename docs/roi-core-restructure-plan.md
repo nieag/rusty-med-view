@@ -444,7 +444,7 @@ Pending:
 - [x] Phase 0: expose ROI geometry identity and dimensions through QA
 - [x] Phase 1: attach validated geometry to every ROI and import path
 - [ ] Phase 2: carry geometry identity on every cache and migrate validated plane frames
-- [ ] Phase 3: move remaining direct processor callers behind the coordinator
+- [x] Phase 3: move remaining direct processor callers behind the coordinator
 - [ ] Phase 4: attach geometry to remaining legacy mesh/import creation paths
 - [ ] Phase 5: transitional deletion
 - [ ] Phase 6: measured optimization

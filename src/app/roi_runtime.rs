@@ -486,7 +486,7 @@ pub fn request_viewport_mesh_state(
     crate::app::roi::requests::request_viewport_mesh_state(world, viewport_mode, roi_entity)
 }
 
-pub fn sync_active_roi_contour_view_caches_for_viewports(world: &mut World) {
+pub(crate) fn sync_active_roi_contour_view_caches_for_viewports(world: &mut World) {
     let active_roi = world
         .query::<&EditorState>()
         .iter()
@@ -532,7 +532,7 @@ pub fn sync_active_roi_contour_view_caches_for_viewports(world: &mut World) {
     }
 }
 
-pub fn sync_active_roi_mesh_cache_for_viewports(world: &mut World) {
+pub(crate) fn sync_active_roi_mesh_cache_for_viewports(world: &mut World) {
     if !world
         .query::<&Viewport>()
         .iter()
@@ -1171,11 +1171,11 @@ pub fn complete_cache_rebuild(
     true
 }
 
-pub fn process_contour_voxel_rebuild_jobs(world: &mut World) {
+pub(crate) fn process_contour_voxel_rebuild_jobs(world: &mut World) {
     let _ = process_contour_voxel_rebuild_jobs_with_hook(world, |_world, _entity| {}, None, None);
 }
 
-pub fn process_contour_voxel_rebuild_jobs_with_gpu(
+pub(crate) fn process_contour_voxel_rebuild_jobs_with_gpu(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     world: &mut World,
@@ -1193,11 +1193,11 @@ pub fn process_contour_voxel_rebuild_jobs_with_gpu(
     }
 }
 
-pub fn process_mesh_voxel_rebuild_jobs(world: &mut World) {
+pub(crate) fn process_mesh_voxel_rebuild_jobs(world: &mut World) {
     let _ = process_mesh_voxel_rebuild_jobs_with_context(world, None, None);
 }
 
-pub fn process_mesh_voxel_rebuild_jobs_with_gpu(
+pub(crate) fn process_mesh_voxel_rebuild_jobs_with_gpu(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     world: &mut World,
@@ -1211,7 +1211,7 @@ pub fn process_mesh_voxel_rebuild_jobs_with_gpu(
     }
 }
 
-pub fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
+pub(crate) fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
     const FRAME_JOB_BUDGET: Duration = Duration::from_millis(4);
     let frame_started_at = Instant::now();
 
