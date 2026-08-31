@@ -448,6 +448,7 @@ Completed:
 - [x] Regression coverage proves display-volume changes do not retarget existing contour ROI geometry
 - [x] `VoxelGeometry` fields are crate-private; external construction goes through validation
 - [x] Moved delegating edit/history runtime wrappers out of production builds
+- [x] Moved delegating ROI request wrappers out of production builds
 
 Pending:
 

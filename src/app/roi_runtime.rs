@@ -284,6 +284,7 @@ pub fn can_enable_roi_visibility(world: &World, roi_entity: hecs::Entity) -> boo
     visible_voxel_overlay_count(world) < MAX_SIMULTANEOUS_ROI_OVERLAYS
 }
 
+#[cfg(test)]
 pub fn set_active_contour_plane_family(
     world: &mut World,
     roi_entity: hecs::Entity,
@@ -292,6 +293,7 @@ pub fn set_active_contour_plane_family(
     crate::app::roi::authority::set_active_contour_plane_family(world, roi_entity, family)
 }
 
+#[cfg(test)]
 pub fn request_voxel_overlay_state(
     world: &World,
     roi_entity: hecs::Entity,
@@ -299,6 +301,7 @@ pub fn request_voxel_overlay_state(
     crate::app::roi::requests::request_voxel_overlay_state(world, roi_entity)
 }
 
+#[cfg(test)]
 pub fn request_mesh_cache_state(
     world: &World,
     roi_entity: hecs::Entity,
@@ -306,6 +309,7 @@ pub fn request_mesh_cache_state(
     crate::app::roi::requests::request_mesh_cache_state(world, roi_entity)
 }
 
+#[cfg(test)]
 pub fn request_contour_view_state(
     world: &World,
     roi_entity: hecs::Entity,
@@ -321,7 +325,7 @@ fn build_contour_view_data_for_plane(
     extract_contour_slice_from_voxel_data(voxel_data, view_key.plane)
 }
 
-pub fn ensure_contour_view_cache(
+pub(crate) fn ensure_contour_view_cache(
     world: &mut World,
     roi_entity: hecs::Entity,
     view_key: &ContourViewKey,
@@ -465,6 +469,7 @@ pub fn ensure_contour_view_cache(
     }
 }
 
+#[cfg(test)]
 pub fn request_viewport_voxel_overlay_state(
     world: &World,
     viewport_mode: ViewMode,
@@ -477,6 +482,7 @@ pub fn request_viewport_voxel_overlay_state(
     )
 }
 
+#[cfg(test)]
 pub fn request_viewport_mesh_state(
     world: &World,
     viewport_mode: ViewMode,
