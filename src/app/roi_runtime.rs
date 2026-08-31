@@ -485,6 +485,7 @@ pub fn sync_active_roi_mesh_cache_for_viewports(world: &mut World) {
         return;
     };
     if matches!(&roi.authoritative_data, RoiAuthoritativeData::Mesh(_))
+        || roi.is_cache_current(RoiCacheKind::Mesh)
         || roi.has_queued_job(RoiJobKind::RebuildMeshCache)
         || roi.running_job_kind() == Some(RoiJobKind::RebuildMeshCache)
     {
@@ -2316,6 +2317,43 @@ mod tests {
         assert!(expected_occupied > 0);
         assert_eq!(stats.occupied_voxels, expected_occupied);
         assert!((stats.volume_mm3 - expected_occupied as f32).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_mesh_viewport_sync_keeps_current_mesh_cache_current() {
+        let mut world = World::new();
+        let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+        seed_current_voxel_cache_for_contour_roi(&mut world, entity);
+        world.spawn((Viewport {
+            mode: ViewMode::ThreeD,
+            rect: [0.0, 0.0, 800.0, 600.0],
+            uniform_index: 0,
+        },));
+        world.spawn((EditorState {
+            active_roi: Some(entity),
+            ..EditorState::default()
+        },));
+        {
+            let mut roi = world.get::<&mut Roi>(entity).unwrap();
+            let generation = roi.dirty_state.generations.authoritative;
+            roi.install_mesh_cache_result(
+                MeshCache {
+                    data: MeshData {
+                        vertices: Vec::new(),
+                        faces: Vec::new(),
+                    },
+                    chunks: None,
+                },
+                generation,
+            )
+            .unwrap();
+        }
+
+        sync_active_roi_mesh_cache_for_viewports(&mut world);
+
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert!(roi.is_cache_current(RoiCacheKind::Mesh));
+        assert!(!roi.has_queued_job(RoiJobKind::RebuildMeshCache));
     }
 
     #[test]

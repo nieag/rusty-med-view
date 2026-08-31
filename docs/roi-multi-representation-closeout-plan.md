@@ -360,6 +360,7 @@ Completed prerequisites:
   - oblique dirty-slice jobs conservatively rebuild the full contour set until incremental arbitrary-plane rasterization exists
   - the ROI QA preset exposes axial, coronal, sagittal, RMB-rotatable oblique, and 3D viewports simultaneously
   - navigation and editing picks use each active viewport's aspect ratio, matching render projection in mixed-size layouts
+- post-R6 cache stability: 3D viewport sync preserves a current derived mesh instead of immediately dirtying and requeueing it before render preparation
 
 Pending:
 
