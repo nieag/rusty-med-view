@@ -429,6 +429,7 @@ Completed:
 - [x] Pending ROI work now requests another frame independently of GUI repaint timing
 - [x] Reject voxel and preview-voxel cache installation when geometry differs from ROI reference
 - [x] Mesh-authoritative voxel rebuilds use the ROI cache grid, not the displayed main-volume grid
+- [x] Legacy voxel-to-contour and voxel-to-mesh conversions snapshot the source grid and work without a displayed main volume
 
 Pending:
 
@@ -442,7 +443,7 @@ Pending:
 - [ ] Phase 5: transitional deletion
 - [ ] Phase 6: measured optimization
 
-Plan-relevant commits: none yet.
+Plan-relevant commits: `d7b4704`, `a5eed49`, `876d103`, `2ed81e0`, `cd905ac`.
 
 ## Stable-v0 boundary
 

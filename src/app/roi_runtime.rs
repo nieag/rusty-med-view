@@ -55,7 +55,6 @@ pub enum VoxelContourCreationError {
 pub enum VoxelMeshCreationError {
     MissingRoi,
     NotVoxelRoi,
-    MissingMainVolume,
     EmptyMeshFromNonEmptySource,
     ExtractionFailed(VoxelMeshExtractionError),
 }
@@ -72,7 +71,6 @@ pub enum ContourMeshCreationError {
 pub enum DisplayVoxelSourceError {
     MissingRoi,
     NotVoxelRoi,
-    MissingMainVolume,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -997,9 +995,11 @@ pub fn create_contour_roi_from_voxel_roi(
         .map(|roi| roi.metadata.name.clone())
         .unwrap_or_else(|| "Voxel ROI".to_string());
     let new_name = format!("{source_name} ({} Contour)", plane_family_label(family));
+    let reference_geometry = roi_geometry_from_voxel_geometry(source_voxel.geometry)
+        .expect("voxel ROI geometry was validated at creation");
 
     let entity = world.spawn((
-        Roi::new_contour(RoiId(next_roi_id), new_name, extracted),
+        Roi::new_contour_with_geometry(RoiId(next_roi_id), new_name, reference_geometry, extracted),
         LayerSettings { opacity: 0.5 },
         RoiTag,
     ));
@@ -1057,7 +1057,6 @@ pub fn create_mesh_roi_from_voxel_roi(
         voxel_data_for_display_surface_extraction(world, source_roi).map_err(|err| match err {
             DisplayVoxelSourceError::MissingRoi => VoxelMeshCreationError::MissingRoi,
             DisplayVoxelSourceError::NotVoxelRoi => VoxelMeshCreationError::NotVoxelRoi,
-            DisplayVoxelSourceError::MissingMainVolume => VoxelMeshCreationError::MissingMainVolume,
         })?;
 
     let source_has_occupancy = source_voxel.raw_data.iter().any(|value| *value != 0);
@@ -1074,9 +1073,11 @@ pub fn create_mesh_roi_from_voxel_roi(
         .map(|roi| roi.metadata.name.clone())
         .unwrap_or_else(|| "Voxel ROI".to_string());
     let entity = world.spawn((
-        Roi::new_mesh(
+        Roi::new_mesh_with_geometry(
             RoiId(next_roi_id),
             format!("{source_name} (Mesh)"),
+            roi_geometry_from_voxel_geometry(source_voxel.geometry)
+                .expect("voxel ROI geometry was validated at creation"),
             extracted,
         ),
         LayerSettings { opacity: 0.5 },
@@ -1109,7 +1110,6 @@ pub fn voxel_data_for_display_surface_extraction(
         }
     };
 
-    let _ = main_volume_geometry(world).ok_or(DisplayVoxelSourceError::MissingMainVolume)?;
     Ok(source_voxel)
 }
 
@@ -1143,9 +1143,11 @@ pub fn create_mesh_roi_from_contour_roi(
         .map(|roi| roi.metadata.name.clone())
         .unwrap_or_else(|| "Contour ROI".to_string());
     let entity = world.spawn((
-        Roi::new_mesh(
+        Roi::new_mesh_with_geometry(
             RoiId(next_roi_id),
             format!("{source_name} (Mesh)"),
+            roi_geometry_from_voxel_geometry(source_voxel.geometry)
+                .expect("contour voxel cache geometry was validated at installation"),
             extracted,
         ),
         LayerSettings { opacity: 0.5 },
@@ -3213,11 +3215,12 @@ mod tests {
     }
 
     #[test]
-    fn test_create_mesh_roi_from_voxel_roi_rejects_missing_main_volume() {
+    fn test_create_mesh_roi_from_voxel_roi_uses_source_grid_without_main_volume() {
         let mut world = World::new();
         let source = spawn_sparse_voxel_roi(&mut world);
-        let result = create_mesh_roi_from_voxel_roi(&mut world, source);
-        assert_eq!(result, Err(VoxelMeshCreationError::MissingMainVolume));
+        let result = create_mesh_roi_from_voxel_roi(&mut world, source).unwrap();
+        let roi = world.get::<&Roi>(result).unwrap();
+        assert_eq!(roi.reference_geometry().unwrap().dimensions(), [4, 4, 4]);
     }
 
     #[test]
