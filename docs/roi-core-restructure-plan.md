@@ -412,7 +412,7 @@ Avoid exposing internal scheduler structures that tests do not need.
 
 ## Implementation status
 
-Current phase: Phase 2 / Phase 3 tracer path
+Current phase: Phase 4 authority-path migration
 
 Completed:
 
@@ -428,6 +428,7 @@ Completed:
 - [x] Added `advance_roi_work` as the single render-frame ROI work coordinator
 - [x] Pending ROI work now requests another frame independently of GUI repaint timing
 - [x] Reject voxel and preview-voxel cache installation when geometry differs from ROI reference
+- [x] Mesh-authoritative voxel rebuilds use the ROI cache grid, not the displayed main-volume grid
 
 Pending:
 
@@ -437,7 +438,7 @@ Pending:
 - [ ] Phase 1: attach validated geometry to every ROI and import path
 - [ ] Phase 2: carry geometry identity on every cache and migrate validated plane frames
 - [ ] Phase 3: move remaining direct processor callers behind the coordinator
-- [ ] Phase 4: remaining authority paths
+- [ ] Phase 4: attach geometry to remaining legacy mesh/import creation paths
 - [ ] Phase 5: transitional deletion
 - [ ] Phase 6: measured optimization
 

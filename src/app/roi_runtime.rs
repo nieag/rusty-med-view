@@ -939,8 +939,9 @@ pub fn request_rebuild_voxel_cache_from_mesh(
     if !matches!(&roi.authoritative_data, RoiAuthoritativeData::Mesh(_)) {
         return Err(MeshDerivedRebuildError::NotMeshRoi);
     }
+    let has_voxel_cache = roi.voxel_cache().is_some();
     drop(roi);
-    if main_volume_voxel_geometry(world).is_none() {
+    if !has_voxel_cache {
         return Err(MeshDerivedRebuildError::MissingTargetGeometry);
     }
     let mut roi = world
@@ -1453,21 +1454,26 @@ fn process_mesh_voxel_rebuild_for_entity(
     roi_entity: hecs::Entity,
     upload_context: Option<(&wgpu::Device, &wgpu::Queue)>,
 ) -> bool {
-    let (source_generation, mesh) = {
+    let (source_generation, mesh, target_geometry) = {
         let Ok(roi) = world.get::<&Roi>(roi_entity) else {
             return false;
         };
         let RoiAuthoritativeData::Mesh(mesh) = &roi.authoritative_data else {
             return false;
         };
-        (roi.dirty_state.generations.authoritative, mesh.clone())
+        let target_geometry = roi.voxel_cache().map(|cache| cache.data.geometry);
+        (
+            roi.dirty_state.generations.authoritative,
+            mesh.clone(),
+            target_geometry,
+        )
     };
     if begin_next_job(world, roi_entity) != Some(RoiJobKind::RebuildVoxelCache) {
         return false;
     }
     let started_at = Instant::now();
-    let Some(target_geometry) = main_volume_voxel_geometry(world) else {
-        fail_mesh_voxel_rebuild(world, roi_entity, "main_volume_geometry_missing");
+    let Some(target_geometry) = target_geometry else {
+        fail_mesh_voxel_rebuild(world, roi_entity, "roi_reference_grid_missing");
         return false;
     };
     let voxel_data = match voxelize_mesh_to_voxel_data(&mesh, target_geometry) {
@@ -2961,12 +2967,17 @@ mod tests {
     #[test]
     fn test_mesh_rebuild_contract_builds_voxel_then_enables_contour_refresh() {
         let mut world = World::new();
-        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-        let entity = world.spawn((Roi::new_mesh(
-            RoiId(301),
-            "Mesh Contract".to_string(),
-            closed_tetra_mesh_data(),
-        ),));
+        let entity = spawn_sparse_voxel_roi(&mut world);
+        {
+            let mut roi = world.get::<&mut Roi>(entity).unwrap();
+            roi.session_caches.mesh = Some(MeshCache {
+                data: closed_tetra_mesh_data(),
+                chunks: None,
+            });
+            roi.dirty_state.mesh_cache_dirty = false;
+            roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        }
+        promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
 
         let voxel_result = request_rebuild_voxel_cache_from_mesh(&mut world, entity);
         assert_eq!(voxel_result, Ok(()));
