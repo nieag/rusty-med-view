@@ -439,14 +439,14 @@ Pending:
 - [x] Accept plan and begin implementation
 - [x] Phase 0: add end-to-end contour-to-mesh acceptance coverage
 - [x] Phase 0: expose ROI geometry identity and dimensions through QA
-- [ ] Phase 1: attach validated geometry to every ROI and import path
+- [x] Phase 1: attach validated geometry to every ROI and import path
 - [ ] Phase 2: carry geometry identity on every cache and migrate validated plane frames
 - [ ] Phase 3: move remaining direct processor callers behind the coordinator
 - [ ] Phase 4: attach geometry to remaining legacy mesh/import creation paths
 - [ ] Phase 5: transitional deletion
 - [ ] Phase 6: measured optimization
 
-Plan-relevant commits: `d7b4704`, `a5eed49`, `876d103`, `2ed81e0`, `cd905ac`.
+Plan-relevant commits: `d7b4704`, `a5eed49`, `876d103`, `2ed81e0`, `cd905ac`, `88857f0`, `694503a`, `3193068`, `e7e236e`.
 
 ## Stable-v0 boundary
 
