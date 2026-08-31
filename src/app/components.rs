@@ -474,9 +474,7 @@ pub struct Roi {
     pub metadata: RoiMetadata,
     /// Immutable reference grid for conversions involving this ROI.
     ///
-    /// `None` is temporary migration state for legacy contour/mesh construction paths. New
-    /// authoring and import paths must use the geometry-aware constructors below.
-    pub reference_geometry: Option<RoiGeometry>,
+    pub reference_geometry: RoiGeometry,
     pub authoritative_data: RoiAuthoritativeData,
     pub session_caches: RoiSessionCaches,
     pub dirty_state: RoiDirtyState,
@@ -486,8 +484,8 @@ pub struct Roi {
 }
 
 impl Roi {
-    pub fn reference_geometry(&self) -> Option<&RoiGeometry> {
-        self.reference_geometry.as_ref()
+    pub fn reference_geometry(&self) -> &RoiGeometry {
+        &self.reference_geometry
     }
 
     pub fn primary_representation(&self) -> PrimaryRepresentation {
@@ -531,7 +529,7 @@ impl Roi {
                 is_locked: false,
                 color: [1.0, 0.2, 0.2, 1.0],
             },
-            reference_geometry: Some(reference_geometry),
+            reference_geometry,
             authoritative_data: RoiAuthoritativeData::Voxel(voxel_data.clone()),
             session_caches: RoiSessionCaches {
                 voxel: Some(VoxelCache {
@@ -558,28 +556,15 @@ impl Roi {
         }
     }
 
+    #[cfg(test)]
     pub fn new_contour(roi_id: RoiId, name: String, contour_data: ContourData) -> Self {
-        Self::new_contour_with_optional_geometry(roi_id, name, None, contour_data)
+        Self::new_contour_with_geometry(roi_id, name, unit_test_roi_geometry(), contour_data)
     }
 
     pub fn new_contour_with_geometry(
         roi_id: RoiId,
         name: String,
         reference_geometry: RoiGeometry,
-        contour_data: ContourData,
-    ) -> Self {
-        Self::new_contour_with_optional_geometry(
-            roi_id,
-            name,
-            Some(reference_geometry),
-            contour_data,
-        )
-    }
-
-    fn new_contour_with_optional_geometry(
-        roi_id: RoiId,
-        name: String,
-        reference_geometry: Option<RoiGeometry>,
         contour_data: ContourData,
     ) -> Self {
         Self {
@@ -610,23 +595,15 @@ impl Roi {
         }
     }
 
+    #[cfg(test)]
     pub fn new_mesh(roi_id: RoiId, name: String, mesh_data: MeshData) -> Self {
-        Self::new_mesh_with_optional_geometry(roi_id, name, None, mesh_data)
+        Self::new_mesh_with_geometry(roi_id, name, unit_test_roi_geometry(), mesh_data)
     }
 
     pub fn new_mesh_with_geometry(
         roi_id: RoiId,
         name: String,
         reference_geometry: RoiGeometry,
-        mesh_data: MeshData,
-    ) -> Self {
-        Self::new_mesh_with_optional_geometry(roi_id, name, Some(reference_geometry), mesh_data)
-    }
-
-    fn new_mesh_with_optional_geometry(
-        roi_id: RoiId,
-        name: String,
-        reference_geometry: Option<RoiGeometry>,
         mesh_data: MeshData,
     ) -> Self {
         Self {
@@ -676,6 +653,17 @@ impl Roi {
 pub struct VolumeWindowing {
     pub center: f32,
     pub width: f32,
+}
+
+#[cfg(test)]
+fn unit_test_roi_geometry() -> RoiGeometry {
+    RoiGeometry::from_legacy_parts(
+        [1, 1, 1],
+        [1.0, 1.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .expect("unit test geometry is valid")
 }
 
 impl Default for VolumeWindowing {
@@ -907,12 +895,7 @@ mod tests {
         assert_eq!(roi.metadata.roi_id, RoiId(7));
         assert_eq!(roi.metadata.name, "Liver");
         assert_eq!(roi.primary_representation(), PrimaryRepresentation::Voxel);
-        assert_eq!(
-            roi.reference_geometry()
-                .expect("voxel ROI has reference geometry")
-                .dimensions(),
-            [16, 16, 8]
-        );
+        assert_eq!(roi.reference_geometry().dimensions(), [16, 16, 8]);
         assert!(matches!(
             roi.authoritative_data,
             RoiAuthoritativeData::Voxel(VoxelData {
@@ -1390,12 +1373,7 @@ mod tests {
         assert_eq!(roi.metadata.roi_id, RoiId(14));
         assert_eq!(roi.metadata.name, "GTV");
         assert_eq!(roi.primary_representation(), PrimaryRepresentation::Contour);
-        assert_eq!(
-            roi.reference_geometry()
-                .expect("explicit contour ROI has reference geometry")
-                .identity(),
-            expected_identity
-        );
+        assert_eq!(roi.reference_geometry().identity(), expected_identity);
         assert!(matches!(
             roi.authoritative_data,
             RoiAuthoritativeData::Contour(_)

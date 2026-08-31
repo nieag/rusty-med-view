@@ -416,9 +416,7 @@ impl Roi {
     }
 
     fn validate_voxel_data_geometry(&self, data: &VoxelData) -> Result<(), CacheInstallError> {
-        let Some(reference) = self.reference_geometry() else {
-            return Ok(());
-        };
+        let reference = self.reference_geometry();
         let actual = RoiGeometry::from_legacy_parts(
             data.geometry.dimensions,
             data.geometry.spacing,

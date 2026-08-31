@@ -1171,22 +1171,6 @@ pub fn complete_cache_rebuild(
     true
 }
 
-pub fn invalidate_contour_voxel_caches_for_main_volume_change(world: &mut World) {
-    for (_, roi) in world.query_mut::<&mut Roi>() {
-        if !matches!(roi.authoritative_data, RoiAuthoritativeData::Contour(_))
-            || roi.reference_geometry().is_some()
-        {
-            continue;
-        }
-
-        // Legacy contour ROIs without a reference grid still target the current main-volume
-        // grid. New ROIs keep their own geometry and are intentionally unaffected.
-        roi.discard_cache(RoiCacheKind::Voxel);
-        roi.finish_job(RoiJobKind::RebuildVoxelCache);
-        roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
-    }
-}
-
 pub fn process_contour_voxel_rebuild_jobs(world: &mut World) {
     let _ = process_contour_voxel_rebuild_jobs_with_hook(world, |_world, _entity| {}, None, None);
 }
@@ -2478,7 +2462,7 @@ mod tests {
 
         let roi = world.get::<&Roi>(entity).unwrap();
         assert!(roi.is_cache_current(RoiCacheKind::Voxel));
-        assert!(roi.reference_geometry().is_some());
+        assert_eq!(roi.reference_geometry().dimensions(), [4, 4, 4]);
     }
 
     #[test]
@@ -3174,7 +3158,7 @@ mod tests {
         let source = spawn_sparse_voxel_roi(&mut world);
         let result = create_mesh_roi_from_voxel_roi(&mut world, source).unwrap();
         let roi = world.get::<&Roi>(result).unwrap();
-        assert_eq!(roi.reference_geometry().unwrap().dimensions(), [4, 4, 4]);
+        assert_eq!(roi.reference_geometry().dimensions(), [4, 4, 4]);
     }
 
     #[test]
@@ -4083,36 +4067,6 @@ mod tests {
         assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
         assert_eq!(roi.running_job_kind(), None);
         assert_eq!(roi.queued_job_kind(), None);
-    }
-
-    #[test]
-    fn test_main_volume_change_does_not_invalidate_contour_roi_with_reference_geometry() {
-        let mut world = World::new();
-        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-        let contour_entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
-        let voxel_entity = spawn_test_roi(&mut world);
-        let replacement = square_contour_data_for_main_volume(&world, 1.2);
-        replace_contour_data(&mut world, contour_entity, replacement).unwrap();
-        process_contour_voxel_rebuild_jobs(&mut world);
-
-        {
-            let contour_roi = world.get::<&Roi>(contour_entity).unwrap();
-            assert!(contour_roi.is_cache_current(RoiCacheKind::Voxel));
-            assert!(contour_roi.voxel_cache().is_some());
-        }
-
-        invalidate_contour_voxel_caches_for_main_volume_change(&mut world);
-
-        let contour_roi = world.get::<&Roi>(contour_entity).unwrap();
-        assert!(contour_roi.is_cache_current(RoiCacheKind::Voxel));
-        assert!(contour_roi.voxel_cache().is_some());
-        assert_eq!(
-            contour_roi.queued_job_kind(),
-            Some(RoiJobKind::RebuildMeshCache)
-        );
-
-        let voxel_roi = world.get::<&Roi>(voxel_entity).unwrap();
-        assert_eq!(voxel_roi.queued_job_kind(), None);
     }
 
     #[test]

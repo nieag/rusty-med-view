@@ -286,12 +286,11 @@ impl AppState {
                     visible: roi.metadata.is_visible,
                     active: Some(entity) == active_roi_entity,
                     overlay_slot: overlay_slots.get(&entity).copied(),
-                    reference_geometry_dimensions: roi
-                        .reference_geometry()
-                        .map(|geometry| geometry.dimensions()),
-                    reference_geometry_identity: roi
-                        .reference_geometry()
-                        .map(|geometry| format!("{:?}", geometry.identity())),
+                    reference_geometry_dimensions: Some(roi.reference_geometry().dimensions()),
+                    reference_geometry_identity: Some(format!(
+                        "{:?}",
+                        roi.reference_geometry().identity()
+                    )),
                     voxel_dimensions,
                     non_empty_voxel_bounds: non_empty_bounds,
                     preview_active: roi.preview_state.active,
