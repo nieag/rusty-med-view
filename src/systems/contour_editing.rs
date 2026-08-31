@@ -1,13 +1,13 @@
 use crate::app::roi;
 #[cfg(test)]
 use crate::app::roi_runtime;
+#[cfg(test)]
+use crate::components::VoxelData;
 use crate::components::{
     AppEntities, ContourData, ContourDraft, ContourLoop, ContourPoint, ContourSelection,
     ContourSlice, EditorState, EditorTool, InputState, MainVolumeTag, Roi, Transform, ViewMode,
     Viewport, VoxelGeometry,
 };
-#[cfg(test)]
-use crate::components::{VoxelCache, VoxelData};
 use crate::convert::{
     contour_slice_contains_point, oblique_plane_from_view_rotation,
     orthogonal_plane_from_volume_uv, plane_local_mm_to_viewport_uv, plane_local_mm_to_world_mm,
