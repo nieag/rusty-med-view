@@ -563,6 +563,7 @@ pub(crate) fn sync_active_roi_mesh_cache_for_viewports(world: &mut World) {
     }
 }
 
+#[cfg(test)]
 pub fn promote_contour_view_to_authoritative(
     world: &mut World,
     roi_entity: hecs::Entity,
@@ -571,6 +572,7 @@ pub fn promote_contour_view_to_authoritative(
     crate::app::roi::authority::promote_contour_view_to_authoritative(world, roi_entity, view_key)
 }
 
+#[cfg(test)]
 pub fn replace_contour_data(
     world: &mut World,
     roi_entity: hecs::Entity,
@@ -579,6 +581,7 @@ pub fn replace_contour_data(
     crate::app::roi::authority::replace_contour_data(world, roi_entity, contour_data)
 }
 
+#[cfg(test)]
 pub fn replace_contour_data_for_slice(
     world: &mut World,
     roi_entity: hecs::Entity,
@@ -593,6 +596,7 @@ pub fn replace_contour_data_for_slice(
     )
 }
 
+#[cfg(test)]
 pub fn replace_contour_data_with_history(
     world: &mut World,
     editor_entity: hecs::Entity,
@@ -607,6 +611,7 @@ pub fn replace_contour_data_with_history(
     )
 }
 
+#[cfg(test)]
 pub fn replace_contour_data_for_slice_with_history(
     world: &mut World,
     editor_entity: hecs::Entity,
@@ -623,14 +628,17 @@ pub fn replace_contour_data_for_slice_with_history(
     )
 }
 
+#[cfg(test)]
 pub fn can_undo_roi_edit(world: &World, editor_entity: hecs::Entity) -> bool {
     crate::app::roi::history::can_undo_roi_edit(world, editor_entity)
 }
 
+#[cfg(test)]
 pub fn can_redo_roi_edit(world: &World, editor_entity: hecs::Entity) -> bool {
     crate::app::roi::history::can_redo_roi_edit(world, editor_entity)
 }
 
+#[cfg(test)]
 pub fn clear_roi_edit_history_for_roi(
     world: &mut World,
     editor_entity: hecs::Entity,
@@ -639,6 +647,7 @@ pub fn clear_roi_edit_history_for_roi(
     crate::app::roi::history::clear_roi_edit_history_for_roi(world, editor_entity, roi_entity);
 }
 
+#[cfg(test)]
 pub fn undo_roi_edit(
     world: &mut World,
     editor_entity: hecs::Entity,
@@ -646,6 +655,7 @@ pub fn undo_roi_edit(
     crate::app::roi::history::undo_roi_edit(world, editor_entity)
 }
 
+#[cfg(test)]
 pub fn redo_roi_edit(
     world: &mut World,
     editor_entity: hecs::Entity,
@@ -815,6 +825,7 @@ pub fn create_empty_contour_roi(
     Ok(entity)
 }
 
+#[cfg(test)]
 pub fn replace_mesh_data(
     world: &mut World,
     roi_entity: hecs::Entity,
@@ -823,6 +834,7 @@ pub fn replace_mesh_data(
     crate::app::roi::authority::replace_mesh_data(world, roi_entity, mesh_data)
 }
 
+#[cfg(test)]
 pub fn replace_mesh_data_with_history(
     world: &mut World,
     editor_entity: hecs::Entity,
@@ -837,6 +849,7 @@ pub fn replace_mesh_data_with_history(
     )
 }
 
+#[cfg(test)]
 pub fn translate_mesh_data(
     world: &mut World,
     roi_entity: hecs::Entity,
@@ -859,6 +872,7 @@ pub fn translate_mesh_data(
     replace_mesh_data(world, roi_entity, mesh)
 }
 
+#[cfg(test)]
 pub fn begin_mesh_translation_preview(
     world: &mut World,
     editor_entity: hecs::Entity,
@@ -882,6 +896,7 @@ pub fn begin_mesh_translation_preview(
     crate::app::roi::preview::begin_mesh_edit_preview(world, editor_entity, roi_entity, mesh)
 }
 
+#[cfg(test)]
 pub fn commit_mesh_edit_preview(
     world: &mut World,
     editor_entity: hecs::Entity,
@@ -889,6 +904,7 @@ pub fn commit_mesh_edit_preview(
     crate::app::roi::preview::commit_mesh_edit_preview(world, editor_entity)
 }
 
+#[cfg(test)]
 pub fn cancel_mesh_edit_preview(
     world: &mut World,
     editor_entity: hecs::Entity,
