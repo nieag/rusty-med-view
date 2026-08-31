@@ -412,7 +412,7 @@ Avoid exposing internal scheduler structures that tests do not need.
 
 ## Implementation status
 
-Current phase: Phase 4 authority-path migration
+Current phase: Phase 5 transitional deletion
 
 Completed:
 
@@ -444,6 +444,7 @@ Completed:
 - [x] Removed duplicate voxel ROI statistics compatibility wrapper
 - [x] Affine ROI/display mapping rejects invalid orientations instead of silently using identity
 - [x] Moved test-only cache-control compatibility APIs out of production builds
+- [x] Plane factories reject invalid geometry orientation rather than falling back to identity
 
 Pending:
 

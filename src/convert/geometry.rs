@@ -282,7 +282,7 @@ fn world_direction_from_index_direction(
         geometry.spacing[2],
     );
     let scaled = index_direction * spacing;
-    let world = normalized_orientation(geometry.orientation) * scaled;
+    let world = validated_orientation(geometry.orientation)? * scaled;
     if world.length_squared() <= 1e-12 {
         return None;
     }
@@ -298,7 +298,7 @@ fn index_direction_from_world_direction(
         return None;
     }
 
-    let local = normalized_orientation(geometry.orientation).inverse() * world_direction;
+    let local = validated_orientation(geometry.orientation)?.inverse() * world_direction;
     let mut components = [0.0; 3];
     for axis in 0..3 {
         let spacing = geometry.spacing[axis];
@@ -886,6 +886,18 @@ mod tests {
         };
 
         assert!(index_space_affine_from_src_to_dst(invalid, valid).is_none());
+    }
+
+    #[test]
+    fn test_plane_factory_rejects_invalid_geometry_orientation() {
+        let geometry = VoxelGeometry {
+            dimensions: [4, 4, 4],
+            spacing: [1.0; 3],
+            origin: [0.0; 3],
+            orientation: [0.0; 4],
+        };
+
+        assert!(orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5; 3], geometry).is_none());
     }
 
     #[test]
