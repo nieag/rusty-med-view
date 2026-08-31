@@ -2007,10 +2007,6 @@ fn set_runtime_status_message(world: &mut World, message: String) {
     }
 }
 
-pub fn voxel_roi_stats(world: &World, roi_entity: hecs::Entity) -> Option<VoxelRoiStats> {
-    roi_voxel_stats(world, roi_entity)
-}
-
 pub fn roi_voxel_stats(world: &World, roi_entity: hecs::Entity) -> Option<VoxelRoiStats> {
     let roi = world.get::<&Roi>(roi_entity).ok()?;
     let voxel_data = match &roi.authoritative_data {
@@ -2319,7 +2315,7 @@ mod tests {
             None,
         ),));
 
-        let stats = voxel_roi_stats(&world, entity).unwrap();
+        let stats = roi_voxel_stats(&world, entity).unwrap();
 
         assert_eq!(stats.occupied_voxels, 4);
         assert!((stats.volume_mm3 - 2.0).abs() < f32::EPSILON);

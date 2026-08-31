@@ -232,7 +232,7 @@ pub fn draw_sidebar(
                 roi.metadata.name.clone(),
                 roi.metadata.is_visible,
                 settings.opacity,
-                roi_runtime::voxel_roi_stats(world, e),
+                roi_runtime::roi_voxel_stats(world, e),
             ));
         }
 

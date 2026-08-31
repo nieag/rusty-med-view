@@ -441,6 +441,7 @@ Completed:
 - [x] Current-cache checks reject accepted mesh or contour data with a mismatched geometry stamp
 - [x] QA exposes authority plus per-cache generation and current-state diagnostics
 - [x] ROI job metrics record queue delay for measured Phase 6 optimization work
+- [x] Removed duplicate voxel ROI statistics compatibility wrapper
 
 Pending:
 
