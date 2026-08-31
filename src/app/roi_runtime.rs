@@ -1104,6 +1104,7 @@ pub fn cache_status(
     crate::app::roi::requests::cache_status(world, roi_entity, kind)
 }
 
+#[cfg(test)]
 pub fn request_cache_rebuild(
     world: &mut World,
     roi_entity: hecs::Entity,
@@ -1116,11 +1117,12 @@ pub fn request_cache_rebuild(
     Some(job_kind)
 }
 
-pub fn begin_next_job(world: &mut World, roi_entity: hecs::Entity) -> Option<RoiJobKind> {
+pub(crate) fn begin_next_job(world: &mut World, roi_entity: hecs::Entity) -> Option<RoiJobKind> {
     let mut roi = world.get::<&mut Roi>(roi_entity).ok()?;
     roi.start_queued_job()
 }
 
+#[cfg(test)]
 pub fn complete_cache_rebuild(
     world: &mut World,
     roi_entity: hecs::Entity,
@@ -2035,6 +2037,7 @@ pub fn roi_voxel_stats(world: &World, roi_entity: hecs::Entity) -> Option<VoxelR
     })
 }
 
+#[cfg(test)]
 fn cache_kind_to_job_kind(kind: RoiCacheKind) -> RoiJobKind {
     match kind {
         RoiCacheKind::Voxel => RoiJobKind::RebuildVoxelCache,
