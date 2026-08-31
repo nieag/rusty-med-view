@@ -15,8 +15,8 @@ use crate::convert::{
     contour_geometry_voxel_aabb, contour_slices_voxel_aabb, extract_contour_slice_from_voxel_data,
     extract_contours_from_voxel_data, extract_mesh_from_voxel_data, intersect_mesh_with_plane,
     rasterize_contour_preview_slices_to_voxel_data, rasterize_contours_to_voxel_data,
-    voxelize_mesh_to_voxel_data, IncrementalChunkedMeshRebuild, MeshVoxelizationError, PlaneFamily,
-    RoiGeometry, VoxelContourExtractionError, VoxelMeshExtractionError, DEFAULT_MESH_CHUNK_SIZE,
+    voxelize_mesh_to_voxel_data, IncrementalChunkedMeshRebuild, PlaneFamily, RoiGeometry,
+    VoxelContourExtractionError, VoxelMeshExtractionError, DEFAULT_MESH_CHUNK_SIZE,
 };
 use crate::render::roi_views::{RenderRepresentationRequest, RoiRenderViews};
 use hecs::World;
