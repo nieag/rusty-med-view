@@ -412,7 +412,7 @@ Avoid exposing internal scheduler structures that tests do not need.
 
 ## Implementation status
 
-Current phase: Phase 0 / Phase 1 foundation
+Current phase: Phase 2 / Phase 3 tracer path
 
 Completed:
 
@@ -423,6 +423,10 @@ Completed:
 - [x] Drafted migration and deletion sequence
 - [x] Documented the current NIfTI sform/qform/fallback compatibility convention in ADR 0003
 - [x] Added validated affine-based `RoiGeometry`, stable geometry identity, and conversion tests
+- [x] New contour ROIs snapshot a reference grid and rebuild without main-volume geometry
+- [x] Main-volume changes no longer invalidate contour ROI caches that own reference geometry
+- [x] Added `advance_roi_work` as the single render-frame ROI work coordinator
+- [x] Pending ROI work now requests another frame independently of GUI repaint timing
 
 Pending:
 
@@ -430,8 +434,8 @@ Pending:
 - [ ] Phase 0: add end-to-end contour-to-mesh acceptance coverage
 - [x] Phase 0: expose ROI geometry identity and dimensions through QA
 - [ ] Phase 1: attach validated geometry to every ROI and import path
-- [ ] Phase 2: contour tracer path
-- [ ] Phase 3: centralized work advancement
+- [ ] Phase 2: stamp cache acceptance with geometry identity and migrate validated plane frames
+- [ ] Phase 3: move remaining direct processor callers behind the coordinator
 - [ ] Phase 4: remaining authority paths
 - [ ] Phase 5: transitional deletion
 - [ ] Phase 6: measured optimization

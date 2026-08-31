@@ -1051,7 +1051,7 @@ impl ApplicationHandler<AppEvent> for App {
                     qa_runtime.last_render_error = Some(category.to_string());
                 }
 
-                if repaint_after.is_zero() {
+                if repaint_after.is_zero() || frame_stats.roi_work_pending {
                     ctx.window.request_redraw();
                 }
             }

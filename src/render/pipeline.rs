@@ -263,6 +263,7 @@ pub struct RenderFrameStats {
     pub mesh_batch_count: u32,
     pub mesh_chunks_uploaded: u32,
     pub mesh_chunks_reused: u32,
+    pub roi_work_pending: bool,
     pub last_warning: Option<&'static str>,
     pub last_error: Option<&'static str>,
 }
@@ -275,18 +276,11 @@ fn run_frame_systems(
     volume_res: &VolumeResources,
     window: &Arc<Window>,
     event_proxy: winit::event_loop::EventLoopProxy<crate::AppEvent>,
-) {
-    let active_roi = scene
-        .world
-        .get::<&EditorState>(scene.entities.editor)
-        .ok()
-        .and_then(|editor| editor.active_roi);
-    crate::app::roi_runtime::process_voxel_mesh_rebuild_jobs(&mut scene.world);
-    crate::app::roi_runtime::process_contour_voxel_rebuild_jobs_with_gpu(
-        &gpu.device,
-        &gpu.queue,
-        &mut scene.world,
-        &crate::app::roi_runtime::BindGroupResources {
+) -> crate::app::roi_runtime::RoiWorkStatus {
+    let roi_work = crate::app::roi_runtime::RoiWorkGpuContext {
+        device: &gpu.device,
+        queue: &gpu.queue,
+        bind_groups: crate::app::roi_runtime::BindGroupResources {
             layout: &volume_res.texture_bind_group_layout,
             uniform_buffer: &volume_res.uniform_buffer,
             dummy_view: &volume_res.dummy_r8.1,
@@ -294,24 +288,9 @@ fn run_frame_systems(
             default_lut_view: &volume_res.default_lut.1,
             overlay_buffer: &volume_res.overlay_buffer,
         },
-        active_roi,
-    );
-    crate::app::roi_runtime::process_mesh_voxel_rebuild_jobs_with_gpu(
-        &gpu.device,
-        &gpu.queue,
-        &mut scene.world,
-        &crate::app::roi_runtime::BindGroupResources {
-            layout: &volume_res.texture_bind_group_layout,
-            uniform_buffer: &volume_res.uniform_buffer,
-            dummy_view: &volume_res.dummy_r8.1,
-            dummy_sampler: &volume_res.dummy_r8.2,
-            default_lut_view: &volume_res.default_lut.1,
-            overlay_buffer: &volume_res.overlay_buffer,
-        },
-        active_roi,
-    );
-    crate::app::roi_runtime::sync_active_roi_contour_view_caches_for_viewports(&mut scene.world);
-    crate::app::roi_runtime::sync_active_roi_mesh_cache_for_viewports(&mut scene.world);
+    };
+    let roi_work_status =
+        crate::app::roi_runtime::advance_roi_work(&mut scene.world, Some(&roi_work));
     systems::sys_handle_mouse_drag(&mut scene.world, &scene.entities);
     gui.prepare(window, &mut scene.world, &scene.entities, event_proxy);
     systems::sys_sync_annotations_to_overlay(&mut scene.world, &scene.entities);
@@ -321,6 +300,7 @@ fn run_frame_systems(
     {
         overlay.rebuild_primitives();
     }
+    roi_work_status
 }
 
 /// Write overlay and per-viewport uniforms to GPU buffers. Returns viewport list.
@@ -457,7 +437,8 @@ pub fn render_frame(
         return (std::time::Duration::MAX, stats);
     }
 
-    run_frame_systems(scene, gui, gpu, volume_res, window, event_proxy);
+    let roi_work_status = run_frame_systems(scene, gui, gpu, volume_res, window, event_proxy);
+    stats.roi_work_pending = roi_work_status.pending;
     let viewports = prepare_uniforms(scene, gpu, volume_res);
     stats.viewport_uniform_count = viewports.len() as u32;
     let frame = match acquire_surface_texture(&gpu.surface, &gpu.device, &gpu.config) {

@@ -121,6 +121,65 @@ pub struct BindGroupResources<'a> {
     pub overlay_buffer: &'a wgpu::Buffer,
 }
 
+/// GPU resources available while advancing ROI-derived work for one frame.
+pub struct RoiWorkGpuContext<'a> {
+    pub device: &'a wgpu::Device,
+    pub queue: &'a wgpu::Queue,
+    pub bind_groups: BindGroupResources<'a>,
+}
+
+/// Whether the ROI runtime needs another frame to finish queued work.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RoiWorkStatus {
+    pub pending: bool,
+}
+
+/// Advances all demanded ROI work in the only supported frame order.
+///
+/// Conversion processors remain concrete functions during the migration, but callers no longer
+/// choose their order. The returned pending flag must drive another redraw independently of GUI
+/// repaint requests.
+pub fn advance_roi_work(world: &mut World, gpu: Option<&RoiWorkGpuContext<'_>>) -> RoiWorkStatus {
+    let active_roi = world
+        .query::<&EditorState>()
+        .iter()
+        .next()
+        .and_then(|(_, editor)| editor.active_roi);
+
+    if let Some(gpu) = gpu {
+        process_contour_voxel_rebuild_jobs_with_gpu(
+            gpu.device,
+            gpu.queue,
+            world,
+            &gpu.bind_groups,
+            active_roi,
+        );
+        process_mesh_voxel_rebuild_jobs_with_gpu(
+            gpu.device,
+            gpu.queue,
+            world,
+            &gpu.bind_groups,
+            active_roi,
+        );
+    } else {
+        process_contour_voxel_rebuild_jobs(world);
+        process_mesh_voxel_rebuild_jobs(world);
+    }
+
+    // Demand is resolved after voxel-producing work so a newly current voxel cache can schedule
+    // its mesh in this same frame.
+    sync_active_roi_contour_view_caches_for_viewports(world);
+    sync_active_roi_mesh_cache_for_viewports(world);
+    process_voxel_mesh_rebuild_jobs(world);
+
+    RoiWorkStatus {
+        pending: world
+            .query::<&Roi>()
+            .iter()
+            .any(|(_, roi)| roi.running_job_kind().is_some() || !roi.job_state.pending.is_empty()),
+    }
+}
+
 /// Recreate the scene bind group with current volume and renderable ROI textures.
 ///
 /// This is a runtime concern rather than a load-handler concern because it
@@ -2410,6 +2469,38 @@ mod tests {
         let roi = world.get::<&Roi>(entity).unwrap();
         assert!(roi.is_cache_current(RoiCacheKind::Mesh));
         assert!(!roi.has_queued_job(RoiJobKind::RebuildMeshCache));
+    }
+
+    #[test]
+    fn test_advance_roi_work_reports_pending_queued_work() {
+        let mut world = World::new();
+        let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+        world
+            .get::<&mut Roi>(entity)
+            .unwrap()
+            .enqueue_rebuild(RoiJobKind::RebuildMeshCache);
+
+        let status = advance_roi_work(&mut world, None);
+
+        assert!(status.pending);
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert!(roi.has_queued_job(RoiJobKind::RebuildMeshCache));
+    }
+
+    #[test]
+    fn test_advance_roi_work_rebuilds_contour_voxels_from_roi_reference_grid() {
+        let mut world = World::new();
+        let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+        world
+            .get::<&mut Roi>(entity)
+            .unwrap()
+            .enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
+
+        let _status = advance_roi_work(&mut world, None);
+
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert!(roi.is_cache_current(RoiCacheKind::Voxel));
+        assert!(roi.reference_geometry().is_some());
     }
 
     #[test]
