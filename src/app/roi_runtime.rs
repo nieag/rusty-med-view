@@ -73,14 +73,6 @@ pub enum DisplayVoxelSourceError {
     NotVoxelRoi,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MeshDerivedRebuildError {
-    MissingRoi,
-    NotMeshRoi,
-    MissingTargetGeometry,
-    VoxelizationFailed(MeshVoxelizationError),
-}
-
 pub const MAX_SIMULTANEOUS_ROI_OVERLAYS: usize =
     crate::render::roi_views::DEFAULT_MAX_VOXEL_OVERLAYS;
 
@@ -895,47 +887,6 @@ pub fn cancel_mesh_edit_preview(
     editor_entity: hecs::Entity,
 ) -> Result<(), MeshMutationError> {
     crate::app::roi::preview::cancel_mesh_edit_preview(world, editor_entity)
-}
-
-pub fn request_rebuild_voxel_cache_from_mesh(
-    world: &mut World,
-    roi_entity: hecs::Entity,
-) -> Result<(), MeshDerivedRebuildError> {
-    let roi = world
-        .get::<&Roi>(roi_entity)
-        .map_err(|_| MeshDerivedRebuildError::MissingRoi)?;
-    if !matches!(&roi.authoritative_data, RoiAuthoritativeData::Mesh(_)) {
-        return Err(MeshDerivedRebuildError::NotMeshRoi);
-    }
-    let has_voxel_cache = roi.voxel_cache().is_some();
-    drop(roi);
-    if !has_voxel_cache {
-        return Err(MeshDerivedRebuildError::MissingTargetGeometry);
-    }
-    let mut roi = world
-        .get::<&mut Roi>(roi_entity)
-        .map_err(|_| MeshDerivedRebuildError::MissingRoi)?;
-    roi.mark_cache_dirty(RoiCacheKind::Voxel);
-    roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
-    Ok(())
-}
-
-pub fn request_rebuild_contour_cache_from_mesh(
-    world: &mut World,
-    roi_entity: hecs::Entity,
-) -> Result<(), MeshDerivedRebuildError> {
-    let mut roi = world
-        .get::<&mut Roi>(roi_entity)
-        .map_err(|_| MeshDerivedRebuildError::MissingRoi)?;
-    if !matches!(&roi.authoritative_data, RoiAuthoritativeData::Mesh(_)) {
-        return Err(MeshDerivedRebuildError::NotMeshRoi);
-    }
-    if roi.voxel_cache().is_none() || !roi.is_cache_current(RoiCacheKind::Voxel) {
-        return Err(MeshDerivedRebuildError::MissingTargetGeometry);
-    }
-    roi.mark_cache_dirty(RoiCacheKind::Contour);
-    roi.mark_all_contour_view_caches_stale();
-    Ok(())
 }
 
 pub fn create_contour_roi_from_voxel_roi(
@@ -2919,8 +2870,11 @@ mod tests {
         }
         promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
 
-        let voxel_result = request_rebuild_voxel_cache_from_mesh(&mut world, entity);
-        assert_eq!(voxel_result, Ok(()));
+        {
+            let mut roi = world.get::<&mut Roi>(entity).unwrap();
+            roi.mark_cache_dirty(RoiCacheKind::Voxel);
+            roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
+        }
         {
             let roi = world.get::<&Roi>(entity).unwrap();
             assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
@@ -2935,35 +2889,14 @@ mod tests {
             .is_some_and(|cache| cache.data.raw_data.iter().any(|value| *value != 0)));
         assert!(roi_voxel_stats(&world, entity).is_some_and(|stats| stats.occupied_voxels > 0));
 
-        let contour_result = request_rebuild_contour_cache_from_mesh(&mut world, entity);
-        assert_eq!(contour_result, Ok(()));
+        world
+            .get::<&mut Roi>(entity)
+            .unwrap()
+            .mark_cache_dirty(RoiCacheKind::Contour);
         assert!(
             cache_status(&world, entity, RoiCacheKind::Contour)
                 .unwrap()
                 .is_dirty
-        );
-    }
-
-    #[test]
-    fn test_mesh_rebuild_contract_requests_reject_non_mesh_and_missing_roi() {
-        let mut world = World::new();
-        let voxel_entity = spawn_test_roi(&mut world);
-
-        assert_eq!(
-            request_rebuild_voxel_cache_from_mesh(&mut world, voxel_entity),
-            Err(MeshDerivedRebuildError::NotMeshRoi)
-        );
-        assert_eq!(
-            request_rebuild_contour_cache_from_mesh(&mut world, voxel_entity),
-            Err(MeshDerivedRebuildError::NotMeshRoi)
-        );
-        assert_eq!(
-            request_rebuild_voxel_cache_from_mesh(&mut world, hecs::Entity::DANGLING),
-            Err(MeshDerivedRebuildError::MissingRoi)
-        );
-        assert_eq!(
-            request_rebuild_contour_cache_from_mesh(&mut world, hecs::Entity::DANGLING),
-            Err(MeshDerivedRebuildError::MissingRoi)
         );
     }
 
