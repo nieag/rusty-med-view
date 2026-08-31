@@ -1,5 +1,200 @@
 use crate::app::roi::VoxelGeometry;
-use glam::{Mat3, Quat, Vec3};
+use glam::{DMat3, DMat4, DVec3, DVec4, Mat3, Quat, Vec3};
+use thiserror::Error;
+
+const GEOMETRY_EPSILON: f64 = 1.0e-12;
+
+/// Stable identity for a validated voxel grid and its coordinate convention.
+///
+/// This intentionally stores affine bits rather than a hash so cache acceptance can remain
+/// deterministic and collision-free without introducing a hashing policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GeometryIdentity {
+    dimensions: [u32; 3],
+    ijk_to_world_bits: [u64; 16],
+}
+
+impl GeometryIdentity {
+    pub const fn dimensions(self) -> [u32; 3] {
+        self.dimensions
+    }
+
+    pub const fn ijk_to_world_bits(self) -> [u64; 16] {
+        self.ijk_to_world_bits
+    }
+}
+
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum RoiGeometryError {
+    #[error("ROI geometry dimensions must be non-zero")]
+    EmptyDimensions,
+    #[error("ROI IJK-to-world affine contains non-finite values")]
+    NonFiniteAffine,
+    #[error("ROI IJK-to-world affine must have final row [0, 0, 0, 1]")]
+    NonAffineTransform,
+    #[error("ROI IJK-to-world affine is singular")]
+    SingularAffine,
+    #[error("ROI IJK-to-world affine contains a zero-length grid axis")]
+    ZeroLengthAxis,
+    #[error("legacy ROI geometry contains non-finite values")]
+    NonFiniteLegacyParts,
+    #[error("legacy ROI geometry has non-positive spacing")]
+    InvalidLegacySpacing,
+    #[error("legacy ROI geometry has an invalid orientation quaternion")]
+    InvalidLegacyOrientation,
+}
+
+/// Immutable validated reference grid for an ROI.
+///
+/// Integer IJK coordinates identify voxel centres. World coordinates are millimetres. The
+/// inverse and identity are derived once so callers cannot silently reinterpret a grid.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoiGeometry {
+    dimensions: [u32; 3],
+    ijk_to_world: DMat4,
+    world_to_ijk: DMat4,
+    identity: GeometryIdentity,
+}
+
+impl RoiGeometry {
+    pub fn new(dimensions: [u32; 3], ijk_to_world: DMat4) -> Result<Self, RoiGeometryError> {
+        if dimensions.contains(&0) {
+            return Err(RoiGeometryError::EmptyDimensions);
+        }
+        if !ijk_to_world.is_finite() {
+            return Err(RoiGeometryError::NonFiniteAffine);
+        }
+
+        let final_row = DVec4::new(
+            ijk_to_world.x_axis.w,
+            ijk_to_world.y_axis.w,
+            ijk_to_world.z_axis.w,
+            ijk_to_world.w_axis.w,
+        );
+        if !approximately_equal_dvec4(final_row, DVec4::W) {
+            return Err(RoiGeometryError::NonAffineTransform);
+        }
+
+        let linear = DMat3::from_cols(
+            ijk_to_world.x_axis.truncate(),
+            ijk_to_world.y_axis.truncate(),
+            ijk_to_world.z_axis.truncate(),
+        );
+        if linear.determinant().abs() <= GEOMETRY_EPSILON {
+            return Err(RoiGeometryError::SingularAffine);
+        }
+        if [linear.x_axis, linear.y_axis, linear.z_axis]
+            .into_iter()
+            .any(|axis| axis.length() <= GEOMETRY_EPSILON)
+        {
+            return Err(RoiGeometryError::ZeroLengthAxis);
+        }
+
+        let identity = GeometryIdentity {
+            dimensions,
+            ijk_to_world_bits: ijk_to_world
+                .to_cols_array()
+                .map(|value| if value == 0.0 { 0.0 } else { value })
+                .map(f64::to_bits),
+        };
+        Ok(Self {
+            dimensions,
+            world_to_ijk: ijk_to_world.inverse(),
+            ijk_to_world,
+            identity,
+        })
+    }
+
+    /// Converts the legacy decomposed geometry while it is being migrated out of the runtime.
+    pub fn from_legacy_parts(
+        dimensions: [u32; 3],
+        spacing: [f32; 3],
+        origin: [f32; 3],
+        orientation: [f32; 4],
+    ) -> Result<Self, RoiGeometryError> {
+        if !spacing
+            .into_iter()
+            .chain(origin)
+            .chain(orientation)
+            .all(f32::is_finite)
+        {
+            return Err(RoiGeometryError::NonFiniteLegacyParts);
+        }
+        if spacing.into_iter().any(|value| value <= 0.0) {
+            return Err(RoiGeometryError::InvalidLegacySpacing);
+        }
+        let orientation = Quat::from_array(orientation);
+        let length_squared = orientation.length_squared();
+        if length_squared <= 1.0e-12 || !length_squared.is_finite() {
+            return Err(RoiGeometryError::InvalidLegacyOrientation);
+        }
+        let rotation = Mat3::from_quat(orientation.normalize());
+        let axes = [
+            DVec3::from(rotation.x_axis) * f64::from(spacing[0]),
+            DVec3::from(rotation.y_axis) * f64::from(spacing[1]),
+            DVec3::from(rotation.z_axis) * f64::from(spacing[2]),
+        ];
+        Self::new(
+            dimensions,
+            DMat4::from_cols(
+                axes[0].extend(0.0),
+                axes[1].extend(0.0),
+                axes[2].extend(0.0),
+                DVec3::new(
+                    f64::from(origin[0]),
+                    f64::from(origin[1]),
+                    f64::from(origin[2]),
+                )
+                .extend(1.0),
+            ),
+        )
+    }
+
+    pub const fn dimensions(&self) -> [u32; 3] {
+        self.dimensions
+    }
+
+    pub const fn ijk_to_world_affine(&self) -> DMat4 {
+        self.ijk_to_world
+    }
+
+    pub const fn world_to_ijk_affine(&self) -> DMat4 {
+        self.world_to_ijk
+    }
+
+    pub const fn identity(&self) -> GeometryIdentity {
+        self.identity
+    }
+
+    pub fn ijk_to_world_mm(&self, ijk: [f64; 3]) -> [f64; 3] {
+        self.ijk_to_world
+            .transform_point3(DVec3::from_array(ijk))
+            .to_array()
+    }
+
+    pub fn world_mm_to_ijk(&self, world: [f64; 3]) -> [f64; 3] {
+        self.world_to_ijk
+            .transform_point3(DVec3::from_array(world))
+            .to_array()
+    }
+
+    pub fn contains_voxel_center(&self, ijk: [f64; 3]) -> bool {
+        let point = DVec3::from_array(ijk);
+        let upper = DVec3::new(
+            f64::from(self.dimensions[0]) - 0.5,
+            f64::from(self.dimensions[1]) - 0.5,
+            f64::from(self.dimensions[2]) - 0.5,
+        );
+        point.cmpge(DVec3::splat(-0.5)).all() && point.cmplt(upper).all()
+    }
+}
+
+fn approximately_equal_dvec4(left: DVec4, right: DVec4) -> bool {
+    (left - right)
+        .abs()
+        .cmple(DVec4::splat(GEOMETRY_EPSILON))
+        .all()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PlaneFamily {
@@ -1044,5 +1239,103 @@ mod tests {
             .to_array();
 
         assert!(approx_eq(shader_equivalent, expected, 1e-5));
+    }
+
+    #[test]
+    fn test_roi_geometry_roundtrips_rotated_anisotropic_affine() {
+        let affine = DMat4::from_cols(
+            DVec4::new(0.0, 2.0, 0.0, 0.0),
+            DVec4::new(-3.0, 0.0, 0.0, 0.0),
+            DVec4::new(0.0, 0.0, 4.0, 0.0),
+            DVec4::new(10.0, -5.0, 2.5, 1.0),
+        );
+        let geometry = RoiGeometry::new([9, 8, 7], affine).unwrap();
+        let ijk = [2.25, 3.5, 1.75];
+
+        let world = geometry.ijk_to_world_mm(ijk);
+        let roundtrip = geometry.world_mm_to_ijk(world);
+
+        for axis in 0..3 {
+            assert!((roundtrip[axis] - ijk[axis]).abs() < 1.0e-12);
+        }
+        assert!(geometry.contains_voxel_center([0.0, 0.0, 0.0]));
+        assert!(geometry.contains_voxel_center([8.499, 7.499, 6.499]));
+        assert!(!geometry.contains_voxel_center([8.5, 7.0, 6.0]));
+    }
+
+    #[test]
+    fn test_roi_geometry_preserves_reflection_in_identity() {
+        let reflected = RoiGeometry::new(
+            [4, 5, 6],
+            DMat4::from_cols(
+                DVec4::new(-1.0, 0.0, 0.0, 0.0),
+                DVec4::new(0.0, 2.0, 0.0, 0.0),
+                DVec4::new(0.0, 0.0, 3.0, 0.0),
+                DVec4::new(11.0, 12.0, 13.0, 1.0),
+            ),
+        )
+        .unwrap();
+        let unreflected = RoiGeometry::new(
+            [4, 5, 6],
+            DMat4::from_cols(
+                DVec4::new(1.0, 0.0, 0.0, 0.0),
+                DVec4::new(0.0, 2.0, 0.0, 0.0),
+                DVec4::new(0.0, 0.0, 3.0, 0.0),
+                DVec4::new(11.0, 12.0, 13.0, 1.0),
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            reflected.ijk_to_world_mm([1.0, 0.0, 0.0]),
+            [10.0, 12.0, 13.0]
+        );
+        assert_ne!(reflected.identity(), unreflected.identity());
+    }
+
+    #[test]
+    fn test_roi_geometry_rejects_invalid_affines() {
+        assert_eq!(
+            RoiGeometry::new([0, 2, 3], DMat4::IDENTITY),
+            Err(RoiGeometryError::EmptyDimensions)
+        );
+        assert_eq!(
+            RoiGeometry::new(
+                [2, 2, 2],
+                DMat4::from_cols(DVec4::X, DVec4::Y, DVec4::Z, DVec4::new(0.0, 0.0, 0.0, 2.0),),
+            ),
+            Err(RoiGeometryError::NonAffineTransform)
+        );
+        assert_eq!(
+            RoiGeometry::new(
+                [2, 2, 2],
+                DMat4::from_cols(DVec4::ZERO, DVec4::Y, DVec4::Z, DVec4::W),
+            ),
+            Err(RoiGeometryError::SingularAffine)
+        );
+    }
+
+    #[test]
+    fn test_roi_geometry_legacy_conversion_matches_existing_voxel_world_mapping() {
+        let legacy = VoxelGeometry {
+            dimensions: [8, 7, 6],
+            spacing: [0.5, 1.25, 2.0],
+            origin: [4.0, -3.0, 8.0],
+            orientation: Quat::from_euler(glam::EulerRot::XYZ, 0.1, -0.3, 0.25).to_array(),
+        };
+        let geometry = RoiGeometry::from_legacy_parts(
+            legacy.dimensions,
+            legacy.spacing,
+            legacy.origin,
+            legacy.orientation,
+        )
+        .unwrap();
+        let ijk = [3.25, 1.5, 5.0];
+        let legacy_world = voxel_index_to_world_mm(ijk.map(|value| value as f32), legacy);
+        let affine_world = geometry.ijk_to_world_mm(ijk);
+
+        for axis in 0..3 {
+            assert!((affine_world[axis] - f64::from(legacy_world[axis])).abs() < 1.0e-6);
+        }
     }
 }

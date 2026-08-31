@@ -1,7 +1,7 @@
 # ROI Core Restructure Plan
 
 Date: 2026-08-30  
-Status: Proposed  
+Status: In progress  
 Scope: Coordinate ownership, ROI state orchestration, derived caches, and removal of transitional runtime code
 
 ## Purpose
@@ -412,7 +412,7 @@ Avoid exposing internal scheduler structures that tests do not need.
 
 ## Implementation status
 
-Current phase: Proposal review
+Current phase: Phase 0 / Phase 1 foundation
 
 Completed:
 
@@ -421,12 +421,14 @@ Completed:
 - [x] Chosen in-place ROI-core replacement over a full reboot
 - [x] Defined target coordinate ownership and work-coordinator contracts
 - [x] Drafted migration and deletion sequence
+- [x] Documented the current NIfTI sform/qform/fallback compatibility convention in ADR 0003
+- [x] Added validated affine-based `RoiGeometry`, stable geometry identity, and conversion tests
 
 Pending:
 
-- [ ] Accept or amend this plan
-- [ ] Phase 0: freeze behavior and coordinate conventions
-- [ ] Phase 1: validated ROI geometry
+- [x] Accept plan and begin implementation
+- [ ] Phase 0: add end-to-end contour-to-mesh acceptance coverage and required QA fields
+- [ ] Phase 1: attach validated geometry to every ROI and import path
 - [ ] Phase 2: contour tracer path
 - [ ] Phase 3: centralized work advancement
 - [ ] Phase 4: remaining authority paths
