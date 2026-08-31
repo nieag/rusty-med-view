@@ -2440,6 +2440,37 @@ mod tests {
     }
 
     #[test]
+    fn test_display_volume_change_does_not_retarget_contour_roi_geometry() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+        let (identity_before, voxel_geometry_before) = {
+            let roi = world.get::<&Roi>(entity).unwrap();
+            (
+                roi.reference_geometry().identity(),
+                roi.voxel_cache().unwrap().data.geometry,
+            )
+        };
+
+        let (_, volume) = world
+            .query_mut::<&mut VolumeData>()
+            .with::<&MainVolumeTag>()
+            .into_iter()
+            .next()
+            .unwrap();
+        volume.dimensions = [9, 8, 7];
+        volume.spacing = [0.25, 2.0, 3.0];
+        volume.origin = [10.0, -4.0, 2.0];
+
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert_eq!(roi.reference_geometry().identity(), identity_before);
+        assert_eq!(
+            roi.voxel_cache().unwrap().data.geometry,
+            voxel_geometry_before
+        );
+    }
+
+    #[test]
     fn test_main_volume_geometry_returns_none_when_missing() {
         let world = World::new();
         assert!(main_volume_geometry(&world).is_none());
