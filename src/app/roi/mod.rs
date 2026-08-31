@@ -29,6 +29,7 @@ pub use preview::{
 pub use model::{
     ContourData, ContourLoop, ContourPoint, ContourSlice, MeshData, MeshFace, MeshVertex,
     PrimaryRepresentation, RoiAuthoritativeData, RoiId, RoiMetadata, VoxelData, VoxelGeometry,
+    VoxelGeometryError,
 };
 pub use requests::{
     cache_status, request_contour_view_state, request_mesh_cache_state,

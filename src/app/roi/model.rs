@@ -27,10 +27,82 @@ pub struct VoxelData {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VoxelGeometry {
-    pub dimensions: [u32; 3],
-    pub spacing: [f32; 3],
-    pub origin: [f32; 3],
-    pub orientation: [f32; 4],
+    pub(crate) dimensions: [u32; 3],
+    pub(crate) spacing: [f32; 3],
+    pub(crate) origin: [f32; 3],
+    pub(crate) orientation: [f32; 4],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoxelGeometryError {
+    EmptyDimensions,
+    InvalidSpacing,
+    NonFiniteOrigin,
+    InvalidOrientation,
+}
+
+impl VoxelGeometry {
+    pub fn new(
+        dimensions: [u32; 3],
+        spacing: [f32; 3],
+        origin: [f32; 3],
+        orientation: [f32; 4],
+    ) -> Result<Self, VoxelGeometryError> {
+        if dimensions.contains(&0) {
+            return Err(VoxelGeometryError::EmptyDimensions);
+        }
+        if spacing
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+        {
+            return Err(VoxelGeometryError::InvalidSpacing);
+        }
+        if origin.iter().any(|value| !value.is_finite()) {
+            return Err(VoxelGeometryError::NonFiniteOrigin);
+        }
+        let orientation_length_sq = orientation
+            .into_iter()
+            .map(|value| value * value)
+            .sum::<f32>();
+        if !orientation_length_sq.is_finite() || orientation_length_sq <= 1e-12 {
+            return Err(VoxelGeometryError::InvalidOrientation);
+        }
+        Ok(Self {
+            dimensions,
+            spacing,
+            origin,
+            orientation,
+        })
+    }
+
+    pub fn dimensions(self) -> [u32; 3] {
+        self.dimensions
+    }
+
+    pub fn spacing(self) -> [f32; 3] {
+        self.spacing
+    }
+
+    pub fn origin(self) -> [f32; 3] {
+        self.origin
+    }
+
+    pub fn orientation(self) -> [f32; 4] {
+        self.orientation
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_voxel_geometry_constructor_rejects_invalid_orientation() {
+        assert_eq!(
+            VoxelGeometry::new([1, 1, 1], [1.0; 3], [0.0; 3], [0.0; 4]),
+            Err(VoxelGeometryError::InvalidOrientation)
+        );
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
