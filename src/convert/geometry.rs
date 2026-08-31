@@ -213,6 +213,37 @@ pub struct PlaneDefinition {
     pub normal_mm: [f32; 3],
 }
 
+impl PlaneDefinition {
+    /// Builds a finite, non-degenerate plane frame and derives its normal from the two axes.
+    pub fn new(
+        family: PlaneFamily,
+        origin_mm: [f32; 3],
+        u_axis_mm: [f32; 3],
+        v_axis_mm: [f32; 3],
+    ) -> Option<Self> {
+        let origin = Vec3::from_array(origin_mm);
+        if !origin.is_finite() {
+            return None;
+        }
+        let u_axis = Vec3::from_array(u_axis_mm);
+        let v_axis = Vec3::from_array(v_axis_mm);
+        if !u_axis.is_finite() || !v_axis.is_finite() {
+            return None;
+        }
+        let normal = u_axis.cross(v_axis);
+        if normal.length_squared() <= 1e-12 {
+            return None;
+        }
+        Some(Self {
+            family,
+            origin_mm,
+            u_axis_mm,
+            v_axis_mm,
+            normal_mm: normal.normalize().to_array(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewportMapping {
     pub zoom: f32,
@@ -311,15 +342,14 @@ pub fn orthogonal_plane_from_volume_uv(
 
     let u_world = world_direction_from_index_direction(u_index_dir, geometry)?;
     let v_world = world_direction_from_index_direction(v_index_dir, geometry)?;
-    let (u_axis, v_axis, normal) = orthonormalize_plane_axes(u_world, v_world)?;
+    let (u_axis, v_axis, _) = orthonormalize_plane_axes(u_world, v_world)?;
 
-    Some(PlaneDefinition {
+    PlaneDefinition::new(
         family,
-        origin_mm: volume_uv_to_world_mm(cursor_uv, geometry),
-        u_axis_mm: u_axis.to_array(),
-        v_axis_mm: v_axis.to_array(),
-        normal_mm: normal.to_array(),
-    })
+        volume_uv_to_world_mm(cursor_uv, geometry),
+        u_axis.to_array(),
+        v_axis.to_array(),
+    )
 }
 
 pub fn oblique_plane_from_view_rotation(
@@ -342,15 +372,12 @@ pub fn oblique_plane_from_view_rotation(
     if normal_vec.length_squared() <= 1e-12 {
         return None;
     }
-    let normal = normal_vec.normalize();
-
-    Some(PlaneDefinition {
-        family: PlaneFamily::Oblique,
-        origin_mm: volume_uv_to_world_mm(cursor_uv, geometry),
-        u_axis_mm: u_axis.to_array(),
-        v_axis_mm: v_axis.to_array(),
-        normal_mm: normal.to_array(),
-    })
+    PlaneDefinition::new(
+        PlaneFamily::Oblique,
+        volume_uv_to_world_mm(cursor_uv, geometry),
+        u_axis.to_array(),
+        v_axis.to_array(),
+    )
 }
 
 pub fn plane_local_mm_to_world_mm(local: [f32; 2], plane: PlaneDefinition) -> [f32; 3] {
@@ -1337,5 +1364,24 @@ mod tests {
         for axis in 0..3 {
             assert!((affine_world[axis] - f64::from(legacy_world[axis])).abs() < 1.0e-6);
         }
+    }
+
+    #[test]
+    fn test_plane_definition_constructor_derives_normal_and_rejects_degenerate_axes() {
+        let plane = PlaneDefinition::new(
+            PlaneFamily::Axial,
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 3.0, 0.0],
+        )
+        .unwrap();
+        assert_eq!(plane.normal_mm, [0.0, 0.0, 1.0]);
+        assert!(PlaneDefinition::new(
+            PlaneFamily::Axial,
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+        )
+        .is_none());
     }
 }

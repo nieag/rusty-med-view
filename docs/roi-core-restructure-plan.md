@@ -435,6 +435,7 @@ Completed:
 - [x] ROI reference geometry is mandatory; main-volume contour-cache invalidation compatibility hook removed
 - [x] Accepted mesh and preview-mesh caches carry the ROI geometry identity
 - [x] Accepted contour-view caches carry the ROI geometry identity
+- [x] Production plane factories use a validated constructor that derives normals without changing legacy oblique mapping
 
 Pending:
 
