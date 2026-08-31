@@ -2,7 +2,9 @@ pub use crate::app::roi::{
     ContourData, ContourLoop, ContourPoint, ContourSlice, MeshData, MeshFace, MeshVertex,
     PrimaryRepresentation, RoiAuthoritativeData, RoiId, RoiMetadata, VoxelData, VoxelGeometry,
 };
-use crate::convert::{ChunkedMeshData, PlaneDefinition, PlaneFamily, RoiGeometry};
+use crate::convert::{
+    ChunkedMeshData, GeometryIdentity, PlaneDefinition, PlaneFamily, RoiGeometry,
+};
 use glam::Vec3;
 
 use winit::keyboard::ModifiersState;
@@ -287,6 +289,10 @@ pub struct RoiSessionCaches {
     pub mesh: Option<MeshCache>,
     pub preview_voxel: Option<PreviewVoxelCache>,
     pub preview_mesh: Option<PreviewMeshCache>,
+    /// Geometry identity recorded when a mesh cache is accepted for this ROI.
+    pub mesh_geometry_identity: Option<GeometryIdentity>,
+    /// Geometry identity recorded when a preview mesh cache is accepted for this ROI.
+    pub preview_mesh_geometry_identity: Option<GeometryIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -540,6 +546,8 @@ impl Roi {
                 mesh: None,
                 preview_voxel: None,
                 preview_mesh: None,
+                mesh_geometry_identity: None,
+                preview_mesh_geometry_identity: None,
             },
             dirty_state: RoiDirtyState {
                 contour_cache_dirty: true,
@@ -583,6 +591,8 @@ impl Roi {
                 mesh: None,
                 preview_voxel: None,
                 preview_mesh: None,
+                mesh_geometry_identity: None,
+                preview_mesh_geometry_identity: None,
             },
             dirty_state: RoiDirtyState {
                 voxel_cache_dirty: true,
@@ -622,6 +632,8 @@ impl Roi {
                 mesh: None,
                 preview_voxel: None,
                 preview_mesh: None,
+                mesh_geometry_identity: None,
+                preview_mesh_geometry_identity: None,
             },
             dirty_state: RoiDirtyState {
                 voxel_cache_dirty: true,

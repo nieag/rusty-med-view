@@ -238,6 +238,7 @@ impl Roi {
             }
             RoiCacheKind::Mesh => {
                 self.session_caches.mesh = None;
+                self.session_caches.mesh_geometry_identity = None;
                 self.dirty_state.generations.mesh = 0;
             }
         }
@@ -252,6 +253,7 @@ impl Roi {
     ) {
         if let Some(mesh) = replacement_mesh {
             self.session_caches.mesh = Some(mesh);
+            self.session_caches.mesh_geometry_identity = Some(self.reference_geometry().identity());
         }
         self.session_caches.contour = None;
         if let Some(voxel_cache) = self.session_caches.voxel.as_mut() {
@@ -291,6 +293,11 @@ impl Roi {
         }
         self.session_caches.contour = None;
         self.session_caches.mesh = retained_mesh;
+        self.session_caches.mesh_geometry_identity = self
+            .session_caches
+            .mesh
+            .as_ref()
+            .map(|_| self.reference_geometry().identity());
 
         let generation = self.next_authoritative_generation();
         self.dirty_state = RoiDirtyState {
@@ -309,6 +316,7 @@ impl Roi {
 
     pub(crate) fn rebase_after_mesh_promotion(&mut self, voxel_cache_is_current: bool) {
         self.session_caches.mesh = None;
+        self.session_caches.mesh_geometry_identity = None;
         self.session_caches.contour = None;
 
         let generation = self.next_authoritative_generation();
@@ -337,6 +345,7 @@ impl Roi {
     ) -> Result<(), CacheInstallError> {
         self.validate_source_generation(source_generation)?;
         self.session_caches.mesh = Some(cache);
+        self.session_caches.mesh_geometry_identity = Some(self.reference_geometry().identity());
         self.finish_cache_rebuild(RoiCacheKind::Mesh);
         Ok(())
     }
@@ -383,6 +392,8 @@ impl Roi {
     ) -> Result<(), CacheInstallError> {
         self.validate_preview_source(cache.source_generation, cache.preview_revision)?;
         self.session_caches.preview_mesh = Some(cache);
+        self.session_caches.preview_mesh_geometry_identity =
+            Some(self.reference_geometry().identity());
         Ok(())
     }
 
@@ -570,5 +581,28 @@ mod tests {
         assert_eq!(roi.voxel_cache().unwrap().data.raw_data, vec![7]);
         assert!(roi.is_cache_current(RoiCacheKind::Voxel));
         assert_eq!(roi.cache_generation(RoiCacheKind::Voxel), generation);
+    }
+
+    #[test]
+    fn test_mesh_result_is_stamped_with_roi_geometry_identity() {
+        let mut roi = test_roi();
+        let generation = roi.dirty_state.generations.authoritative;
+
+        roi.install_mesh_cache_result(
+            MeshCache {
+                data: crate::app::roi::MeshData {
+                    vertices: Vec::new(),
+                    faces: Vec::new(),
+                },
+                chunks: None,
+            },
+            generation,
+        )
+        .unwrap();
+
+        assert_eq!(
+            roi.session_caches.mesh_geometry_identity,
+            Some(roi.reference_geometry().identity())
+        );
     }
 }

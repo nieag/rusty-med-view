@@ -433,6 +433,7 @@ Completed:
 - [x] Coordinator-level contour commit acceptance coverage reaches current voxel and mesh caches
 - [x] Removed uncalled empty-mesh ROI creation API
 - [x] ROI reference geometry is mandatory; main-volume contour-cache invalidation compatibility hook removed
+- [x] Accepted mesh and preview-mesh caches carry the ROI geometry identity
 
 Pending:
 
