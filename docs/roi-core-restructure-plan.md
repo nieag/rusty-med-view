@@ -434,6 +434,7 @@ Completed:
 - [x] Removed uncalled empty-mesh ROI creation API
 - [x] ROI reference geometry is mandatory; main-volume contour-cache invalidation compatibility hook removed
 - [x] Accepted mesh and preview-mesh caches carry the ROI geometry identity
+- [x] Accepted contour-view caches carry the ROI geometry identity
 
 Pending:
 

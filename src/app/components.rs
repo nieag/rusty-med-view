@@ -321,6 +321,7 @@ pub struct ContourViewCache {
     pub key: ContourViewKey,
     pub data: ContourData,
     pub source_generation: u64,
+    pub geometry_identity: GeometryIdentity,
     pub state: CacheViewState,
 }
 

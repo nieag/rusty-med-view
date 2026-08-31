@@ -59,6 +59,7 @@ impl Roi {
         source_generation: u64,
         state: CacheViewState,
     ) {
+        let geometry_identity = self.reference_geometry().identity();
         let cache = self.ensure_contour_cache();
         if let Some(existing) = cache
             .views
@@ -67,6 +68,7 @@ impl Roi {
         {
             existing.data = data;
             existing.source_generation = source_generation;
+            existing.geometry_identity = geometry_identity;
             existing.state = state;
             existing.key = key;
         } else {
@@ -74,6 +76,7 @@ impl Roi {
                 key,
                 data,
                 source_generation,
+                geometry_identity,
                 state,
             });
             if cache.views.len() > MAX_CONTOUR_VIEW_CACHE_ENTRIES {
@@ -603,6 +606,40 @@ mod tests {
         assert_eq!(
             roi.session_caches.mesh_geometry_identity,
             Some(roi.reference_geometry().identity())
+        );
+    }
+
+    #[test]
+    fn test_contour_view_result_is_stamped_with_roi_geometry_identity() {
+        let mut roi = test_roi();
+        let generation = roi.dirty_state.generations.authoritative;
+        let key = ContourViewKey::from_plane(
+            crate::convert::orthogonal_plane_from_volume_uv(
+                PlaneFamily::Axial,
+                [0.5, 0.5, 0.5],
+                VoxelGeometry {
+                    dimensions: [1, 1, 1],
+                    spacing: [1.0; 3],
+                    origin: [0.0; 3],
+                    orientation: [0.0, 0.0, 0.0, 1.0],
+                },
+            )
+            .unwrap(),
+        );
+
+        roi.install_current_contour_view_result(
+            key.clone(),
+            ContourData {
+                active_plane_family: PlaneFamily::Axial,
+                slices: Vec::new(),
+            },
+            generation,
+        )
+        .unwrap();
+
+        assert_eq!(
+            roi.contour_view_cache(&key).unwrap().geometry_identity,
+            roi.reference_geometry().identity()
         );
     }
 }
