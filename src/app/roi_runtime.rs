@@ -13,11 +13,13 @@ pub use crate::app::roi::requests::{
 use crate::convert::PlaneDefinition;
 use crate::convert::{
     contour_geometry_voxel_aabb, contour_slices_voxel_aabb, extract_contour_slice_from_voxel_data,
-    extract_contours_from_voxel_data, extract_mesh_from_voxel_data, intersect_mesh_with_plane,
-    rasterize_contour_preview_slices_to_voxel_data, rasterize_contours_to_voxel_data,
-    voxelize_mesh_to_voxel_data, IncrementalChunkedMeshRebuild, PlaneFamily, RoiGeometry,
-    VoxelContourExtractionError, VoxelMeshExtractionError, DEFAULT_MESH_CHUNK_SIZE,
+    intersect_mesh_with_plane, rasterize_contour_preview_slices_to_voxel_data,
+    rasterize_contours_to_voxel_data, voxelize_mesh_to_voxel_data, IncrementalChunkedMeshRebuild,
+    PlaneFamily, RoiGeometry, VoxelContourExtractionError, VoxelMeshExtractionError,
+    DEFAULT_MESH_CHUNK_SIZE,
 };
+#[cfg(test)]
+use crate::convert::{extract_contours_from_voxel_data, extract_mesh_from_voxel_data};
 use crate::render::roi_views::{RenderRepresentationRequest, RoiRenderViews};
 use hecs::World;
 use web_time::{Duration, Instant};
@@ -44,6 +46,7 @@ pub struct VoxelRoiStats {
     pub volume_mm3: f32,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoxelContourCreationError {
     MissingRoi,
@@ -51,6 +54,7 @@ pub enum VoxelContourCreationError {
     ExtractionFailed(VoxelContourExtractionError),
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoxelMeshCreationError {
     MissingRoi,
@@ -59,6 +63,7 @@ pub enum VoxelMeshCreationError {
     ExtractionFailed(VoxelMeshExtractionError),
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContourMeshCreationError {
     MissingRoi,
@@ -67,6 +72,7 @@ pub enum ContourMeshCreationError {
     ExtractionFailed(VoxelMeshExtractionError),
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisplayVoxelSourceError {
     MissingRoi,
@@ -76,6 +82,7 @@ pub enum DisplayVoxelSourceError {
 pub const MAX_SIMULTANEOUS_ROI_OVERLAYS: usize =
     crate::render::roi_views::DEFAULT_MAX_VOXEL_OVERLAYS;
 
+#[cfg(test)]
 fn plane_family_label(family: PlaneFamily) -> &'static str {
     match family {
         PlaneFamily::Axial => "Axial",
@@ -889,6 +896,7 @@ pub fn cancel_mesh_edit_preview(
     crate::app::roi::preview::cancel_mesh_edit_preview(world, editor_entity)
 }
 
+#[cfg(test)]
 pub fn create_contour_roi_from_voxel_roi(
     world: &mut World,
     source_roi: hecs::Entity,
@@ -970,6 +978,7 @@ pub fn promote_current_mesh_cache_to_authority(
     crate::app::roi::authority::promote_current_mesh_cache_to_authority(world, roi_entity)
 }
 
+#[cfg(test)]
 pub fn create_mesh_roi_from_voxel_roi(
     world: &mut World,
     source_roi: hecs::Entity,
@@ -1015,6 +1024,7 @@ pub fn create_mesh_roi_from_voxel_roi(
     Ok(entity)
 }
 
+#[cfg(test)]
 pub fn voxel_data_for_display_surface_extraction(
     world: &World,
     source_roi: hecs::Entity,
@@ -1034,6 +1044,7 @@ pub fn voxel_data_for_display_surface_extraction(
     Ok(source_voxel)
 }
 
+#[cfg(test)]
 pub fn create_mesh_roi_from_contour_roi(
     world: &mut World,
     source_roi: hecs::Entity,

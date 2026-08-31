@@ -437,6 +437,7 @@ Completed:
 - [x] Accepted contour-view caches carry the ROI geometry identity
 - [x] Production plane factories use a validated constructor that derives normals without changing legacy oblique mapping
 - [x] Removed uncalled mesh cache-request compatibility APIs
+- [x] Moved uncalled duplicate ROI-creation compatibility APIs out of production builds
 
 Pending:
 
