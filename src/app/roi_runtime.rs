@@ -816,36 +816,6 @@ pub fn create_empty_contour_roi(
     Ok(entity)
 }
 
-pub fn create_empty_mesh_roi(
-    world: &mut World,
-    editor_entity: hecs::Entity,
-) -> Result<hecs::Entity, String> {
-    if world.get::<&EditorState>(editor_entity).is_err() {
-        return Err("Missing editor state; mesh ROI was not created.".to_string());
-    }
-
-    let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
-    let roi_name = format!("Mesh ROI {}", next_roi_id);
-    let entity = world.spawn((
-        Roi::new_mesh(
-            RoiId(next_roi_id),
-            roi_name,
-            MeshData {
-                vertices: Vec::new(),
-                faces: Vec::new(),
-            },
-        ),
-        LayerSettings { opacity: 0.5 },
-        RoiTag,
-    ));
-
-    let mut editor = world
-        .get::<&mut EditorState>(editor_entity)
-        .map_err(|_| "Missing editor state; mesh ROI was not created.".to_string())?;
-    editor.active_roi = Some(entity);
-    Ok(entity)
-}
-
 pub fn replace_mesh_data(
     world: &mut World,
     roi_entity: hecs::Entity,
@@ -2633,22 +2603,6 @@ mod tests {
 
         let entity = create_empty_contour_roi(&mut world, editor, PlaneFamily::Axial).unwrap();
 
-        let editor_state = world.get::<&EditorState>(editor).unwrap();
-        assert_eq!(editor_state.active_roi, Some(entity));
-    }
-
-    #[test]
-    fn test_create_empty_mesh_roi_creates_mesh_primary_and_sets_active_roi() {
-        let mut world = World::new();
-        let editor = world.spawn((EditorState::default(),));
-
-        let entity = create_empty_mesh_roi(&mut world, editor).unwrap();
-
-        let roi = world.get::<&Roi>(entity).unwrap();
-        assert_eq!(roi.primary_representation(), PrimaryRepresentation::Mesh);
-        let mesh_data = roi.mesh_data().expect("expected mesh roi");
-        assert!(mesh_data.vertices.is_empty());
-        assert!(mesh_data.faces.is_empty());
         let editor_state = world.get::<&EditorState>(editor).unwrap();
         assert_eq!(editor_state.active_roi, Some(entity));
     }

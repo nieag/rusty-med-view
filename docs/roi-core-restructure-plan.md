@@ -431,6 +431,7 @@ Completed:
 - [x] Mesh-authoritative voxel rebuilds use the ROI cache grid, not the displayed main-volume grid
 - [x] Legacy voxel-to-contour and voxel-to-mesh conversions snapshot the source grid and work without a displayed main volume
 - [x] Coordinator-level contour commit acceptance coverage reaches current voxel and mesh caches
+- [x] Removed uncalled empty-mesh ROI creation API
 
 Pending:
 
