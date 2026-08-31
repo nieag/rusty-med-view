@@ -439,6 +439,7 @@ Completed:
 - [x] Removed uncalled mesh cache-request compatibility APIs
 - [x] Moved uncalled duplicate ROI-creation compatibility APIs out of production builds
 - [x] Current-cache checks reject accepted mesh or contour data with a mismatched geometry stamp
+- [x] QA exposes authority plus per-cache generation and current-state diagnostics
 
 Pending:
 

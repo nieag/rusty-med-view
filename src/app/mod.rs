@@ -283,6 +283,7 @@ impl AppState {
                 rois.push(qa::QaSnapshotRoi {
                     id: roi.metadata.roi_id.0,
                     name: roi.metadata.name.clone(),
+                    authority: format!("{:?}", roi.primary_representation()),
                     visible: roi.metadata.is_visible,
                     active: Some(entity) == active_roi_entity,
                     overlay_slot: overlay_slots.get(&entity).copied(),
@@ -291,6 +292,12 @@ impl AppState {
                         "{:?}",
                         roi.reference_geometry().identity()
                     )),
+                    voxel_cache_generation: roi.cache_generation(RoiCacheKind::Voxel),
+                    contour_cache_generation: roi.cache_generation(RoiCacheKind::Contour),
+                    mesh_cache_generation: roi.cache_generation(RoiCacheKind::Mesh),
+                    voxel_cache_current: roi.is_cache_current(RoiCacheKind::Voxel),
+                    contour_cache_current: roi.is_cache_current(RoiCacheKind::Contour),
+                    mesh_cache_current: roi.is_cache_current(RoiCacheKind::Mesh),
                     voxel_dimensions,
                     non_empty_voxel_bounds: non_empty_bounds,
                     preview_active: roi.preview_state.active,
