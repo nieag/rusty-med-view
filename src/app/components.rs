@@ -6,6 +6,7 @@ use crate::convert::{
     ChunkedMeshData, GeometryIdentity, PlaneDefinition, PlaneFamily, RoiGeometry,
 };
 use glam::Vec3;
+use web_time::Instant;
 
 use winit::keyboard::ModifiersState;
 
@@ -462,6 +463,7 @@ pub struct RoiJobMetrics {
     pub discarded_count: u64,
     pub failed_count: u64,
     pub last_duration_ms: f32,
+    pub last_queue_delay_ms: f32,
     pub max_queue_depth: usize,
 }
 
@@ -475,6 +477,9 @@ pub struct RoiPreviewState {
 pub struct RoiJobState {
     pub running_request: Option<RoiJobRequest>,
     pub pending: Vec<RoiJobRequest>,
+    // ponytail: one timestamp measures oldest pending work; add per-request timestamps only if
+    // queue-delay attribution becomes a measured bottleneck.
+    pub oldest_pending_since: Option<Instant>,
 }
 
 pub struct Roi {

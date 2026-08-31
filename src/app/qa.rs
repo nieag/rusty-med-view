@@ -106,6 +106,7 @@ pub struct QaSnapshotRoi {
     pub discarded_job_count: u64,
     pub failed_job_count: u64,
     pub last_job_duration_ms: f32,
+    pub last_queue_delay_ms: f32,
     pub max_job_queue_depth: usize,
 }
 

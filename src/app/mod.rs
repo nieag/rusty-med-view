@@ -313,6 +313,7 @@ impl AppState {
                     discarded_job_count: roi.job_metrics.discarded_count,
                     failed_job_count: roi.job_metrics.failed_count,
                     last_job_duration_ms: roi.job_metrics.last_duration_ms,
+                    last_queue_delay_ms: roi.job_metrics.last_queue_delay_ms,
                     max_job_queue_depth: roi.job_metrics.max_queue_depth,
                 });
             }

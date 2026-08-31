@@ -1,6 +1,7 @@
 use crate::app::components::{
     Roi, RoiDirtyRegion, RoiJobKind, RoiJobPriority, RoiJobRequest, RoiJobState,
 };
+use web_time::Instant;
 
 impl RoiJobState {
     pub fn running_kind(&self) -> Option<RoiJobKind> {
@@ -48,6 +49,9 @@ impl Roi {
             };
         } else {
             self.job_state.pending.push(request);
+            if self.job_state.oldest_pending_since.is_none() {
+                self.job_state.oldest_pending_since = Some(Instant::now());
+            }
         }
         self.job_state.pending.sort_by_key(|request| {
             (
@@ -67,6 +71,12 @@ impl Roi {
         }
         let request = self.job_state.pending.first().copied()?;
         self.job_state.pending.remove(0);
+        if let Some(queued_at) = self.job_state.oldest_pending_since.take() {
+            self.job_metrics.last_queue_delay_ms = queued_at.elapsed().as_secs_f32() * 1000.0;
+        }
+        if !self.job_state.pending.is_empty() {
+            self.job_state.oldest_pending_since = Some(Instant::now());
+        }
         self.job_state.running_request = Some(request);
         Some(request.kind)
     }
@@ -148,5 +158,30 @@ fn merge_dirty_regions(left: RoiDirtyRegion, right: RoiDirtyRegion) -> RoiDirtyR
         },
         (left, right) if left == right => left,
         _ => RoiDirtyRegion::Full,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::components::{ContourData, RoiId};
+    use crate::convert::PlaneFamily;
+
+    #[test]
+    fn test_starting_queued_work_records_queue_delay() {
+        let mut roi = Roi::new_contour(
+            RoiId(1),
+            "test".to_string(),
+            ContourData {
+                active_plane_family: PlaneFamily::Axial,
+                slices: Vec::new(),
+            },
+        );
+        roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
+
+        assert!(roi.job_state.oldest_pending_since.is_some());
+        assert_eq!(roi.start_queued_job(), Some(RoiJobKind::RebuildVoxelCache));
+        assert!(roi.job_state.oldest_pending_since.is_none());
+        assert!(roi.job_metrics.last_queue_delay_ms >= 0.0);
     }
 }
