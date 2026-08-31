@@ -262,6 +262,12 @@ fn normalized_orientation(orientation: [f32; 4]) -> Quat {
     }
 }
 
+fn validated_orientation(orientation: [f32; 4]) -> Option<Quat> {
+    let quat = Quat::from_array(orientation);
+    let length_sq = quat.length_squared();
+    (length_sq.is_finite() && length_sq > 1e-12).then(|| quat.normalize())
+}
+
 fn world_direction_from_index_direction(
     index_direction: Vec3,
     geometry: VoxelGeometry,
@@ -685,8 +691,8 @@ pub fn index_space_affine_from_src_to_dst(
         return None;
     }
 
-    let src_rot = normalized_orientation(src.orientation);
-    let dst_inv_rot = normalized_orientation(dst.orientation).inverse();
+    let src_rot = validated_orientation(src.orientation)?;
+    let dst_inv_rot = validated_orientation(dst.orientation)?.inverse();
 
     let src_scale = Mat3::from_diagonal(Vec3::from_array(src.spacing));
     let dst_inv_scale = Mat3::from_diagonal(Vec3::new(
@@ -864,6 +870,22 @@ mod tests {
         let world = voxel_index_to_world_mm(src_index, src);
         let expected = world_mm_to_voxel_index(world, dst);
         assert!(approx_eq(mapped, expected, 1e-5));
+    }
+
+    #[test]
+    fn test_index_space_affine_rejects_invalid_orientation() {
+        let valid = VoxelGeometry {
+            dimensions: [4, 4, 4],
+            spacing: [1.0; 3],
+            origin: [0.0; 3],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+        let invalid = VoxelGeometry {
+            orientation: [0.0; 4],
+            ..valid
+        };
+
+        assert!(index_space_affine_from_src_to_dst(invalid, valid).is_none());
     }
 
     #[test]

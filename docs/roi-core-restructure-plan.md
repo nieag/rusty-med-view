@@ -442,6 +442,7 @@ Completed:
 - [x] QA exposes authority plus per-cache generation and current-state diagnostics
 - [x] ROI job metrics record queue delay for measured Phase 6 optimization work
 - [x] Removed duplicate voxel ROI statistics compatibility wrapper
+- [x] Affine ROI/display mapping rejects invalid orientations instead of silently using identity
 
 Pending:
 
