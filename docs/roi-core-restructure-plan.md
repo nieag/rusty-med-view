@@ -427,7 +427,8 @@ Completed:
 Pending:
 
 - [x] Accept plan and begin implementation
-- [ ] Phase 0: add end-to-end contour-to-mesh acceptance coverage and required QA fields
+- [ ] Phase 0: add end-to-end contour-to-mesh acceptance coverage
+- [x] Phase 0: expose ROI geometry identity and dimensions through QA
 - [ ] Phase 1: attach validated geometry to every ROI and import path
 - [ ] Phase 2: contour tracer path
 - [ ] Phase 3: centralized work advancement

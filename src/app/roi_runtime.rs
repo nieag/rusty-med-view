@@ -16,7 +16,7 @@ use crate::convert::{
     extract_contours_from_voxel_data, extract_mesh_from_voxel_data, intersect_mesh_with_plane,
     rasterize_contour_preview_slices_to_voxel_data, rasterize_contours_to_voxel_data,
     voxelize_mesh_to_voxel_data, IncrementalChunkedMeshRebuild, MeshVoxelizationError, PlaneFamily,
-    VoxelContourExtractionError, VoxelMeshExtractionError, DEFAULT_MESH_CHUNK_SIZE,
+    RoiGeometry, VoxelContourExtractionError, VoxelMeshExtractionError, DEFAULT_MESH_CHUNK_SIZE,
 };
 use crate::render::roi_views::{RenderRepresentationRequest, RoiRenderViews};
 use hecs::World;
@@ -93,6 +93,16 @@ fn plane_family_label(family: PlaneFamily) -> &'static str {
         PlaneFamily::Sagittal => "Sagittal",
         PlaneFamily::Oblique => "Oblique",
     }
+}
+
+fn roi_geometry_from_voxel_geometry(geometry: VoxelGeometry) -> Result<RoiGeometry, String> {
+    RoiGeometry::from_legacy_parts(
+        geometry.dimensions,
+        geometry.spacing,
+        geometry.origin,
+        geometry.orientation,
+    )
+    .map_err(|error| format!("Invalid ROI reference geometry: {error}"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -703,12 +713,24 @@ pub fn create_empty_contour_roi(
         return Err("Missing editor state; contour ROI was not created.".to_string());
     }
 
+    let reference_voxel_geometry = main_volume_voxel_geometry(world)
+        .ok_or_else(|| "Missing main volume geometry; contour ROI was not created.".to_string())?;
+    let reference_geometry = roi_geometry_from_voxel_geometry(reference_voxel_geometry)?;
+    let voxel_count = reference_voxel_geometry
+        .dimensions
+        .into_iter()
+        .try_fold(1usize, |count, dimension| {
+            count.checked_mul(dimension as usize)
+        })
+        .ok_or_else(|| "Contour ROI reference grid is too large.".to_string())?;
+
     let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
     let roi_name = format!("Contour ROI {}", next_roi_id);
     let entity = world.spawn((
-        Roi::new_contour(
+        Roi::new_contour_with_geometry(
             RoiId(next_roi_id),
             roi_name,
+            reference_geometry,
             ContourData {
                 active_plane_family,
                 slices: Vec::new(),
@@ -717,6 +739,18 @@ pub fn create_empty_contour_roi(
         LayerSettings { opacity: 0.5 },
         RoiTag,
     ));
+
+    if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
+        // The stale template fixes contour rasterization to the ROI's creation grid. It is not a
+        // display result and will be replaced by the first committed contour rebuild.
+        roi.session_caches.voxel = Some(VoxelCache {
+            data: VoxelData {
+                geometry: reference_voxel_geometry,
+                raw_data: vec![0; voxel_count],
+            },
+            gpu_resources: None,
+        });
+    }
 
     let mut editor = world
         .get::<&mut EditorState>(editor_entity)
@@ -1107,12 +1141,14 @@ pub fn complete_cache_rebuild(
 
 pub fn invalidate_contour_voxel_caches_for_main_volume_change(world: &mut World) {
     for (_, roi) in world.query_mut::<&mut Roi>() {
-        if !matches!(roi.authoritative_data, RoiAuthoritativeData::Contour(_)) {
+        if !matches!(roi.authoritative_data, RoiAuthoritativeData::Contour(_))
+            || roi.reference_geometry().is_some()
+        {
             continue;
         }
 
-        // Derived contour voxel caches target the current main-volume grid, so they
-        // must be invalidated whenever that reference grid changes.
+        // Legacy contour ROIs without a reference grid still target the current main-volume
+        // grid. New ROIs keep their own geometry and are intentionally unaffected.
         roi.discard_cache(RoiCacheKind::Voxel);
         roi.finish_job(RoiJobKind::RebuildVoxelCache);
         roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
@@ -1697,14 +1733,18 @@ fn process_contour_voxel_rebuild_for_entity(
             .retain(|slice| ContourSliceKey::from_plane(slice.plane) == slice_key);
     }
 
-    let Some(target_geometry) = main_volume_voxel_geometry(world) else {
+    let target_geometry = world
+        .get::<&Roi>(roi_entity)
+        .ok()
+        .and_then(|roi| roi.voxel_cache().map(|cache| cache.data.geometry));
+    let Some(target_geometry) = target_geometry else {
         log::warn!(
-            "Skipping contour voxel rebuild for ROI {:?}: missing main volume geometry",
+            "Skipping contour voxel rebuild for ROI {:?}: missing ROI reference grid",
             roi_entity
         );
         set_runtime_status_message(
             world,
-            "Contour voxel rebuild failed: main volume geometry is unavailable.".to_string(),
+            "Contour voxel rebuild failed: ROI reference geometry is unavailable.".to_string(),
         );
         fail_contour_voxel_rebuild(world, roi_entity);
         return false;
@@ -2090,6 +2130,12 @@ mod tests {
         family: PlaneFamily,
         with_loops: bool,
     ) -> hecs::Entity {
+        let geometry = VoxelGeometry {
+            dimensions: [4, 4, 4],
+            spacing: [1.0, 1.0, 1.0],
+            origin: [0.0, 0.0, 0.0],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
         let slices = if with_loops {
             vec![ContourSlice {
                 plane: test_plane_definition(family),
@@ -2112,14 +2158,24 @@ mod tests {
             Vec::new()
         };
 
-        world.spawn((Roi::new_contour(
+        let entity = world.spawn((Roi::new_contour_with_geometry(
             RoiId(100),
             "Contour".to_string(),
+            roi_geometry_from_voxel_geometry(geometry).unwrap(),
             ContourData {
                 active_plane_family: family,
                 slices,
             },
-        ),))
+        ),));
+        let mut roi = world.get::<&mut Roi>(entity).unwrap();
+        roi.session_caches.voxel = Some(VoxelCache {
+            data: VoxelData {
+                geometry,
+                raw_data: vec![0; 64],
+            },
+            gpu_resources: None,
+        });
+        entity
     }
 
     fn seed_current_voxel_cache_for_contour_roi(world: &mut World, entity: hecs::Entity) {
@@ -2458,6 +2514,7 @@ mod tests {
     #[test]
     fn test_create_empty_contour_roi_creates_contour_primary_with_requested_plane_family() {
         let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
         let editor = world.spawn((EditorState::default(),));
 
         let entity = create_empty_contour_roi(&mut world, editor, PlaneFamily::Coronal).unwrap();
@@ -2472,6 +2529,7 @@ mod tests {
     #[test]
     fn test_create_empty_contour_roi_sets_active_roi_to_new_entity() {
         let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
         let editor = world.spawn((EditorState::default(),));
 
         let entity = create_empty_contour_roi(&mut world, editor, PlaneFamily::Axial).unwrap();
@@ -3780,7 +3838,7 @@ mod tests {
     }
 
     #[test]
-    fn test_process_contour_voxel_rebuild_jobs_missing_main_volume_requeues_without_mutation() {
+    fn test_process_contour_voxel_rebuild_jobs_uses_roi_reference_grid_without_main_volume() {
         let mut world = World::new();
         let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
         let contour_before = world
@@ -3798,10 +3856,9 @@ mod tests {
 
         let roi = world.get::<&Roi>(entity).unwrap();
         assert_eq!(roi.contour_data(), Some(&contour_before));
-        assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
-        assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
+        assert!(roi.is_cache_current(RoiCacheKind::Voxel));
         assert_eq!(roi.running_job_kind(), None);
-        assert_eq!(roi.queued_job_kind(), None);
+        assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildMeshCache));
     }
 
     #[test]
@@ -3887,14 +3944,22 @@ mod tests {
         };
         let first_slice = make_slice(1.0);
         let first_key = ContourSliceKey::from_plane(first_slice.plane);
-        let entity = world.spawn((Roi::new_contour(
+        let geometry = VoxelGeometry {
+            dimensions: [4, 4, 4],
+            spacing: [1.0, 1.0, 1.0],
+            origin: [0.0, 0.0, 0.0],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+        let entity = world.spawn((Roi::new_contour_with_geometry(
             RoiId(101),
             "Oblique".to_string(),
+            roi_geometry_from_voxel_geometry(geometry).unwrap(),
             ContourData {
                 active_plane_family: PlaneFamily::Oblique,
                 slices: vec![first_slice, make_slice(2.0)],
             },
         ),));
+        seed_current_voxel_cache_for_contour_roi(&mut world, entity);
         {
             let mut roi = world.get::<&mut Roi>(entity).unwrap();
             let source_generation = roi.dirty_state.generations.authoritative;
@@ -3959,7 +4024,7 @@ mod tests {
     }
 
     #[test]
-    fn test_invalidate_contour_voxel_caches_for_main_volume_change_dirties_and_queues() {
+    fn test_main_volume_change_does_not_invalidate_contour_roi_with_reference_geometry() {
         let mut world = World::new();
         spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
         let contour_entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
@@ -3977,12 +4042,11 @@ mod tests {
         invalidate_contour_voxel_caches_for_main_volume_change(&mut world);
 
         let contour_roi = world.get::<&Roi>(contour_entity).unwrap();
-        assert!(contour_roi.is_cache_dirty(RoiCacheKind::Voxel));
-        assert!(!contour_roi.is_cache_current(RoiCacheKind::Voxel));
-        assert!(contour_roi.voxel_cache().is_none());
+        assert!(contour_roi.is_cache_current(RoiCacheKind::Voxel));
+        assert!(contour_roi.voxel_cache().is_some());
         assert_eq!(
             contour_roi.queued_job_kind(),
-            Some(RoiJobKind::RebuildVoxelCache)
+            Some(RoiJobKind::RebuildMeshCache)
         );
 
         let voxel_roi = world.get::<&Roi>(voxel_entity).unwrap();
@@ -4191,6 +4255,11 @@ mod tests {
         let mut world = World::new();
         let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
         let key = ContourViewKey::from_plane(test_plane_definition(PlaneFamily::Coronal));
+
+        world
+            .get::<&mut Roi>(entity)
+            .unwrap()
+            .discard_cache(RoiCacheKind::Voxel);
 
         let blocked = request_contour_view_state(&world, entity, &key);
         assert_eq!(blocked.request.state, RepresentationRequestState::Blocked);

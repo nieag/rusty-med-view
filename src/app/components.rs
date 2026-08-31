@@ -2,7 +2,7 @@ pub use crate::app::roi::{
     ContourData, ContourLoop, ContourPoint, ContourSlice, MeshData, MeshFace, MeshVertex,
     PrimaryRepresentation, RoiAuthoritativeData, RoiId, RoiMetadata, VoxelData, VoxelGeometry,
 };
-use crate::convert::{ChunkedMeshData, PlaneDefinition, PlaneFamily};
+use crate::convert::{ChunkedMeshData, PlaneDefinition, PlaneFamily, RoiGeometry};
 use glam::Vec3;
 
 use winit::keyboard::ModifiersState;
@@ -472,6 +472,11 @@ pub struct RoiJobState {
 
 pub struct Roi {
     pub metadata: RoiMetadata,
+    /// Immutable reference grid for conversions involving this ROI.
+    ///
+    /// `None` is temporary migration state for legacy contour/mesh construction paths. New
+    /// authoring and import paths must use the geometry-aware constructors below.
+    pub reference_geometry: Option<RoiGeometry>,
     pub authoritative_data: RoiAuthoritativeData,
     pub session_caches: RoiSessionCaches,
     pub dirty_state: RoiDirtyState,
@@ -481,6 +486,10 @@ pub struct Roi {
 }
 
 impl Roi {
+    pub fn reference_geometry(&self) -> Option<&RoiGeometry> {
+        self.reference_geometry.as_ref()
+    }
+
     pub fn primary_representation(&self) -> PrimaryRepresentation {
         match &self.authoritative_data {
             RoiAuthoritativeData::Voxel(_) => PrimaryRepresentation::Voxel,
@@ -507,6 +516,13 @@ impl Roi {
         gpu_resources: Option<GpuVolumeResources>,
     ) -> Self {
         let voxel_data = VoxelData { geometry, raw_data };
+        let reference_geometry = RoiGeometry::from_legacy_parts(
+            voxel_data.geometry.dimensions,
+            voxel_data.geometry.spacing,
+            voxel_data.geometry.origin,
+            voxel_data.geometry.orientation,
+        )
+        .expect("voxel ROI constructors require valid reference geometry");
         Self {
             metadata: RoiMetadata {
                 roi_id,
@@ -515,6 +531,7 @@ impl Roi {
                 is_locked: false,
                 color: [1.0, 0.2, 0.2, 1.0],
             },
+            reference_geometry: Some(reference_geometry),
             authoritative_data: RoiAuthoritativeData::Voxel(voxel_data.clone()),
             session_caches: RoiSessionCaches {
                 voxel: Some(VoxelCache {
@@ -542,6 +559,29 @@ impl Roi {
     }
 
     pub fn new_contour(roi_id: RoiId, name: String, contour_data: ContourData) -> Self {
+        Self::new_contour_with_optional_geometry(roi_id, name, None, contour_data)
+    }
+
+    pub fn new_contour_with_geometry(
+        roi_id: RoiId,
+        name: String,
+        reference_geometry: RoiGeometry,
+        contour_data: ContourData,
+    ) -> Self {
+        Self::new_contour_with_optional_geometry(
+            roi_id,
+            name,
+            Some(reference_geometry),
+            contour_data,
+        )
+    }
+
+    fn new_contour_with_optional_geometry(
+        roi_id: RoiId,
+        name: String,
+        reference_geometry: Option<RoiGeometry>,
+        contour_data: ContourData,
+    ) -> Self {
         Self {
             metadata: RoiMetadata {
                 roi_id,
@@ -550,6 +590,7 @@ impl Roi {
                 is_locked: false,
                 color: [1.0, 0.2, 0.2, 1.0],
             },
+            reference_geometry,
             authoritative_data: RoiAuthoritativeData::Contour(contour_data),
             session_caches: RoiSessionCaches {
                 voxel: None,
@@ -570,6 +611,24 @@ impl Roi {
     }
 
     pub fn new_mesh(roi_id: RoiId, name: String, mesh_data: MeshData) -> Self {
+        Self::new_mesh_with_optional_geometry(roi_id, name, None, mesh_data)
+    }
+
+    pub fn new_mesh_with_geometry(
+        roi_id: RoiId,
+        name: String,
+        reference_geometry: RoiGeometry,
+        mesh_data: MeshData,
+    ) -> Self {
+        Self::new_mesh_with_optional_geometry(roi_id, name, Some(reference_geometry), mesh_data)
+    }
+
+    fn new_mesh_with_optional_geometry(
+        roi_id: RoiId,
+        name: String,
+        reference_geometry: Option<RoiGeometry>,
+        mesh_data: MeshData,
+    ) -> Self {
         Self {
             metadata: RoiMetadata {
                 roi_id,
@@ -578,6 +637,7 @@ impl Roi {
                 is_locked: false,
                 color: [1.0, 0.2, 0.2, 1.0],
             },
+            reference_geometry,
             authoritative_data: RoiAuthoritativeData::Mesh(mesh_data),
             session_caches: RoiSessionCaches {
                 voxel: None,
@@ -847,6 +907,12 @@ mod tests {
         assert_eq!(roi.metadata.roi_id, RoiId(7));
         assert_eq!(roi.metadata.name, "Liver");
         assert_eq!(roi.primary_representation(), PrimaryRepresentation::Voxel);
+        assert_eq!(
+            roi.reference_geometry()
+                .expect("voxel ROI has reference geometry")
+                .dimensions(),
+            [16, 16, 8]
+        );
         assert!(matches!(
             roi.authoritative_data,
             RoiAuthoritativeData::Voxel(VoxelData {
@@ -1306,11 +1372,30 @@ mod tests {
                 }],
             }],
         };
-        let roi = Roi::new_contour(RoiId(14), "GTV".to_string(), contour_data.clone());
+        let reference_geometry = RoiGeometry::from_legacy_parts(
+            [16, 16, 8],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap();
+        let expected_identity = reference_geometry.identity();
+        let roi = Roi::new_contour_with_geometry(
+            RoiId(14),
+            "GTV".to_string(),
+            reference_geometry,
+            contour_data.clone(),
+        );
 
         assert_eq!(roi.metadata.roi_id, RoiId(14));
         assert_eq!(roi.metadata.name, "GTV");
         assert_eq!(roi.primary_representation(), PrimaryRepresentation::Contour);
+        assert_eq!(
+            roi.reference_geometry()
+                .expect("explicit contour ROI has reference geometry")
+                .identity(),
+            expected_identity
+        );
         assert!(matches!(
             roi.authoritative_data,
             RoiAuthoritativeData::Contour(_)

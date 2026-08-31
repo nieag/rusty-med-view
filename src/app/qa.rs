@@ -87,6 +87,8 @@ pub struct QaSnapshotRoi {
     pub visible: bool,
     pub active: bool,
     pub overlay_slot: Option<u32>,
+    pub reference_geometry_dimensions: Option<[u32; 3]>,
+    pub reference_geometry_identity: Option<String>,
     pub voxel_dimensions: Option<[u32; 3]>,
     pub non_empty_voxel_bounds: Option<[[u32; 3]; 2]>,
     pub preview_active: bool,

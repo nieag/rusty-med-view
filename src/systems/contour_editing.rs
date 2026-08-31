@@ -6,6 +6,8 @@ use crate::components::{
     ContourSlice, EditorState, EditorTool, InputState, MainVolumeTag, Roi, Transform, ViewMode,
     Viewport, VoxelGeometry,
 };
+#[cfg(test)]
+use crate::components::{VoxelCache, VoxelData};
 use crate::convert::{
     contour_slice_contains_point, oblique_plane_from_view_rotation,
     orthogonal_plane_from_volume_uv, plane_local_mm_to_viewport_uv, plane_local_mm_to_world_mm,
@@ -1025,9 +1027,16 @@ mod tests {
             orientation: [0.0, 0.0, 0.0, 1.0],
         };
         let plane = orthogonal_plane_from_volume_uv(family, [0.4, 0.55, 0.2], geometry).unwrap();
-        world.spawn((Roi::new_contour(
+        let entity = world.spawn((Roi::new_contour_with_geometry(
             crate::components::RoiId(101),
             "ContourWithLoop".to_string(),
+            crate::convert::RoiGeometry::from_legacy_parts(
+                geometry.dimensions,
+                geometry.spacing,
+                geometry.origin,
+                geometry.orientation,
+            )
+            .unwrap(),
             ContourData {
                 active_plane_family: family,
                 slices: vec![ContourSlice {
@@ -1051,7 +1060,15 @@ mod tests {
                     }],
                 }],
             },
-        ),))
+        ),));
+        world.get::<&mut Roi>(entity).unwrap().session_caches.voxel = Some(VoxelCache {
+            data: VoxelData {
+                geometry,
+                raw_data: vec![0; 64 * 48 * 32],
+            },
+            gpu_resources: None,
+        });
+        entity
     }
 
     fn reframe_first_contour_slice(world: &mut World, roi_entity: hecs::Entity) {
