@@ -452,6 +452,7 @@ Completed:
 - [x] QA models mandatory ROI reference geometry as non-optional
 - [x] Main-volume legacy geometry conversion validates volume metadata at the runtime boundary
 - [x] All production `VolumeData` to `VoxelGeometry` conversions validate metadata
+- [x] Labelmap import validates ROI geometry before allocating GPU resources
 - [x] QA records contour-raster and mesh-voxelization stage timings
 - [x] Browser QA contract passes against the live Trunk server (3/3); headless Chromium reports no WebGPU adapter, so it cannot provide interaction timings
 

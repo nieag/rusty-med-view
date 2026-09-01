@@ -687,6 +687,13 @@ pub fn prepare_voxel_roi_import(
     world: &World,
     loaded_label: &LoadedLabel,
 ) -> Result<VoxelRoiImportSpec, String> {
+    let geometry = VoxelGeometry::new(
+        loaded_label.dimensions,
+        loaded_label.spacing,
+        loaded_label.origin,
+        loaded_label.orientation,
+    )
+    .map_err(|error| format!("Invalid label ROI geometry: {error:?}"))?;
     let geometry_matches_main = if let Some(main_geometry) = main_volume_voxel_geometry(world) {
         let differs = main_geometry.dimensions != loaded_label.dimensions
             || !approx_eq_slice(main_geometry.spacing, loaded_label.spacing, 1e-5)
@@ -711,12 +718,7 @@ pub fn prepare_voxel_roi_import(
     };
 
     Ok(VoxelRoiImportSpec {
-        geometry: VoxelGeometry {
-            dimensions: loaded_label.dimensions,
-            spacing: loaded_label.spacing,
-            origin: loaded_label.origin,
-            orientation: loaded_label.orientation,
-        },
+        geometry,
         start_visible: visible_voxel_overlay_count(world) < MAX_SIMULTANEOUS_ROI_OVERLAYS,
         geometry_matches_main,
     })
@@ -2597,6 +2599,24 @@ mod tests {
         assert_eq!(import_spec.geometry.orientation, [0.0, 0.0, 1.0, 0.0]);
         assert!(!import_spec.geometry_matches_main);
         assert!(import_spec.start_visible);
+    }
+
+    #[test]
+    fn test_prepare_voxel_roi_import_rejects_invalid_label_geometry_before_gpu_creation() {
+        let world = World::new();
+        let loaded_label = LoadedLabel {
+            dimensions: [2, 2, 2],
+            spacing: [1.0; 3],
+            origin: [0.0; 3],
+            orientation: [0.0; 4],
+            data: vec![0; 8],
+            filename: "Invalid label".to_string(),
+        };
+
+        assert_eq!(
+            prepare_voxel_roi_import(&world, &loaded_label).unwrap_err(),
+            "Invalid label ROI geometry: InvalidOrientation"
+        );
     }
 
     #[test]
