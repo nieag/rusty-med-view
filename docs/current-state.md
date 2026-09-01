@@ -49,4 +49,4 @@ Completed plans and handoffs are under [archive/](archive/); they are context, n
 
 ## Next planning decision
 
-There is no active implementation plan. The core loop is stable enough to choose product value rather than further infrastructure work.
+The proposed next direction is the [ROI workstation plan](roi-workstation-plan.md): polish one complete local authoring-to-export workflow before adding new algorithms or infrastructure.
