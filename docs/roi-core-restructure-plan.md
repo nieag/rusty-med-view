@@ -452,6 +452,7 @@ Completed:
 - [x] QA models mandatory ROI reference geometry as non-optional
 - [x] Main-volume legacy geometry conversion validates volume metadata at the runtime boundary
 - [x] All production `VolumeData` to `VoxelGeometry` conversions validate metadata
+- [x] QA records contour-raster and mesh-voxelization stage timings
 
 Pending:
 

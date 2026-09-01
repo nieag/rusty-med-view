@@ -1419,6 +1419,7 @@ fn process_mesh_voxel_rebuild_for_entity(
         fail_mesh_voxel_rebuild(world, roi_entity, "roi_reference_grid_missing");
         return false;
     };
+    let voxelization_started_at = Instant::now();
     let voxel_data = match voxelize_mesh_to_voxel_data(&mesh, target_geometry) {
         Ok(data) => data,
         Err(error) => {
@@ -1464,6 +1465,8 @@ fn process_mesh_voxel_rebuild_for_entity(
     let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) else {
         return false;
     };
+    roi.job_metrics.last_mesh_voxelization_ms =
+        voxelization_started_at.elapsed().as_secs_f32() * 1000.0;
     if roi
         .install_voxel_cache_result(
             VoxelCache {
@@ -1771,6 +1774,7 @@ fn process_contour_voxel_rebuild_for_entity(
             }
         })
     });
+    let raster_started_at = Instant::now();
     let raster_result = if let Some(base) = base_slice_voxel.as_ref() {
         rasterize_contour_preview_slices_to_voxel_data(&contour_data, base)
     } else {
@@ -1951,6 +1955,7 @@ fn process_contour_voxel_rebuild_for_entity(
     let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) else {
         return false;
     };
+    roi.job_metrics.last_contour_raster_ms = raster_started_at.elapsed().as_secs_f32() * 1000.0;
 
     if roi
         .install_voxel_cache_result(

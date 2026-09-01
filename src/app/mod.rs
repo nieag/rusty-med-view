@@ -314,6 +314,8 @@ impl AppState {
                     failed_job_count: roi.job_metrics.failed_count,
                     last_job_duration_ms: roi.job_metrics.last_duration_ms,
                     last_queue_delay_ms: roi.job_metrics.last_queue_delay_ms,
+                    last_contour_raster_ms: roi.job_metrics.last_contour_raster_ms,
+                    last_mesh_voxelization_ms: roi.job_metrics.last_mesh_voxelization_ms,
                     max_job_queue_depth: roi.job_metrics.max_queue_depth,
                 });
             }

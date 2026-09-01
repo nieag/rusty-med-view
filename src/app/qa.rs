@@ -107,6 +107,8 @@ pub struct QaSnapshotRoi {
     pub failed_job_count: u64,
     pub last_job_duration_ms: f32,
     pub last_queue_delay_ms: f32,
+    pub last_contour_raster_ms: f32,
+    pub last_mesh_voxelization_ms: f32,
     pub max_job_queue_depth: usize,
 }
 
