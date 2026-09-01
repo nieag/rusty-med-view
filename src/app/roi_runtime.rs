@@ -1338,16 +1338,17 @@ fn resume_voxel_mesh_rebuild_work(
         roi.finish_job(RoiJobKind::RebuildMeshCache);
         return;
     }
-    if roi
-        .install_mesh_cache_result(
-            MeshCache {
-                data: mesh_data,
-                chunks: Some(chunked_mesh),
-            },
-            work.source_generation,
-        )
-        .is_err()
-    {
+    let cache_install_started_at = Instant::now();
+    let installed = roi.install_mesh_cache_result(
+        MeshCache {
+            data: mesh_data,
+            chunks: Some(chunked_mesh),
+        },
+        work.source_generation,
+    );
+    roi.job_metrics.last_cpu_cache_install_ms =
+        cache_install_started_at.elapsed().as_secs_f32() * 1000.0;
+    if installed.is_err() {
         roi.job_metrics.discarded_count = roi.job_metrics.discarded_count.saturating_add(1);
         roi.finish_job(RoiJobKind::RebuildMeshCache);
         return;
@@ -1441,11 +1442,12 @@ fn process_mesh_voxel_rebuild_for_entity(
         return false;
     }
 
-    let gpu_resources = if let Some((device, queue)) = upload_context {
+    let (gpu_resources, gpu_upload_ms) = if let Some((device, queue)) = upload_context {
         let Some(placeholder_bg) = main_volume_bind_group(world) else {
             fail_mesh_voxel_rebuild(world, roi_entity, "main_volume_bind_group_missing");
             return false;
         };
+        let upload_started_at = Instant::now();
         let (texture, view, sampler) =
             match crate::io::volume::create_texture_from_voxel_data(device, queue, &voxel_data) {
                 Ok(resources) => resources,
@@ -1455,14 +1457,17 @@ fn process_mesh_voxel_rebuild_for_entity(
                     return false;
                 }
             };
-        Some(GpuVolumeResources {
-            texture,
-            view,
-            sampler,
-            bind_group: placeholder_bg,
-        })
+        (
+            Some(GpuVolumeResources {
+                texture,
+                view,
+                sampler,
+                bind_group: placeholder_bg,
+            }),
+            Some(upload_started_at.elapsed().as_secs_f32() * 1000.0),
+        )
     } else {
-        None
+        (None, None)
     };
 
     let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) else {
@@ -1470,16 +1475,20 @@ fn process_mesh_voxel_rebuild_for_entity(
     };
     roi.job_metrics.last_mesh_voxelization_ms =
         voxelization_started_at.elapsed().as_secs_f32() * 1000.0;
-    if roi
-        .install_voxel_cache_result(
-            VoxelCache {
-                data: voxel_data,
-                gpu_resources,
-            },
-            source_generation,
-        )
-        .is_err()
-    {
+    if let Some(upload_ms) = gpu_upload_ms {
+        roi.job_metrics.last_gpu_upload_ms = upload_ms;
+    }
+    let cache_install_started_at = Instant::now();
+    let installed = roi.install_voxel_cache_result(
+        VoxelCache {
+            data: voxel_data,
+            gpu_resources,
+        },
+        source_generation,
+    );
+    roi.job_metrics.last_cpu_cache_install_ms =
+        cache_install_started_at.elapsed().as_secs_f32() * 1000.0;
+    if installed.is_err() {
         roi.job_metrics.discarded_count = roi.job_metrics.discarded_count.saturating_add(1);
         roi.finish_job(RoiJobKind::RebuildVoxelCache);
         return false;
@@ -1912,7 +1921,7 @@ fn process_contour_voxel_rebuild_for_entity(
         return false;
     }
 
-    let gpu_resources = if let Some((device, queue)) = upload_context {
+    let (gpu_resources, gpu_upload_ms) = if let Some((device, queue)) = upload_context {
         let Some(placeholder_bg) = main_volume_bind_group(world) else {
             log::warn!(
                 "Skipping contour voxel rebuild GPU upload for ROI {:?}: missing main volume bind group",
@@ -1927,6 +1936,7 @@ fn process_contour_voxel_rebuild_for_entity(
             return false;
         };
 
+        let upload_started_at = Instant::now();
         let (texture, view, sampler) =
             match crate::io::volume::create_texture_from_voxel_data(device, queue, &voxel_data) {
                 Ok(gpu_tuple) => gpu_tuple,
@@ -1945,31 +1955,38 @@ fn process_contour_voxel_rebuild_for_entity(
                 }
             };
 
-        Some(GpuVolumeResources {
-            texture,
-            view,
-            sampler,
-            bind_group: placeholder_bg,
-        })
+        (
+            Some(GpuVolumeResources {
+                texture,
+                view,
+                sampler,
+                bind_group: placeholder_bg,
+            }),
+            Some(upload_started_at.elapsed().as_secs_f32() * 1000.0),
+        )
     } else {
-        None
+        (None, None)
     };
 
     let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) else {
         return false;
     };
     roi.job_metrics.last_contour_raster_ms = raster_started_at.elapsed().as_secs_f32() * 1000.0;
+    if let Some(upload_ms) = gpu_upload_ms {
+        roi.job_metrics.last_gpu_upload_ms = upload_ms;
+    }
 
-    if roi
-        .install_voxel_cache_result(
-            VoxelCache {
-                data: voxel_data,
-                gpu_resources,
-            },
-            authoritative_generation,
-        )
-        .is_err()
-    {
+    let cache_install_started_at = Instant::now();
+    let installed = roi.install_voxel_cache_result(
+        VoxelCache {
+            data: voxel_data,
+            gpu_resources,
+        },
+        authoritative_generation,
+    );
+    roi.job_metrics.last_cpu_cache_install_ms =
+        cache_install_started_at.elapsed().as_secs_f32() * 1000.0;
+    if installed.is_err() {
         roi.job_metrics.discarded_count = roi.job_metrics.discarded_count.saturating_add(1);
         roi.finish_job(RoiJobKind::RebuildVoxelCache);
         return false;
@@ -3823,6 +3840,11 @@ mod tests {
         let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
         let replacement = square_contour_data_for_main_volume(&world, 1.4);
         replace_contour_data(&mut world, entity, replacement.clone()).unwrap();
+        world
+            .get::<&mut Roi>(entity)
+            .unwrap()
+            .job_metrics
+            .last_cpu_cache_install_ms = 42.0;
 
         process_contour_voxel_rebuild_jobs(&mut world);
 
@@ -3835,6 +3857,7 @@ mod tests {
         assert_eq!(voxel_cache.data.geometry.dimensions, [4, 4, 4]);
         assert!(voxel_cache.data.raw_data.iter().any(|v| *v != 0));
         assert!(voxel_cache.gpu_resources.is_none());
+        assert_ne!(roi.job_metrics.last_cpu_cache_install_ms, 42.0);
     }
 
     #[test]

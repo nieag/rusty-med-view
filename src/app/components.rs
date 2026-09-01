@@ -466,6 +466,8 @@ pub struct RoiJobMetrics {
     pub last_queue_delay_ms: f32,
     pub last_contour_raster_ms: f32,
     pub last_mesh_voxelization_ms: f32,
+    pub last_cpu_cache_install_ms: f32,
+    pub last_gpu_upload_ms: f32,
     pub max_queue_depth: usize,
 }
 

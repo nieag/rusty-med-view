@@ -316,6 +316,8 @@ impl AppState {
                     last_queue_delay_ms: roi.job_metrics.last_queue_delay_ms,
                     last_contour_raster_ms: roi.job_metrics.last_contour_raster_ms,
                     last_mesh_voxelization_ms: roi.job_metrics.last_mesh_voxelization_ms,
+                    last_cpu_cache_install_ms: roi.job_metrics.last_cpu_cache_install_ms,
+                    last_gpu_upload_ms: roi.job_metrics.last_gpu_upload_ms,
                     max_job_queue_depth: roi.job_metrics.max_queue_depth,
                 });
             }

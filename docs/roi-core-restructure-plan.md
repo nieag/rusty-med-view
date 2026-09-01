@@ -456,6 +456,7 @@ Completed:
 - [x] Labelmap import validates ROI geometry before allocating GPU resources
 - [x] Removed the duplicate main-volume geometry compatibility alias and unused authority/cache delegates from production builds
 - [x] QA records contour-raster and mesh-voxelization stage timings
+- [x] QA records CPU cache-install and CPU-to-GPU upload submission timings
 - [x] Browser QA contract passes against the live Trunk server (3/3); headless Chromium reports no WebGPU adapter, so it cannot provide interaction timings
 
 Pending:
@@ -473,7 +474,7 @@ Pending:
 Phase 6 measurement gate:
 
 - Run the liver QA sample in a GPU-capable browser, create and commit a contour loop, then wait for the ROI pending queue to empty.
-- Record the active ROI's `last_queue_delay_ms`, `last_contour_raster_ms`, `last_mesh_voxelization_ms`, `last_job_duration_ms`, and render frame progression from `window.__viewerQa.state()`.
+- Record the active ROI's `last_queue_delay_ms`, `last_contour_raster_ms`, `last_mesh_voxelization_ms`, `last_cpu_cache_install_ms`, `last_gpu_upload_ms`, `last_job_duration_ms`, and render frame progression from `window.__viewerQa.state()`. GPU-upload timing is synchronous submission wall time, not asynchronous GPU completion.
 - Compare the first visible preview and final convergence with the 100 ms preview target, 200 ms hard gate, and 16.7 ms frame budget in `roi-multi-representation-closeout-plan.md`.
 - Headless browser QA is a contract check only in this environment: Chromium has no WebGPU adapter, so its successful fallback path is not a performance result.
 
