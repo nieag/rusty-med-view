@@ -93,6 +93,16 @@ test("qa-2 sample preset readiness", async ({ page }) => {
     expect(activeRoi).toBeTruthy();
     expect(activeRoi.visible).toBeTruthy();
     expect(activeRoi.overlay_slot === 0 || activeRoi.overlay_slot === 1).toBeTruthy();
+    for (const field of [
+      "last_queue_delay_ms",
+      "last_contour_raster_ms",
+      "last_mesh_voxelization_ms",
+      "last_cpu_cache_install_ms",
+      "last_gpu_upload_ms",
+      "last_work_convergence_ms",
+    ]) {
+      expect(typeof activeRoi[field]).toBe("number");
+    }
     expect(lastError).toBeNull();
     expect(logs.events.some((e) => e.category === "qa.sample")).toBeTruthy();
     expect(logs.events.some((e) => e.category === "qa.preset")).toBeTruthy();

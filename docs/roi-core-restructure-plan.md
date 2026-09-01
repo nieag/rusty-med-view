@@ -458,6 +458,7 @@ Completed:
 - [x] QA records contour-raster and mesh-voxelization stage timings
 - [x] QA records CPU cache-install and CPU-to-GPU upload submission timings
 - [x] QA records end-to-end accepted-work convergence across queued follow-on jobs
+- [x] Browser QA asserts the ROI timing schema when the GPU-backed sample reaches ready state
 - [x] Browser QA contract passes against the live Trunk server (3/3); headless Chromium reports no WebGPU adapter, so it cannot provide interaction timings
 
 Pending:
