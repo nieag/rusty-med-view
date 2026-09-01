@@ -156,3 +156,4 @@ Checkpoint commits:
 - `b1e7ab0` Feat: use smooth meshes in chunked ROI rebuilds
 - `d28f022` Feat: make mesh brush surface-aware
 - `af658ad` Test: cover rotated mesh voxel roundtrip
+- `96e64c5` Test: cover oblique mesh authority contours
