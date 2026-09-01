@@ -168,12 +168,24 @@ pub fn advance_roi_work(world: &mut World, gpu: Option<&RoiWorkGpuContext<'_>>) 
     sync_active_roi_contour_view_caches_for_viewports(world);
     sync_active_roi_mesh_cache_for_viewports(world);
     process_voxel_mesh_rebuild_jobs(world);
+    record_completed_work_cycles(world);
 
     RoiWorkStatus {
         pending: world
             .query::<&Roi>()
             .iter()
             .any(|(_, roi)| roi.running_job_kind().is_some() || !roi.job_state.pending.is_empty()),
+    }
+}
+
+fn record_completed_work_cycles(world: &mut World) {
+    for (_, roi) in world.query_mut::<&mut Roi>() {
+        if roi.job_state.running_request.is_none() && roi.job_state.pending.is_empty() {
+            if let Some(started_at) = roi.job_state.work_cycle_started_at.take() {
+                roi.job_metrics.last_work_convergence_ms =
+                    started_at.elapsed().as_secs_f32() * 1000.0;
+            }
+        }
     }
 }
 
@@ -2462,16 +2474,23 @@ mod tests {
     fn test_advance_roi_work_rebuilds_contour_voxels_from_roi_reference_grid() {
         let mut world = World::new();
         let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
-        world
-            .get::<&mut Roi>(entity)
-            .unwrap()
-            .enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
+        {
+            let mut roi = world.get::<&mut Roi>(entity).unwrap();
+            roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
+            roi.job_metrics.last_work_convergence_ms = 42.0;
+        }
 
-        let _status = advance_roi_work(&mut world, None);
+        for _ in 0..32 {
+            if !advance_roi_work(&mut world, None).pending {
+                break;
+            }
+        }
 
         let roi = world.get::<&Roi>(entity).unwrap();
         assert!(roi.is_cache_current(RoiCacheKind::Voxel));
         assert_eq!(roi.reference_geometry().dimensions(), [4, 4, 4]);
+        assert!(roi.job_state.work_cycle_started_at.is_none());
+        assert_ne!(roi.job_metrics.last_work_convergence_ms, 42.0);
     }
 
     #[test]

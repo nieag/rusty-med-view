@@ -53,6 +53,9 @@ impl Roi {
                 self.job_state.oldest_pending_since = Some(Instant::now());
             }
         }
+        if self.job_state.work_cycle_started_at.is_none() {
+            self.job_state.work_cycle_started_at = Some(Instant::now());
+        }
         self.job_state.pending.sort_by_key(|request| {
             (
                 priority_rank(request.priority),

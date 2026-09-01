@@ -468,6 +468,7 @@ pub struct RoiJobMetrics {
     pub last_mesh_voxelization_ms: f32,
     pub last_cpu_cache_install_ms: f32,
     pub last_gpu_upload_ms: f32,
+    pub last_work_convergence_ms: f32,
     pub max_queue_depth: usize,
 }
 
@@ -484,6 +485,9 @@ pub struct RoiJobState {
     // ponytail: one timestamp measures oldest pending work; add per-request timestamps only if
     // queue-delay attribution becomes a measured bottleneck.
     pub oldest_pending_since: Option<Instant>,
+    // ponytail: one timestamp covers a coalesced ROI work cycle; split by representation only if
+    // a measured bottleneck needs finer attribution.
+    pub work_cycle_started_at: Option<Instant>,
 }
 
 pub struct Roi {

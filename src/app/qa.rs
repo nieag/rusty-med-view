@@ -111,6 +111,7 @@ pub struct QaSnapshotRoi {
     pub last_mesh_voxelization_ms: f32,
     pub last_cpu_cache_install_ms: f32,
     pub last_gpu_upload_ms: f32,
+    pub last_work_convergence_ms: f32,
     pub max_job_queue_depth: usize,
 }
 
