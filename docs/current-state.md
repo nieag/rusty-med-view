@@ -1,76 +1,51 @@
 # Current Repository State
 
-This repository contains a medical volume viewer with multi-representation ROI support. Active code supports:
+Status: stable-v0 ROI core accepted.
 
-- NIfTI volume loading
-- Labelmap loading as overlay layers
-- Orthogonal and 3D volume viewing
-- Crosshair picking, pan, zoom, and rotation
-- Windowing controls
-- Annotation and note-taking UI
-- voxel-, contour-, and mesh-primary ROIs
-- ROI-owned voxel geometry and geometry-aware overlay sampling
-- voxel-to-contour extraction and contour-to-voxel rebuilding
-- contour editing in orthogonal and active oblique planes, including exact displayed-view promotion
-- voxel/contour-to-mesh creation and native WGPU contour/mesh rendering
+## What works
 
-## Segmentation Status
+- NIfTI image and labelmap loading, orthogonal/oblique/3D viewing, picking, pan/zoom/rotation, windowing, annotations, and notes.
+- A single ROI identity with voxel, contour, or mesh authority. The other forms are derived, revision- and geometry-checked caches.
+- Contour authoring and editing in orthogonal and active oblique planes; voxel/contour/mesh conversion; native WGPU rendering for contours, voxel overlays, and meshes.
+- ROI-owned immutable reference geometry. ROIs on different voxel grids remain comparable in patient/world millimetres; voxel-wise comparison requires an explicit target grid and resampling policy.
+- One ROI work coordinator advances demanded derived work, rejects stale results, uploads current GPU mirrors, and requests follow-up frames until the queue is empty.
 
-ROIs use one authoritative primary representation. Other representations are derived session caches with explicit generation, dirty, rebuild, and blocker state.
+## Runtime boundary
 
-Voxel/contour workflows and the mesh-primary correctness roundtrip are implemented. Mesh Edit selects a projected mesh vertex in 3D and applies a radius/strength brush during pointer drag. The mesh and direct intersections in visible 2D planes preview without changing authority; pointer release commits once and queues exact voxel/contour convergence. Contour point drags produce changed-slice voxel previews, cross-plane contours, and preview meshes without changing authority. Preview meshing reuses unchanged voxel chunks, rebuilds only chunks intersecting the merged old/new contour bounds, and resumes under a four-millisecond frame budget. Mesh rendering retains GPU buffers by ROI/view/chunk identity and uploads only changed projected chunks. Oblique image and geometry-aware voxel sampling now consume a shared CPU-derived plane basis, and requested oblique voxel contours build as current view caches. A current displayed oblique contour view can be promoted exactly and edited; committed rasterization preserves all authoritative oblique planes. Oblique commits currently use a full-contour voxel rebuild, so large-volume 60 FPS and preview-latency gates remain unmeasured.
+```text
+input + GUI intent
+  -> authoritative ROI edit
+  -> generation/revision + dirty bounds
+  -> demanded conversion work on CPU
+  -> geometry-checked cache install
+  -> WGPU texture/buffer upload
+  -> native viewport rendering
+```
 
-Voxel, contour, and mesh authority can be switched on the same ROI whenever the target cache is current. Promotion preserves the ROI entity, identity, metadata, layer settings, and compatible caches; it advances authority generation once and activates the corresponding edit tool. Voxel-to-contour conversion uses the active 2D plane family, and contour plane-family switches rebuild the full requested family from the current voxel representation. The older duplicate-ROI extraction helpers remain available as runtime APIs but are no longer the primary sidebar editing workflow.
+`src/convert/` owns pure geometry, rasterization, contour extraction, and meshing algorithms. `src/app/roi/` owns authority, caches, history, scheduling, and requests. `src/render/` owns WGPU preparation and drawing. `egui` owns controls only, never viewer-scene drawing.
 
-## Implementation Status
+The CPU performs representation conversion. The GPU renders already-prepared textures and buffers; it does not run ROI compute shaders.
 
-State: bidirectional ROI editing core implemented; acceptance closeout in progress
+## Stable-v0 evidence
 
-Architecture cleanup has started: authoritative ROI shape types now live under `src/app/roi/model.rs`, and primary representation is derived from authoritative data instead of stored redundantly.
-Read-only cache and representation readiness queries now live under `src/app/roi/requests.rs`; UI and QA callers no longer depend on the mutation-heavy compatibility runtime for those decisions.
+Manual GPU-browser QA with the liver sample accepted the full contour loop:
 
-Completed:
-- ROI core model and ROI-owned spatial metadata
-- conversion/job runtime scaffold
-- voxel/contour roundtrip and contour view-cache promotion
-- geometry-aware voxel overlays
-- native WGPU contour and mesh rendering
-- representation request/QA state contracts
-- mesh-to-voxel-to-contour committed roundtrip
-- direct mesh-plane 2D previews with mesh preview commit/cancel
-- priority/dependency-aware conversion queue and bounded view caches
-- dirty-AABB chunked contour-preview meshing with full-rebuild equivalence tests
-- frame-budgeted resumable preview mesh extraction with stale-preview cancellation
-- retained per-chunk WGPU mesh buffers with upload/reuse QA counters
-- projected 3D mesh vertex selection and radius/strength brush deformation
-- non-authoritative per-drag mesh previews with one commit on pointer release
-- native WGPU selected-vertex handle and direct visible-plane intersection updates
-- tool, ROI-switch, commit, and cancel lifecycle cleanup for pending previews
-- same-ROI voxel-to-contour authority promotion for axial, coronal, and sagittal editing
-- same-ROI current-mesh-cache promotion with stale/missing-cache rejection
-- explicit lossy-conversion UI that activates the matching edit tool
-- reversible voxel/contour/mesh authority controls with stale-cache gating
-- explicit Edit Points, Add Loop, and Deform Mesh tool naming
-- additive contour correction with merged planar boundaries, hole preservation, and inside-outside-inside auto-commit
-- world-space reprojection between display-plane and authoritative contour-plane frames for addition, movement, insertion, and dirty-slice updates
-- bounded authoritative contour/mesh undo and redo with preview-frame exclusion and normal derived-cache rebuilds
-- slice-local contour undo/redo preserving incremental voxel-slab and affected mesh-chunk rebuild scope
-- WASM-safe ROI history shortcut polling without nested egui context locking
-- single-pass compositing for eight geometry-aware voxel ROIs with deterministic active-first ordering
-- simultaneous native WGPU rendering of visible contour ROIs with active-only editing affordances
-- shared CPU/GPU oblique plane basis for aligned image and geometry-aware voxel sampling
-- requested oblique voxel-to-contour view caches with exact displayed-view authority promotion
-- oblique contour rendering independent of empty orthogonal cache ordering
-- oblique contour-to-voxel rebuild preserving all authoritative planes
-- five-view ROI MPR protocol exposing axial, coronal, sagittal, rotatable oblique, and 3D viewports together
-- viewport-local aspect ratios shared by rendering and picking in mixed-size protocols
+| Commit path | Contour raster | Convergence | Queue delay | GPU upload |
+| --- | ---: | ---: | ---: | ---: |
+| Fresh orthogonal contour | 3 ms | 5 ms | 1 ms | 1 ms |
+| Fresh oblique contour | 3 ms | 26 ms | 1 ms | 2 ms |
 
-Pending:
-- measured 60 FPS and preview-latency acceptance on representative volumes
-- performance/cache closeout work
-- incremental oblique contour rasterization or measured acceptance of the full-contour fallback
-- manual oblique image/voxel/contour alignment acceptance
+Both paths finished with current voxel, contour, and mesh caches and no failed or discarded jobs. The retained ROI-core record contains the exact acceptance contract and measurements.
 
-Plan Document:
-- See `docs/segmentation-reimplementation-plan.md` for the canonical roadmap and implementation status.
-- See `docs/roi-authoring-runtime-cleanup-plan.md` for the post-closeout runtime modularization and segmentation-tool transition plan.
+## Living documentation
+
+- [Rendering architecture](rendering-architecture.md) — mandatory viewport-rendering boundary.
+- [ROI core restructure](roi-core-restructure-plan.md) — accepted stable-v0 model, coordinate contract, and performance evidence.
+- [Architecture decisions](adr/) — primary representation, WGPU ownership, and ROI spatial metadata.
+- [Domain glossary](../CONTEXT.md) — shared terminology.
+
+Completed plans and handoffs are under [archive/](archive/); they are context, not instructions.
+
+## Next planning decision
+
+There is no active implementation plan. The core loop is stable enough to choose product value rather than further infrastructure work.

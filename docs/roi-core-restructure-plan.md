@@ -10,7 +10,7 @@ Restructure the ROI core in place without rebooting the application.
 
 The existing renderer, interaction systems, conversion algorithms, ECS scene, QA tooling, and native/WASM shell remain. The work replaces the weak center: coordinate ownership, representation state transitions, cache scheduling, and GPU synchronization ordering.
 
-This document turns the findings in [architecture-review.md](architecture-review.md) into an implementation sequence. The existing [roi-multi-representation-closeout-plan.md](roi-multi-representation-closeout-plan.md) remains the behavioral and latency acceptance reference. Once this plan is accepted, it supersedes the structural cleanup sequence in [roi-authoring-runtime-cleanup-plan.md](roi-authoring-runtime-cleanup-plan.md).
+This document turns the findings in the archived [architecture review](archive/architecture-review.md) into an implementation sequence. The archived [ROI multi-representation closeout plan](archive/roi-multi-representation-closeout-plan.md) remains the behavioral and latency acceptance reference. Once this plan is accepted, it supersedes the structural cleanup sequence in the archived [ROI authoring runtime cleanup plan](archive/roi-authoring-runtime-cleanup-plan.md).
 
 ## Decision summary
 
@@ -479,7 +479,7 @@ Phase 6 measurement gate:
 
 - Run the liver QA sample in a GPU-capable browser, create and commit a contour loop, then wait for the ROI pending queue to empty.
 - Record the active ROI's `last_queue_delay_ms`, `last_contour_raster_ms`, `last_mesh_voxelization_ms`, `last_cpu_cache_install_ms`, `last_gpu_upload_ms`, `last_work_convergence_ms`, `last_job_duration_ms`, and render frame progression from `window.__viewerQa.state()`. GPU-upload timing is synchronous submission wall time, and work convergence ends after accepted follow-on work—not GPU presentation.
-- Compare the first visible preview and final convergence with the 100 ms preview target, 200 ms hard gate, and 16.7 ms frame budget in `roi-multi-representation-closeout-plan.md`.
+- Compare the first visible preview and final convergence with the 100 ms preview target, 200 ms hard gate, and 16.7 ms frame budget in `archive/roi-multi-representation-closeout-plan.md`.
 - Headless browser QA is a contract check only in this environment: Chromium has no WebGPU adapter, so its successful fallback path is not a performance result.
 
 Measured acceptance:
