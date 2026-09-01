@@ -242,10 +242,6 @@ pub fn main_volume_geometry(world: &World) -> Option<VoxelGeometry> {
     .ok()
 }
 
-pub fn main_volume_voxel_geometry(world: &World) -> Option<VoxelGeometry> {
-    main_volume_geometry(world)
-}
-
 pub fn renderable_voxel_overlay_rois(
     world: &World,
     active_roi: Option<hecs::Entity>,
@@ -502,7 +498,7 @@ pub(crate) fn sync_active_roi_contour_view_caches_for_viewports(world: &mut Worl
         return;
     };
 
-    let geometry = main_volume_voxel_geometry(world).or_else(|| {
+    let geometry = main_volume_geometry(world).or_else(|| {
         world
             .get::<&Roi>(active_roi)
             .ok()
@@ -694,7 +690,7 @@ pub fn prepare_voxel_roi_import(
         loaded_label.orientation,
     )
     .map_err(|error| format!("Invalid label ROI geometry: {error:?}"))?;
-    let geometry_matches_main = if let Some(main_geometry) = main_volume_voxel_geometry(world) {
+    let geometry_matches_main = if let Some(main_geometry) = main_volume_geometry(world) {
         let differs = main_geometry.dimensions != loaded_label.dimensions
             || !approx_eq_slice(main_geometry.spacing, loaded_label.spacing, 1e-5)
             || !approx_eq_slice(main_geometry.origin, loaded_label.origin, 1e-5)
@@ -788,7 +784,7 @@ pub fn create_empty_contour_roi(
         return Err("Missing editor state; contour ROI was not created.".to_string());
     }
 
-    let reference_voxel_geometry = main_volume_voxel_geometry(world)
+    let reference_voxel_geometry = main_volume_geometry(world)
         .ok_or_else(|| "Missing main volume geometry; contour ROI was not created.".to_string())?;
     let reference_geometry = roi_geometry_from_voxel_geometry(reference_voxel_geometry)?;
     let voxel_count = reference_voxel_geometry
@@ -973,6 +969,7 @@ pub fn create_contour_roi_from_voxel_roi(
     Ok(entity)
 }
 
+#[cfg(test)]
 pub fn promote_voxel_roi_to_contour_authority(
     world: &mut World,
     roi_entity: hecs::Entity,
@@ -981,6 +978,7 @@ pub fn promote_voxel_roi_to_contour_authority(
     crate::app::roi::authority::promote_voxel_roi_to_contour_authority(world, roi_entity, family)
 }
 
+#[cfg(test)]
 pub fn promote_roi_to_contour_authority(
     world: &mut World,
     roi_entity: hecs::Entity,
@@ -989,6 +987,7 @@ pub fn promote_roi_to_contour_authority(
     crate::app::roi::authority::promote_roi_to_contour_authority(world, roi_entity, family)
 }
 
+#[cfg(test)]
 pub fn promote_current_voxel_cache_to_authority(
     world: &mut World,
     roi_entity: hecs::Entity,
@@ -996,6 +995,7 @@ pub fn promote_current_voxel_cache_to_authority(
     crate::app::roi::authority::promote_current_voxel_cache_to_authority(world, roi_entity)
 }
 
+#[cfg(test)]
 pub fn promote_current_mesh_cache_to_authority(
     world: &mut World,
     roi_entity: hecs::Entity,
@@ -1121,6 +1121,7 @@ pub fn create_mesh_roi_from_contour_roi(
     Ok(entity)
 }
 
+#[cfg(test)]
 pub fn cache_status(
     world: &World,
     roi_entity: hecs::Entity,
@@ -2209,7 +2210,7 @@ mod tests {
     }
 
     fn square_contour_data_for_main_volume(world: &World, half_extent: f32) -> ContourData {
-        let geometry = main_volume_voxel_geometry(world).expect("main volume geometry must exist");
+        let geometry = main_volume_geometry(world).expect("main volume geometry must exist");
         let plane = orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry)
             .expect("axial plane should resolve");
         ContourData {
@@ -2457,11 +2458,11 @@ mod tests {
     }
 
     #[test]
-    fn test_main_volume_voxel_geometry_reads_main_volume_fields() {
+    fn test_main_volume_geometry_reads_main_volume_fields() {
         let mut world = World::new();
         spawn_main_volume(&mut world, [0.25, 0.5, 2.0], [3.0, -1.5, 2.25]);
 
-        let geometry = main_volume_voxel_geometry(&world).unwrap();
+        let geometry = main_volume_geometry(&world).unwrap();
 
         assert_eq!(geometry.dimensions, [4, 4, 4]);
         assert_eq!(geometry.spacing, [0.25, 0.5, 2.0]);
@@ -2470,7 +2471,7 @@ mod tests {
     }
 
     #[test]
-    fn test_main_volume_voxel_geometry_rejects_invalid_metadata() {
+    fn test_main_volume_geometry_rejects_invalid_metadata() {
         let mut world = World::new();
         spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
         let (_, volume) = world
@@ -2481,7 +2482,7 @@ mod tests {
             .unwrap();
         volume.orientation = [0.0; 4];
 
-        assert!(main_volume_voxel_geometry(&world).is_none());
+        assert!(main_volume_geometry(&world).is_none());
     }
 
     #[test]
@@ -2877,7 +2878,7 @@ mod tests {
             "Preview".to_string(),
             original.clone(),
         ),));
-        let geometry = main_volume_voxel_geometry(&world).unwrap();
+        let geometry = main_volume_geometry(&world).unwrap();
         let plane = orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.25], geometry)
             .unwrap();
         let key = ContourViewKey::from_plane(plane);
@@ -3848,7 +3849,7 @@ mod tests {
                 roi.voxel_cache_mut().unwrap().data.raw_data[0] = 1;
             }
 
-            let geometry = main_volume_voxel_geometry(&world).unwrap();
+            let geometry = main_volume_geometry(&world).unwrap();
             let plane = orthogonal_plane_from_volume_uv(family, [0.5, 0.5, 0.5], geometry)
                 .expect("orthogonal edit plane");
             let replacement = ContourData {

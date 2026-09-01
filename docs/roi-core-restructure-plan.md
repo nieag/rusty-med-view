@@ -454,6 +454,7 @@ Completed:
 - [x] All production `VolumeData` to `VoxelGeometry` conversions validate metadata
 - [x] Contour-edit viewport mapping rejects invalid main-volume geometry
 - [x] Labelmap import validates ROI geometry before allocating GPU resources
+- [x] Removed the duplicate main-volume geometry compatibility alias and unused authority/cache delegates from production builds
 - [x] QA records contour-raster and mesh-voxelization stage timings
 - [x] Browser QA contract passes against the live Trunk server (3/3); headless Chromium reports no WebGPU adapter, so it cannot provide interaction timings
 

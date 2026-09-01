@@ -71,7 +71,7 @@ pub fn resolve_active_contour_edit_viewport(
         .next()
         .is_some();
     let geometry =
-        crate::app::roi_runtime::main_volume_voxel_geometry(world).ok_or(if has_main_volume {
+        crate::app::roi_runtime::main_volume_geometry(world).ok_or(if has_main_volume {
             ContourEditMappingError::InvalidMainVolumeGeometry
         } else {
             ContourEditMappingError::MissingMainVolume
@@ -1635,7 +1635,7 @@ mod tests {
                 break;
             }
         }
-        let geometry = roi_runtime::main_volume_voxel_geometry(&world).unwrap();
+        let geometry = roi_runtime::main_volume_geometry(&world).unwrap();
         let cross_plane =
             orthogonal_plane_from_volume_uv(PlaneFamily::Coronal, [0.5, 0.5, 0.5], geometry)
                 .unwrap();

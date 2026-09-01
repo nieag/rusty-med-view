@@ -140,7 +140,7 @@ fn apply_image_label_mpr_basic_preset(
             if let Some(bounds) =
                 non_empty_voxel_bounds(&cache.data.raw_data, cache.data.geometry.dimensions)
             {
-                let Some(main_geometry) = roi_runtime::main_volume_voxel_geometry(world) else {
+                let Some(main_geometry) = roi_runtime::main_volume_geometry(world) else {
                     return false;
                 };
                 let center = [
@@ -432,7 +432,7 @@ impl AppState {
                     representation_requests.push("mesh_3d".to_string());
 
                     if let Some(geometry) = active_roi_geometry
-                        .or_else(|| roi_runtime::main_volume_voxel_geometry(&ctx.scene.world))
+                        .or_else(|| roi_runtime::main_volume_geometry(&ctx.scene.world))
                     {
                         let displayed_plane =
                             crate::render::roi_views::displayed_plane_for_viewport(
@@ -486,7 +486,7 @@ impl AppState {
                             active_roi_non_empty_bounds,
                             active_roi_dims,
                             active_roi_geometry,
-                            roi_runtime::main_volume_voxel_geometry(&ctx.scene.world),
+                            roi_runtime::main_volume_geometry(&ctx.scene.world),
                         ) {
                             let axis = match vp.mode {
                                 ViewMode::Axial => 2,

@@ -43,7 +43,7 @@ fn active_viewport_contour_view_key(
         .get::<&Transform>(entities.cursor)
         .map(|cursor| cursor.position)
         .unwrap_or([0.5, 0.5, 0.5]);
-    let geometry = roi_runtime::main_volume_voxel_geometry(world).or_else(|| {
+    let geometry = roi_runtime::main_volume_geometry(world).or_else(|| {
         world
             .get::<&Roi>(roi_entity)
             .ok()
