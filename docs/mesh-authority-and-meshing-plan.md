@@ -102,6 +102,8 @@ Completed:
   intersections while voxelization is queued and after it completes.
 - [x] Phase 2: CPU signed Euclidean distance field uses the ROI-owned grid and
   world-mm spacing.
+- [x] Phase 2: keep the marching-cubes kernel local and testable; no meshing
+  crate dependency.
 
 Pending:
 
