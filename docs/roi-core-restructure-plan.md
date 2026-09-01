@@ -460,6 +460,7 @@ Completed:
 - [x] QA records end-to-end accepted-work convergence across queued follow-on jobs
 - [x] Browser QA asserts the ROI timing schema when the GPU-backed sample reaches ready state
 - [x] Fresh contour ROIs retain a current empty voxel cache so their first slice commit uses incremental rasterization
+- [x] Oblique contour rasterization scans a conservative contour/slab voxel bound, with full-grid equivalence coverage
 - [x] Browser QA contract passes against the live Trunk server (3/3); headless Chromium reports no WebGPU adapter, so it cannot provide interaction timings
 
 Pending:

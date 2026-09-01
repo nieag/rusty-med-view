@@ -111,6 +111,7 @@ struct RasterSlice {
     plane: PlaneDefinition,
     origin: Vec3,
     normal: Vec3,
+    slab_tolerance_mm: f32,
     loops: Vec<Vec<[f32; 2]>>,
 }
 
@@ -128,7 +129,7 @@ pub fn rasterize_contours_to_voxel_data(
 
     let voxel_count = voxel_count(target_geometry.dimensions)
         .ok_or(ContourRasterizationError::InvalidTargetGeometry)?;
-    let mut raw_data = vec![0_u8; voxel_count];
+    let raw_data = vec![0_u8; voxel_count];
 
     if contour.slices.is_empty() || voxel_count == 0 {
         return Ok(VoxelData {
@@ -145,19 +146,37 @@ pub fn rasterize_contours_to_voxel_data(
         });
     }
 
-    for z in 0..target_geometry.dimensions[2] {
-        for y in 0..target_geometry.dimensions[1] {
-            for x in 0..target_geometry.dimensions[0] {
+    let raw_data = rasterize_slices_in_bounds(
+        &slices,
+        target_geometry,
+        raster_bounds_for_slices(&slices, target_geometry),
+        raw_data,
+    );
+
+    Ok(VoxelData {
+        geometry: target_geometry,
+        raw_data,
+    })
+}
+
+fn rasterize_slices_in_bounds(
+    slices: &[RasterSlice],
+    target_geometry: VoxelGeometry,
+    bounds: ([u32; 3], [u32; 3]),
+    mut raw_data: Vec<u8>,
+) -> Vec<u8> {
+    for z in bounds.0[2]..bounds.1[2] {
+        for y in bounds.0[1]..bounds.1[1] {
+            for x in bounds.0[0]..bounds.1[0] {
                 let world_center = Vec3::from_array(voxel_index_to_world_mm(
                     [x as f32, y as f32, z as f32],
                     target_geometry,
                 ));
                 let mut filled = false;
 
-                for slice in &slices {
+                for slice in slices {
                     let signed_distance = (world_center - slice.origin).dot(slice.normal);
-                    let tolerance = slice_slab_tolerance_mm(target_geometry, slice.normal);
-                    if signed_distance.abs() > tolerance {
+                    if signed_distance.abs() > slice.slab_tolerance_mm {
                         continue;
                     }
 
@@ -175,11 +194,7 @@ pub fn rasterize_contours_to_voxel_data(
             }
         }
     }
-
-    Ok(VoxelData {
-        geometry: target_geometry,
-        raw_data,
-    })
+    raw_data
 }
 
 pub fn rasterize_contour_preview_slices_to_voxel_data(
@@ -293,10 +308,55 @@ fn prepare_slices(
             plane: slice.plane,
             origin,
             normal,
+            slab_tolerance_mm: slice_slab_tolerance_mm(target_geometry, normal),
             loops,
         });
     }
     Ok(slices)
+}
+
+fn raster_bounds_for_slices(
+    slices: &[RasterSlice],
+    geometry: VoxelGeometry,
+) -> ([u32; 3], [u32; 3]) {
+    let mut min = geometry.dimensions;
+    let mut max = [0; 3];
+    let mut found = false;
+
+    for slice in slices {
+        for contour_loop in &slice.loops {
+            for point in contour_loop {
+                let world = Vec3::from_array(plane_local_mm_to_world_mm(*point, slice.plane));
+                for offset in [-slice.slab_tolerance_mm, slice.slab_tolerance_mm] {
+                    let index = world_mm_to_voxel_index(
+                        (world + slice.normal * offset).to_array(),
+                        geometry,
+                    );
+                    if index.iter().any(|value| !value.is_finite()) {
+                        return ([0; 3], geometry.dimensions);
+                    }
+                    found = true;
+                    for axis in 0..3 {
+                        min[axis] = min[axis].min(index[axis].floor().max(0.0) as u32);
+                        max[axis] = max[axis].max(
+                            (index[axis].ceil() as u32)
+                                .saturating_add(1)
+                                .min(geometry.dimensions[axis]),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    if !found || (0..3).any(|axis| min[axis] >= max[axis]) {
+        return ([0; 3], geometry.dimensions);
+    }
+
+    (
+        min.map(|value| value.saturating_sub(1)),
+        std::array::from_fn(|axis| max[axis].saturating_add(1).min(geometry.dimensions[axis])),
+    )
 }
 
 fn point_in_loops_even_odd(point: [f32; 2], loops: &[Vec<[f32; 2]>]) -> bool {
@@ -626,6 +686,43 @@ mod tests {
         assert_eq!(
             contour_slices_voxel_aabb(&contour, geometry),
             Some(([0, 0, 0], geometry.dimensions))
+        );
+    }
+
+    #[test]
+    fn test_oblique_raster_bounds_match_full_volume_reference() {
+        let geometry = identity_geometry([24, 24, 24]);
+        let normal = Vec3::new(0.3, 0.4, 0.866_025_4).normalize();
+        let u_axis = Vec3::new(-0.8, 0.6, 0.0);
+        let v_axis = normal.cross(u_axis);
+        let plane = PlaneDefinition::new(
+            PlaneFamily::Oblique,
+            [12.0, 12.0, 12.0],
+            u_axis.to_array(),
+            v_axis.to_array(),
+        )
+        .unwrap();
+        let contour = ContourData {
+            active_plane_family: PlaneFamily::Oblique,
+            slices: vec![ContourSlice {
+                plane,
+                loops: vec![square_loop(3.5)],
+            }],
+        };
+        let slices = prepare_slices(&contour, geometry).unwrap();
+        let bounds = raster_bounds_for_slices(&slices, geometry);
+        let bounded = rasterize_contours_to_voxel_data(&contour, geometry).unwrap();
+        let full = rasterize_slices_in_bounds(
+            &slices,
+            geometry,
+            ([0; 3], geometry.dimensions),
+            vec![0; 24 * 24 * 24],
+        );
+
+        assert_eq!(bounded.raw_data, full);
+        assert!(
+            bounds.0 != [0; 3] || bounds.1 != geometry.dimensions,
+            "small oblique loop should not scan the whole grid"
         );
     }
 
