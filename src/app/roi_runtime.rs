@@ -824,15 +824,20 @@ pub fn create_empty_contour_roi(
     ));
 
     if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
-        // The stale template fixes contour rasterization to the ROI's creation grid. It is not a
-        // display result and will be replaced by the first committed contour rebuild.
-        roi.session_caches.voxel = Some(VoxelCache {
-            data: VoxelData {
-                geometry: reference_voxel_geometry,
-                raw_data: vec![0; voxel_count],
+        // The empty cache is valid for the initial empty contour authority. Its generation lets
+        // the first changed-slice commit use the incremental slab rasterizer.
+        let generation = roi.dirty_state.generations.authoritative;
+        roi.install_voxel_cache_result(
+            VoxelCache {
+                data: VoxelData {
+                    geometry: reference_voxel_geometry,
+                    raw_data: vec![0; voxel_count],
+                },
+                gpu_resources: None,
             },
-            gpu_resources: None,
-        });
+            generation,
+        )
+        .expect("new contour ROI cache must match its reference geometry");
     }
 
     let mut editor = world
@@ -2669,6 +2674,12 @@ mod tests {
         let contour_data = roi.contour_data().expect("expected contour roi");
         assert_eq!(contour_data.active_plane_family, PlaneFamily::Coronal);
         assert!(contour_data.slices.is_empty());
+        assert!(roi.is_cache_current(RoiCacheKind::Voxel));
+        assert!(roi.voxel_cache().is_some_and(|cache| cache
+            .data
+            .raw_data
+            .iter()
+            .all(|value| *value == 0)));
     }
 
     #[test]
