@@ -100,10 +100,13 @@ Completed:
   zoom-redraw coalescing fixes before this milestone.
 - [x] Phase 1: mesh-authority contour views stay direct mesh-plane
   intersections while voxelization is queued and after it completes.
+- [x] Phase 2: CPU signed Euclidean distance field uses the ROI-owned grid and
+  world-mm spacing.
 
 Pending:
 
-- [ ] Phase 2 SDF helper and marching-cubes derived mesh.
+- [ ] Phase 2: indexed marching-cubes derived mesh and incremental runtime
+  integration.
 - [ ] Phase 3 surface-aware deformation.
 - [ ] Phase 4 QA/performance decision.
 
@@ -111,3 +114,4 @@ Checkpoint commits:
 
 - `b9a177e` Perf: coalesce rapid 3D zoom redraws
 - `67a2037` Fix: preserve direct contours for mesh authority
+- `fab1421` Feat: add ROI signed distance conversion
