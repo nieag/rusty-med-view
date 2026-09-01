@@ -412,7 +412,7 @@ Avoid exposing internal scheduler structures that tests do not need.
 
 ## Implementation status
 
-Current phase: Phase 5 transitional deletion
+Current phase: Phase 6 baseline measurement
 
 Completed:
 
@@ -453,6 +453,7 @@ Completed:
 - [x] Main-volume legacy geometry conversion validates volume metadata at the runtime boundary
 - [x] All production `VolumeData` to `VoxelGeometry` conversions validate metadata
 - [x] QA records contour-raster and mesh-voxelization stage timings
+- [x] Browser QA contract passes against the live Trunk server (3/3); headless Chromium reports no WebGPU adapter, so it cannot provide interaction timings
 
 Pending:
 
@@ -465,6 +466,13 @@ Pending:
 - [x] Phase 4: attach geometry to remaining legacy mesh/import creation paths
 - [x] Phase 5: transitional deletion
 - [ ] Phase 6: measured optimization
+
+Phase 6 measurement gate:
+
+- Run the liver QA sample in a GPU-capable browser, create and commit a contour loop, then wait for the ROI pending queue to empty.
+- Record the active ROI's `last_queue_delay_ms`, `last_contour_raster_ms`, `last_mesh_voxelization_ms`, `last_job_duration_ms`, and render frame progression from `window.__viewerQa.state()`.
+- Compare the first visible preview and final convergence with the 100 ms preview target, 200 ms hard gate, and 16.7 ms frame budget in `roi-multi-representation-closeout-plan.md`.
+- Headless browser QA is a contract check only in this environment: Chromium has no WebGPU adapter, so its successful fallback path is not a performance result.
 
 Plan-relevant commits: `d7b4704`, `a5eed49`, `876d103`, `2ed81e0`, `cd905ac`, `88857f0`, `694503a`, `3193068`, `e7e236e`, `e4943f6`, `f54483d`, `328d156`, `28aea14`, `f4bb9ff`, `e7d8bf1`, `5e95879`, `fac64cf`, `581aa2d`, `5c8ad96`, `fa64e89`, `9c4dc47`, `58a36c9`, `dcbbf9a`, `4035f72`, `9c0ea3c`, `7588c50`.
 
