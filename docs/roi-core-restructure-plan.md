@@ -462,10 +462,10 @@ Pending:
 - [x] Phase 2: carry geometry identity on every cache and migrate validated plane frames
 - [x] Phase 3: move remaining direct processor callers behind the coordinator
 - [x] Phase 4: attach geometry to remaining legacy mesh/import creation paths
-- [ ] Phase 5: transitional deletion
+- [x] Phase 5: transitional deletion
 - [ ] Phase 6: measured optimization
 
-Plan-relevant commits: `d7b4704`, `a5eed49`, `876d103`, `2ed81e0`, `cd905ac`, `88857f0`, `694503a`, `3193068`, `e7e236e`, `e4943f6`, `f54483d`, `328d156`, `28aea14`, `f4bb9ff`, `e7d8bf1`, `5e95879`, `fac64cf`, `581aa2d`, `5c8ad96`.
+Plan-relevant commits: `d7b4704`, `a5eed49`, `876d103`, `2ed81e0`, `cd905ac`, `88857f0`, `694503a`, `3193068`, `e7e236e`, `e4943f6`, `f54483d`, `328d156`, `28aea14`, `f4bb9ff`, `e7d8bf1`, `5e95879`, `fac64cf`, `581aa2d`, `5c8ad96`, `fa64e89`, `9c4dc47`, `58a36c9`, `dcbbf9a`, `4035f72`, `9c0ea3c`, `7588c50`.
 
 ## Stable-v0 boundary
 
