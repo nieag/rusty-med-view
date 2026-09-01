@@ -478,7 +478,7 @@ Phase 6 measurement gate:
 - Compare the first visible preview and final convergence with the 100 ms preview target, 200 ms hard gate, and 16.7 ms frame budget in `roi-multi-representation-closeout-plan.md`.
 - Headless browser QA is a contract check only in this environment: Chromium has no WebGPU adapter, so its successful fallback path is not a performance result.
 
-Plan-relevant commits: `d7b4704`, `a5eed49`, `876d103`, `2ed81e0`, `cd905ac`, `88857f0`, `694503a`, `3193068`, `e7e236e`, `e4943f6`, `f54483d`, `328d156`, `28aea14`, `01d86a1`, `6d1465c`, `9e5b5de`, `f4bb9ff`, `e7d8bf1`, `5e95879`, `fac64cf`, `78b8d33`, `581aa2d`, `5c8ad96`, `3933e23`, `97235b7`, `72d7e73`, `fa81182`, `1ac5770`, `1b32ae5`, `392db9b`, `209a2d0`, `0bf5973`, `23566d3`, `e030d4f`, `71719c5`, `93ac81d`, `ced99a0`, `81759e8`, `0df1967`, `087fea4`.
+Plan-relevant commits: `d7b4704`, `a5eed49`, `876d103`, `2ed81e0`, `cd905ac`, `88857f0`, `694503a`, `3193068`, `e7e236e`, `e4943f6`, `f54483d`, `328d156`, `28aea14`, `01d86a1`, `6d1465c`, `9e5b5de`, `f4bb9ff`, `e7d8bf1`, `5e95879`, `fac64cf`, `78b8d33`, `581aa2d`, `5c8ad96`, `3933e23`, `97235b7`, `72d7e73`, `fa81182`, `1ac5770`, `1b32ae5`, `392db9b`, `209a2d0`, `0bf5973`, `23566d3`, `e030d4f`, `71719c5`, `93ac81d`, `ced99a0`, `81759e8`, `0df1967`, `087fea4`, `103a5f5`.
 
 ## Stable-v0 boundary
 
