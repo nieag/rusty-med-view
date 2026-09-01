@@ -274,14 +274,17 @@ pub fn sys_handle_mouse_button(
 }
 
 /// Handle scroll input for zooming or slice scrolling.
-pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta: f32) {
+///
+/// Returns whether this changed a 3D zoom. Callers can coalesce the expensive
+/// 3D redraw path while preserving immediate redraws for the slice views.
+pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta: f32) -> bool {
     let mut active_vp = None;
     let mut mouse_uv = [0.5, 0.5];
     let mut is_zoom = false;
 
     if let Ok(input) = world.get::<&InputState>(entities.input) {
         if input.egui_wants_input {
-            return;
+            return false;
         }
         active_vp = input.active_viewport;
         mouse_uv = input.mouse_uv;
@@ -290,7 +293,7 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
 
     let avp = match active_vp {
         Some(e) => e,
-        None => return,
+        None => return false,
     };
 
     let mut vol_aspects = [1.0, 1.0, 1.0];
@@ -300,6 +303,7 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
         dims = vol.dimensions;
     }
 
+    let mut changed_3d_zoom = false;
     if is_zoom {
         if let (Ok(vp), Ok(mut vs)) = (
             world.get::<&Viewport>(avp),
@@ -330,6 +334,7 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
             vs.pan[1] += my_centered * (1.0 / old_zoom - 1.0 / new_zoom);
             vs.zoom = new_zoom;
             vs.pivot = [0.5, 0.5];
+            changed_3d_zoom = vp.mode == ViewMode::ThreeD;
         }
     } else if let Ok(mut transform) = world.get::<&mut Transform>(entities.cursor) {
         if let Ok(vp) = world.get::<&Viewport>(avp) {
@@ -338,10 +343,10 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
                 ViewMode::Coronal => (1, dims[1]),
                 ViewMode::Sagittal => (0, dims[0]),
                 ViewMode::Oblique => (2, dims[2]),
-                _ => return,
+                _ => return false,
             };
             if dim == 0 {
-                return;
+                return false;
             }
 
             if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
@@ -374,6 +379,8 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
             }
         }
     }
+
+    changed_3d_zoom
 }
 
 /// Handle mouse drag motion for panning and rotating.
@@ -585,5 +592,37 @@ mod tests {
         let rotation = world.get::<&ViewportState>(viewport).unwrap().user_rotation;
         assert_ne!(rotation, [0.0, 0.0, 0.0, 1.0]);
         assert!((Quat::from_array(rotation).length() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_scroll_reports_3d_zoom_for_redraw_coalescing() {
+        let mut world = World::new();
+        let viewport = world.spawn((
+            Viewport {
+                mode: ViewMode::ThreeD,
+                rect: [0.0, 0.0, 500.0, 500.0],
+                uniform_index: 0,
+            },
+            ViewportState::default(),
+        ));
+        let input = world.spawn((InputState {
+            active_viewport: Some(viewport),
+            modifiers: ModifiersState::CONTROL,
+            ..InputState::default()
+        },));
+        let editor = world.spawn((EditorState::default(),));
+        let entities = AppEntities {
+            input,
+            editor,
+            gui_state: Entity::DANGLING,
+            volume_windowing: Entity::DANGLING,
+            annotations: Entity::DANGLING,
+            overlay: Entity::DANGLING,
+            protocol: Entity::DANGLING,
+            cursor: Entity::DANGLING,
+            window_settings: Entity::DANGLING,
+        };
+
+        assert!(sys_handle_input_scroll(&mut world, &entities, 1.0));
     }
 }

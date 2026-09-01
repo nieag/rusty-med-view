@@ -173,6 +173,7 @@ pub struct App {
     pub instance: wgpu::Instance,
     pub state: Arc<std::sync::Mutex<AppState>>,
     pub event_proxy: Option<EventLoopProxy<AppEvent>>,
+    zoom_redraw_pending: bool,
 }
 
 impl App {
@@ -201,6 +202,7 @@ impl App {
             instance: wgpu::Instance::default(),
             state: Arc::new(std::sync::Mutex::new(AppState { context: None, qa })),
             event_proxy: None,
+            zoom_redraw_pending: false,
         }
     }
 }
@@ -1008,12 +1010,16 @@ impl ApplicationHandler<AppEvent> for App {
                     MouseScrollDelta::PixelDelta(pos) => (pos.y * PIXEL_SCROLL_FACTOR) as f32,
                 };
                 if y_delta != 0.0 {
-                    systems::sys_handle_input_scroll(
+                    let changed_3d_zoom = systems::sys_handle_input_scroll(
                         &mut ctx.scene.world,
                         &ctx.scene.entities,
                         y_delta,
                     );
-                    ctx.window.request_redraw();
+                    if changed_3d_zoom {
+                        self.zoom_redraw_pending = true;
+                    } else {
+                        ctx.window.request_redraw();
+                    }
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => {
@@ -1068,6 +1074,18 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if !self.zoom_redraw_pending {
+            return;
+        }
+
+        let state = self.state.lock().unwrap();
+        if let Some(ctx) = &state.context {
+            ctx.window.request_redraw();
+            self.zoom_redraw_pending = false;
         }
     }
 
