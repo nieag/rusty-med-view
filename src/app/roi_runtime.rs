@@ -233,12 +233,13 @@ pub fn recreate_scene_bind_groups(
 pub fn main_volume_geometry(world: &World) -> Option<VoxelGeometry> {
     let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
     let (_, volume) = query.iter().next()?;
-    Some(VoxelGeometry {
-        dimensions: volume.dimensions,
-        spacing: volume.spacing,
-        origin: volume.origin,
-        orientation: volume.orientation,
-    })
+    VoxelGeometry::new(
+        volume.dimensions,
+        volume.spacing,
+        volume.origin,
+        volume.orientation,
+    )
+    .ok()
 }
 
 pub fn main_volume_voxel_geometry(world: &World) -> Option<VoxelGeometry> {
@@ -2459,6 +2460,21 @@ mod tests {
         assert_eq!(geometry.spacing, [0.25, 0.5, 2.0]);
         assert_eq!(geometry.origin, [3.0, -1.5, 2.25]);
         assert_eq!(geometry.orientation, [0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn test_main_volume_voxel_geometry_rejects_invalid_metadata() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
+        let (_, volume) = world
+            .query_mut::<&mut VolumeData>()
+            .with::<&MainVolumeTag>()
+            .into_iter()
+            .next()
+            .unwrap();
+        volume.orientation = [0.0; 4];
+
+        assert!(main_volume_voxel_geometry(&world).is_none());
     }
 
     #[test]
