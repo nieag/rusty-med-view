@@ -3077,35 +3077,48 @@ mod tests {
             .unwrap()
             .data
             .geometry;
-        let plane =
+        let inverse_sqrt_two = std::f32::consts::FRAC_1_SQRT_2;
+        let planes = [
             orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 1.0 / 3.0], geometry)
-                .unwrap();
-        let key = ContourViewKey::from_plane(plane);
-        let expected = {
-            let roi = world.get::<&Roi>(entity).unwrap();
-            intersect_mesh_with_plane(roi.mesh_data().unwrap(), plane).unwrap()
-        };
-
-        let before_rebuild = ensure_contour_view_cache(&mut world, entity, &key);
-        assert_eq!(before_rebuild.state, RepresentationRequestState::Current);
-        assert_eq!(
-            request_contour_view_state(&world, entity, &key)
-                .request
-                .state,
-            RepresentationRequestState::Current,
-            "a direct mesh contour must remain current while voxelization is queued"
-        );
+                .unwrap(),
+            PlaneDefinition {
+                family: PlaneFamily::Oblique,
+                origin_mm: [0.5, 0.5, 0.5],
+                u_axis_mm: [inverse_sqrt_two, 0.0, -inverse_sqrt_two],
+                v_axis_mm: [0.0, 1.0, 0.0],
+                normal_mm: [inverse_sqrt_two, 0.0, inverse_sqrt_two],
+            },
+        ];
+        let expected = planes.map(|plane| {
+            let key = ContourViewKey::from_plane(plane);
+            let expected = {
+                let roi = world.get::<&Roi>(entity).unwrap();
+                intersect_mesh_with_plane(roi.mesh_data().unwrap(), plane).unwrap()
+            };
+            assert!(!expected.slices.is_empty());
+            let before_rebuild = ensure_contour_view_cache(&mut world, entity, &key);
+            assert_eq!(before_rebuild.state, RepresentationRequestState::Current);
+            assert_eq!(
+                request_contour_view_state(&world, entity, &key)
+                    .request
+                    .state,
+                RepresentationRequestState::Current,
+                "a direct mesh contour must remain current while voxelization is queued"
+            );
+            (key, expected)
+        });
 
         process_mesh_voxel_rebuild_jobs(&mut world);
-        let status = ensure_contour_view_cache(&mut world, entity, &key);
-
-        assert_eq!(status.state, RepresentationRequestState::Current);
-        let roi = world.get::<&Roi>(entity).unwrap();
-        assert_eq!(
-            roi.contour_view_cache(&key).unwrap().data,
-            expected,
-            "mesh authority must retain direct mesh-plane contours after voxelization"
-        );
+        for (key, expected) in expected {
+            let status = ensure_contour_view_cache(&mut world, entity, &key);
+            assert_eq!(status.state, RepresentationRequestState::Current);
+            let roi = world.get::<&Roi>(entity).unwrap();
+            assert_eq!(
+                roi.contour_view_cache(&key).unwrap().data,
+                expected,
+                "mesh authority must retain direct mesh-plane contours after voxelization"
+            );
+        }
     }
 
     #[test]

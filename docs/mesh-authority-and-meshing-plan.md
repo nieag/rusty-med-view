@@ -120,6 +120,8 @@ Completed:
   zoom-redraw coalescing fixes before this milestone.
 - [x] Phase 1: mesh-authority contour views stay direct mesh-plane
   intersections while voxelization is queued and after it completes.
+- [x] Phase 1: the direct-contour regression covers both axial and genuinely
+  oblique planes before and after mesh voxel resampling.
 - [x] Phase 2: CPU signed Euclidean distance field uses the ROI-owned grid and
   world-mm spacing.
 - [x] Phase 2: keep the marching-cubes kernel local and testable; no meshing
