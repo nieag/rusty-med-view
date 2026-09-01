@@ -146,3 +146,4 @@ Checkpoint commits:
 - `d7cd04e` Feat: add local SDF marching cubes extractor
 - `b1e7ab0` Feat: use smooth meshes in chunked ROI rebuilds
 - `d28f022` Feat: make mesh brush surface-aware
+- `af658ad` Test: cover rotated mesh voxel roundtrip
