@@ -264,10 +264,12 @@ pub enum RoiEditPreview {
     MeshDeform(MeshEditPreview),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MeshSelection {
     pub roi_entity: hecs::Entity,
     pub vertex_index: usize,
+    pub triangle_vertex_indices: [u32; 3],
+    pub anchor_world_mm: [f32; 3],
 }
 
 #[derive(Debug, Clone, PartialEq)]

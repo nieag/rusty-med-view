@@ -88,7 +88,7 @@ and mesh-authority 2D views remain coherent before and after commit.
 
 ## Implementation status
 
-Current phase: Phase 3 planned.
+Current phase: Phase 4 QA and performance decision.
 
 Completed:
 
@@ -109,10 +109,14 @@ Completed:
 - [x] Phase 2: normal and preview mesh-cache rebuilds use the shared SDF with
   the existing chunked frame-budget scheduler; legacy cube-face extraction was
   removed from the normal path.
+- [x] Phase 3: mesh deformation picks the clicked triangle surface and uses a
+  connected, world-mm geodesic brush, so nearby disconnected surfaces are not
+  deformed together.
+- [x] Phase 3: committing a mesh preview validates closed-mesh topology before
+  cache voxelization; an invalid preview remains available for correction.
 
 Pending:
 
-- [ ] Phase 3 surface-aware deformation.
 - [ ] Phase 4 QA/performance decision.
 
 Checkpoint commits:

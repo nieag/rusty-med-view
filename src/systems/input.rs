@@ -247,7 +247,7 @@ pub fn sys_handle_mouse_button(
                 .unwrap_or([0.5, 0.5]);
             match crate::systems::select_mesh_vertex(world, entities, click_pos) {
                 Ok(Some(_)) => {
-                    set_status_message(world, entities, "Selected mesh vertex.".to_string())
+                    set_status_message(world, entities, "Selected mesh surface.".to_string())
                 }
                 Ok(None) => {}
                 Err(error) => set_status_message(

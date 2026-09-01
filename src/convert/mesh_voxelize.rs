@@ -64,6 +64,10 @@ pub fn voxelize_mesh_to_voxel_data(
     })
 }
 
+pub fn validate_mesh_for_voxelization(mesh: &MeshData) -> Result<(), MeshVoxelizationError> {
+    welded_closed_mesh(mesh).map(|_| ())
+}
+
 fn validate_target_geometry(geometry: VoxelGeometry) -> Result<(), MeshVoxelizationError> {
     if geometry.dimensions.contains(&0)
         || geometry
@@ -236,6 +240,10 @@ mod tests {
 
         assert!(matches!(
             voxelize_mesh_to_voxel_data(&mesh, geometry()),
+            Err(MeshVoxelizationError::OpenOrNonManifoldEdge { .. })
+        ));
+        assert!(matches!(
+            validate_mesh_for_voxelization(&mesh),
             Err(MeshVoxelizationError::OpenOrNonManifoldEdge { .. })
         ));
     }

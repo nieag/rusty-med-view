@@ -792,6 +792,8 @@ mod tests {
             editor.mesh_selection = Some(crate::components::MeshSelection {
                 roi_entity,
                 vertex_index: 0,
+                triangle_vertex_indices: [0, 1, 2],
+                anchor_world_mm: [4.0, 4.0, 4.0],
             });
         }
 

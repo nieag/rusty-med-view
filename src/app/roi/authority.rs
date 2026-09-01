@@ -4,7 +4,8 @@ use crate::app::components::{
     RoiJobState,
 };
 use crate::convert::{
-    extract_contours_from_voxel_data, PlaneDefinition, PlaneFamily, VoxelContourExtractionError,
+    extract_contours_from_voxel_data, MeshVoxelizationError, PlaneDefinition, PlaneFamily,
+    VoxelContourExtractionError,
 };
 use hecs::World;
 
@@ -30,6 +31,7 @@ pub enum MeshMutationError {
     MissingPreview,
     NotMeshRoi,
     InvalidDelta,
+    InvalidMesh(MeshVoxelizationError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
