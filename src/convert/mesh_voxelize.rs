@@ -186,6 +186,7 @@ mod tests {
     use super::*;
     use crate::components::{MeshFace, MeshVertex};
     use crate::convert::extract_mesh_from_voxel_data;
+    use glam::Quat;
 
     fn geometry() -> VoxelGeometry {
         VoxelGeometry {
@@ -216,6 +217,33 @@ mod tests {
         let rebuilt = voxelize_mesh_to_voxel_data(&mesh, geometry).unwrap();
 
         assert_eq!(rebuilt.geometry, geometry);
+        assert_eq!(rebuilt.raw_data, raw_data);
+    }
+
+    #[test]
+    fn test_smooth_mesh_roundtrip_preserves_rotated_anisotropic_grid() {
+        let geometry = VoxelGeometry {
+            dimensions: [5, 4, 3],
+            spacing: [1.5, 2.0, 3.5],
+            origin: [10.0, -4.0, 22.0],
+            orientation: Quat::from_rotation_y(0.4).to_array(),
+        };
+        let mut raw_data = vec![0; 60];
+        for z in 1..=2 {
+            for y in 1..=2 {
+                for x in 1..=3 {
+                    raw_data[linear_index([x, y, z], geometry.dimensions)] = 1;
+                }
+            }
+        }
+        let source = VoxelData {
+            geometry,
+            raw_data: raw_data.clone(),
+        };
+
+        let mesh = extract_mesh_from_voxel_data(&source).unwrap();
+        let rebuilt = voxelize_mesh_to_voxel_data(&mesh, geometry).unwrap();
+
         assert_eq!(rebuilt.raw_data, raw_data);
     }
 

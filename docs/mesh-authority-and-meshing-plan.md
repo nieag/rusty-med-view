@@ -131,6 +131,8 @@ Completed:
   cache voxelization; an invalid preview remains available for correction.
 - [x] Phase 4: live Trunk browser QA contract passes (3/3); it verifies the
   QA state schema and the honest no-WebGPU fallback in this environment.
+- [x] Phase 4: automated smooth-mesh to voxel resampling round-trip preserves
+  a rotated, anisotropic ROI grid exactly.
 
 Pending:
 
