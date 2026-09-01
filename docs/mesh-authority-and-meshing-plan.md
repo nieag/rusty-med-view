@@ -93,6 +93,11 @@ Manual GPU-browser acceptance capture:
    headless browser contract is not performance evidence because it has no
    WebGPU adapter.
 
+Decision: keep mesh-authority voxelization as an explicitly provisional,
+reference-grid resample for v0. It samples a closed world-mm mesh at the
+ROI-owned voxel centres for overlays and downstream voxel workflows; it is not
+lossless mesh export and must never replace mesh-authority contour display.
+
 ## Non-goals
 
 - Replacing the authority model with voxel-only or SDF-only editing.
@@ -133,6 +138,8 @@ Completed:
   QA state schema and the honest no-WebGPU fallback in this environment.
 - [x] Phase 4: automated smooth-mesh to voxel resampling round-trip preserves
   a rotated, anisotropic ROI grid exactly.
+- [x] Phase 4: mesh-authority voxelization remains an explicit reference-grid
+  resample for v0, not a lossless mesh export or display source.
 
 Pending:
 
