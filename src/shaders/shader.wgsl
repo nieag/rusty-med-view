@@ -127,14 +127,16 @@ fn get_overlay_color(
         return vec4<f32>(0.0);
     }
 
+    // `main_uvw` maps geometry to voxel centres `[0, dimensions - 1]`, not texture edges.
+    // Fetch the nearest ROI cell so label boundaries agree with contour cell boundaries.
     let main_dims = vec3<f32>(uniforms.volume_dims.xyz);
-    let main_index = main_uvw * main_dims;
+    let main_index = main_uvw * max(main_dims - vec3<f32>(1.0), vec3<f32>(0.0));
     let roi_index = vec3<f32>(
         dot(main_to_roi_row0, vec4<f32>(main_index, 1.0)),
         dot(main_to_roi_row1, vec4<f32>(main_index, 1.0)),
         dot(main_to_roi_row2, vec4<f32>(main_index, 1.0))
     );
-    let coords = vec3<i32>(floor(roi_index));
+    let coords = vec3<i32>(floor(roi_index + vec3<f32>(0.5)));
     
     // Bounds check
     if any(coords < vec3<i32>(0)) || any(coords >= vec3<i32>(overlay_dims)) {

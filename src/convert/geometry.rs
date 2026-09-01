@@ -728,7 +728,9 @@ pub fn sample_index_from_volume_uv(uv: [f32; 3], dimensions: [u32; 3]) -> [u32; 
         if dim == 0 {
             continue;
         }
-        let scaled = (uv[axis] * dim as f32).floor();
+        // `volume_uv` maps voxel centres to IJK `[0, dim - 1]`. Labels occupy cells
+        // centered on those indices, so nearest-cell sampling changes at half-indices.
+        let scaled = (uv[axis] * (dim - 1) as f32 + 0.5).floor();
         sample[axis] = scaled.clamp(0.0, (dim - 1) as f32) as u32;
     }
     sample
@@ -837,6 +839,15 @@ mod tests {
 
         let sample_with_zero_dim = sample_index_from_volume_uv([0.5, 0.5, 0.5], [0, 1, 2]);
         assert_eq!(sample_with_zero_dim, [0, 0, 1]);
+    }
+
+    #[test]
+    fn test_sample_index_uses_voxel_cell_boundaries() {
+        let dimensions = [5, 1, 1];
+        // IJK 0.51 lies inside voxel 1's cell: [0.5, 1.5).
+        let uv = voxel_index_to_volume_uv([0.51, 0.0, 0.0], dimensions);
+
+        assert_eq!(sample_index_from_volume_uv(uv, dimensions), [1, 0, 0]);
     }
 
     #[test]
