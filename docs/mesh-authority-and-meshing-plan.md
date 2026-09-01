@@ -160,3 +160,4 @@ Checkpoint commits:
 - `d28f022` Feat: make mesh brush surface-aware
 - `af658ad` Test: cover rotated mesh voxel roundtrip
 - `96e64c5` Test: cover oblique mesh authority contours
+- `c5dac9b` Fix: pick frontmost mesh surface
