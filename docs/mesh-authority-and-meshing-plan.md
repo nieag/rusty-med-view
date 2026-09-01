@@ -88,7 +88,7 @@ and mesh-authority 2D views remain coherent before and after commit.
 
 ## Implementation status
 
-Current phase: Phase 2 planned.
+Current phase: Phase 3 planned.
 
 Completed:
 
@@ -106,11 +106,12 @@ Completed:
   crate dependency.
 - [x] Phase 2: local indexed marching-cubes extraction from a padded SDF,
   including an expected voxel round-trip fixture.
+- [x] Phase 2: normal and preview mesh-cache rebuilds use the shared SDF with
+  the existing chunked frame-budget scheduler; legacy cube-face extraction was
+  removed from the normal path.
 
 Pending:
 
-- [ ] Phase 2: incremental runtime integration and representative topology/
-  world-mm regression coverage.
 - [ ] Phase 3 surface-aware deformation.
 - [ ] Phase 4 QA/performance decision.
 
@@ -120,3 +121,4 @@ Checkpoint commits:
 - `67a2037` Fix: preserve direct contours for mesh authority
 - `fab1421` Feat: add ROI signed distance conversion
 - `d7cd04e` Feat: add local SDF marching cubes extractor
+- `b1e7ab0` Feat: use smooth meshes in chunked ROI rebuilds
