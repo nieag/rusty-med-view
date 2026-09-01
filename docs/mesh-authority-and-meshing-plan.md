@@ -88,7 +88,7 @@ and mesh-authority 2D views remain coherent before and after commit.
 
 ## Implementation status
 
-Current phase: Phase 1 planned.
+Current phase: Phase 2 planned.
 
 Completed:
 
@@ -98,10 +98,11 @@ Completed:
   voxel-contour switch as the likely 2D deformation discontinuity.
 - [x] Added 3D orientation, orthographic projection, overlay alignment, and
   zoom-redraw coalescing fixes before this milestone.
+- [x] Phase 1: mesh-authority contour views stay direct mesh-plane
+  intersections while voxelization is queued and after it completes.
 
 Pending:
 
-- [ ] Phase 1 regression test and implementation.
 - [ ] Phase 2 SDF helper and marching-cubes derived mesh.
 - [ ] Phase 3 surface-aware deformation.
 - [ ] Phase 4 QA/performance decision.
@@ -109,3 +110,4 @@ Pending:
 Checkpoint commits:
 
 - `b9a177e` Perf: coalesce rapid 3D zoom redraws
+- `67a2037` Fix: preserve direct contours for mesh authority
