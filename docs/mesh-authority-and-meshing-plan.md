@@ -78,6 +78,21 @@ and mesh-authority 2D views remain coherent before and after commit.
 - Decide whether mesh-authority voxelization is suitable for stable v0 export
   or remains an explicitly provisional/resampled operation.
 
+Manual GPU-browser acceptance capture:
+
+1. Open `/?qa=1&sample=liver_0&preset=image_label_mpr_basic`, create or
+   promote a mesh-authority ROI, then deform and commit it in the 3D viewport.
+2. Confirm axial, oblique, and 3D views remain coherent while the queue drains;
+   in particular, 2D contours must stay direct mesh-plane intersections rather
+   than snap to the resampled voxel cache.
+3. After `pending_jobs` and `running_job` are empty, record the active ROI from
+   `window.__viewerQa.state().rois`: `last_mesh_voxelization_ms`,
+   `last_gpu_upload_ms`, `last_work_convergence_ms`, `last_job_duration_ms`,
+   and failed/discarded counts.
+4. Repeat once with an anisotropic or rotated ROI geometry fixture. The
+   headless browser contract is not performance evidence because it has no
+   WebGPU adapter.
+
 ## Non-goals
 
 - Replacing the authority model with voxel-only or SDF-only editing.
@@ -114,6 +129,8 @@ Completed:
   deformed together.
 - [x] Phase 3: committing a mesh preview validates closed-mesh topology before
   cache voxelization; an invalid preview remains available for correction.
+- [x] Phase 4: live Trunk browser QA contract passes (3/3); it verifies the
+  QA state schema and the honest no-WebGPU fallback in this environment.
 
 Pending:
 
