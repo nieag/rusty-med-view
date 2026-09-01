@@ -40,6 +40,7 @@ Both paths finished with current voxel, contour, and mesh caches and no failed o
 ## Living documentation
 
 - [Rendering architecture](rendering-architecture.md) — mandatory viewport-rendering boundary.
+- [Code map](code-map.md) — repository navigation and runtime ownership.
 - [ROI core restructure](roi-core-restructure-plan.md) — accepted stable-v0 model, coordinate contract, and performance evidence.
 - [Architecture decisions](adr/) — primary representation, WGPU ownership, and ROI spatial metadata.
 - [Domain glossary](../CONTEXT.md) — shared terminology.
