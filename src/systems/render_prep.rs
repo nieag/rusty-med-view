@@ -62,12 +62,8 @@ pub fn sys_prepare_render_data(
         volume_spacing = [vol.spacing[0], vol.spacing[1], vol.spacing[2], 0.0];
         volume_intensity_range = vol.intensity_range;
         data_orientation = vol.orientation;
-        main_geometry = Some(VoxelGeometry {
-            dimensions: vol.dimensions,
-            spacing: vol.spacing,
-            origin: vol.origin,
-            orientation: vol.orientation,
-        });
+        main_geometry =
+            VoxelGeometry::new(vol.dimensions, vol.spacing, vol.origin, vol.orientation).ok();
     }
 
     let composed_rotation = if view_mode == 0 {

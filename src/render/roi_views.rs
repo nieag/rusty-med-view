@@ -409,15 +409,15 @@ pub fn contour_renderable_in_viewport(
         let mut volume_query = world
             .query::<&crate::app::components::VolumeData>()
             .with::<&crate::app::components::MainVolumeTag>();
-        volume_query
-            .iter()
-            .next()
-            .map(|(_, volume)| crate::app::components::VoxelGeometry {
-                dimensions: volume.dimensions,
-                spacing: volume.spacing,
-                origin: volume.origin,
-                orientation: volume.orientation,
-            })
+        volume_query.iter().next().and_then(|(_, volume)| {
+            crate::app::components::VoxelGeometry::new(
+                volume.dimensions,
+                volume.spacing,
+                volume.origin,
+                volume.orientation,
+            )
+            .ok()
+        })
     }
     .or_else(|| roi.voxel_cache().map(|cache| cache.data.geometry));
     let Some(geometry) = geometry else {
