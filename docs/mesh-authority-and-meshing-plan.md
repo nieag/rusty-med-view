@@ -104,11 +104,13 @@ Completed:
   world-mm spacing.
 - [x] Phase 2: keep the marching-cubes kernel local and testable; no meshing
   crate dependency.
+- [x] Phase 2: local indexed marching-cubes extraction from a padded SDF,
+  including an expected voxel round-trip fixture.
 
 Pending:
 
-- [ ] Phase 2: indexed marching-cubes derived mesh and incremental runtime
-  integration.
+- [ ] Phase 2: incremental runtime integration and representative topology/
+  world-mm regression coverage.
 - [ ] Phase 3 surface-aware deformation.
 - [ ] Phase 4 QA/performance decision.
 
@@ -117,3 +119,4 @@ Checkpoint commits:
 - `b9a177e` Perf: coalesce rapid 3D zoom redraws
 - `67a2037` Fix: preserve direct contours for mesh authority
 - `fab1421` Feat: add ROI signed distance conversion
+- `d7cd04e` Feat: add local SDF marching cubes extractor
