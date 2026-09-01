@@ -53,7 +53,6 @@ pub fn select_mesh_vertex(
         .map_err(|_| MeshEditInteractionError::MissingViewport)?;
     let projection = build_display_projection_context(world, entities, &viewport, &viewport_state)
         .ok_or(MeshEditInteractionError::ProjectionFailed)?;
-    let viewport_size = [viewport.rect[2], viewport.rect[3]];
     drop(viewport_state);
     drop(viewport);
 
@@ -68,13 +67,11 @@ pub fn select_mesh_vertex(
         _ => return Err(MeshEditInteractionError::ActiveRoiNotMesh),
     };
     let selection =
-        nearest_mesh_surface_hit(mesh, viewport_uv, viewport_size, projection).map(|hit| {
-            MeshSelection {
-                roi_entity,
-                vertex_index: hit.vertex_index,
-                triangle_vertex_indices: hit.triangle_vertex_indices,
-                anchor_world_mm: hit.anchor_world_mm,
-            }
+        nearest_mesh_surface_hit(mesh, viewport_uv, projection).map(|hit| MeshSelection {
+            roi_entity,
+            vertex_index: hit.vertex_index,
+            triangle_vertex_indices: hit.triangle_vertex_indices,
+            anchor_world_mm: hit.anchor_world_mm,
         });
     drop(roi);
     if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
@@ -161,9 +158,24 @@ struct MeshSurfaceHit {
 fn nearest_mesh_surface_hit(
     mesh: &MeshData,
     viewport_uv: [f32; 2],
-    viewport_size_px: [f32; 2],
     projection: DisplayProjectionContext,
 ) -> Option<MeshSurfaceHit> {
+    let (_, ray_direction) = crate::util::orientation::screen_to_ray_3d(
+        viewport_uv,
+        projection.composed_rotation_3d,
+        projection.zoom,
+        projection.pan,
+        projection.screen_aspect,
+    );
+    let ray_direction = Vec3::from_array(ray_direction);
+    let aspect = Vec3::from_array(projection.display_aspect_ratios);
+    if aspect
+        .to_array()
+        .iter()
+        .any(|value| value.abs() <= f32::EPSILON)
+    {
+        return None;
+    }
     mesh.faces
         .iter()
         .filter_map(|face| {
@@ -184,24 +196,22 @@ fn nearest_mesh_surface_hit(
             let anchor = Vec3::from_array(a.world_mm) * weights[0]
                 + Vec3::from_array(b.world_mm) * weights[1]
                 + Vec3::from_array(c.world_mm) * weights[2];
+            let anchor_uv =
+                crate::convert::world_mm_to_volume_uv(anchor.to_array(), projection.main_geometry);
+            let depth =
+                ((Vec3::from_array(anchor_uv) - Vec3::splat(0.5)) * aspect).dot(ray_direction);
             let nearest = weights
                 .iter()
                 .enumerate()
                 .max_by(|left, right| left.1.total_cmp(right.1))?
                 .0;
-            let centroid = (
-                projected[0][0] + projected[1][0] + projected[2][0],
-                projected[0][1] + projected[1][1] + projected[2][1],
-            );
-            let dx = (centroid.0 - viewport_uv[0]) * viewport_size_px[0];
-            let dy = (centroid.1 - viewport_uv[1]) * viewport_size_px[1];
             Some((
                 MeshSurfaceHit {
                     vertex_index: indices[nearest] as usize,
                     triangle_vertex_indices: indices,
                     anchor_world_mm: anchor.to_array(),
                 },
-                dx * dx + dy * dy,
+                depth,
             ))
         })
         .min_by(|left, right| left.1.total_cmp(&right.1))
@@ -611,16 +621,22 @@ mod tests {
         let projection =
             build_display_projection_context(&world, &entities, &viewport, &viewport_state)
                 .expect("display projection");
-        let click_uv = project_world_mm_to_viewport_uv_3d([4.0, 4.0, 4.0], projection)
+        // The default view looks along +Y, so this point is inside the
+        // front-facing tetrahedron triangle rather than an occluded face.
+        let surface_point = [4.25, 4.75, 4.0];
+        let click_uv = project_world_mm_to_viewport_uv_3d(surface_point, projection)
             .expect("projected anchor");
         drop(viewport_state);
         drop(viewport);
 
         let selection = select_mesh_vertex(&mut world, &entities, click_uv)
             .expect("mesh selection")
-            .expect("selected vertex");
+            .expect("selected surface");
         assert_eq!(selection.roi_entity, roi_entity);
-        assert_eq!(selection.anchor_world_mm, [4.0, 4.0, 4.0]);
+        assert!(
+            Vec3::from_array(selection.anchor_world_mm).distance(Vec3::from_array(surface_point))
+                < 1e-5
+        );
         let authoritative_before = world
             .get::<&Roi>(roi_entity)
             .unwrap()

@@ -134,6 +134,9 @@ Completed:
 - [x] Phase 3: mesh deformation picks the clicked triangle surface and uses a
   connected, world-mm geodesic brush, so nearby disconnected surfaces are not
   deformed together.
+- [x] Phase 3: overlapping projected faces select the frontmost containing
+  surface; the interaction regression clicks inside a face rather than a
+  vertex.
 - [x] Phase 3: committing a mesh preview validates closed-mesh topology before
   cache voxelization; an invalid preview remains available for correction.
 - [x] Phase 4: live Trunk browser QA contract passes (3/3); it verifies the
