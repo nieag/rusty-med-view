@@ -69,6 +69,8 @@ struct Uniforms {
 const MAX_OVERLAY_PRIMITIVES: u32 = 64u;
 const PRIMITIVE_CIRCLE: u32 = 0u;
 const PRIMITIVE_RING: u32 = 1u;
+// Must match `orientation::ORTHOGRAPHIC_VIEW_SCALE`.
+const ORTHOGRAPHIC_VIEW_SCALE: f32 = 3.5;
 
 struct OverlayPrimitive {
     world_pos: vec4<f32>,     // xyz = position, w = unused
@@ -404,7 +406,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     } else {
         // --- MODE 0: 3D X-RAY (Volume-Based Rotation) ---
-        // Camera is FIXED, volume rotates
+        // Orthographic camera plane; the volume rotates beneath parallel rays.
         let zoom = uniforms.zoom;
         let pivot = uniforms.zoom_pivot;
         let pan = uniforms.pan;
@@ -442,15 +444,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // This rotates FROM world space TO object space
         let inv_rot_mat = transpose(rot_mat);
         
-        // Fixed camera position in world space
-        let radius = 3.5;
-        let cam_pos = vec3<f32>(0.0, 0.0, -radius);
+        // The camera plane preserves the previous default framing without perspective taper.
+        let cam_pos = vec3<f32>(
+            screen_pos.x * ORTHOGRAPHIC_VIEW_SCALE,
+            screen_pos.y * ORTHOGRAPHIC_VIEW_SCALE,
+            -ORTHOGRAPHIC_VIEW_SCALE,
+        );
         let forward = vec3<f32>(0.0, 0.0, 1.0);
-        let right = vec3<f32>(1.0, 0.0, 0.0);
-        let up = vec3<f32>(0.0, 1.0, 0.0);
-
-        // Ray direction in world space
-        let ray_dir_world = normalize(forward + right * screen_pos.x + up * screen_pos.y);
+        let ray_dir_world = forward;
         
         // Transform ray into object space for volume intersection
         let cam_pos_obj = inv_rot_mat * cam_pos;
@@ -471,38 +472,33 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Project Cursor (cursor is in object space UV, transform to world for projection)
         let cursor_obj = (uniforms.cursor_pos.xyz - 0.5) * aspect_ratio_vol;
         let cursor_world = rot_mat * cursor_obj;
-        let to_cursor = cursor_world - cam_pos;
-        let dist_z = dot(to_cursor, forward);
+        let dist_z = dot(cursor_world - cam_pos, forward);
         if dist_z > 0.0 {
-            let dist_x = dot(to_cursor, right);
-            let dist_y = dot(to_cursor, up);
-            let screen_u = -(dist_x / dist_z) / aspect;
-            let screen_v = -(dist_y / dist_z);
+            let screen_u = -cursor_world.x / (ORTHOGRAPHIC_VIEW_SCALE * aspect);
+            let screen_v = -cursor_world.y / ORTHOGRAPHIC_VIEW_SCALE;
             let p_uv = vec2<f32>(screen_u + 0.5, screen_v + 0.5);
             crosshair_screen_pos = (p_uv - pan - pivot) * zoom + pivot;
             
             // Calculate Axis Projection
-            let z2_inv = 1.0 / (dist_z * dist_z);
-            
             // X (Red)
             let wx = rot_mat[0] * aspect_ratio_vol.x;
             ch_v1 = vec2<f32>(
-                -((dot(wx, right) * dist_z - dist_x * dot(wx, forward)) * z2_inv) / aspect,
-                -((dot(wx, up) * dist_z - dist_y * dot(wx, forward)) * z2_inv) // Flipped
+                -wx.x / (ORTHOGRAPHIC_VIEW_SCALE * aspect),
+                -wx.y / ORTHOGRAPHIC_VIEW_SCALE
             ) * zoom;
             
             // Y (Green)
             let wy = rot_mat[1] * aspect_ratio_vol.y;
             ch_v2 = vec2<f32>(
-                -((dot(wy, right) * dist_z - dist_x * dot(wy, forward)) * z2_inv) / aspect,
-                -((dot(wy, up) * dist_z - dist_y * dot(wy, forward)) * z2_inv) // Flipped
+                -wy.x / (ORTHOGRAPHIC_VIEW_SCALE * aspect),
+                -wy.y / ORTHOGRAPHIC_VIEW_SCALE
             ) * zoom;
             
             // Z (Blue)
             let wz = rot_mat[2] * aspect_ratio_vol.z;
             ch_v3 = vec2<f32>(
-                -((dot(wz, right) * dist_z - dist_x * dot(wz, forward)) * z2_inv) / aspect,
-                -((dot(wz, up) * dist_z - dist_y * dot(wz, forward)) * z2_inv) // Flipped
+                -wz.x / (ORTHOGRAPHIC_VIEW_SCALE * aspect),
+                -wz.y / ORTHOGRAPHIC_VIEW_SCALE
             ) * zoom;
 
             draw_crosshair = true;
@@ -712,26 +708,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let pos_obj = (world_pos - 0.5) * aspect_ratio_vol;
             let pos_world = rot_mat * pos_obj;
 
-            let cam_pos = vec3<f32>(0.0, 0.0, -3.5);
-            let forward = vec3<f32>(0.0, 0.0, 1.0);
-            let right = vec3<f32>(1.0, 0.0, 0.0);
-            let up = vec3<f32>(0.0, 1.0, 0.0);
+            let proj_u = -pos_world.x / (ORTHOGRAPHIC_VIEW_SCALE * aspect);
+            let proj_v = -pos_world.y / ORTHOGRAPHIC_VIEW_SCALE;
+            let p_uv = vec2<f32>(proj_u + 0.5, proj_v + 0.5);
 
-            let to_prim = pos_world - cam_pos;
-            let dist_z = dot(to_prim, forward);
-            if dist_z > 0.0 {
-                let dist_x = dot(to_prim, right);
-                let dist_y = dot(to_prim, up);
-                let proj_u = -(dist_x / dist_z) / aspect;
-                let proj_v = -(dist_y / dist_z);
-                let p_uv = vec2<f32>(proj_u + 0.5, proj_v + 0.5);
-
-                let zoom = uniforms.zoom;
-                let pan = uniforms.pan;
-                let pivot = uniforms.zoom_pivot;
-                screen_pos = (p_uv - pan - pivot) * zoom + pivot;
-                visible = true;
-            }
+            let zoom = uniforms.zoom;
+            let pan = uniforms.pan;
+            let pivot = uniforms.zoom_pivot;
+            screen_pos = (p_uv - pan - pivot) * zoom + pivot;
+            visible = true;
         }
 
         if !visible { continue; }

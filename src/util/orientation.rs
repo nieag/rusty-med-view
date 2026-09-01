@@ -114,7 +114,11 @@ pub const BASE_ROTATION: [f32; 4] = [
     0.0,
     0.0,
     std::f32::consts::FRAC_1_SQRT_2,
-]; // 90° rotation around X
+]; // -90° rotation around X
+
+/// Half-height of the default orthographic 3D view in normalized physical-volume units.
+/// Must match `ORTHOGRAPHIC_VIEW_SCALE` in `src/shaders/shader.wgsl`.
+pub const ORTHOGRAPHIC_VIEW_SCALE: f32 = 3.5;
 
 /// Compose final view rotation from data orientation and user rotation.
 /// Formula: final = user_rotation * BASE_ROTATION * data_orientation
@@ -195,17 +199,13 @@ pub fn screen_to_ray_3d(
     let uv = [zoomed_uv[0] - 0.5, zoomed_uv[1] - 0.5];
     let screen_pos = [-uv[0] * screen_aspect, -uv[1]];
 
-    let cam_pos_world = [0.0, 0.0, -3.5];
-    let forward = [0.0, 0.0, 1.0];
-    let right = [1.0, 0.0, 0.0];
-    let up = [0.0, 1.0, 0.0];
-
-    let raw_dir = [
-        forward[0] + right[0] * screen_pos[0] + up[0] * screen_pos[1],
-        forward[1] + right[1] * screen_pos[0] + up[1] * screen_pos[1],
-        forward[2] + right[2] * screen_pos[0] + up[2] * screen_pos[1],
+    let cam_pos_world = [
+        screen_pos[0] * ORTHOGRAPHIC_VIEW_SCALE,
+        screen_pos[1] * ORTHOGRAPHIC_VIEW_SCALE,
+        -ORTHOGRAPHIC_VIEW_SCALE,
     ];
-    let ray_dir_world = normalize_vec3(raw_dir);
+    let forward = [0.0, 0.0, 1.0];
+    let ray_dir_world = forward;
 
     let rot_mat = quat_to_mat3(rotation);
     let inv_rot_mat = transpose_mat3(rot_mat);
@@ -235,28 +235,10 @@ pub fn volume_to_screen_3d(
     let rot_mat = quat_to_mat3(rotation);
     let cursor_world = rotate_vec3(rot_mat, cursor_obj);
 
-    let cam_pos = [0.0, 0.0, -3.5];
-    let forward = [0.0, 0.0, 1.0];
-    let right = [1.0, 0.0, 0.0];
-    let up = [0.0, 1.0, 0.0];
-
-    let to_cursor = [
-        cursor_world[0] - cam_pos[0],
-        cursor_world[1] - cam_pos[1],
-        cursor_world[2] - cam_pos[2],
-    ];
-
-    let dist_z = to_cursor[0] * forward[0] + to_cursor[1] * forward[1] + to_cursor[2] * forward[2];
-    if dist_z <= 0.01 {
-        return None;
-    }
-
-    let dist_x = to_cursor[0] * right[0] + to_cursor[1] * right[1] + to_cursor[2] * right[2];
-    let dist_y = to_cursor[0] * up[0] + to_cursor[1] * up[1] + to_cursor[2] * up[2];
-
-    // RADIOLOGICAL: Flip X and Y projection
-    let screen_u = -(dist_x / dist_z) / screen_aspect;
-    let screen_v = -(dist_y / dist_z);
+    // Orthographic projection deliberately ignores depth, so rotating a volume does not taper it.
+    // RADIOLOGICAL: flip X and Y projection.
+    let screen_u = -cursor_world[0] / (ORTHOGRAPHIC_VIEW_SCALE * screen_aspect);
+    let screen_v = -cursor_world[1] / ORTHOGRAPHIC_VIEW_SCALE;
 
     let p_uv = [screen_u + 0.5, screen_v + 0.5];
 
@@ -404,6 +386,32 @@ mod tests {
     }
 
     #[test]
+    fn test_orthographic_projection_does_not_taper_with_depth() {
+        let rotation = [0.0, 0.0, 0.0, 1.0];
+        let near = volume_to_screen_3d(
+            [0.2, 0.5, 0.2],
+            rotation,
+            [1.0, 1.0, 1.0],
+            1.0,
+            [0.0, 0.0],
+            1.0,
+        )
+        .expect("near point is visible");
+        let far = volume_to_screen_3d(
+            [0.2, 0.5, 0.8],
+            rotation,
+            [1.0, 1.0, 1.0],
+            1.0,
+            [0.0, 0.0],
+            1.0,
+        )
+        .expect("far point is visible");
+
+        assert!((near[0] - far[0]).abs() < 1e-6);
+        assert!((near[1] - far[1]).abs() < 1e-6);
+    }
+
+    #[test]
     fn test_compose_rotation() {
         let data = [0.0, 0.0, 0.0, 1.0];
         let user = [0.0, 0.0, 0.0, 1.0];
@@ -494,12 +502,8 @@ mod tests {
         // 4. Sample projection logic (MUST MATCH SHADER EXACTLY)
         match view_mode {
             0 => {
-                // 3D Ray Projection (Perspective)
-                // Represents the "crosshair_screen_pos" calculation in mode 0
-                let cam_pos = [0.0, 0.0, -3.5];
-                let forward = [0.0, 0.0, 1.0];
-                let right = [1.0, 0.0, 0.0];
-                let up = [0.0, 1.0, 0.0];
+                // 3D orthographic projection
+                // Represents the orthographic crosshair calculation in mode 0.
 
                 let q = [0.0, 0.0, 0.0, 1.0]; // Identity rotation for test
                 let rot_mat = quat_to_mat3(q);
@@ -507,20 +511,8 @@ mod tests {
                 // For parity test, we assume standard Aspect Ratio Vol [1,1,1]
                 let cursor_obj = [cursor[0] - 0.5, cursor[1] - 0.5, cursor[2] - 0.5];
                 let cursor_world = rotate_vec3(rot_mat, cursor_obj);
-                let to_cursor = [
-                    cursor_world[0] - cam_pos[0],
-                    cursor_world[1] - cam_pos[1],
-                    cursor_world[2] - cam_pos[2],
-                ];
-                let dist_z = to_cursor[0] * forward[0]
-                    + to_cursor[1] * forward[1]
-                    + to_cursor[2] * forward[2];
-                let dist_x =
-                    to_cursor[0] * right[0] + to_cursor[1] * right[1] + to_cursor[2] * right[2];
-                let dist_y = to_cursor[0] * up[0] + to_cursor[1] * up[1] + to_cursor[2] * up[2];
-
-                let screen_u = -(dist_x / dist_z) / screen_aspect;
-                let screen_v = -(dist_y / dist_z); // THE VERTICAL FIX
+                let screen_u = -cursor_world[0] / (ORTHOGRAPHIC_VIEW_SCALE * screen_aspect);
+                let screen_v = -cursor_world[1] / ORTHOGRAPHIC_VIEW_SCALE;
                 let p_uv = [screen_u + 0.5, screen_v + 0.5];
                 let crosshair_pos = [
                     (p_uv[0] - pan[0] - pivot[0]) * zoom + pivot[0],
@@ -633,16 +625,12 @@ mod tests {
         let uv = [mouse_uv[0] - 0.5, mouse_uv[1] - 0.5];
         let screen_pos = [-uv[0] * 1.0, -uv[1]]; // THE RADIOLOGICAL + VERTICAL FIX
 
-        let forward = Vec3::from([0.0, 0.0, 1.0]);
-        let right = Vec3::from([1.0, 0.0, 0.0]);
-        let up = Vec3::from([0.0, 1.0, 0.0]);
-        let ray_dir_world = (forward + right * screen_pos[0] + up * screen_pos[1]).normalize();
-
-        // Ray should point towards Patient Right (+X)
-        assert!(ray_dir_world.x > 0.0);
-        // Ray should point towards World Y- (Down) because cursor is at Y=0.5 (center)
-        // Wait, if cursor is at center (0.5), ray should be straight forward.
-        // Let's test a non-center cursor.
+        let ray_origin_world = Vec3::from([
+            screen_pos[0] * ORTHOGRAPHIC_VIEW_SCALE,
+            screen_pos[1] * ORTHOGRAPHIC_VIEW_SCALE,
+            -ORTHOGRAPHIC_VIEW_SCALE,
+        ]);
+        assert!((ray_origin_world.x - 0.5).abs() < 1e-5);
 
         let cursor_up = [0.5, 0.8, 0.5]; // Anterior (Up in identity)
         let shader_uv_up =
@@ -652,8 +640,11 @@ mod tests {
 
         let uv_up = [shader_uv_up[0] - 0.5, shader_uv_up[1] - 0.5];
         let screen_pos_up = [-uv_up[0], -uv_up[1]];
-        let ray_up = (forward + right * screen_pos_up[0] + up * screen_pos_up[1]).normalize();
-        // ray_up.y should be positive (points Up)
-        assert!(ray_up.y > 0.0);
+        let ray_up_origin = Vec3::from([
+            screen_pos_up[0] * ORTHOGRAPHIC_VIEW_SCALE,
+            screen_pos_up[1] * ORTHOGRAPHIC_VIEW_SCALE,
+            -ORTHOGRAPHIC_VIEW_SCALE,
+        ]);
+        assert!((ray_up_origin.y - 0.3).abs() < 1e-5);
     }
 }
