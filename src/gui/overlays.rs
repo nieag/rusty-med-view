@@ -300,12 +300,8 @@ fn draw_annotations(
     let focused_id = ann_ctx.focused_id;
     let cursor_pos = ann_ctx.cursor_pos;
     let aspect_ratios = vol.aspect_ratios();
-    let geometry = VoxelGeometry {
-        dimensions: vol.dimensions,
-        spacing: vol.spacing,
-        origin: vol.origin,
-        orientation: vol.orientation,
-    };
+    let geometry =
+        VoxelGeometry::new(vol.dimensions, vol.spacing, vol.origin, vol.orientation).ok()?;
     let proj = crate::render::geometry::ViewProjection {
         zoom: view.zoom,
         pan: view.pan,

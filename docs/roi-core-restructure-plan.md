@@ -451,6 +451,7 @@ Completed:
 - [x] Moved delegating ROI request wrappers out of production builds
 - [x] QA models mandatory ROI reference geometry as non-optional
 - [x] Main-volume legacy geometry conversion validates volume metadata at the runtime boundary
+- [x] All production `VolumeData` to `VoxelGeometry` conversions validate metadata
 
 Pending:
 

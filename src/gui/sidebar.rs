@@ -97,12 +97,13 @@ fn focus_cursor_on_first_extracted_slice(
             Some((
                 contour.active_plane_family,
                 slice.plane.origin_mm,
-                VoxelGeometry {
-                    dimensions: volume.dimensions,
-                    spacing: volume.spacing,
-                    origin: volume.origin,
-                    orientation: volume.orientation,
-                },
+                VoxelGeometry::new(
+                    volume.dimensions,
+                    volume.spacing,
+                    volume.origin,
+                    volume.orientation,
+                )
+                .ok()?,
             ))
         })() else {
             return;

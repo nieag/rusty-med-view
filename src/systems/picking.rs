@@ -61,12 +61,7 @@ pub fn get_voxel_at_mouse(
             (
                 vol.aspect_ratios(),
                 Some(vol.dimensions),
-                Some(VoxelGeometry {
-                    dimensions: vol.dimensions,
-                    spacing: vol.spacing,
-                    origin: vol.origin,
-                    orientation: vol.orientation,
-                }),
+                VoxelGeometry::new(vol.dimensions, vol.spacing, vol.origin, vol.orientation).ok(),
             )
         } else {
             ([1.0, 1.0, 1.0], None, None)
