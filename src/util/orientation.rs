@@ -105,9 +105,12 @@ impl SlicePlane {
     }
 }
 
-/// Base rotation to make Superior UP in default 3D view
+/// Base rotation to make Superior UP in the default 3D view.
+///
+/// Screen projection flips Y, so this must be -90° around X: object +Z maps to world +Y
+/// and therefore to screen-up.
 pub const BASE_ROTATION: [f32; 4] = [
-    std::f32::consts::FRAC_1_SQRT_2,
+    -std::f32::consts::FRAC_1_SQRT_2,
     0.0,
     0.0,
     std::f32::consts::FRAC_1_SQRT_2,
@@ -411,6 +414,22 @@ mod tests {
         assert!((result[1] - BASE_ROTATION[1]).abs() < 1e-5);
         assert!((result[2] - BASE_ROTATION[2]).abs() < 1e-5);
         assert!((result[3] - BASE_ROTATION[3]).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_default_3d_projects_superior_up() {
+        let rotation = compose_view_rotation([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 1.0]);
+        let superior = project_axis_3d([0.0, 0.0, 1.0], rotation, [1.0, 1.0, 1.0], 1.0);
+        let inferior = project_axis_3d([0.0, 0.0, -1.0], rotation, [1.0, 1.0, 1.0], 1.0);
+
+        assert!(
+            superior[1] < 0.0,
+            "superior must project screen-up by default"
+        );
+        assert!(
+            inferior[1] > 0.0,
+            "inferior must project screen-down by default"
+        );
     }
 
     #[test]
