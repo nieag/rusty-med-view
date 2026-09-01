@@ -44,6 +44,12 @@ pub enum SmoothMeshExtractionError {
     InvalidRawDataLength { expected: usize, actual: usize },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct SmoothMeshField {
+    padded_dimensions: [u32; 3],
+    values: Vec<f32>,
+}
+
 pub fn extract_smooth_mesh_from_voxel_data(
     voxel_data: &VoxelData,
 ) -> Result<MeshData, SmoothMeshExtractionError> {
@@ -62,25 +68,77 @@ pub fn extract_smooth_mesh_from_voxel_data(
         });
     }
 
+    let field = build_smooth_mesh_field(voxel_data)?;
+    extract_smooth_mesh_chunk_from_field(voxel_data, &field, [0; 3], dimensions)
+}
+
+pub fn build_smooth_mesh_field(
+    voxel_data: &VoxelData,
+) -> Result<SmoothMeshField, SmoothMeshExtractionError> {
+    let dimensions = voxel_data.geometry.dimensions;
+    let expected = voxel_count(dimensions);
+    if voxel_data.raw_data.len() != expected {
+        return Err(SmoothMeshExtractionError::InvalidRawDataLength {
+            expected,
+            actual: voxel_data.raw_data.len(),
+        });
+    }
     let padded = padded_voxel_data(voxel_data);
-    let field = signed_distance_from_voxel_data(&padded)
+    let values = signed_distance_from_voxel_data(&padded)
         .map_err(SmoothMeshExtractionError::SignedDistance)?;
-    let padded_dimensions = padded.geometry.dimensions;
+    Ok(SmoothMeshField {
+        padded_dimensions: padded.geometry.dimensions,
+        values,
+    })
+}
+
+pub fn extract_smooth_mesh_chunk_from_field(
+    voxel_data: &VoxelData,
+    field: &SmoothMeshField,
+    min_inclusive: [u32; 3],
+    max_exclusive: [u32; 3],
+) -> Result<MeshData, SmoothMeshExtractionError> {
+    let dimensions = voxel_data.geometry.dimensions;
+    let expected = voxel_count(dimensions);
+    if voxel_data.raw_data.len() != expected {
+        return Err(SmoothMeshExtractionError::InvalidRawDataLength {
+            expected,
+            actual: voxel_data.raw_data.len(),
+        });
+    }
+    if dimensions.contains(&0) {
+        return Ok(MeshData {
+            vertices: Vec::new(),
+            faces: Vec::new(),
+        });
+    }
     let mut mesh = MeshData {
         vertices: Vec::new(),
         faces: Vec::new(),
     };
     let mut edge_vertices = HashMap::new();
-
-    for z in 0..padded_dimensions[2] - 1 {
-        for y in 0..padded_dimensions[1] - 1 {
-            for x in 0..padded_dimensions[0] - 1 {
+    let cell_ranges: [std::ops::Range<u32>; 3] = std::array::from_fn(|axis| {
+        let start = if min_inclusive[axis] == 0 {
+            0
+        } else {
+            min_inclusive[axis] + 1
+        };
+        let end = if max_exclusive[axis] >= dimensions[axis] {
+            dimensions[axis] + 1
+        } else {
+            max_exclusive[axis] + 1
+        };
+        start..end
+    });
+    for z in cell_ranges[2].clone() {
+        for y in cell_ranges[1].clone() {
+            for x in cell_ranges[0].clone() {
                 append_cell(
                     &mut mesh,
                     &mut edge_vertices,
                     [x, y, z],
-                    padded_dimensions,
-                    &field,
+                    field.padded_dimensions,
+                    &field.values,
                     voxel_data,
                 );
             }

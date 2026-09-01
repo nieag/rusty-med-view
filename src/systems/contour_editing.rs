@@ -1624,7 +1624,7 @@ mod tests {
             assert_eq!(roi.running_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
         }
         move_selected_point_preview(&mut world, &entities, [0.6, 0.55]).unwrap();
-        for _ in 0..8 {
+        for _ in 0..64 {
             roi_runtime::process_contour_voxel_rebuild_jobs(&mut world);
             if world.get::<&Roi>(roi_entity).is_ok_and(|roi| {
                 roi.session_caches

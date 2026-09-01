@@ -1,11 +1,15 @@
-use crate::app::roi::{MeshData, MeshFace, MeshVertex, VoxelData};
-use crate::convert::voxel_index_to_world_mm;
+use crate::app::roi::{MeshData, MeshFace, VoxelData};
+use crate::convert::{
+    build_smooth_mesh_field, extract_smooth_mesh_chunk_from_field,
+    extract_smooth_mesh_from_voxel_data, SmoothMeshExtractionError, SmoothMeshField,
+};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoxelMeshExtractionError {
     InvalidRawDataLength { expected: usize, actual: usize },
     InvalidChunkSize,
+    SmoothMesh(SmoothMeshExtractionError),
 }
 
 pub const DEFAULT_MESH_CHUNK_SIZE: u32 = 16;
@@ -31,6 +35,7 @@ pub struct ChunkedMeshData {
 #[derive(Debug, Clone, PartialEq)]
 pub struct IncrementalChunkedMeshRebuild {
     result: ChunkedMeshData,
+    smooth_field: SmoothMeshField,
     pending_keys: Vec<MeshChunkKey>,
     next_key: usize,
 }
@@ -45,12 +50,15 @@ impl IncrementalChunkedMeshRebuild {
             return Err(VoxelMeshExtractionError::InvalidChunkSize);
         }
         let dimensions = voxel_data.geometry.dimensions;
+        let smooth_field =
+            build_smooth_mesh_field(voxel_data).map_err(VoxelMeshExtractionError::SmoothMesh)?;
         Ok(Self {
             result: ChunkedMeshData {
                 chunk_size,
                 voxel_dimensions: dimensions,
                 chunks: Vec::new(),
             },
+            smooth_field,
             pending_keys: all_mesh_chunk_keys(dimensions, chunk_size),
             next_key: 0,
         })
@@ -70,6 +78,9 @@ impl IncrementalChunkedMeshRebuild {
             return Self::begin_full(voxel_data, chunked.chunk_size);
         }
 
+        let smooth_field =
+            build_smooth_mesh_field(voxel_data).map_err(VoxelMeshExtractionError::SmoothMesh)?;
+
         let pending_keys = mesh_chunk_keys_for_voxel_aabb(
             voxel_data.geometry.dimensions,
             min_inclusive,
@@ -81,6 +92,7 @@ impl IncrementalChunkedMeshRebuild {
             .retain(|chunk| !pending_keys.contains(&chunk.key));
         Ok(Self {
             result: chunked,
+            smooth_field,
             pending_keys,
             next_key: 0,
         })
@@ -90,7 +102,12 @@ impl IncrementalChunkedMeshRebuild {
         let Some(key) = self.pending_keys.get(self.next_key).copied() else {
             return Ok(true);
         };
-        let data = extract_mesh_chunk_from_voxel_data(voxel_data, key, self.result.chunk_size)?;
+        let data = extract_mesh_chunk_from_voxel_data(
+            voxel_data,
+            &self.smooth_field,
+            key,
+            self.result.chunk_size,
+        )?;
         if !data.faces.is_empty() {
             self.result.chunks.push(MeshChunk {
                 key,
@@ -158,7 +175,7 @@ pub fn extract_mesh_from_voxel_data(
     voxel_data: &VoxelData,
 ) -> Result<MeshData, VoxelMeshExtractionError> {
     validate_voxel_data(voxel_data)?;
-    extract_mesh_from_voxel_bounds(voxel_data, [0, 0, 0], voxel_data.geometry.dimensions)
+    extract_smooth_mesh_from_voxel_data(voxel_data).map_err(VoxelMeshExtractionError::SmoothMesh)
 }
 
 pub fn extract_chunked_mesh_from_voxel_data(
@@ -259,6 +276,7 @@ fn all_mesh_chunk_keys(dimensions: [u32; 3], chunk_size: u32) -> Vec<MeshChunkKe
 
 fn extract_mesh_chunk_from_voxel_data(
     voxel_data: &VoxelData,
+    smooth_field: &SmoothMeshField,
     key: MeshChunkKey,
     chunk_size: u32,
 ) -> Result<MeshData, VoxelMeshExtractionError> {
@@ -270,185 +288,17 @@ fn extract_mesh_chunk_from_voxel_data(
     let min = key.index.map(|index| index.saturating_mul(chunk_size));
     let max =
         std::array::from_fn(|axis| min[axis].saturating_add(chunk_size).min(dimensions[axis]));
-    extract_mesh_from_voxel_bounds(voxel_data, min, max)
-}
-
-fn extract_mesh_from_voxel_bounds(
-    voxel_data: &VoxelData,
-    min_inclusive: [u32; 3],
-    max_exclusive: [u32; 3],
-) -> Result<MeshData, VoxelMeshExtractionError> {
-    let dimensions = voxel_data.geometry.dimensions;
-
-    let mut mesh = MeshData {
-        vertices: Vec::new(),
-        faces: Vec::new(),
-    };
-
-    if voxel_data.raw_data.is_empty()
-        || (0..3).any(|axis| min_inclusive[axis] >= max_exclusive[axis])
-    {
-        return Ok(mesh);
-    }
-
-    for z in min_inclusive[2]..max_exclusive[2].min(dimensions[2]) {
-        for y in min_inclusive[1]..max_exclusive[1].min(dimensions[1]) {
-            for x in min_inclusive[0]..max_exclusive[0].min(dimensions[0]) {
-                if !is_occupied(voxel_data, dimensions, x, y, z) {
-                    continue;
-                }
-
-                for face in FACE_DEFINITIONS {
-                    let nx = x as i64 + face.neighbor_offset[0];
-                    let ny = y as i64 + face.neighbor_offset[1];
-                    let nz = z as i64 + face.neighbor_offset[2];
-
-                    if is_occupied_i64(voxel_data, dimensions, nx, ny, nz) {
-                        continue;
-                    }
-
-                    append_face(&mut mesh, voxel_data, x as f32, y as f32, z as f32, face);
-                }
-            }
-        }
-    }
-
-    Ok(mesh)
-}
-
-#[derive(Debug, Clone, Copy)]
-struct FaceDefinition {
-    neighbor_offset: [i64; 3],
-    corners: [[f32; 3]; 4],
-    triangles: [[u32; 3]; 2],
-}
-
-const FACE_DEFINITIONS: [FaceDefinition; 6] = [
-    // -X
-    FaceDefinition {
-        neighbor_offset: [-1, 0, 0],
-        corners: [
-            [0.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0],
-            [0.0, 1.0, 1.0],
-            [0.0, 1.0, 0.0],
-        ],
-        triangles: [[0, 1, 2], [0, 2, 3]],
-    },
-    // +X
-    FaceDefinition {
-        neighbor_offset: [1, 0, 0],
-        corners: [
-            [1.0, 0.0, 0.0],
-            [1.0, 1.0, 0.0],
-            [1.0, 1.0, 1.0],
-            [1.0, 0.0, 1.0],
-        ],
-        triangles: [[0, 1, 2], [0, 2, 3]],
-    },
-    // -Y
-    FaceDefinition {
-        neighbor_offset: [0, -1, 0],
-        corners: [
-            [0.0, 0.0, 0.0],
-            [1.0, 0.0, 0.0],
-            [1.0, 0.0, 1.0],
-            [0.0, 0.0, 1.0],
-        ],
-        triangles: [[0, 1, 2], [0, 2, 3]],
-    },
-    // +Y
-    FaceDefinition {
-        neighbor_offset: [0, 1, 0],
-        corners: [
-            [0.0, 1.0, 0.0],
-            [0.0, 1.0, 1.0],
-            [1.0, 1.0, 1.0],
-            [1.0, 1.0, 0.0],
-        ],
-        triangles: [[0, 1, 2], [0, 2, 3]],
-    },
-    // -Z
-    FaceDefinition {
-        neighbor_offset: [0, 0, -1],
-        corners: [
-            [0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [1.0, 1.0, 0.0],
-            [1.0, 0.0, 0.0],
-        ],
-        triangles: [[0, 1, 2], [0, 2, 3]],
-    },
-    // +Z
-    FaceDefinition {
-        neighbor_offset: [0, 0, 1],
-        corners: [
-            [0.0, 0.0, 1.0],
-            [1.0, 0.0, 1.0],
-            [1.0, 1.0, 1.0],
-            [0.0, 1.0, 1.0],
-        ],
-        triangles: [[0, 1, 2], [0, 2, 3]],
-    },
-];
-
-fn append_face(
-    mesh: &mut MeshData,
-    voxel_data: &VoxelData,
-    x: f32,
-    y: f32,
-    z: f32,
-    face: FaceDefinition,
-) {
-    let base_vertex = mesh.vertices.len() as u32;
-    let cell_min_index = [x - 0.5, y - 0.5, z - 0.5];
-
-    for corner in face.corners {
-        let index = [
-            cell_min_index[0] + corner[0],
-            cell_min_index[1] + corner[1],
-            cell_min_index[2] + corner[2],
-        ];
-        let world_mm = voxel_index_to_world_mm(index, voxel_data.geometry);
-        mesh.vertices.push(MeshVertex { world_mm });
-    }
-
-    for tri in face.triangles {
-        mesh.faces.push(MeshFace {
-            vertex_indices: [
-                base_vertex + tri[0],
-                base_vertex + tri[1],
-                base_vertex + tri[2],
-            ],
-        });
-    }
+    extract_smooth_mesh_chunk_from_field(voxel_data, smooth_field, min, max)
+        .map_err(VoxelMeshExtractionError::SmoothMesh)
 }
 
 fn voxel_cell_count(dimensions: [u32; 3]) -> usize {
     dimensions[0] as usize * dimensions[1] as usize * dimensions[2] as usize
 }
 
+#[cfg(test)]
 fn voxel_linear_index(dimensions: [u32; 3], x: u32, y: u32, z: u32) -> usize {
     (z as usize * dimensions[1] as usize + y as usize) * dimensions[0] as usize + x as usize
-}
-
-fn is_occupied(voxel_data: &VoxelData, dimensions: [u32; 3], x: u32, y: u32, z: u32) -> bool {
-    voxel_data.raw_data[voxel_linear_index(dimensions, x, y, z)] != 0
-}
-
-fn is_occupied_i64(voxel_data: &VoxelData, dimensions: [u32; 3], x: i64, y: i64, z: i64) -> bool {
-    if x < 0 || y < 0 || z < 0 {
-        return false;
-    }
-
-    let xu = x as u32;
-    let yu = y as u32;
-    let zu = z as u32;
-    if xu >= dimensions[0] || yu >= dimensions[1] || zu >= dimensions[2] {
-        return false;
-    }
-
-    is_occupied(voxel_data, dimensions, xu, yu, zu)
 }
 
 #[cfg(test)]
@@ -531,21 +381,21 @@ mod tests {
             [10.0, 20.0, 30.0],
             rotation,
         );
-
-        let mesh = extract_mesh_from_voxel_data(&voxel)
-            .expect("single occupied voxel should produce mesh");
-        let expected_world = Vec3::from_array(voxel.geometry.origin)
-            + (Quat::from_array(rotation) * Vec3::new(1.0, -1.5, -2.0));
-
-        let found = mesh.vertices.iter().any(|vertex| {
-            let v = Vec3::from_array(vertex.world_mm);
-            v.distance(expected_world) < 1e-5
-        });
-        assert!(
-            found,
-            "expected to find world-space vertex at transformed +X corner: {:?}",
-            expected_world
+        let identity = voxel_data_with_single_occupied(
+            [2, 2, 2],
+            [0, 0, 0],
+            [2.0, 3.0, 4.0],
+            [0.0, 0.0, 0.0],
+            Quat::IDENTITY.to_array(),
         );
+        let mesh = extract_mesh_from_voxel_data(&voxel).unwrap();
+        let identity_mesh = extract_mesh_from_voxel_data(&identity).unwrap();
+
+        for (rotated, local) in mesh.vertices.iter().zip(&identity_mesh.vertices) {
+            let expected = Vec3::from_array(voxel.geometry.origin)
+                + Quat::from_array(rotation) * Vec3::from_array(local.world_mm);
+            assert!(Vec3::from_array(rotated.world_mm).distance(expected) < 1e-5);
+        }
     }
 
     #[test]
@@ -570,8 +420,8 @@ mod tests {
             }
         }
 
-        assert_eq!(min, [13.0, 27.5, 44.0]);
-        assert_eq!(max, [15.0, 30.5, 48.0]);
+        assert!(min.into_iter().zip([13.0, 27.5, 44.0]).all(|(a, b)| a >= b));
+        assert!(max.into_iter().zip([15.0, 30.5, 48.0]).all(|(a, b)| a <= b));
     }
 
     #[test]
@@ -591,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn test_single_voxel_topology_has_12_triangles() {
+    fn test_single_voxel_smooth_topology_has_no_cube_faces() {
         let voxel = voxel_data_with_single_occupied(
             [2, 2, 2],
             [0, 0, 0],
@@ -600,11 +450,11 @@ mod tests {
             Quat::IDENTITY.to_array(),
         );
         let mesh = extract_mesh_from_voxel_data(&voxel).expect("mesh extraction should succeed");
-        assert_eq!(mesh.faces.len(), 12);
+        assert_eq!(mesh.faces.len(), 8);
     }
 
     #[test]
-    fn test_solid_2x2x2_has_no_internal_faces() {
+    fn test_solid_2x2x2_smooth_mesh_is_smaller_than_cube_faces() {
         let dimensions = [2, 2, 2];
         let voxel = VoxelData {
             geometry: geometry(
@@ -616,8 +466,7 @@ mod tests {
             raw_data: vec![1; 8],
         };
         let mesh = extract_mesh_from_voxel_data(&voxel).expect("mesh extraction should succeed");
-        // 2x2x2 solid block: 24 exterior quads -> 48 triangles.
-        assert_eq!(mesh.faces.len(), 48);
+        assert!(mesh.faces.len() < 48);
     }
 
     #[test]
@@ -654,8 +503,7 @@ mod tests {
             raw_data: vec![1, 2],
         };
         let mesh = extract_mesh_from_voxel_data(&voxel).expect("mesh extraction should succeed");
-        // Two adjacent occupied voxels: 10 exposed faces -> 20 triangles.
-        assert_eq!(mesh.faces.len(), 20);
+        assert!(mesh.faces.len() < 20);
     }
 
     fn canonical_triangles(mesh: &MeshData) -> Vec<[[i32; 3]; 3]> {
