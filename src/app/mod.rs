@@ -287,11 +287,11 @@ impl AppState {
                     visible: roi.metadata.is_visible,
                     active: Some(entity) == active_roi_entity,
                     overlay_slot: overlay_slots.get(&entity).copied(),
-                    reference_geometry_dimensions: Some(roi.reference_geometry().dimensions()),
-                    reference_geometry_identity: Some(format!(
+                    reference_geometry_dimensions: roi.reference_geometry().dimensions(),
+                    reference_geometry_identity: format!(
                         "{:?}",
                         roi.reference_geometry().identity()
-                    )),
+                    ),
                     voxel_cache_generation: roi.cache_generation(RoiCacheKind::Voxel),
                     contour_cache_generation: roi.cache_generation(RoiCacheKind::Contour),
                     mesh_cache_generation: roi.cache_generation(RoiCacheKind::Mesh),

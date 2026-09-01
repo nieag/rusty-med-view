@@ -449,6 +449,7 @@ Completed:
 - [x] `VoxelGeometry` fields are crate-private; external construction goes through validation
 - [x] Moved delegating edit/history runtime wrappers out of production builds
 - [x] Moved delegating ROI request wrappers out of production builds
+- [x] QA models mandatory ROI reference geometry as non-optional
 
 Pending:
 
