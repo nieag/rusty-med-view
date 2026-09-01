@@ -1,7 +1,7 @@
 # ROI Core Restructure Plan
 
 Date: 2026-08-30  
-Status: In progress  
+Status: Complete  
 Scope: Coordinate ownership, ROI state orchestration, derived caches, and removal of transitional runtime code
 
 ## Purpose
@@ -412,7 +412,7 @@ Avoid exposing internal scheduler structures that tests do not need.
 
 ## Implementation status
 
-Current phase: Phase 6 oblique acceptance
+Current phase: Stable-v0 accepted
 
 Completed:
 
@@ -473,7 +473,7 @@ Pending:
 - [x] Phase 3: move remaining direct processor callers behind the coordinator
 - [x] Phase 4: attach geometry to remaining legacy mesh/import creation paths
 - [x] Phase 5: transitional deletion
-- [ ] Phase 6: measured optimization
+- [x] Phase 6: measured optimization
 
 Phase 6 measurement gate:
 
@@ -486,9 +486,10 @@ Measured acceptance:
 
 - Liver QA sample, fresh contour-loop commit: contour rasterization `3 ms`, accepted-work convergence `5 ms`, queue delay `1 ms`, GPU-upload submission `1 ms`, and last job duration `1 ms`.
 - The active contour ROI reached empty pending/running work with current voxel, contour, and mesh caches; no job failed or was discarded.
-- This meets the `<= 4 ms` conversion-work budget and `<= 100 ms` first-derived-preview target for the measured first-slice orthogonal contour path. Full-contour oblique rebuild remains deliberately outside this measured path and retains its documented fallback; it is the remaining Phase 6 acceptance gate.
+- Liver QA sample, fresh oblique contour-loop commit after bounded rasterization: contour rasterization `3 ms`, accepted-work convergence `26 ms`, queue delay `1 ms`, and GPU-upload submission `2 ms`; all caches reached current with no failed or discarded work. The reported `13 ms` job duration is aggregate resumable mesh work, not one frame's conversion work.
+- Both measured paths meet the `<= 4 ms` conversion-work budget and `<= 100 ms` first-derived-preview target.
 
-Plan-relevant commits: `d7b4704`, `a5eed49`, `876d103`, `2ed81e0`, `cd905ac`, `88857f0`, `694503a`, `3193068`, `e7e236e`, `e4943f6`, `f54483d`, `328d156`, `28aea14`, `01d86a1`, `6d1465c`, `9e5b5de`, `f4bb9ff`, `e7d8bf1`, `5e95879`, `fac64cf`, `78b8d33`, `581aa2d`, `5c8ad96`, `3933e23`, `97235b7`, `72d7e73`, `fa81182`, `1ac5770`, `1b32ae5`, `392db9b`, `209a2d0`, `0bf5973`, `23566d3`, `e030d4f`, `71719c5`, `93ac81d`, `ced99a0`, `81759e8`, `0df1967`, `087fea4`, `103a5f5`, `a70642a`, `fbc01a5`, `2395c5e`.
+Plan-relevant commits: `d7b4704`, `a5eed49`, `876d103`, `2ed81e0`, `cd905ac`, `88857f0`, `694503a`, `3193068`, `e7e236e`, `e4943f6`, `f54483d`, `328d156`, `28aea14`, `01d86a1`, `6d1465c`, `9e5b5de`, `f4bb9ff`, `e7d8bf1`, `5e95879`, `fac64cf`, `78b8d33`, `581aa2d`, `5c8ad96`, `3933e23`, `97235b7`, `72d7e73`, `fa81182`, `1ac5770`, `1b32ae5`, `392db9b`, `209a2d0`, `0bf5973`, `23566d3`, `e030d4f`, `71719c5`, `93ac81d`, `ced99a0`, `81759e8`, `0df1967`, `087fea4`, `103a5f5`, `a70642a`, `fbc01a5`, `2395c5e`, `ec13598`.
 
 ## Stable-v0 boundary
 
