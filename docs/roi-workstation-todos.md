@@ -47,5 +47,6 @@ Ordered backlog for the next direction. Complete top-to-bottom unless a measured
 - ECS rewrite.
 - Generic job framework.
 - Coordinate-system rewrite.
-- New contour/mesh/voxel algorithms.
+- New contour algorithms. Meshing work is tracked separately in
+  `docs/mesh-authority-and-meshing-plan.md`.
 - GPU compute migration without a measured bottleneck.
