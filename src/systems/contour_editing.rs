@@ -27,6 +27,7 @@ pub enum ContourEditMappingError {
     MissingViewportState,
     MissingCursor,
     MissingMainVolume,
+    InvalidMainVolumeGeometry,
     UnsupportedViewportMode,
     PlaneUnavailable,
     PlaneFamilyMismatch {
@@ -63,21 +64,18 @@ pub fn resolve_active_contour_edit_viewport(
         .get::<&crate::components::ViewportState>(viewport_entity)
         .map_err(|_| ContourEditMappingError::MissingViewportState)?;
 
-    let geometry = {
-        let mut main_volume_query = world
-            .query::<&crate::components::VolumeData>()
-            .with::<&MainVolumeTag>();
-        let (_, volume) = main_volume_query
-            .iter()
-            .next()
-            .ok_or(ContourEditMappingError::MissingMainVolume)?;
-        VoxelGeometry {
-            dimensions: volume.dimensions,
-            spacing: volume.spacing,
-            origin: volume.origin,
-            orientation: volume.orientation,
-        }
-    };
+    let has_main_volume = world
+        .query::<&crate::components::VolumeData>()
+        .with::<&MainVolumeTag>()
+        .iter()
+        .next()
+        .is_some();
+    let geometry =
+        crate::app::roi_runtime::main_volume_voxel_geometry(world).ok_or(if has_main_volume {
+            ContourEditMappingError::InvalidMainVolumeGeometry
+        } else {
+            ContourEditMappingError::MissingMainVolume
+        })?;
 
     let cursor = world
         .get::<&Transform>(entities.cursor)
@@ -1127,6 +1125,27 @@ mod tests {
         assert_eq!(
             result,
             Err(ContourEditMappingError::UnsupportedViewportMode)
+        );
+    }
+
+    #[test]
+    fn test_contour_edit_rejects_invalid_main_volume_geometry() {
+        let mut world = World::new();
+        let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+        for (_, volume) in world
+            .query_mut::<&mut crate::components::VolumeData>()
+            .with::<&MainVolumeTag>()
+        {
+            volume.orientation = [0.0; 4];
+        }
+        let contour = ContourData {
+            active_plane_family: PlaneFamily::Axial,
+            slices: Vec::new(),
+        };
+
+        assert_eq!(
+            resolve_active_contour_edit_viewport(&world, &entities, &contour),
+            Err(ContourEditMappingError::InvalidMainVolumeGeometry)
         );
     }
 
