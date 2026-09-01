@@ -349,28 +349,30 @@ pub(crate) fn ensure_contour_view_cache(
         }
     }
     let mesh_preview_revision = roi.preview_state.revision;
-    let mesh_needs_direct_preview =
-        matches!(&roi.authoritative_data, RoiAuthoritativeData::Mesh(_))
-            && (mesh_preview.is_some()
-                || roi.is_cache_dirty(RoiCacheKind::Voxel)
-                || !roi.is_cache_current(RoiCacheKind::Voxel));
-    if mesh_needs_direct_preview {
+    if matches!(&roi.authoritative_data, RoiAuthoritativeData::Mesh(_)) {
         let mesh = mesh_preview
             .as_ref()
             .or_else(|| roi.mesh_data())
             .expect("mesh-authoritative ROI must expose mesh data");
+        let state = if mesh_preview.is_some() {
+            CacheViewState::Preview {
+                revision: mesh_preview_revision,
+            }
+        } else {
+            CacheViewState::Current
+        };
         return match intersect_mesh_with_plane(mesh, view_key.plane) {
             Ok(data) => {
                 let generation = roi.dirty_state.generations.authoritative;
-                let _ = roi.install_contour_view_result(
-                    view_key.clone(),
-                    data,
-                    generation,
-                    CacheViewState::Preview {
-                        revision: mesh_preview_revision,
-                    },
-                );
-                RepresentationRequestStatus::preview("mesh_plane_intersection_preview")
+                let install =
+                    roi.install_contour_view_result(view_key.clone(), data, generation, state);
+                if install.is_err() {
+                    RepresentationRequestStatus::stale("mesh_plane_intersection_superseded")
+                } else if mesh_preview.is_some() {
+                    RepresentationRequestStatus::preview("mesh_plane_intersection_preview")
+                } else {
+                    RepresentationRequestStatus::current()
+                }
             }
             Err(_) => RepresentationRequestStatus::blocked("mesh_plane_intersection_failed"),
         };
@@ -3049,6 +3051,60 @@ mod tests {
             cache_status(&world, entity, RoiCacheKind::Contour)
                 .unwrap()
                 .is_dirty
+        );
+    }
+
+    #[test]
+    fn test_mesh_authority_keeps_direct_plane_contour_after_voxel_rebuild() {
+        let mut world = World::new();
+        let entity = spawn_sparse_voxel_roi(&mut world);
+        {
+            let mut roi = world.get::<&mut Roi>(entity).unwrap();
+            roi.session_caches.mesh = Some(MeshCache {
+                data: closed_tetra_mesh_data(),
+                chunks: None,
+            });
+            roi.dirty_state.mesh_cache_dirty = false;
+            roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        }
+        promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
+        translate_mesh_data(&mut world, entity, [0.25, 0.0, 0.0]).unwrap();
+
+        let geometry = world
+            .get::<&Roi>(entity)
+            .unwrap()
+            .voxel_cache()
+            .unwrap()
+            .data
+            .geometry;
+        let plane =
+            orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 1.0 / 3.0], geometry)
+                .unwrap();
+        let key = ContourViewKey::from_plane(plane);
+        let expected = {
+            let roi = world.get::<&Roi>(entity).unwrap();
+            intersect_mesh_with_plane(roi.mesh_data().unwrap(), plane).unwrap()
+        };
+
+        let before_rebuild = ensure_contour_view_cache(&mut world, entity, &key);
+        assert_eq!(before_rebuild.state, RepresentationRequestState::Current);
+        assert_eq!(
+            request_contour_view_state(&world, entity, &key)
+                .request
+                .state,
+            RepresentationRequestState::Current,
+            "a direct mesh contour must remain current while voxelization is queued"
+        );
+
+        process_mesh_voxel_rebuild_jobs(&mut world);
+        let status = ensure_contour_view_cache(&mut world, entity, &key);
+
+        assert_eq!(status.state, RepresentationRequestState::Current);
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert_eq!(
+            roi.contour_view_cache(&key).unwrap().data,
+            expected,
+            "mesh authority must retain direct mesh-plane contours after voxelization"
         );
     }
 

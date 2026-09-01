@@ -184,6 +184,7 @@ pub fn request_contour_view_state(
     };
     let contour = roi.contour_data();
     let contour_primary = contour.is_some();
+    let mesh_primary = matches!(&roi.authoritative_data, RoiAuthoritativeData::Mesh(_));
     if let Some(contour) = contour {
         if contour.active_plane_family == view_key.family {
             return ContourRepresentationStatus {
@@ -244,7 +245,9 @@ pub fn request_contour_view_state(
 
     let request = match &view_cache.state {
         CacheViewState::Current => {
-            if roi.running_job_kind() == Some(RoiJobKind::RebuildVoxelCache) {
+            if mesh_primary {
+                RepresentationRequestStatus::current()
+            } else if roi.running_job_kind() == Some(RoiJobKind::RebuildVoxelCache) {
                 RepresentationRequestStatus::rebuilding("voxel_cache_rebuilding_for_contour_view")
             } else if roi.has_queued_job(RoiJobKind::RebuildVoxelCache) {
                 RepresentationRequestStatus::queued("voxel_cache_queued_for_contour_view")
