@@ -312,6 +312,10 @@ impl AppState {
                         .map(|request| request.kind.as_str().to_string())
                         .collect(),
                     completed_job_count: roi.job_metrics.completed_count,
+                    last_completed_job: roi
+                        .job_metrics
+                        .last_completed_kind
+                        .map(|kind| kind.as_str().to_string()),
                     discarded_job_count: roi.job_metrics.discarded_count,
                     failed_job_count: roi.job_metrics.failed_count,
                     last_job_duration_ms: roi.job_metrics.last_duration_ms,

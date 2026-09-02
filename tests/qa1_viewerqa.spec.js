@@ -103,6 +103,10 @@ test("qa-2 sample preset readiness", async ({ page }) => {
     ]) {
       expect(typeof activeRoi[field]).toBe("number");
     }
+    expect(
+      activeRoi.last_completed_job === null ||
+        typeof activeRoi.last_completed_job === "string",
+    ).toBeTruthy();
     expect(lastError).toBeNull();
     expect(logs.events.some((e) => e.category === "qa.sample")).toBeTruthy();
     expect(logs.events.some((e) => e.category === "qa.preset")).toBeTruthy();

@@ -88,7 +88,7 @@ Manual GPU-browser acceptance capture:
 3. After `pending_jobs` and `running_job` are empty, record the active ROI from
    `window.__viewerQa.state().rois`: `last_mesh_voxelization_ms`,
    `last_gpu_upload_ms`, `last_work_convergence_ms`, `last_job_duration_ms`,
-   and failed/discarded counts.
+   `last_completed_job`, and failed/discarded counts.
 4. Repeat once with an anisotropic or rotated ROI geometry fixture. The
    headless browser contract is not performance evidence because it has no
    WebGPU adapter.
@@ -156,6 +156,8 @@ Completed:
 - [x] Phase 4: liver GPU-browser QA measured `969 ms` for the eager mesh
   resample; mesh commits now defer it until an explicit **Build voxels**
   request, while direct contours and the authoritative mesh remain live.
+- [x] Phase 4: QA identifies the completed job kind, so a generic duration is
+  no longer mistaken for mesh-to-voxel resampling.
 
 Pending:
 

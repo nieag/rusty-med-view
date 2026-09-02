@@ -103,6 +103,7 @@ pub struct QaSnapshotRoi {
     pub running_job: Option<String>,
     pub pending_jobs: Vec<String>,
     pub completed_job_count: u64,
+    pub last_completed_job: Option<String>,
     pub discarded_job_count: u64,
     pub failed_job_count: u64,
     pub last_job_duration_ms: f32,

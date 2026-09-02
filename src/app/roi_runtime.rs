@@ -1373,6 +1373,7 @@ fn resume_voxel_mesh_rebuild_work(
         return;
     }
     roi.job_metrics.completed_count = roi.job_metrics.completed_count.saturating_add(1);
+    roi.job_metrics.last_completed_kind = Some(RoiJobKind::RebuildMeshCache);
     roi.job_metrics.last_duration_ms = duration.as_secs_f32() * 1000.0;
 }
 
@@ -1515,6 +1516,7 @@ fn process_mesh_voxel_rebuild_for_entity(
     roi.mark_cache_dirty(RoiCacheKind::Contour);
     roi.mark_all_contour_view_caches_stale();
     roi.job_metrics.completed_count = roi.job_metrics.completed_count.saturating_add(1);
+    roi.job_metrics.last_completed_kind = Some(RoiJobKind::RebuildVoxelCache);
     roi.job_metrics.last_duration_ms = started_at.elapsed().as_secs_f32() * 1000.0;
     drop(roi);
     set_runtime_status_message(world, "Mesh voxel cache rebuilt.".to_string());
@@ -1688,6 +1690,7 @@ fn resume_contour_preview_mesh_work(
     }
     roi.finish_job(RoiJobKind::RebuildVoxelCache);
     roi.job_metrics.completed_count = roi.job_metrics.completed_count.saturating_add(1);
+    roi.job_metrics.last_completed_kind = Some(RoiJobKind::RebuildVoxelCache);
     roi.job_metrics.last_duration_ms = duration.as_secs_f32() * 1000.0;
     true
 }
@@ -2019,6 +2022,7 @@ fn process_contour_voxel_rebuild_for_entity(
         dirty_region: committed_mesh_dirty_region,
     });
     roi.job_metrics.completed_count = roi.job_metrics.completed_count.saturating_add(1);
+    roi.job_metrics.last_completed_kind = Some(RoiJobKind::RebuildVoxelCache);
     roi.job_metrics.last_duration_ms = started_at.elapsed().as_secs_f32() * 1000.0;
     drop(roi);
     set_runtime_status_message(world, "Contour voxel cache rebuilt.".to_string());

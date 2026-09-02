@@ -462,6 +462,7 @@ pub struct RoiJobRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct RoiJobMetrics {
     pub completed_count: u64,
+    pub last_completed_kind: Option<RoiJobKind>,
     pub discarded_count: u64,
     pub failed_count: u64,
     pub last_duration_ms: f32,
