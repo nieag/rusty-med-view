@@ -179,3 +179,4 @@ Checkpoint commits:
 - `c5dac9b` Fix: pick frontmost mesh surface
 - `05312e8` Perf: defer mesh voxel resampling
 - `be31f42` QA: identify completed ROI job kind
+- `fcb9487` Fix: keep open meshes out of voxel resampling
