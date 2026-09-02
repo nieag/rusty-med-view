@@ -172,3 +172,4 @@ Checkpoint commits:
 - `af658ad` Test: cover rotated mesh voxel roundtrip
 - `96e64c5` Test: cover oblique mesh authority contours
 - `c5dac9b` Fix: pick frontmost mesh surface
+- `05312e8` Perf: defer mesh voxel resampling
