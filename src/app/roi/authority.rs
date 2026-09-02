@@ -169,6 +169,24 @@ pub fn replace_mesh_data(
     }
 
     roi.mark_mesh_authoritative_changed();
+    // Mesh contours and the 3D surface read the authority directly. Rebuilding
+    // the optional voxel cache here can take nearly a second for a liver ROI,
+    // so only an explicit voxel/export request may schedule it.
+    roi.job_state = RoiJobState::default();
+    Ok(())
+}
+
+pub fn request_mesh_voxel_cache_rebuild(
+    world: &mut World,
+    roi_entity: hecs::Entity,
+) -> Result<(), MeshMutationError> {
+    let mut roi = world
+        .get::<&mut Roi>(roi_entity)
+        .map_err(|_| MeshMutationError::MissingRoi)?;
+    if !matches!(roi.authoritative_data, RoiAuthoritativeData::Mesh(_)) {
+        return Err(MeshMutationError::NotMeshRoi);
+    }
+    roi.mark_cache_dirty(RoiCacheKind::Voxel);
     roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
     Ok(())
 }
@@ -386,8 +404,5 @@ pub fn promote_current_mesh_cache_to_authority(
     roi.job_state = RoiJobState::default();
     roi.end_preview();
     roi.rebase_after_mesh_promotion(voxel_cache_was_current);
-    if !voxel_cache_was_current {
-        roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
-    }
     Ok(())
 }

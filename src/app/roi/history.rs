@@ -272,7 +272,6 @@ fn restore_roi_edit_snapshot(
             *existing = mesh;
             roi.mark_mesh_authoritative_changed();
             roi.mark_all_contour_view_caches_stale();
-            roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
         }
         _ => return Err(RoiEditHistoryError::RepresentationChanged),
     }

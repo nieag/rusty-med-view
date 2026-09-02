@@ -10,9 +10,10 @@ pub use authority::{
     promote_contour_view_to_authoritative, promote_current_mesh_cache_to_authority,
     promote_current_voxel_cache_to_authority, promote_roi_to_contour_authority,
     promote_voxel_roi_to_contour_authority, replace_contour_data, replace_contour_data_for_slice,
-    replace_mesh_data, set_active_contour_plane_family, ContourMutationError,
-    ContourPlaneFamilySwitchError, ContourPromotionError, MeshAuthorityPromotionError,
-    MeshMutationError, VoxelAuthorityPromotionError, VoxelContourPromotionError,
+    replace_mesh_data, request_mesh_voxel_cache_rebuild, set_active_contour_plane_family,
+    ContourMutationError, ContourPlaneFamilySwitchError, ContourPromotionError,
+    MeshAuthorityPromotionError, MeshMutationError, VoxelAuthorityPromotionError,
+    VoxelContourPromotionError,
 };
 pub use cache::CacheInstallError;
 pub use history::{

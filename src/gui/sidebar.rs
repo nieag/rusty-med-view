@@ -277,9 +277,9 @@ pub fn draw_sidebar(
                 .map(|roi| roi.primary_representation())
         });
         if let (Some(roi_entity), Some(primary)) = (new_active_roi, active_primary) {
+            let voxel_status = roi::request_voxel_overlay_state(world, roi_entity);
             let voxel_ready = primary == PrimaryRepresentation::Voxel
-                || roi::cache_status(world, roi_entity, RoiCacheKind::Voxel)
-                    .is_some_and(|status| status.is_current);
+                || voxel_status.state == roi::RepresentationRequestState::Current;
             let mesh_status = roi::request_mesh_cache_state(world, roi_entity);
             let mesh_ready = primary == PrimaryRepresentation::Mesh
                 || mesh_status.state == roi::RepresentationRequestState::Current;
@@ -331,6 +331,38 @@ pub fn draw_sidebar(
                             world,
                             entities,
                             format!("Voxel promotion failed: {error:?}."),
+                        ),
+                    }
+                }
+                let voxel_rebuildable = primary == PrimaryRepresentation::Mesh
+                    && matches!(
+                        voxel_status.state,
+                        roi::RepresentationRequestState::Stale
+                            | roi::RepresentationRequestState::Blocked
+                    );
+                if ui
+                    .add_enabled(
+                        voxel_rebuildable,
+                        egui::Button::new("Build voxels").small(),
+                    )
+                    .on_hover_text(
+                        "Resample the mesh onto its reference voxel grid for the voxel overlay or voxel authority. This can be slow for large meshes.",
+                    )
+                    .clicked()
+                {
+                    match roi::request_mesh_voxel_cache_rebuild(world, roi_entity) {
+                        Ok(()) => {
+                            handlers::set_status_message(
+                                world,
+                                entities,
+                                "Voxel-cache rebuild queued; mesh contours remain direct.".to_string(),
+                            );
+                            let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
+                        }
+                        Err(error) => handlers::set_status_message(
+                            world,
+                            entities,
+                            format!("Voxel-cache rebuild request failed: {error:?}."),
                         ),
                     }
                 }

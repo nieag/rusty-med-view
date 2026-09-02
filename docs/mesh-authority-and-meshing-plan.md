@@ -93,10 +93,18 @@ Manual GPU-browser acceptance capture:
    headless browser contract is not performance evidence because it has no
    WebGPU adapter.
 
+Measured liver mesh-authority resample before deferral: `969 ms` mesh
+voxelization, `1 ms` GPU upload, and `972 ms` accepted-work convergence, with
+no failed/discarded jobs. The resample scans the mesh voxel bounds
+synchronously, so it cannot run automatically on an interactive mesh commit.
+
 Decision: keep mesh-authority voxelization as an explicitly provisional,
 reference-grid resample for v0. It samples a closed world-mm mesh at the
 ROI-owned voxel centres for overlays and downstream voxel workflows; it is not
 lossless mesh export and must never replace mesh-authority contour display.
+Mesh commits therefore leave that cache stale and do not enqueue a rebuild.
+The sidebar's explicit **Build voxels** action requests the potentially slow
+resample when the voxel overlay or voxel authority is actually needed.
 
 ## Non-goals
 
@@ -145,6 +153,9 @@ Completed:
   a rotated, anisotropic ROI grid exactly.
 - [x] Phase 4: mesh-authority voxelization remains an explicit reference-grid
   resample for v0, not a lossless mesh export or display source.
+- [x] Phase 4: liver GPU-browser QA measured `969 ms` for the eager mesh
+  resample; mesh commits now defer it until an explicit **Build voxels**
+  request, while direct contours and the authoritative mesh remain live.
 
 Pending:
 

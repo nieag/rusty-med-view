@@ -2852,7 +2852,7 @@ mod tests {
     }
 
     #[test]
-    fn test_replace_mesh_data_updates_authoritative_state_and_queues_voxel_rebuild() {
+    fn test_replace_mesh_data_leaves_voxel_cache_stale_until_explicitly_requested() {
         let mut world = World::new();
         let entity = world.spawn((Roi::new_mesh(
             RoiId(300),
@@ -2884,7 +2884,17 @@ mod tests {
         assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
         assert!(roi.is_cache_dirty(RoiCacheKind::Contour));
         assert!(!roi.is_cache_dirty(RoiCacheKind::Mesh));
-        assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
+        assert_eq!(roi.queued_job_kind(), None);
+        drop(roi);
+
+        assert_eq!(
+            crate::app::roi::request_mesh_voxel_cache_rebuild(&mut world, entity),
+            Ok(())
+        );
+        assert_eq!(
+            world.get::<&Roi>(entity).unwrap().queued_job_kind(),
+            Some(RoiJobKind::RebuildVoxelCache)
+        );
     }
 
     #[test]
@@ -2896,7 +2906,7 @@ mod tests {
     }
 
     #[test]
-    fn test_translate_mesh_data_changes_authority_and_queues_voxel_rebuild() {
+    fn test_translate_mesh_data_changes_authority_without_eager_voxel_rebuild() {
         let mut world = World::new();
         let original = closed_tetra_mesh_data();
         let entity = world.spawn((Roi::new_mesh(
@@ -2911,7 +2921,7 @@ mod tests {
         let translated = roi.mesh_data().unwrap();
         assert_eq!(translated.vertices[0].world_mm, [1.0, -2.0, 0.5]);
         assert_eq!(translated.faces, original.faces);
-        assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
+        assert_eq!(roi.queued_job_kind(), None);
         assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
         assert!(roi.is_cache_dirty(RoiCacheKind::Contour));
     }
@@ -2957,7 +2967,7 @@ mod tests {
         let roi = world.get::<&Roi>(entity).unwrap();
         assert_eq!(roi.mesh_data().unwrap().vertices[0].world_mm[0], 0.25);
         assert!(!roi.preview_state.active);
-        assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
+        assert_eq!(roi.queued_job_kind(), None);
         drop(roi);
 
         {
@@ -2970,7 +2980,7 @@ mod tests {
         {
             let roi = world.get::<&Roi>(entity).unwrap();
             assert_eq!(roi.mesh_data(), Some(&original));
-            assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
+            assert_eq!(roi.queued_job_kind(), None);
             assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
             assert!(roi.is_cache_dirty(RoiCacheKind::Contour));
         }
