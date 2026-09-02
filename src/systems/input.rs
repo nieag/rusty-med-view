@@ -132,7 +132,7 @@ pub fn sys_handle_mouse_button(
             Ok(()) => set_status_message(
                 world,
                 entities,
-                "Committed mesh deformation; exact derived views queued.".to_string(),
+                "Committed mesh deformation; build voxels explicitly when needed.".to_string(),
             ),
             Err(error) => set_status_message(
                 world,

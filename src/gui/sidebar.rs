@@ -487,7 +487,7 @@ pub fn draw_sidebar(
                                 handlers::set_status_message(
                                     world,
                                     entities,
-                                    "Committed mesh edit; derived voxel/contour views queued."
+                                    "Committed mesh edit; build voxels explicitly when needed."
                                         .to_string(),
                                 );
                                 ctx.request_repaint();

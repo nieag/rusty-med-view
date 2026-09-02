@@ -183,9 +183,10 @@ pub fn request_mesh_voxel_cache_rebuild(
     let mut roi = world
         .get::<&mut Roi>(roi_entity)
         .map_err(|_| MeshMutationError::MissingRoi)?;
-    if !matches!(roi.authoritative_data, RoiAuthoritativeData::Mesh(_)) {
+    let RoiAuthoritativeData::Mesh(mesh) = &roi.authoritative_data else {
         return Err(MeshMutationError::NotMeshRoi);
-    }
+    };
+    crate::convert::validate_mesh_for_voxelization(mesh).map_err(MeshMutationError::InvalidMesh)?;
     roi.mark_cache_dirty(RoiCacheKind::Voxel);
     roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
     Ok(())

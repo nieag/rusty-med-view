@@ -104,7 +104,10 @@ ROI-owned voxel centres for overlays and downstream voxel workflows; it is not
 lossless mesh export and must never replace mesh-authority contour display.
 Mesh commits therefore leave that cache stale and do not enqueue a rebuild.
 The sidebar's explicit **Build voxels** action requests the potentially slow
-resample when the voxel overlay or voxel authority is actually needed.
+resample when the voxel overlay or voxel authority is actually needed. Open
+mesh-authority surfaces may still be edited and displayed through direct
+contours; **Build voxels** rejects them before undefined solid containment can
+produce an invalid labelmap.
 
 ## Non-goals
 
@@ -146,7 +149,7 @@ Completed:
   surface; the interaction regression clicks inside a face rather than a
   vertex.
 - [x] Phase 3: committing a mesh preview validates closed-mesh topology before
-  cache voxelization; an invalid preview remains available for correction.
+  explicit cache voxelization; open meshes remain valid mesh-authority edits.
 - [x] Phase 4: live Trunk browser QA contract passes (3/3); it verifies the
   QA state schema and the honest no-WebGPU fallback in this environment.
 - [x] Phase 4: automated smooth-mesh to voxel resampling round-trip preserves

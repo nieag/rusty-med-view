@@ -2877,7 +2877,7 @@ mod tests {
             roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
         }
 
-        let replacement = simple_mesh_data();
+        let replacement = closed_tetra_mesh_data();
         let result = replace_mesh_data(&mut world, entity, replacement.clone());
         assert_eq!(result, Ok(()));
 
