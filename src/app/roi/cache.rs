@@ -110,6 +110,17 @@ impl Roi {
         }
 
         let view = self.contour_view_cache(key)?;
+        let mesh_view_usable = match view.state {
+            CacheViewState::Current => true,
+            CacheViewState::Preview { .. } => self.preview_state.active,
+            _ => false,
+        };
+        if self.mesh_data().is_some()
+            && (view.source_generation != self.dirty_state.generations.authoritative
+                || !mesh_view_usable)
+        {
+            return None;
+        }
         if matches!(
             view.state,
             CacheViewState::Blocked { .. } | CacheViewState::Unsupported { .. }

@@ -193,7 +193,12 @@ fn append_cell(
         let indices = edges.map(|edge| {
             let key = EdgeKey::from_cell_edge(cell, edge);
             *edge_vertices.entry(key).or_insert_with(|| {
-                let [a, b] = EDGE_CONNECTION[edge];
+                // Adjacent cells may enumerate the same edge in opposite
+                // directions. Canonical order keeps chunk seams bit-identical.
+                let [mut a, mut b] = EDGE_CONNECTION[edge];
+                if corner_indices[a] > corner_indices[b] {
+                    std::mem::swap(&mut a, &mut b);
+                }
                 let offset = interpolation_offset(values[a], values[b]);
                 let index = lerp_index(corner_indices[a], corner_indices[b], offset);
                 let original_index = index.map(|value| value - 1.0);
@@ -313,6 +318,71 @@ mod tests {
                 actual: 1,
             }
         );
+    }
+
+    #[test]
+    fn test_all_binary_cell_patterns_produce_closed_roundtrippable_meshes() {
+        for spacing in [[1.0; 3], [0.7, 1.3, 2.1]] {
+            for pattern in 1_u16..256 {
+                let source = VoxelData {
+                    geometry: VoxelGeometry {
+                        dimensions: [2; 3],
+                        spacing,
+                        origin: [0.0; 3],
+                        orientation: [0.0, 0.0, 0.0, 1.0],
+                    },
+                    raw_data: (0..8)
+                        .map(|bit| u8::from(pattern & (1 << bit) != 0))
+                        .collect(),
+                };
+                let mesh = extract_smooth_mesh_from_voxel_data(&source).unwrap();
+                let rebuilt = voxelize_mesh_to_voxel_data(&mesh, source.geometry)
+                    .unwrap_or_else(|error| panic!("pattern {pattern:08b}: {error:?}"));
+                assert_eq!(rebuilt.raw_data, source.raw_data, "pattern {pattern:08b}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_larger_binary_patterns_preserve_closed_mesh_and_voxel_occupancy() {
+        // Fixed seed exercises adjacent ambiguous cells without flaky randomness.
+        let mut seed = 0x5eed_u32;
+        for case in 0..256 {
+            let mut source = voxel_data(vec![0; 27]);
+            for voxel in &mut source.raw_data {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                *voxel = u8::from(seed & 1 != 0);
+            }
+            let mesh = extract_smooth_mesh_from_voxel_data(&source).unwrap();
+            let rebuilt = voxelize_mesh_to_voxel_data(&mesh, source.geometry)
+                .unwrap_or_else(|error| panic!("case {case}: {error:?}"));
+            assert_eq!(rebuilt.raw_data, source.raw_data, "case {case}");
+        }
+    }
+
+    #[test]
+    #[ignore = "exhaustive topology QA"]
+    fn test_adjacent_binary_cells_preserve_closed_mesh_and_voxel_occupancy() {
+        let dimensions = [3, 2, 2];
+        for pattern in 1_u16..(1 << 12) {
+            let source = VoxelData {
+                geometry: VoxelGeometry {
+                    dimensions,
+                    spacing: [0.7, 1.3, 2.1],
+                    origin: [10.0, 20.0, 30.0],
+                    orientation: [0.0, 0.0, 0.0, 1.0],
+                },
+                raw_data: (0..12)
+                    .map(|bit| u8::from(pattern & (1 << bit) != 0))
+                    .collect(),
+            };
+            let mesh = extract_smooth_mesh_from_voxel_data(&source).unwrap();
+            let rebuilt = voxelize_mesh_to_voxel_data(&mesh, source.geometry)
+                .unwrap_or_else(|error| panic!("pattern {pattern:012b}: {error:?}"));
+            assert_eq!(rebuilt.raw_data, source.raw_data, "pattern {pattern:012b}");
+        }
     }
 
     #[test]

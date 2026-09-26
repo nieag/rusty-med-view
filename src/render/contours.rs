@@ -1116,7 +1116,7 @@ mod tests {
             window_settings,
         };
 
-        crate::app::roi_runtime::sync_active_roi_contour_view_caches_for_viewports(&mut world);
+        crate::app::roi_runtime::sync_roi_contour_view_caches_for_viewports(&mut world);
         let data = prepare_contour_render_data(&world, &entities);
 
         let roi = world.get::<&Roi>(roi_entity).unwrap();

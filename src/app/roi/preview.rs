@@ -198,8 +198,16 @@ pub fn commit_mesh_edit_preview(
         .map_err(|_| MeshMutationError::MissingEditorState)?
         .take_mesh_edit_preview()
         .ok_or(MeshMutationError::MissingPreview)?;
-    let result =
-        replace_mesh_data_with_history(world, editor_entity, preview.roi_entity, preview.mesh_data);
+    let result = crate::convert::validate_mesh_for_voxelization(&preview.mesh_data)
+        .map_err(MeshMutationError::InvalidMesh)
+        .and_then(|()| {
+            replace_mesh_data_with_history(
+                world,
+                editor_entity,
+                preview.roi_entity,
+                preview.mesh_data,
+            )
+        });
     end_roi_preview(world, preview.roi_entity);
     result
 }
@@ -310,15 +318,25 @@ mod tests {
     }
 
     #[test]
-    fn test_open_mesh_preview_commits_for_mesh_authority() {
+    fn test_invalid_mesh_preview_preserves_authority_and_history() {
         let mut world = World::new();
+        let original = MeshData {
+            vertices: [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ]
+            .map(|world_mm| MeshVertex { world_mm })
+            .to_vec(),
+            faces: [[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]]
+                .map(|vertex_indices| MeshFace { vertex_indices })
+                .to_vec(),
+        };
         let roi_entity = world.spawn((Roi::new_mesh(
             RoiId(1),
             "test".to_string(),
-            MeshData {
-                vertices: Vec::new(),
-                faces: Vec::new(),
-            },
+            original.clone(),
         ),));
         let editor_entity = world.spawn((EditorState::default(),));
         let open_mesh = MeshData {
@@ -337,7 +355,10 @@ mod tests {
         };
         begin_mesh_edit_preview(&mut world, editor_entity, roi_entity, open_mesh.clone()).unwrap();
 
-        assert_eq!(commit_mesh_edit_preview(&mut world, editor_entity), Ok(()));
+        assert!(matches!(
+            commit_mesh_edit_preview(&mut world, editor_entity),
+            Err(MeshMutationError::InvalidMesh(_))
+        ));
         assert!(world
             .get::<&EditorState>(editor_entity)
             .unwrap()
@@ -345,13 +366,9 @@ mod tests {
             .is_none());
         let roi = world.get::<&Roi>(roi_entity).unwrap();
         assert!(!roi.preview_state.active);
-        assert_eq!(roi.mesh_data(), Some(&open_mesh));
+        assert_eq!(roi.mesh_data(), Some(&original));
         drop(roi);
-        assert!(matches!(
-            crate::app::roi::request_mesh_voxel_cache_rebuild(&mut world, roi_entity),
-            Err(MeshMutationError::InvalidMesh(
-                crate::convert::MeshVoxelizationError::OpenOrNonManifoldEdge { .. }
-            ))
-        ));
+        assert!(!crate::app::roi::can_undo_roi_edit(&world, editor_entity));
+        crate::app::roi::request_mesh_voxel_cache_rebuild(&mut world, roi_entity).unwrap();
     }
 }

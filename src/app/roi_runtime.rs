@@ -14,7 +14,7 @@ use crate::convert::PlaneDefinition;
 use crate::convert::{
     contour_geometry_voxel_aabb, contour_slices_voxel_aabb, extract_contour_slice_from_voxel_data,
     intersect_mesh_with_plane, rasterize_contour_preview_slices_to_voxel_data,
-    rasterize_contours_to_voxel_data, voxelize_mesh_to_voxel_data, IncrementalChunkedMeshRebuild,
+    rasterize_contours_to_voxel_data, IncrementalChunkedMeshRebuild, IncrementalMeshVoxelization,
     PlaneFamily, RoiGeometry, VoxelContourExtractionError, VoxelMeshExtractionError,
     DEFAULT_MESH_CHUNK_SIZE,
 };
@@ -38,6 +38,13 @@ struct VoxelMeshRebuildWork {
     voxel_data: VoxelData,
     rebuild: IncrementalChunkedMeshRebuild,
     started_at: Instant,
+}
+
+struct MeshVoxelRebuildWork {
+    source_generation: u64,
+    rebuild: IncrementalMeshVoxelization,
+    started_at: Instant,
+    voxelization_duration: Duration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -165,7 +172,7 @@ pub fn advance_roi_work(world: &mut World, gpu: Option<&RoiWorkGpuContext<'_>>) 
 
     // Demand is resolved after voxel-producing work so a newly current voxel cache can schedule
     // its mesh in this same frame.
-    sync_active_roi_contour_view_caches_for_viewports(world);
+    sync_roi_contour_view_caches_for_viewports(world);
     sync_active_roi_mesh_cache_for_viewports(world);
     process_voxel_mesh_rebuild_jobs(world);
     record_completed_work_cycles(world);
@@ -361,9 +368,19 @@ pub(crate) fn ensure_contour_view_cache(
         } else {
             CacheViewState::Current
         };
+        let generation = roi.dirty_state.generations.authoritative;
+        if roi
+            .contour_view_cache(view_key)
+            .is_some_and(|cache| cache.source_generation == generation && cache.state == state)
+        {
+            return if mesh_preview.is_some() {
+                RepresentationRequestStatus::preview("mesh_plane_intersection_preview")
+            } else {
+                RepresentationRequestStatus::current()
+            };
+        }
         return match intersect_mesh_with_plane(mesh, view_key.plane) {
             Ok(data) => {
-                let generation = roi.dirty_state.generations.authoritative;
                 let install =
                     roi.install_contour_view_result(view_key.clone(), data, generation, state);
                 if install.is_err() {
@@ -502,25 +519,20 @@ pub fn request_viewport_mesh_state(
     crate::app::roi::requests::request_viewport_mesh_state(world, viewport_mode, roi_entity)
 }
 
-pub(crate) fn sync_active_roi_contour_view_caches_for_viewports(world: &mut World) {
+pub(crate) fn sync_roi_contour_view_caches_for_viewports(world: &mut World) {
     let active_roi = world
         .query::<&EditorState>()
         .iter()
         .next()
         .and_then(|(_, editor)| editor.active_roi);
-    let Some(active_roi) = active_roi else {
-        return;
-    };
-
-    let geometry = main_volume_geometry(world).or_else(|| {
-        world
-            .get::<&Roi>(active_roi)
-            .ok()
-            .and_then(|roi| roi.voxel_cache().map(|cache| cache.data.geometry))
-    });
-    let Some(geometry) = geometry else {
-        return;
-    };
+    let mut roi_entities = active_roi.into_iter().collect::<Vec<_>>();
+    roi_entities.extend(world.query::<&Roi>().iter().filter_map(|(entity, roi)| {
+        (Some(entity) != active_roi
+            && roi.metadata.is_visible
+            && matches!(roi.authoritative_data, RoiAuthoritativeData::Mesh(_)))
+        .then_some(entity)
+    }));
+    let main_geometry = main_volume_geometry(world);
 
     let cursor_uv = world
         .query::<&Transform>()
@@ -529,22 +541,32 @@ pub(crate) fn sync_active_roi_contour_view_caches_for_viewports(world: &mut Worl
         .map(|(_, transform)| transform.position)
         .unwrap_or([0.5, 0.5, 0.5]);
 
-    let viewport_requests: Vec<_> = world
-        .query::<(&Viewport, &ViewportState)>()
-        .iter()
-        .filter_map(|(_, (viewport, viewport_state))| {
-            crate::render::roi_views::displayed_plane_for_viewport(
-                viewport.mode,
-                cursor_uv,
-                viewport_state.user_rotation,
-                geometry,
-            )
-            .map(ContourViewKey::from_plane)
-        })
-        .collect();
-
-    for view_key in viewport_requests {
-        let _ = ensure_contour_view_cache(world, active_roi, &view_key);
+    for roi_entity in roi_entities {
+        let geometry = main_geometry.or_else(|| {
+            world
+                .get::<&Roi>(roi_entity)
+                .ok()
+                .and_then(|roi| roi.voxel_cache().map(|cache| cache.data.geometry))
+        });
+        let Some(geometry) = geometry else {
+            continue;
+        };
+        let viewport_requests: Vec<_> = world
+            .query::<(&Viewport, &ViewportState)>()
+            .iter()
+            .filter_map(|(_, (viewport, viewport_state))| {
+                crate::render::roi_views::displayed_plane_for_viewport(
+                    viewport.mode,
+                    cursor_uv,
+                    viewport_state.user_rotation,
+                    geometry,
+                )
+                .map(ContourViewKey::from_plane)
+            })
+            .collect();
+        for view_key in viewport_requests {
+            let _ = ensure_contour_view_cache(world, roi_entity, &view_key);
+        }
     }
 }
 
@@ -1395,6 +1417,21 @@ fn process_mesh_voxel_rebuild_jobs_with_context(
     upload_context: Option<(&wgpu::Device, &wgpu::Queue)>,
     preferred_roi: Option<hecs::Entity>,
 ) -> bool {
+    const FRAME_JOB_BUDGET: Duration = Duration::from_millis(4);
+    let frame_started_at = Instant::now();
+    let running_entity = {
+        let mut query = world.query::<&MeshVoxelRebuildWork>();
+        query.iter().map(|(entity, _)| entity).next()
+    };
+    if let Some(entity) = running_entity {
+        return resume_mesh_voxel_rebuild_work(
+            world,
+            entity,
+            upload_context,
+            frame_started_at,
+            FRAME_JOB_BUDGET,
+        );
+    }
     let mut entities = world
         .query::<&Roi>()
         .iter()
@@ -1410,16 +1447,23 @@ fn process_mesh_voxel_rebuild_jobs_with_context(
             entities.swap(0, index);
         }
     }
-    entities
-        .into_iter()
-        .take(1)
-        .any(|entity| process_mesh_voxel_rebuild_for_entity(world, entity, upload_context))
+    entities.into_iter().take(1).any(|entity| {
+        process_mesh_voxel_rebuild_for_entity(
+            world,
+            entity,
+            upload_context,
+            frame_started_at,
+            FRAME_JOB_BUDGET,
+        )
+    })
 }
 
 fn process_mesh_voxel_rebuild_for_entity(
     world: &mut World,
     roi_entity: hecs::Entity,
     upload_context: Option<(&wgpu::Device, &wgpu::Queue)>,
+    frame_started_at: Instant,
+    frame_budget: Duration,
 ) -> bool {
     let (source_generation, mesh, target_geometry) = {
         let Ok(roi) = world.get::<&Roi>(roi_entity) else {
@@ -1444,21 +1488,91 @@ fn process_mesh_voxel_rebuild_for_entity(
         return false;
     };
     let voxelization_started_at = Instant::now();
-    let voxel_data = match voxelize_mesh_to_voxel_data(&mesh, target_geometry) {
-        Ok(data) => data,
+    let rebuild = match IncrementalMeshVoxelization::begin(&mesh, target_geometry) {
+        Ok(work) => work,
         Err(error) => {
             log::warn!("Mesh voxel rebuild failed for ROI {roi_entity:?}: {error:?}");
             fail_mesh_voxel_rebuild(world, roi_entity, "mesh_voxelization_failed");
             return false;
         }
     };
+    if world
+        .insert_one(
+            roi_entity,
+            MeshVoxelRebuildWork {
+                source_generation,
+                rebuild,
+                started_at,
+                voxelization_duration: voxelization_started_at.elapsed(),
+            },
+        )
+        .is_err()
+    {
+        fail_mesh_voxel_rebuild(world, roi_entity, "mesh_voxel_work_insert_failed");
+        return false;
+    }
+    resume_mesh_voxel_rebuild_work(
+        world,
+        roi_entity,
+        upload_context,
+        frame_started_at,
+        frame_budget,
+    )
+}
+
+fn resume_mesh_voxel_rebuild_work(
+    world: &mut World,
+    roi_entity: hecs::Entity,
+    upload_context: Option<(&wgpu::Device, &wgpu::Queue)>,
+    frame_started_at: Instant,
+    frame_budget: Duration,
+) -> bool {
+    let Ok(mut work) = world.remove_one::<MeshVoxelRebuildWork>(roi_entity) else {
+        return false;
+    };
+    let is_current = world.get::<&Roi>(roi_entity).is_ok_and(|roi| {
+        roi.dirty_state.generations.authoritative == work.source_generation
+            && matches!(roi.authoritative_data, RoiAuthoritativeData::Mesh(_))
+            && roi.job_state.running_request.is_some_and(|request| {
+                request.kind == RoiJobKind::RebuildVoxelCache
+                    && request.source_generation == work.source_generation
+            })
+    });
+    if !is_current {
+        record_job_discarded(world, roi_entity, work.started_at.elapsed());
+        if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
+            roi.finish_job(RoiJobKind::RebuildVoxelCache);
+        }
+        return false;
+    }
+    let scan_started_at = Instant::now();
+    let mut completed = false;
+    while !completed && frame_started_at.elapsed() < frame_budget {
+        completed = work.rebuild.step(512);
+    }
+    work.voxelization_duration += scan_started_at.elapsed();
+    if !completed {
+        if world.insert_one(roi_entity, work).is_err() {
+            fail_mesh_voxel_rebuild(world, roi_entity, "mesh_voxel_work_insert_failed");
+        }
+        return false;
+    }
+    let voxelization_ms = work.voxelization_duration.as_secs_f32() * 1000.0;
+    let voxel_data = work
+        .rebuild
+        .into_result()
+        .expect("completed scan must yield voxels");
+    let source_generation = work.source_generation;
+    let started_at = work.started_at;
 
     if world
         .get::<&Roi>(roi_entity)
         .is_ok_and(|roi| roi.dirty_state.generations.authoritative != source_generation)
     {
         record_job_discarded(world, roi_entity, started_at.elapsed());
-        requeue_mesh_voxel_rebuild(world, roi_entity);
+        if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
+            roi.finish_job(RoiJobKind::RebuildVoxelCache);
+        }
         return false;
     }
 
@@ -1493,8 +1607,7 @@ fn process_mesh_voxel_rebuild_for_entity(
     let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) else {
         return false;
     };
-    roi.job_metrics.last_mesh_voxelization_ms =
-        voxelization_started_at.elapsed().as_secs_f32() * 1000.0;
+    roi.job_metrics.last_mesh_voxelization_ms = voxelization_ms;
     if let Some(upload_ms) = gpu_upload_ms {
         roi.job_metrics.last_gpu_upload_ms = upload_ms;
     }
@@ -1513,22 +1626,14 @@ fn process_mesh_voxel_rebuild_for_entity(
         roi.finish_job(RoiJobKind::RebuildVoxelCache);
         return false;
     }
-    roi.mark_cache_dirty(RoiCacheKind::Contour);
-    roi.mark_all_contour_view_caches_stale();
+    // Mesh-authority contours depend on the mesh, not this optional voxel cache.
+    // Keep their current plane intersections intact across the resample.
     roi.job_metrics.completed_count = roi.job_metrics.completed_count.saturating_add(1);
     roi.job_metrics.last_completed_kind = Some(RoiJobKind::RebuildVoxelCache);
     roi.job_metrics.last_duration_ms = started_at.elapsed().as_secs_f32() * 1000.0;
     drop(roi);
     set_runtime_status_message(world, "Mesh voxel cache rebuilt.".to_string());
     true
-}
-
-fn requeue_mesh_voxel_rebuild(world: &mut World, roi_entity: hecs::Entity) {
-    if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-        roi.finish_job(RoiJobKind::RebuildVoxelCache);
-        roi.mark_cache_dirty(RoiCacheKind::Voxel);
-        roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
-    }
 }
 
 fn fail_mesh_voxel_rebuild(world: &mut World, roi_entity: hecs::Entity, reason: &'static str) {
@@ -2972,7 +3077,12 @@ mod tests {
         assert_eq!(roi.mesh_data().unwrap().vertices[0].world_mm[0], 0.25);
         assert!(!roi.preview_state.active);
         assert_eq!(roi.queued_job_kind(), None);
+        assert!(roi.contour_view_data_for_render(&key).is_none());
         drop(roi);
+        assert_eq!(
+            ensure_contour_view_cache(&mut world, entity, &key).state,
+            RepresentationRequestState::Current
+        );
 
         {
             let editor_state = world.get::<&EditorState>(editor).unwrap();
@@ -3013,14 +3123,40 @@ mod tests {
             "Cancel".to_string(),
             original.clone(),
         ),));
+        let geometry = VoxelGeometry {
+            dimensions: [4; 3],
+            spacing: [1.0; 3],
+            origin: [0.0; 3],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+        let plane = orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.25], geometry)
+            .unwrap();
+        let key = ContourViewKey::from_plane(plane);
 
         begin_mesh_translation_preview(&mut world, editor, entity, [1.0, 0.0, 0.0]).unwrap();
+        assert_eq!(
+            ensure_contour_view_cache(&mut world, entity, &key).state,
+            RepresentationRequestState::Preview
+        );
         cancel_mesh_edit_preview(&mut world, editor).unwrap();
 
         let roi = world.get::<&Roi>(entity).unwrap();
         assert_eq!(roi.mesh_data(), Some(&original));
         assert!(!roi.preview_state.active);
         assert_eq!(roi.queued_job_kind(), None);
+        assert!(roi.contour_view_data_for_render(&key).is_none());
+        drop(roi);
+        assert_eq!(
+            ensure_contour_view_cache(&mut world, entity, &key).state,
+            RepresentationRequestState::Current
+        );
+        assert_eq!(
+            world
+                .get::<&Roi>(entity)
+                .unwrap()
+                .contour_view_data_for_render(&key),
+            Some(&intersect_mesh_with_plane(&original, plane).unwrap())
+        );
     }
 
     #[test]
@@ -3069,6 +3205,77 @@ mod tests {
     }
 
     #[test]
+    fn test_mesh_voxel_rebuild_keeps_cache_stale_until_incremental_work_completes() {
+        let mut world = World::new();
+        let entity = spawn_sparse_voxel_roi(&mut world);
+        {
+            let mut roi = world.get::<&mut Roi>(entity).unwrap();
+            roi.session_caches.mesh = Some(MeshCache {
+                data: closed_tetra_mesh_data(),
+                chunks: None,
+            });
+            roi.dirty_state.mesh_cache_dirty = false;
+            roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        }
+        promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
+        {
+            let mut roi = world.get::<&mut Roi>(entity).unwrap();
+            roi.mark_cache_dirty(RoiCacheKind::Voxel);
+            roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
+        }
+
+        assert!(!process_mesh_voxel_rebuild_for_entity(
+            &mut world,
+            entity,
+            None,
+            Instant::now(),
+            Duration::ZERO,
+        ));
+        assert!(world.get::<&MeshVoxelRebuildWork>(entity).is_ok());
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert_eq!(roi.running_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
+        assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
+        drop(roi);
+
+        for _ in 0..10 {
+            process_mesh_voxel_rebuild_jobs(&mut world);
+            if world
+                .get::<&Roi>(entity)
+                .unwrap()
+                .is_cache_current(RoiCacheKind::Voxel)
+            {
+                break;
+            }
+        }
+        assert!(world
+            .get::<&Roi>(entity)
+            .unwrap()
+            .is_cache_current(RoiCacheKind::Voxel));
+        assert!(world.get::<&MeshVoxelRebuildWork>(entity).is_err());
+
+        {
+            let mut roi = world.get::<&mut Roi>(entity).unwrap();
+            roi.mark_cache_dirty(RoiCacheKind::Voxel);
+            roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
+        }
+        assert!(!process_mesh_voxel_rebuild_for_entity(
+            &mut world,
+            entity,
+            None,
+            Instant::now(),
+            Duration::ZERO,
+        ));
+        replace_mesh_data(&mut world, entity, closed_tetra_mesh_data()).unwrap();
+        process_mesh_voxel_rebuild_jobs(&mut world);
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
+        assert_eq!(roi.running_job_kind(), None);
+        assert_eq!(roi.queued_job_kind(), None);
+        assert!(roi.job_metrics.discarded_count > 0);
+        assert!(world.get::<&MeshVoxelRebuildWork>(entity).is_err());
+    }
+
+    #[test]
     fn test_mesh_authority_keeps_direct_plane_contour_after_voxel_rebuild() {
         let mut world = World::new();
         let entity = spawn_sparse_voxel_roi(&mut world);
@@ -3082,7 +3289,22 @@ mod tests {
             roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
         }
         promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
-        translate_mesh_data(&mut world, entity, [0.25, 0.0, 0.0]).unwrap();
+        let editor = world.spawn((EditorState::default(),));
+        let deformed = crate::systems::mesh_editing::deform_mesh_surface_brush(
+            world.get::<&Roi>(entity).unwrap().mesh_data().unwrap(),
+            [0, 1, 3],
+            [0.5, 0.0, 0.5],
+            [0.25, 0.0, 0.0],
+            1.5,
+            1.0,
+        );
+        crate::app::roi::begin_mesh_edit_preview(&mut world, editor, entity, deformed.clone())
+            .unwrap();
+        commit_mesh_edit_preview(&mut world, editor).unwrap();
+        assert_eq!(
+            world.get::<&Roi>(entity).unwrap().mesh_data(),
+            Some(&deformed)
+        );
 
         let geometry = world
             .get::<&Roi>(entity)
@@ -3124,6 +3346,16 @@ mod tests {
 
         process_mesh_voxel_rebuild_jobs(&mut world);
         for (key, expected) in expected {
+            assert_eq!(
+                world
+                    .get::<&Roi>(entity)
+                    .unwrap()
+                    .contour_view_cache(&key)
+                    .unwrap()
+                    .state,
+                CacheViewState::Current,
+                "voxel resampling must not invalidate direct mesh contours"
+            );
             let status = ensure_contour_view_cache(&mut world, entity, &key);
             assert_eq!(status.state, RepresentationRequestState::Current);
             let roi = world.get::<&Roi>(entity).unwrap();
@@ -3132,6 +3364,193 @@ mod tests {
                 expected,
                 "mesh authority must retain direct mesh-plane contours after voxelization"
             );
+        }
+    }
+
+    #[test]
+    fn test_visible_inactive_mesh_roi_keeps_direct_contours_in_multiple_viewports() {
+        let mut world = World::new();
+        spawn_main_volume(&mut world, [1.0; 3], [0.0; 3]);
+        let active_roi = spawn_sparse_voxel_roi(&mut world);
+        world.spawn((EditorState {
+            active_roi: Some(active_roi),
+            ..EditorState::default()
+        },));
+        let cursor_uv = [0.5, 0.5, 0.25];
+        world.spawn((Transform {
+            position: cursor_uv,
+        },));
+        let mesh = closed_tetra_mesh_data();
+        let mesh_roi = world.spawn((Roi::new_mesh(RoiId(305), "Mesh".to_string(), mesh.clone()),));
+        let viewports = [
+            (ViewMode::Axial, ViewportState::default()),
+            (
+                ViewMode::Oblique,
+                ViewportState {
+                    user_rotation: glam::Quat::from_rotation_y(0.3).to_array(),
+                    ..ViewportState::default()
+                },
+            ),
+        ];
+        for (index, (mode, state)) in viewports.iter().enumerate() {
+            world.spawn((
+                Viewport {
+                    mode: *mode,
+                    rect: [0.0, 0.0, 800.0, 600.0],
+                    uniform_index: index as u32,
+                },
+                *state,
+            ));
+        }
+
+        sync_roi_contour_view_caches_for_viewports(&mut world);
+        let geometry = main_volume_geometry(&world).unwrap();
+        for (mode, state) in viewports {
+            let plane = crate::render::roi_views::displayed_plane_for_viewport(
+                mode,
+                cursor_uv,
+                state.user_rotation,
+                geometry,
+            )
+            .unwrap();
+            let key = ContourViewKey::from_plane(plane);
+            let expected = intersect_mesh_with_plane(&mesh, plane).unwrap();
+            assert!(!expected.slices.is_empty());
+            let roi = world.get::<&Roi>(mesh_roi).unwrap();
+            let cache = roi.contour_view_cache(&key).unwrap();
+            assert_eq!(cache.state, CacheViewState::Current);
+            assert_eq!(cache.data, expected);
+            drop(roi);
+            let viewport = Viewport {
+                mode,
+                rect: [0.0, 0.0, 800.0, 600.0],
+                uniform_index: 0,
+            };
+            assert!(crate::render::roi_views::contour_renderable_in_viewport(
+                &world, &viewport, &state, cursor_uv, mesh_roi,
+            ));
+        }
+    }
+
+    #[test]
+    fn test_rotated_anisotropic_roi_keeps_direct_contours_through_mesh_resample() {
+        let mut world = World::new();
+        let geometry = VoxelGeometry {
+            dimensions: [8; 3],
+            spacing: [0.7, 1.3, 2.1],
+            origin: [10.0, 20.0, 30.0],
+            orientation: glam::Quat::from_rotation_y(0.4).to_array(),
+        };
+        let mut raw_data = vec![0; 8 * 8 * 8];
+        for z in 2..=5 {
+            for y in 2..=5 {
+                for x in 2..=5 {
+                    raw_data[(z * 8 + y) * 8 + x] = 1;
+                }
+            }
+        }
+        let entity = world.spawn((Roi::new_voxel_with_cache(
+            RoiId(306),
+            "Rotated".to_string(),
+            geometry,
+            raw_data,
+            None,
+        ),));
+        let editor = world.spawn((EditorState {
+            active_roi: Some(entity),
+            ..EditorState::default()
+        },));
+        world.spawn((
+            Viewport {
+                mode: ViewMode::ThreeD,
+                rect: [0.0, 0.0, 800.0, 600.0],
+                uniform_index: 0,
+            },
+            ViewportState::default(),
+        ));
+        for _ in 0..32 {
+            advance_roi_work(&mut world, None);
+            if world
+                .get::<&Roi>(entity)
+                .unwrap()
+                .is_cache_current(RoiCacheKind::Mesh)
+            {
+                break;
+            }
+        }
+        assert!(world
+            .get::<&Roi>(entity)
+            .unwrap()
+            .is_cache_current(RoiCacheKind::Mesh));
+        promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
+        let original = world
+            .get::<&Roi>(entity)
+            .unwrap()
+            .mesh_data()
+            .unwrap()
+            .clone();
+        let seeds = original.faces[original.faces.len() / 2].vertex_indices;
+        let anchor = original.vertices[seeds[0] as usize].world_mm;
+        let deformed = crate::systems::mesh_editing::deform_mesh_surface_brush(
+            &original,
+            seeds,
+            anchor,
+            [0.1, 0.0, 0.0],
+            2.0,
+            1.0,
+        );
+        assert_ne!(deformed, original);
+        crate::app::roi::begin_mesh_edit_preview(&mut world, editor, entity, deformed.clone())
+            .unwrap();
+        commit_mesh_edit_preview(&mut world, editor).unwrap();
+
+        let planes = [
+            orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5; 3], geometry).unwrap(),
+            crate::convert::oblique_plane_from_view_rotation(
+                [0.5; 3],
+                glam::Quat::from_rotation_y(0.25).to_array(),
+                geometry,
+            )
+            .unwrap(),
+        ];
+        let expected = planes.map(|plane| {
+            let key = ContourViewKey::from_plane(plane);
+            let direct = intersect_mesh_with_plane(&deformed, plane).unwrap();
+            assert!(direct.has_loops());
+            assert_eq!(
+                ensure_contour_view_cache(&mut world, entity, &key).state,
+                RepresentationRequestState::Current
+            );
+            (key, direct)
+        });
+        crate::app::roi::request_mesh_voxel_cache_rebuild(&mut world, entity).unwrap();
+        for _ in 0..128 {
+            advance_roi_work(&mut world, None);
+            if world
+                .get::<&Roi>(entity)
+                .unwrap()
+                .is_cache_current(RoiCacheKind::Voxel)
+            {
+                break;
+            }
+        }
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert!(roi.is_cache_current(RoiCacheKind::Voxel));
+        assert!(matches!(
+            roi.authoritative_data,
+            RoiAuthoritativeData::Mesh(_)
+        ));
+        assert!(roi
+            .voxel_cache()
+            .unwrap()
+            .data
+            .raw_data
+            .iter()
+            .any(|value| *value != 0));
+        for (key, direct) in expected {
+            let cache = roi.contour_view_cache(&key).unwrap();
+            assert_eq!(cache.state, CacheViewState::Current);
+            assert_eq!(cache.data, direct);
         }
     }
 

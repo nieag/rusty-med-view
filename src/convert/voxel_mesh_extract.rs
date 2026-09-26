@@ -3,7 +3,7 @@ use crate::convert::{
     build_smooth_mesh_field, extract_smooth_mesh_chunk_from_field,
     extract_smooth_mesh_from_voxel_data, SmoothMeshExtractionError, SmoothMeshField,
 };
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoxelMeshExtractionError {
@@ -65,37 +65,15 @@ impl IncrementalChunkedMeshRebuild {
     }
 
     pub fn begin_for_voxel_aabb(
-        mut chunked: ChunkedMeshData,
+        chunked: ChunkedMeshData,
         voxel_data: &VoxelData,
-        min_inclusive: [u32; 3],
-        max_exclusive: [u32; 3],
+        _min_inclusive: [u32; 3],
+        _max_exclusive: [u32; 3],
     ) -> Result<Self, VoxelMeshExtractionError> {
-        validate_voxel_data(voxel_data)?;
-        if chunked.chunk_size == 0 {
-            return Err(VoxelMeshExtractionError::InvalidChunkSize);
-        }
-        if chunked.voxel_dimensions != voxel_data.geometry.dimensions {
-            return Self::begin_full(voxel_data, chunked.chunk_size);
-        }
-
-        let smooth_field =
-            build_smooth_mesh_field(voxel_data).map_err(VoxelMeshExtractionError::SmoothMesh)?;
-
-        let pending_keys = mesh_chunk_keys_for_voxel_aabb(
-            voxel_data.geometry.dimensions,
-            min_inclusive,
-            max_exclusive,
-            chunked.chunk_size,
-        );
-        chunked
-            .chunks
-            .retain(|chunk| !pending_keys.contains(&chunk.key));
-        Ok(Self {
-            result: chunked,
-            smooth_field,
-            pending_keys,
-            next_key: 0,
-        })
+        // The Euclidean SDF is global: a single changed seed can alter edge
+        // interpolation outside a fixed voxel halo. Rebuild all chunks until
+        // old/new field differences can identify the exact affected chunks.
+        Self::begin_full(voxel_data, chunked.chunk_size)
     }
 
     pub fn step(&mut self, voxel_data: &VoxelData) -> Result<bool, VoxelMeshExtractionError> {
@@ -158,13 +136,29 @@ impl ChunkedMeshData {
             vertices: Vec::with_capacity(vertex_count),
             faces: Vec::with_capacity(face_count),
         };
+        // Chunks index their shared boundary vertices independently. The editable
+        // mesh needs shared indices too, otherwise a connected brush tears seams.
+        let mut vertex_ids = HashMap::with_capacity(vertex_count);
         for chunk in &self.chunks {
-            let vertex_offset = merged.vertices.len() as u32;
-            merged.vertices.extend_from_slice(&chunk.data.vertices);
+            let remap: Vec<u32> = chunk
+                .data
+                .vertices
+                .iter()
+                .map(|vertex| {
+                    let key = vertex
+                        .world_mm
+                        .map(|value| if value == 0.0 { 0 } else { value.to_bits() });
+                    *vertex_ids.entry(key).or_insert_with(|| {
+                        let index = merged.vertices.len() as u32;
+                        merged.vertices.push(*vertex);
+                        index
+                    })
+                })
+                .collect();
             merged
                 .faces
                 .extend(chunk.data.faces.iter().map(|face| MeshFace {
-                    vertex_indices: face.vertex_indices.map(|index| index + vertex_offset),
+                    vertex_indices: face.vertex_indices.map(|index| remap[index as usize]),
                 }));
         }
         merged
@@ -211,38 +205,6 @@ pub fn rebuild_chunked_mesh_for_voxel_aabb(
         .into_result()
         .ok_or(VoxelMeshExtractionError::InvalidChunkSize)?;
     Ok(affected)
-}
-
-pub fn mesh_chunk_keys_for_voxel_aabb(
-    dimensions: [u32; 3],
-    min_inclusive: [u32; 3],
-    max_exclusive: [u32; 3],
-    chunk_size: u32,
-) -> Vec<MeshChunkKey> {
-    if chunk_size == 0 || dimensions.contains(&0) {
-        return Vec::new();
-    }
-
-    // A changed cell can alter a face owned by an adjacent cell. Expand one
-    // voxel before mapping to chunks so boundary faces are rebuilt once.
-    let min: [u32; 3] = std::array::from_fn(|axis| min_inclusive[axis].saturating_sub(1));
-    let max: [u32; 3] =
-        std::array::from_fn(|axis| max_exclusive[axis].saturating_add(1).min(dimensions[axis]));
-    if (0..3).any(|axis| min[axis] >= max[axis]) {
-        return Vec::new();
-    }
-
-    let first = min.map(|value| value / chunk_size);
-    let last: [u32; 3] = std::array::from_fn(|axis| (max[axis] - 1) / chunk_size);
-    let mut keys = Vec::new();
-    for z in first[2]..=last[2] {
-        for y in first[1]..=last[1] {
-            for x in first[0]..=last[0] {
-                keys.push(MeshChunkKey { index: [x, y, z] });
-            }
-        }
-    }
-    keys
 }
 
 fn validate_voxel_data(voxel_data: &VoxelData) -> Result<(), VoxelMeshExtractionError> {
@@ -524,6 +486,22 @@ mod tests {
         triangles
     }
 
+    fn canonical_triangle_bits(mesh: &MeshData) -> Vec<[[u32; 3]; 3]> {
+        let mut triangles = mesh
+            .faces
+            .iter()
+            .map(|face| {
+                let mut points = face
+                    .vertex_indices
+                    .map(|index| mesh.vertices[index as usize].world_mm.map(f32::to_bits));
+                points.sort();
+                points
+            })
+            .collect::<Vec<_>>();
+        triangles.sort();
+        triangles
+    }
+
     #[test]
     fn test_chunked_extraction_matches_full_mesh_across_chunk_boundaries() {
         let dimensions = [5, 3, 2];
@@ -551,6 +529,222 @@ mod tests {
     }
 
     #[test]
+    fn test_chunk_seams_share_exact_vertices_on_anisotropic_curved_surface() {
+        let dimensions = [9; 3];
+        let mut raw_data = vec![0; voxel_cell_count(dimensions)];
+        for z in 0..9 {
+            for y in 0..9 {
+                for x in 0..9 {
+                    let radius_squared: i32 = [x, y, z].map(|v| (v as i32 - 4).pow(2)).iter().sum();
+                    raw_data[voxel_linear_index(dimensions, x, y, z)] =
+                        u8::from(radius_squared <= 12);
+                }
+            }
+        }
+        for spacing in [[0.7, 1.3, 2.1], [3.0, 0.5, 0.9]] {
+            let voxel = VoxelData {
+                geometry: geometry(
+                    dimensions,
+                    spacing,
+                    [0.0; 3],
+                    Quat::from_rotation_y(0.4).to_array(),
+                ),
+                raw_data: raw_data.clone(),
+            };
+            let full = extract_mesh_from_voxel_data(&voxel).unwrap();
+            for chunk_size in [1, 2, 3, 4] {
+                let merged = extract_chunked_mesh_from_voxel_data(&voxel, chunk_size)
+                    .unwrap()
+                    .merged_mesh();
+                assert_eq!(
+                    merged.vertices.len(),
+                    full.vertices.len(),
+                    "spacing={spacing:?}, chunk={chunk_size}"
+                );
+                crate::convert::validate_mesh_for_voxelization(&merged).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "chunk topology stress QA"]
+    fn test_random_chunked_masks_match_full_mesh_and_roundtrip() {
+        let dimensions = [3; 3];
+        let mut seed = 0x5eed_u32;
+        for case in 0..1024 {
+            let mut raw_data = vec![0; voxel_cell_count(dimensions)];
+            for voxel in &mut raw_data {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                *voxel = u8::from(seed & 1 != 0);
+            }
+            let source = VoxelData {
+                geometry: geometry(
+                    dimensions,
+                    [0.7, 1.3, 2.1],
+                    [10.0, 20.0, 30.0],
+                    Quat::from_rotation_y(0.4).to_array(),
+                ),
+                raw_data,
+            };
+            let full = extract_mesh_from_voxel_data(&source).unwrap();
+            for chunk_size in [1, 2] {
+                let merged = extract_chunked_mesh_from_voxel_data(&source, chunk_size)
+                    .unwrap()
+                    .merged_mesh();
+                assert_eq!(
+                    canonical_triangle_bits(&merged),
+                    canonical_triangle_bits(&full),
+                    "case={case}, chunk={chunk_size}"
+                );
+                let rebuilt = crate::convert::voxelize_mesh_to_voxel_data(&merged, source.geometry)
+                    .unwrap_or_else(|error| panic!("case={case}, chunk={chunk_size}: {error:?}"));
+                assert_eq!(
+                    rebuilt.raw_data, source.raw_data,
+                    "case={case}, chunk={chunk_size}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "incremental chunk topology stress QA"]
+    fn test_random_single_voxel_updates_match_full_rebuild() {
+        let dimensions = [5; 3];
+        let changed = [2, 2, 2];
+        let changed_index = voxel_linear_index(dimensions, changed[0], changed[1], changed[2]);
+        let mut seed = 0x51ce_u32;
+        for case in 0..256 {
+            let mut raw_data = vec![0; voxel_cell_count(dimensions)];
+            for voxel in &mut raw_data {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                *voxel = u8::from(seed & if case % 2 == 0 { 1 } else { 7 } == 0);
+            }
+            let mut source = VoxelData {
+                geometry: geometry(
+                    dimensions,
+                    [0.7, 1.3, 2.1],
+                    [10.0, 20.0, 30.0],
+                    Quat::from_rotation_y(0.4).to_array(),
+                ),
+                raw_data,
+            };
+            for chunk_size in [1, 2] {
+                let mut chunked =
+                    extract_chunked_mesh_from_voxel_data(&source, chunk_size).unwrap();
+                source.raw_data[changed_index] ^= 1;
+                rebuild_chunked_mesh_for_voxel_aabb(
+                    &mut chunked,
+                    &source,
+                    changed,
+                    changed.map(|value| value + 1),
+                )
+                .unwrap();
+                let full = extract_mesh_from_voxel_data(&source).unwrap();
+                let actual = canonical_triangle_bits(&chunked.merged_mesh());
+                let expected = canonical_triangle_bits(&full);
+                assert!(
+                    actual == expected,
+                    "case={case}, chunk={chunk_size}, occupied={:?}, triangles={} vs {}",
+                    source
+                        .raw_data
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, value)| (*value != 0).then_some(index))
+                        .collect::<Vec<_>>(),
+                    actual.len(),
+                    expected.len()
+                );
+                source.raw_data[changed_index] ^= 1;
+            }
+        }
+    }
+
+    #[test]
+    fn test_dirty_sdf_rebuild_updates_chunks_beyond_one_voxel_halo() {
+        let dimensions = [5; 3];
+        let mut raw_data = vec![0; voxel_cell_count(dimensions)];
+        for index in [
+            7, 33, 34, 47, 57, 67, 73, 75, 81, 83, 86, 89, 100, 106, 115, 118, 123,
+        ] {
+            raw_data[index] = 1;
+        }
+        let mut source = VoxelData {
+            geometry: geometry(
+                dimensions,
+                [0.7, 1.3, 2.1],
+                [10.0, 20.0, 30.0],
+                Quat::from_rotation_y(0.4).to_array(),
+            ),
+            raw_data,
+        };
+        let mut chunked = extract_chunked_mesh_from_voxel_data(&source, 1).unwrap();
+        source.raw_data[voxel_linear_index(dimensions, 2, 2, 2)] = 1;
+        rebuild_chunked_mesh_for_voxel_aabb(&mut chunked, &source, [2; 3], [3; 3]).unwrap();
+        let full = extract_mesh_from_voxel_data(&source).unwrap();
+        assert_eq!(
+            canonical_triangle_bits(&chunked.merged_mesh()),
+            canonical_triangle_bits(&full)
+        );
+    }
+
+    #[test]
+    #[ignore = "liver dirty-rebuild timing QA"]
+    fn test_liver_dirty_mesh_rebuild_matches_clean_full_rebuild() {
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/qa_samples/liver_0_label.nii"
+        ))
+        .unwrap();
+        let label =
+            crate::nifti_loader::load_label_from_bytes(&bytes, "liver_0_label.nii".into()).unwrap();
+        let mut voxels = VoxelData {
+            geometry: geometry(
+                label.dimensions,
+                label.spacing,
+                label.origin,
+                label.orientation,
+            ),
+            raw_data: label.data,
+        };
+        let base = extract_chunked_mesh_from_voxel_data(&voxels, DEFAULT_MESH_CHUNK_SIZE).unwrap();
+        let changed_index = voxels
+            .raw_data
+            .iter()
+            .position(|value| *value != 0)
+            .unwrap();
+        voxels.raw_data[changed_index] = 0;
+        let [width, height, _] = voxels.geometry.dimensions;
+        let changed = [
+            changed_index as u32 % width,
+            (changed_index as u32 / width) % height,
+            changed_index as u32 / (width * height),
+        ];
+        let setup_started = std::time::Instant::now();
+        let mut work = IncrementalChunkedMeshRebuild::begin_for_voxel_aabb(
+            base,
+            &voxels,
+            changed,
+            changed.map(|value| value + 1),
+        )
+        .unwrap();
+        let setup_duration = setup_started.elapsed();
+        let chunk_started = std::time::Instant::now();
+        while !work.step(&voxels).unwrap() {}
+        let chunk_duration = chunk_started.elapsed();
+        let rebuilt = work.into_result().unwrap();
+        eprintln!("liver dirty mesh rebuild: setup={setup_duration:?}, chunks={chunk_duration:?}");
+        let clean = extract_chunked_mesh_from_voxel_data(&voxels, DEFAULT_MESH_CHUNK_SIZE).unwrap();
+        assert_eq!(
+            canonical_triangle_bits(&rebuilt.merged_mesh()),
+            canonical_triangle_bits(&clean.merged_mesh())
+        );
+    }
+
+    #[test]
     fn test_incremental_chunk_rebuild_matches_clean_full_rebuild() {
         let dimensions = [6, 2, 1];
         let mut voxel = voxel_data_with_single_occupied(
@@ -562,13 +756,6 @@ mod tests {
         );
         voxel.raw_data[voxel_linear_index(dimensions, 5, 0, 0)] = 1;
         let mut chunked = extract_chunked_mesh_from_voxel_data(&voxel, 2).unwrap();
-        let untouched_before = chunked
-            .chunks
-            .iter()
-            .find(|chunk| chunk.key.index == [2, 0, 0])
-            .unwrap()
-            .clone();
-
         voxel.raw_data[voxel_linear_index(dimensions, 2, 0, 0)] = 1;
         let rebuilt =
             rebuild_chunked_mesh_for_voxel_aabb(&mut chunked, &voxel, [2, 0, 0], [3, 1, 1])
@@ -577,15 +764,7 @@ mod tests {
 
         assert_eq!(
             rebuilt.iter().map(|key| key.index).collect::<Vec<_>>(),
-            vec![[0, 0, 0], [1, 0, 0]]
-        );
-        assert_eq!(
-            chunked
-                .chunks
-                .iter()
-                .find(|chunk| chunk.key.index == [2, 0, 0])
-                .unwrap(),
-            &untouched_before
+            vec![[0, 0, 0], [1, 0, 0], [2, 0, 0]]
         );
         assert_eq!(
             canonical_triangles(&chunked.merged_mesh()),
@@ -620,7 +799,7 @@ mod tests {
     }
 
     #[test]
-    fn test_incremental_dirty_rebuild_preserves_untouched_chunks() {
+    fn test_incremental_dirty_rebuild_scans_all_chunks_for_global_sdf() {
         let dimensions = [48, 2, 1];
         let mut voxel = voxel_data_with_single_occupied(
             dimensions,
@@ -631,13 +810,6 @@ mod tests {
         );
         voxel.raw_data[voxel_linear_index(dimensions, 40, 0, 0)] = 1;
         let base = extract_chunked_mesh_from_voxel_data(&voxel, 16).unwrap();
-        let untouched = base
-            .chunks
-            .iter()
-            .find(|chunk| chunk.key.index == [2, 0, 0])
-            .unwrap()
-            .clone();
-
         voxel.raw_data[voxel_linear_index(dimensions, 16, 0, 0)] = 1;
         let mut rebuild = IncrementalChunkedMeshRebuild::begin_for_voxel_aabb(
             base,
@@ -652,30 +824,13 @@ mod tests {
                 .iter()
                 .map(|key| key.index)
                 .collect::<Vec<_>>(),
-            vec![[0, 0, 0], [1, 0, 0]]
+            vec![[0, 0, 0], [1, 0, 0], [2, 0, 0]]
         );
         while !rebuild.step(&voxel).unwrap() {}
         let result = rebuild.into_result().unwrap();
-
-        assert_eq!(
-            result
-                .chunks
-                .iter()
-                .find(|chunk| chunk.key.index == [2, 0, 0])
-                .unwrap(),
-            &untouched
-        );
         assert_eq!(
             canonical_triangles(&result.merged_mesh()),
             canonical_triangles(&extract_mesh_from_voxel_data(&voxel).unwrap())
         );
-    }
-
-    #[test]
-    fn test_dirty_voxel_aabb_includes_neighbor_chunk_for_face_ownership() {
-        let keys = mesh_chunk_keys_for_voxel_aabb([8, 4, 4], [2, 1, 1], [3, 2, 2], 2);
-        assert!(keys.iter().any(|key| key.index == [0, 0, 0]));
-        assert!(keys.iter().any(|key| key.index == [1, 0, 0]));
-        assert!(!keys.iter().any(|key| key.index[0] == 2));
     }
 }

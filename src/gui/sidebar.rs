@@ -465,7 +465,8 @@ pub fn draw_sidebar(
                 })
                 .unwrap_or((false, 12.0, 1.0));
             let radius_changed = ui
-                .add(egui::Slider::new(&mut brush_radius_mm, 1.0..=50.0).text("Brush radius mm"))
+                .add(egui::Slider::new(&mut brush_radius_mm, 1.0..=50.0).text("Minimum radius mm"))
+                .on_hover_text("The affected surface area grows during long drags. This is the minimum radius; disconnected surfaces remain unaffected.")
                 .changed();
             let strength_changed = ui
                 .add(egui::Slider::new(&mut brush_strength, 0.1..=2.0).text("Strength"))

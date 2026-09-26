@@ -73,6 +73,8 @@ fn transform_axis(values: &mut [f32], dimensions: [u32; 3], spacing_mm: f32, axi
     }
     let mut line = vec![0.0; line_len];
     let mut transformed = vec![0.0; line_len];
+    let mut sites = vec![0; line_len];
+    let mut boundaries = vec![0.0; line_len + 1];
     let other_axes = match axis {
         0 => [1, 2],
         1 => [0, 2],
@@ -89,7 +91,13 @@ fn transform_axis(values: &mut [f32], dimensions: [u32; 3], spacing_mm: f32, axi
                 index[other_axes[1]] = second;
                 line[coordinate as usize] = values[linear_index(index, dimensions)];
             }
-            distance_transform_1d(&line, spacing_mm, &mut transformed);
+            distance_transform_1d(
+                &line,
+                spacing_mm,
+                &mut transformed,
+                &mut sites,
+                &mut boundaries,
+            );
             for coordinate in 0..dimensions[axis] {
                 let mut index = [0; 3];
                 index[axis] = coordinate;
@@ -101,14 +109,18 @@ fn transform_axis(values: &mut [f32], dimensions: [u32; 3], spacing_mm: f32, axi
     }
 }
 
-fn distance_transform_1d(input: &[f32], spacing_mm: f32, output: &mut [f32]) {
+fn distance_transform_1d(
+    input: &[f32],
+    spacing_mm: f32,
+    output: &mut [f32],
+    sites: &mut [usize],
+    boundaries: &mut [f32],
+) {
     let Some(first_seed) = input.iter().position(|value| *value < DISTANCE_INFINITY) else {
         output.fill(DISTANCE_INFINITY);
         return;
     };
     let len = input.len();
-    let mut sites = vec![0usize; len];
-    let mut boundaries = vec![0.0f32; len + 1];
     let mut count = 0usize;
     sites[0] = first_seed;
     boundaries[0] = f32::NEG_INFINITY;

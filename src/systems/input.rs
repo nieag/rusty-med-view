@@ -134,6 +134,11 @@ pub fn sys_handle_mouse_button(
                 entities,
                 "Committed mesh deformation; build voxels explicitly when needed.".to_string(),
             ),
+            Err(crate::app::roi::MeshMutationError::InvalidMesh(error)) => set_status_message(
+                world,
+                entities,
+                format!("Deformation rejected; previous mesh kept. Try a shorter drag or larger brush. {error:?}."),
+            ),
             Err(error) => set_status_message(
                 world,
                 entities,
