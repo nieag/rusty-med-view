@@ -382,3 +382,4 @@ Checkpoint commits:
 - `05312e8` Perf: defer mesh voxel resampling
 - `be31f42` QA: identify completed ROI job kind
 - `fcb9487` Fix: keep open meshes out of voxel resampling
+- `0c54f0a` Fix: stabilize mesh authority and SDF rebuilds
