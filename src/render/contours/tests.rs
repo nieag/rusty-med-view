@@ -215,11 +215,11 @@ fn test_prepare_contour_render_data_emits_vertices_for_matching_slice() {
     assert!(multi_roi_data
         .vertices
         .iter()
-        .any(|vertex| vertex.color == [0.1, 0.7, 0.2, 0.4]));
+        .any(|vertex| vertex.color == [0.1, 0.7, 0.2, 0.8]));
     let second_roi_vertex_count = multi_roi_data
         .vertices
         .iter()
-        .filter(|vertex| vertex.color == [0.1, 0.7, 0.2, 0.4])
+        .filter(|vertex| vertex.color == [0.1, 0.7, 0.2, 0.8])
         .count();
     assert_eq!(second_roi_vertex_count, 18);
 

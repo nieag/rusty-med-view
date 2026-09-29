@@ -543,10 +543,8 @@ pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> Con
             ) else {
                 continue;
             };
-            let mut roi_color = roi.metadata.color;
-            if let Ok(settings) = world.get::<&LayerSettings>(*roi_entity) {
-                roi_color[3] *= settings.opacity;
-            }
+            // Outlines are opaque: layer opacity controls the voxel fill, not the contour.
+            let roi_color = roi.metadata.color;
             append_roi_contour_vertices(
                 &mut vertices,
                 *roi_entity,

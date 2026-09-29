@@ -78,9 +78,14 @@ pub fn label_roi_name(filename: &str, label: u8, label_count: usize) -> String {
     }
 }
 
-/// ROI colour for a label, matching the overlay colormap.
+/// ROI colour for a label: the complement of the label's overlay colour. Contours and the 3D
+/// mesh are drawn in the ROI colour on top of the voxel overlay, so a colour equal to the overlay
+/// would make them invisible; the complement stands out from both the overlay and the image, and
+/// still differs per label.
 pub fn label_color(label: u8) -> [f32; 4] {
-    label_lut_rgba(label).map(|channel| f32::from(channel) / 255.0)
+    let [r, g, b, _] = label_lut_rgba(label);
+    let complement = |channel: u8| 1.0 - f32::from(channel) / 255.0;
+    [complement(r), complement(g), complement(b), 1.0]
 }
 
 #[cfg(test)]
@@ -136,13 +141,20 @@ mod tests {
     }
 
     #[test]
-    fn test_label_color_matches_the_overlay_colormap() {
+    fn test_label_color_contrasts_with_the_overlay_colormap() {
         assert_eq!(label_lut_rgba(0), [0, 0, 0, 0]);
         assert_eq!(label_lut_rgba(1), [123, 231, 73, 255]);
+        let color = label_color(1);
         assert_eq!(
-            label_color(1),
-            [123.0 / 255.0, 231.0 / 255.0, 73.0 / 255.0, 1.0]
+            color,
+            [
+                1.0 - 123.0 / 255.0,
+                1.0 - 231.0 / 255.0,
+                1.0 - 73.0 / 255.0,
+                1.0
+            ]
         );
+        assert_ne!(color[..3], [123.0 / 255.0, 231.0 / 255.0, 73.0 / 255.0]);
         assert_ne!(label_color(1), label_color(2));
     }
 
