@@ -587,54 +587,7 @@ fn test_create_empty_contour_roi_sets_active_roi_to_new_entity() {
 }
 
 #[test]
-fn test_promote_voxel_to_contour_authority_preserves_roi_and_rebases_voxel_cache() {
-    let mut world = World::new();
-    let entity = spawn_sparse_voxel_roi(&mut world);
-    let (roi_id, name, source_voxel) = {
-        let roi = world.get::<&Roi>(entity).unwrap();
-        (
-            roi.metadata.roi_id,
-            roi.metadata.name.clone(),
-            roi.voxel_cache().unwrap().data.clone(),
-        )
-    };
-    let roi_count_before = world.query::<&Roi>().iter().count();
-
-    promote_voxel_roi_to_contour_authority(&mut world, entity, PlaneFamily::Axial).unwrap();
-
-    assert_eq!(world.query::<&Roi>().iter().count(), roi_count_before);
-    let roi = world.get::<&Roi>(entity).unwrap();
-    assert_eq!(roi.metadata.roi_id, roi_id);
-    assert_eq!(roi.metadata.name, name);
-    assert_eq!(roi.primary_representation(), PrimaryRepresentation::Contour);
-    assert_eq!(
-        roi.contour_data().unwrap().active_plane_family,
-        PlaneFamily::Axial
-    );
-    assert!(roi.contour_data().unwrap().has_loops());
-    assert_eq!(roi.dirty_state.authoritative.shape, 2);
-    assert_eq!(roi.voxel_cache().unwrap().data, source_voxel);
-    assert!(roi.is_cache_current(RoiCacheKind::Voxel));
-    assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildMeshCache));
-}
-
-#[test]
-fn test_promote_voxel_to_contour_authority_rejects_locked_roi() {
-    let mut world = World::new();
-    let entity = spawn_sparse_voxel_roi(&mut world);
-    world.get::<&mut Roi>(entity).unwrap().metadata.is_locked = true;
-
-    let result = promote_voxel_roi_to_contour_authority(&mut world, entity, PlaneFamily::Axial);
-
-    assert_eq!(result, Err(VoxelContourPromotionError::Locked));
-    assert_eq!(
-        world.get::<&Roi>(entity).unwrap().primary_representation(),
-        PrimaryRepresentation::Voxel
-    );
-}
-
-#[test]
-fn test_promote_current_mesh_cache_to_authority_preserves_roi_and_voxel_cache() {
+fn test_convert_to_mesh_preserves_roi_and_voxel_cache() {
     let mut world = World::new();
     let entity = spawn_sparse_voxel_roi(&mut world);
     let mesh = closed_tetra_mesh_data();
@@ -653,7 +606,7 @@ fn test_promote_current_mesh_cache_to_authority_preserves_roi_and_voxel_cache() 
     };
     let roi_count_before = world.query::<&Roi>().iter().count();
 
-    promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
+    convert_to_mesh(&mut world, entity).unwrap();
 
     assert_eq!(world.query::<&Roi>().iter().count(), roi_count_before);
     let roi = world.get::<&Roi>(entity).unwrap();
@@ -668,7 +621,7 @@ fn test_promote_current_mesh_cache_to_authority_preserves_roi_and_voxel_cache() 
 }
 
 #[test]
-fn test_promote_current_mesh_cache_to_authority_rejects_stale_cache() {
+fn test_convert_to_mesh_rejects_a_stale_mesh_cache() {
     let mut world = World::new();
     let entity = spawn_sparse_voxel_roi(&mut world);
     {
@@ -680,62 +633,13 @@ fn test_promote_current_mesh_cache_to_authority_rejects_stale_cache() {
         roi.dirty_state.mesh.dirty = true;
     }
 
-    let result = promote_current_mesh_cache_to_authority(&mut world, entity);
+    let result = convert_to_mesh(&mut world, entity);
 
-    assert_eq!(
-        result,
-        Err(MeshAuthorityPromotionError::MeshCacheNotCurrent)
-    );
+    assert_eq!(result, Err(SwitchError::SourceUnavailable));
     assert_eq!(
         world.get::<&Roi>(entity).unwrap().primary_representation(),
         PrimaryRepresentation::Voxel
     );
-}
-
-#[test]
-fn test_authority_roundtrip_voxel_contour_voxel_preserves_entity() {
-    let mut world = World::new();
-    let entity = spawn_sparse_voxel_roi(&mut world);
-    let roi_id = world.get::<&Roi>(entity).unwrap().metadata.roi_id;
-
-    promote_roi_to_contour_authority(&mut world, entity, PlaneFamily::Axial).unwrap();
-    promote_current_voxel_cache_to_authority(&mut world, entity).unwrap();
-
-    let roi = world.get::<&Roi>(entity).unwrap();
-    assert_eq!(roi.metadata.roi_id, roi_id);
-    assert_eq!(roi.primary_representation(), PrimaryRepresentation::Voxel);
-    assert!(matches!(roi.body, RoiBody::Voxel(_)));
-    assert!(roi.is_cache_current(RoiCacheKind::Voxel));
-    assert_eq!(roi.dirty_state.authoritative.shape, 3);
-}
-
-#[test]
-fn test_authority_roundtrip_mesh_voxel_mesh_reuses_current_mesh() {
-    let mut world = World::new();
-    let entity = spawn_sparse_voxel_roi(&mut world);
-    let mesh = closed_tetra_mesh_data();
-    {
-        let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        roi.session_caches.mesh = Some(MeshCache {
-            data: mesh.clone(),
-            chunks: None,
-        });
-        roi.dirty_state.mesh.dirty = false;
-        roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
-    }
-
-    promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
-    promote_current_voxel_cache_to_authority(&mut world, entity).unwrap();
-    assert!(world
-        .get::<&Roi>(entity)
-        .unwrap()
-        .is_cache_current(RoiCacheKind::Mesh));
-    promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
-
-    let roi = world.get::<&Roi>(entity).unwrap();
-    assert_eq!(roi.primary_representation(), PrimaryRepresentation::Mesh);
-    assert_eq!(roi.mesh_data(), Some(&mesh));
-    assert_eq!(roi.dirty_state.authoritative.shape, 4);
 }
 
 #[test]
@@ -976,7 +880,7 @@ fn test_mesh_rebuild_contract_builds_voxel_then_enables_contour_refresh() {
         roi.dirty_state.mesh.dirty = false;
         roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     }
-    promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
+    convert_to_mesh(&mut world, entity).unwrap();
 
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
@@ -1021,7 +925,7 @@ fn test_mesh_voxel_rebuild_keeps_cache_stale_until_incremental_work_completes() 
         roi.dirty_state.mesh.dirty = false;
         roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     }
-    promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
+    convert_to_mesh(&mut world, entity).unwrap();
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         roi.mark_cache_dirty(RoiCacheKind::Voxel);
@@ -1092,7 +996,7 @@ fn test_mesh_authority_keeps_direct_plane_contour_after_voxel_rebuild() {
         roi.dirty_state.mesh.dirty = false;
         roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     }
-    promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
+    convert_to_mesh(&mut world, entity).unwrap();
     let editor = world.spawn((EditorState::default(),));
     world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(entity);
     let deformed = crate::systems::mesh_editing::deform_mesh_surface_brush(
@@ -1287,7 +1191,7 @@ fn test_rotated_anisotropic_roi_keeps_direct_contours_through_mesh_resample() {
         .get::<&Roi>(entity)
         .unwrap()
         .is_cache_current(RoiCacheKind::Mesh));
-    promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
+    convert_to_mesh(&mut world, entity).unwrap();
     let original = world
         .get::<&Roi>(entity)
         .unwrap()
@@ -1807,8 +1711,12 @@ fn test_set_active_contour_plane_family_updates_empty_contour_and_marks_derived_
         roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     }
 
-    let result = set_active_contour_plane_family(&mut world, entity, PlaneFamily::Coronal);
-    assert_eq!(result, Ok(()));
+    let result = ensure_editable(
+        &mut world,
+        entity,
+        EditTarget::Contour(PlaneFamily::Coronal),
+    );
+    assert_eq!(result, Ok(Readiness::Ready));
 
     let roi = world.get::<&Roi>(entity).unwrap();
     let contour = roi.contour_data().unwrap();
@@ -1821,7 +1729,7 @@ fn test_set_active_contour_plane_family_updates_empty_contour_and_marks_derived_
 }
 
 #[test]
-fn test_set_active_contour_plane_family_is_noop_when_unchanged() {
+fn test_ensure_editable_is_a_noop_when_the_family_is_unchanged() {
     let mut world = World::new();
     let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Sagittal, false);
     {
@@ -1835,8 +1743,12 @@ fn test_set_active_contour_plane_family_is_noop_when_unchanged() {
         roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     }
 
-    let result = set_active_contour_plane_family(&mut world, entity, PlaneFamily::Sagittal);
-    assert_eq!(result, Ok(()));
+    let result = ensure_editable(
+        &mut world,
+        entity,
+        EditTarget::Contour(PlaneFamily::Sagittal),
+    );
+    assert_eq!(result, Ok(Readiness::Ready));
 
     let roi = world.get::<&Roi>(entity).unwrap();
     let contour = roi.contour_data().unwrap();
@@ -1846,31 +1758,6 @@ fn test_set_active_contour_plane_family_is_noop_when_unchanged() {
     assert!(!roi.is_cache_dirty(RoiCacheKind::Voxel));
     assert!(!roi.is_cache_dirty(RoiCacheKind::Contour));
     assert!(!roi.is_cache_dirty(RoiCacheKind::Mesh));
-}
-
-#[test]
-fn test_set_active_contour_plane_family_rejects_non_empty_contour() {
-    let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
-
-    let result = set_active_contour_plane_family(&mut world, entity, PlaneFamily::Coronal);
-    assert_eq!(
-        result,
-        Err(ContourPlaneFamilySwitchError::RequiresConversion)
-    );
-
-    let roi = world.get::<&Roi>(entity).unwrap();
-    let contour = roi.contour_data().unwrap();
-    assert_eq!(contour.active_plane_family, PlaneFamily::Axial);
-}
-
-#[test]
-fn test_set_active_contour_plane_family_rejects_voxel_roi() {
-    let mut world = World::new();
-    let entity = spawn_test_roi(&mut world);
-
-    let result = set_active_contour_plane_family(&mut world, entity, PlaneFamily::Oblique);
-    assert_eq!(result, Err(ContourPlaneFamilySwitchError::NotContourRoi));
 }
 
 #[test]
@@ -2468,27 +2355,6 @@ fn test_request_contour_view_state_reports_active_family_editable() {
     let status = request_contour_view_state(&world, entity, &key);
     assert_eq!(status.request.state, RepresentationRequestState::Current);
     assert!(status.editable);
-    assert!(!status.promotable);
-}
-
-#[test]
-fn test_request_contour_view_state_reports_derived_promotable_when_current() {
-    let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
-    seed_current_voxel_cache_for_contour_roi(&mut world, entity);
-    let key = ContourViewKey::from_plane(test_plane_definition(PlaneFamily::Coronal));
-    {
-        let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let gen = roi.dirty_state.authoritative;
-        let mut promoted_data = roi.contour_data().unwrap().clone();
-        promoted_data.active_plane_family = PlaneFamily::Coronal;
-        roi.upsert_contour_view_cache(key.clone(), promoted_data, gen, CacheViewState::Current);
-    }
-
-    let status = request_contour_view_state(&world, entity, &key);
-    assert_eq!(status.request.state, RepresentationRequestState::Current);
-    assert!(!status.editable);
-    assert!(status.promotable);
 }
 
 #[test]
@@ -2515,7 +2381,6 @@ fn test_voxel_primary_roi_can_build_and_request_orthogonal_contour_view_cache() 
     let status = request_contour_view_state(&world, entity, &key);
     assert_eq!(status.request.state, RepresentationRequestState::Current);
     assert!(!status.editable);
-    assert!(!status.promotable);
 
     let roi = world.get::<&Roi>(entity).unwrap();
     let cache = roi
@@ -2713,87 +2578,6 @@ fn test_request_contour_view_state_reflects_voxel_stale_rebuilding_and_missing_s
 }
 
 #[test]
-fn test_promote_contour_view_to_authoritative_marks_other_caches_stale_and_rebuilds() {
-    let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
-    seed_current_voxel_cache_for_contour_roi(&mut world, entity);
-    let coronal_key = ContourViewKey::from_plane(test_plane_definition(PlaneFamily::Coronal));
-    let sagittal_key = ContourViewKey::from_plane(test_plane_definition(PlaneFamily::Sagittal));
-    {
-        let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let gen = roi.dirty_state.authoritative;
-        let mut coronal_data = roi.contour_data().unwrap().clone();
-        coronal_data.active_plane_family = PlaneFamily::Coronal;
-        roi.upsert_contour_view_cache(
-            coronal_key.clone(),
-            coronal_data,
-            gen,
-            CacheViewState::Current,
-        );
-        let mut sagittal_data = roi.contour_data().unwrap().clone();
-        sagittal_data.active_plane_family = PlaneFamily::Sagittal;
-        roi.upsert_contour_view_cache(
-            sagittal_key.clone(),
-            sagittal_data,
-            gen,
-            CacheViewState::Current,
-        );
-    }
-
-    let result = promote_contour_view_to_authoritative(&mut world, entity, &coronal_key);
-    assert_eq!(result, Ok(()));
-    let roi = world.get::<&Roi>(entity).unwrap();
-    let contour = roi.contour_data().unwrap();
-    assert_eq!(contour.active_plane_family, PlaneFamily::Coronal);
-    assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
-    assert!(roi.is_cache_dirty(RoiCacheKind::Mesh));
-    assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
-    assert_eq!(
-        roi.contour_view_cache(&sagittal_key).unwrap().state,
-        CacheViewState::Stale
-    );
-}
-
-#[test]
-fn test_promote_contour_view_rejects_stale_or_missing_cache() {
-    let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
-    let key = ContourViewKey::from_plane(test_plane_definition(PlaneFamily::Coronal));
-    let missing_result = promote_contour_view_to_authoritative(&mut world, entity, &key);
-    assert_eq!(missing_result, Err(ContourPromotionError::ViewCacheMissing));
-    {
-        let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let gen = roi.dirty_state.authoritative;
-        let mut promoted_data = roi.contour_data().unwrap().clone();
-        promoted_data.active_plane_family = PlaneFamily::Coronal;
-        roi.upsert_contour_view_cache(key.clone(), promoted_data, gen, CacheViewState::Stale);
-    }
-    let stale_result = promote_contour_view_to_authoritative(&mut world, entity, &key);
-    assert_eq!(
-        stale_result,
-        Err(ContourPromotionError::ViewCacheNotCurrent)
-    );
-
-    {
-        let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let mut promoted_data = roi.contour_data().unwrap().clone();
-        promoted_data.active_plane_family = PlaneFamily::Coronal;
-        roi.upsert_contour_view_cache(
-            key.clone(),
-            promoted_data,
-            Revision::from_shape(1),
-            CacheViewState::Current,
-        );
-        roi.dirty_state.authoritative = Revision::from_shape(2);
-    }
-    let generation_stale = promote_contour_view_to_authoritative(&mut world, entity, &key);
-    assert_eq!(
-        generation_stale,
-        Err(ContourPromotionError::ViewCacheNotCurrent)
-    );
-}
-
-#[test]
 fn test_request_contour_view_state_marks_generation_mismatch_stale() {
     let mut world = World::new();
     let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
@@ -2816,11 +2600,10 @@ fn test_request_contour_view_state_marks_generation_mismatch_stale() {
         status.request.reason.as_deref(),
         Some("contour_view_cache_generation_stale")
     );
-    assert!(!status.promotable);
 }
 
 #[test]
-fn test_oblique_contour_view_builds_current_and_can_be_promoted() {
+fn test_oblique_contour_view_builds_current_and_is_not_editable() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
     let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
@@ -2851,39 +2634,9 @@ fn test_oblique_contour_view_builds_current_and_can_be_promoted() {
     assert_eq!(build_status.state, RepresentationRequestState::Current);
     assert_eq!(status.request.state, RepresentationRequestState::Current);
     assert!(!status.editable);
-    assert!(status.promotable);
-
-    let (cached_data, generation) = {
-        let roi = world.get::<&Roi>(entity).unwrap();
-        (
-            roi.contour_view_cache(&key).unwrap().data.clone(),
-            roi.dirty_state.authoritative.shape,
-        )
-    };
-    assert!(cached_data.has_loops());
-    promote_contour_view_to_authoritative(&mut world, entity, &key).unwrap();
 
     let roi = world.get::<&Roi>(entity).unwrap();
-    assert_eq!(roi.contour_data(), Some(&cached_data));
-    assert_eq!(
-        roi.contour_data().unwrap().active_plane_family,
-        PlaneFamily::Oblique
-    );
-    assert_eq!(roi.dirty_state.authoritative.shape, generation + 1);
-    assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
-    assert!(roi.has_queued_job(RoiJobKind::RebuildVoxelCache));
-    drop(roi);
-
-    process_contour_voxel_rebuild_jobs(&mut world);
-    let roi = world.get::<&Roi>(entity).unwrap();
-    assert!(roi.is_cache_current(RoiCacheKind::Voxel));
-    assert!(roi
-        .voxel_cache()
-        .unwrap()
-        .data
-        .raw_data
-        .iter()
-        .any(|value| *value != 0));
+    assert!(roi.contour_view_cache(&key).unwrap().data.has_loops());
 }
 
 #[test]
@@ -2935,38 +2688,6 @@ fn test_replace_contour_data_marks_existing_derived_contour_views_stale() {
 }
 
 #[test]
-fn test_promotion_preserves_previous_active_family_as_stale_derived_cache() {
-    let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
-    seed_current_voxel_cache_for_contour_roi(&mut world, entity);
-    let coronal_key = ContourViewKey::from_plane(test_plane_definition(PlaneFamily::Coronal));
-    let previous_active_key = {
-        let roi = world.get::<&Roi>(entity).unwrap();
-        let contour = roi.contour_data().unwrap();
-        ContourViewKey::from_plane(contour.slices[0].plane)
-    };
-    {
-        let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let gen = roi.dirty_state.authoritative;
-        let mut promoted_data = roi.contour_data().unwrap().clone();
-        promoted_data.active_plane_family = PlaneFamily::Coronal;
-        roi.upsert_contour_view_cache(
-            coronal_key.clone(),
-            promoted_data,
-            gen,
-            CacheViewState::Current,
-        );
-    }
-
-    promote_contour_view_to_authoritative(&mut world, entity, &coronal_key).unwrap();
-    let roi = world.get::<&Roi>(entity).unwrap();
-    let preserved = roi
-        .contour_view_cache(&previous_active_key)
-        .expect("expected previous active family stale derived cache");
-    assert_eq!(preserved.state, CacheViewState::Stale);
-}
-
-#[test]
 #[ignore = "full liver mesh-to-voxel timing; run explicitly for milestone QA"]
 fn test_liver_explicit_voxel_rebuild_frame_timing() {
     let bytes = std::fs::read(concat!(
@@ -3004,7 +2725,7 @@ fn test_liver_explicit_voxel_rebuild_frame_timing() {
         roi.dirty_state.mesh.dirty = false;
         roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     }
-    promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
+    convert_to_mesh(&mut world, entity).unwrap();
     let seeds = mesh.faces[mesh.faces.len() / 2].vertex_indices;
     let anchor = mesh.vertices[seeds[0] as usize].world_mm;
     let deformed = crate::systems::mesh_editing::deform_mesh_surface_brush(
@@ -3323,7 +3044,7 @@ fn test_undo_without_an_active_roi_is_reported_not_guessed() {
 }
 
 #[test]
-fn test_history_is_capped_per_roi_and_clearing_one_roi_leaves_the_other() {
+fn test_history_is_capped_per_roi_and_one_rois_edits_leave_the_other_alone() {
     let mut world = World::new();
     let busy = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
     let quiet = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
@@ -3340,9 +3061,6 @@ fn test_history_is_capped_per_roi_and_clearing_one_roi_leaves_the_other() {
         MAX_ROI_EDIT_HISTORY
     );
     assert_eq!(world.get::<&Roi>(quiet).unwrap().history.undo.len(), 1);
-
-    clear_roi_edit_history_for_roi(&mut world, busy);
-    assert!(world.get::<&Roi>(busy).unwrap().history.undo.is_empty());
     assert_eq!(world.get::<&Roi>(quiet).unwrap().history.undo.len(), 1);
 }
 

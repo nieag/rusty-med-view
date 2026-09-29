@@ -9,17 +9,12 @@ pub mod scheduler;
 pub mod switch;
 
 pub use authority::{
-    promote_contour_view_to_authoritative, promote_current_mesh_cache_to_authority,
-    promote_current_voxel_cache_to_authority, promote_roi_to_contour_authority,
-    promote_voxel_roi_to_contour_authority, replace_contour_data, replace_contour_data_for_slice,
-    replace_mesh_data, request_mesh_voxel_cache_rebuild, set_active_contour_plane_family,
-    ContourMutationError, ContourPlaneFamilySwitchError, ContourPromotionError,
-    MeshAuthorityPromotionError, MeshMutationError, VoxelAuthorityPromotionError,
-    VoxelContourPromotionError,
+    replace_contour_data, replace_contour_data_for_slice, replace_mesh_data,
+    request_mesh_voxel_cache_rebuild, ContourMutationError, MeshMutationError,
 };
 pub use cache::CacheInstallError;
 pub use history::{
-    can_redo_roi_edit, can_undo_roi_edit, clear_roi_edit_history_for_roi, redo_roi_edit,
+    can_redo_roi_edit, can_undo_roi_edit, redo_roi_edit,
     replace_contour_data_for_slice_with_history, replace_contour_data_with_history,
     replace_mesh_data_with_history, undo_roi_edit, RoiEditHistoryError,
 };

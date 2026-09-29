@@ -269,7 +269,7 @@ impl Roi {
         *self.dirty_state.freshness_mut(kind) = CacheFreshness::invalidated();
     }
 
-    pub(crate) fn rebase_after_contour_promotion(
+    pub(crate) fn rebase_after_switch_to_contour(
         &mut self,
         source_voxel: VoxelData,
         replacement_mesh: Option<MeshCache>,
@@ -303,40 +303,7 @@ impl Roi {
         };
     }
 
-    pub(crate) fn rebase_after_voxel_promotion(
-        &mut self,
-        source_voxel: VoxelData,
-        retained_mesh: Option<MeshCache>,
-    ) {
-        let mesh_cache_is_current = retained_mesh.is_some();
-        if let Some(voxel_cache) = self.session_caches.voxel.as_mut() {
-            voxel_cache.data = source_voxel;
-        } else {
-            unreachable!("current voxel cache was checked before promotion");
-        }
-        self.session_caches.contour = None;
-        self.session_caches.mesh = retained_mesh;
-        self.session_caches.mesh_geometry_identity = self
-            .session_caches
-            .mesh
-            .as_ref()
-            .map(|_| self.reference_geometry().identity());
-
-        let revision = self.dirty_state.authoritative.next_shape();
-        self.dirty_state = RoiDirtyState {
-            authoritative_dirty: true,
-            authoritative: revision,
-            voxel: CacheFreshness::built_from(revision),
-            contour: CacheFreshness::invalidated(),
-            mesh: if mesh_cache_is_current {
-                CacheFreshness::built_from(revision)
-            } else {
-                CacheFreshness::invalidated()
-            },
-        };
-    }
-
-    pub(crate) fn rebase_after_mesh_promotion(&mut self, voxel_cache_is_current: bool) {
+    pub(crate) fn rebase_after_switch_to_mesh(&mut self, voxel_cache_is_current: bool) {
         self.validated_mesh_generation = None;
         self.session_caches.mesh = None;
         self.session_caches.mesh_geometry_identity = None;

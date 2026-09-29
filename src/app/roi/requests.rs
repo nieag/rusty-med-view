@@ -97,7 +97,6 @@ impl RepresentationRequestStatus {
 pub struct ContourRepresentationStatus {
     pub request: RepresentationRequestStatus,
     pub editable: bool,
-    pub promotable: bool,
 }
 
 pub fn cache_status(
@@ -179,18 +178,15 @@ pub fn request_contour_view_state(
         return ContourRepresentationStatus {
             request: RepresentationRequestStatus::blocked("roi_missing"),
             editable: false,
-            promotable: false,
         };
     };
     let contour = roi.contour_data();
-    let contour_primary = contour.is_some();
     let mesh_primary = matches!(&roi.body, RoiBody::Mesh(_));
     if let Some(contour) = contour {
         if contour.active_plane_family == view_key.family {
             return ContourRepresentationStatus {
                 request: RepresentationRequestStatus::current(),
                 editable: true,
-                promotable: false,
             };
         }
     }
@@ -202,14 +198,12 @@ pub fn request_contour_view_state(
                     "voxel_cache_rebuilding_for_contour_view",
                 ),
                 editable: false,
-                promotable: false,
             };
         }
         if roi.has_queued_job(RoiJobKind::RebuildVoxelCache) {
             return ContourRepresentationStatus {
                 request: RepresentationRequestStatus::queued("voxel_cache_queued_for_contour_view"),
                 editable: false,
-                promotable: false,
             };
         }
         if roi.voxel_cache().is_none() {
@@ -218,20 +212,17 @@ pub fn request_contour_view_state(
                     "voxel_cache_missing_for_contour_view",
                 ),
                 editable: false,
-                promotable: false,
             };
         }
         if roi.is_cache_dirty(RoiCacheKind::Voxel) || !roi.is_cache_current(RoiCacheKind::Voxel) {
             return ContourRepresentationStatus {
                 request: RepresentationRequestStatus::stale("voxel_cache_stale_for_contour_view"),
                 editable: false,
-                promotable: false,
             };
         }
         return ContourRepresentationStatus {
             request: RepresentationRequestStatus::rebuilding("contour_view_cache_missing"),
             editable: false,
-            promotable: false,
         };
     };
 
@@ -239,7 +230,6 @@ pub fn request_contour_view_state(
         return ContourRepresentationStatus {
             request: RepresentationRequestStatus::stale("contour_view_cache_generation_stale"),
             editable: false,
-            promotable: false,
         };
     }
 
@@ -272,11 +262,9 @@ pub fn request_contour_view_state(
             RepresentationRequestStatus::unsupported(reason.clone())
         }
     };
-    let promotable = contour_primary && request.state == RepresentationRequestState::Current;
     ContourRepresentationStatus {
         request,
         editable: false,
-        promotable,
     }
 }
 

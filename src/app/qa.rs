@@ -129,7 +129,6 @@ pub struct QaSnapshotViewport {
     pub contour_view_cache_state: String,
     pub mesh_cache_state: String,
     pub contour_editable: bool,
-    pub contour_promotable: bool,
     pub stale: bool,
     pub image_renderable: bool,
     pub overlay_renderable: bool,

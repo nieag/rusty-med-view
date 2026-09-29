@@ -555,7 +555,7 @@ fn test_contour_selection_converts_a_voxel_roi_to_contours_of_the_viewport_famil
 }
 
 #[test]
-fn test_contour_selection_in_another_family_waits_for_the_voxel_source() {
+fn test_contour_selection_gives_an_empty_contour_roi_the_viewport_family() {
     let mut world = World::new();
     let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     let roi_entity = spawn_test_contour_roi(&mut world, PlaneFamily::Coronal);
@@ -566,14 +566,15 @@ fn test_contour_selection_in_another_family_waits_for_the_voxel_source() {
     }
 
     let result = handle_contour_select_click(&mut world, &entities, [0.5, 0.5]);
-    assert_eq!(result, Err(ContourSelectClickError::SwitchPending));
+
+    assert_eq!(result, Ok(None));
     let roi = world.get::<&Roi>(roi_entity).unwrap();
     assert_eq!(
         roi.contour_data().map(|data| data.active_plane_family),
-        Some(PlaneFamily::Coronal),
-        "the ROI stays as it was until its voxel source is ready"
+        Some(PlaneFamily::Axial),
+        "an ROI with no contours takes the family of the view being edited"
     );
-    assert!(roi.job_state.pending_switch.is_some());
+    assert!(roi.history.undo.is_empty(), "nothing was converted");
 }
 
 #[test]

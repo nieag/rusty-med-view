@@ -105,46 +105,6 @@ fn spawn_mesh_edit_world() -> (World, AppEntities, hecs::Entity) {
 }
 
 #[test]
-fn test_mesh_brush_moves_anchor_and_preserves_outside_vertex() {
-    let mesh = MeshData {
-        vertices: vec![
-            MeshVertex {
-                world_mm: [0.0, 0.0, 0.0],
-            },
-            MeshVertex {
-                world_mm: [5.0, 0.0, 0.0],
-            },
-        ],
-        faces: Vec::new(),
-    };
-
-    let deformed = deform_mesh_with_brush(&mesh, [0.0; 3], [0.0, 2.0, 0.0], 2.0, 1.0);
-
-    assert_eq!(deformed.vertices[0].world_mm, [0.0, 2.0, 0.0]);
-    assert_eq!(deformed.vertices[1].world_mm, [5.0, 0.0, 0.0]);
-}
-
-#[test]
-fn test_mesh_brush_moves_duplicate_surface_vertices_identically() {
-    let mesh = MeshData {
-        vertices: vec![
-            MeshVertex {
-                world_mm: [1.0, 1.0, 1.0],
-            },
-            MeshVertex {
-                world_mm: [1.0, 1.0, 1.0],
-            },
-        ],
-        faces: Vec::new(),
-    };
-
-    let deformed = deform_mesh_with_brush(&mesh, [1.0; 3], [1.0, 0.0, 0.0], 4.0, 0.5);
-
-    assert_eq!(deformed.vertices[0], deformed.vertices[1]);
-    assert_eq!(deformed.vertices[0].world_mm, [1.5, 1.0, 1.0]);
-}
-
-#[test]
 fn test_surface_brush_does_not_cross_disconnected_nearby_surface() {
     let mesh = MeshData {
         vertices: vec![

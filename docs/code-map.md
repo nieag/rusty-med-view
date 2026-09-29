@@ -65,7 +65,8 @@ Useful files by concern:
 
 | Concern | Files |
 | --- | --- |
-| Primary authority and promotion | `app/roi/model.rs`, `app/roi/authority.rs` |
+| ROI body types and authoritative edits | `app/roi/model.rs`, `app/roi/authority.rs` |
+| Automatic representation switching (`ensure_editable`) | `app/roi/switch.rs` |
 | Cache state and validation | `app/roi/cache.rs`, `app/roi/requests.rs` |
 | Undo/redo and interaction previews | `app/roi/history.rs`, `app/roi/preview.rs` |
 | Work demand and job ordering | `app/roi/scheduler.rs`, `app/roi_runtime.rs` |

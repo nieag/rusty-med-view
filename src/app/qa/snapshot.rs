@@ -223,7 +223,6 @@ impl AppState {
                 let mut contour_view_cache_state = "unsupported".to_string();
                 let mut mesh_cache_state = "unsupported".to_string();
                 let mut contour_editable = false;
-                let mut contour_promotable = false;
                 let mut volume_slice_in_bounds = None;
                 let mut cursor_intersects_active_roi = None;
                 if let Some(active) = active_roi_entity {
@@ -266,7 +265,6 @@ impl AppState {
                             contour_view_cache_state =
                                 contour_req.request.state.as_str().to_string();
                             contour_editable = contour_req.editable;
-                            contour_promotable = contour_req.promotable;
                             if let Some(reason) = contour_req.request.reason {
                                 contour_blockers.push(reason);
                             }
@@ -459,7 +457,6 @@ impl AppState {
                     contour_view_cache_state: contour_view_cache_state.clone(),
                     mesh_cache_state: mesh_cache_state.clone(),
                     contour_editable,
-                    contour_promotable,
                     stale: [
                         voxel_cache_state.as_str(),
                         contour_view_cache_state.as_str(),

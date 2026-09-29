@@ -1,9 +1,5 @@
 use crate::app::components::*;
-pub use crate::app::roi::authority::{
-    ContourMutationError, ContourPlaneFamilySwitchError, ContourPromotionError,
-    MeshAuthorityPromotionError, MeshMutationError, VoxelAuthorityPromotionError,
-    VoxelContourPromotionError,
-};
+pub use crate::app::roi::authority::{ContourMutationError, MeshMutationError};
 pub use crate::app::roi::history::RoiEditHistoryError;
 use crate::app::roi::label_import::{
     check_label_import_budget, label_color, label_roi_name, present_label_ids, split_labelmap,

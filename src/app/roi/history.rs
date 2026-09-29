@@ -131,13 +131,6 @@ fn active_roi_history(world: &World, editor_entity: hecs::Entity) -> Option<RoiH
         .map(|roi| roi.history.clone())
 }
 
-/// Forgets every undo and redo step of one ROI.
-pub fn clear_roi_edit_history_for_roi(world: &mut World, roi_entity: hecs::Entity) {
-    if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-        roi.history.clear();
-    }
-}
-
 /// Undoes the active ROI's latest edit. Returns the ROI, which stays active.
 pub fn undo_roi_edit(
     world: &mut World,

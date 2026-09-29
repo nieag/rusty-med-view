@@ -6,14 +6,12 @@
 //! by [`complete_pending_switches`] once that data is current. Users never choose the switch.
 
 use crate::app::components::{
-    PrimaryRepresentation, Revision, Roi, RoiBody, RoiCacheKind, RoiEditSnapshot, RoiJobKind,
+    ContourBody, MeshBody, MeshCache, PrimaryRepresentation, Revision, Roi, RoiBody, RoiCacheKind,
+    RoiEditSnapshot, RoiJobKind, RoiJobState,
 };
-use crate::app::roi::authority::{
-    promote_current_mesh_cache_to_authority, promote_roi_to_contour_authority,
-    request_mesh_voxel_cache_rebuild, MeshAuthorityPromotionError, VoxelContourPromotionError,
-};
+use crate::app::roi::authority::request_mesh_voxel_cache_rebuild;
 use crate::app::roi::history::record_authority_change;
-use crate::convert::PlaneFamily;
+use crate::convert::{extract_contours_from_voxel_data, PlaneFamily, VoxelContourExtractionError};
 use hecs::World;
 
 /// What an editing tool needs the ROI to be authoritative in.
@@ -81,9 +79,10 @@ pub enum SwitchError {
     Locked,
     /// Oblique views are derived per-slice views and cannot be edited.
     UnsupportedTarget,
+    /// The voxel or mesh form the conversion starts from is missing or out of date.
     SourceUnavailable,
-    Contour(VoxelContourPromotionError),
-    Mesh(MeshAuthorityPromotionError),
+    ExtractionFailed(VoxelContourExtractionError),
+    EmptyMesh,
     MeshInvalid,
 }
 
@@ -94,8 +93,8 @@ impl SwitchError {
             Self::Locked => "The ROI is locked.".to_string(),
             Self::UnsupportedTarget => "Oblique views cannot be edited.".to_string(),
             Self::SourceUnavailable => "The ROI could not be prepared for editing.".to_string(),
-            Self::Contour(error) => format!("Contour conversion failed: {error:?}."),
-            Self::Mesh(error) => format!("Mesh conversion failed: {error:?}."),
+            Self::ExtractionFailed(error) => format!("Contour extraction failed: {error:?}."),
+            Self::EmptyMesh => "The ROI has no surface to edit.".to_string(),
             Self::MeshInvalid => "The mesh is not a closed surface.".to_string(),
         }
     }
@@ -135,6 +134,12 @@ pub fn ensure_editable(
     if locked {
         return Err(SwitchError::Locked);
     }
+    if let EditTarget::Contour(family) = target {
+        if set_family_of_empty_contour_roi(world, roi_entity, family) {
+            set_pending(world, roi_entity, None);
+            return Ok(Readiness::Ready);
+        }
+    }
     let wanted = PendingSwitch {
         target,
         source: source_revision,
@@ -156,6 +161,26 @@ pub fn ensure_editable(
     let report = convert(world, roi_entity, target)?;
     set_pending(world, roi_entity, None);
     Ok(Readiness::Switched(report))
+}
+
+/// A contour ROI with no loops has nothing to convert: it just takes the new family.
+fn set_family_of_empty_contour_roi(
+    world: &mut World,
+    roi_entity: hecs::Entity,
+    family: PlaneFamily,
+) -> bool {
+    let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) else {
+        return false;
+    };
+    let RoiBody::Contour(body) = &mut roi.body else {
+        return false;
+    };
+    if body.data.has_loops() {
+        return false;
+    }
+    body.data.active_plane_family = family;
+    roi.mark_contour_authoritative_changed();
+    true
 }
 
 /// Finishes every pending switch whose derived data has become current. Returns the outcome per
@@ -286,12 +311,7 @@ fn convert(
     };
     let report = match target {
         EditTarget::Contour(family) => {
-            promote_roi_to_contour_authority(world, roi_entity, family).map_err(
-                |error| match error {
-                    VoxelContourPromotionError::Locked => SwitchError::Locked,
-                    other => SwitchError::Contour(other),
-                },
-            )?;
+            convert_to_contour(world, roi_entity, family)?;
             ConversionReport {
                 from,
                 to: PrimaryRepresentation::Contour,
@@ -301,12 +321,7 @@ fn convert(
             }
         }
         EditTarget::Mesh => {
-            promote_current_mesh_cache_to_authority(world, roi_entity).map_err(
-                |error| match error {
-                    MeshAuthorityPromotionError::Locked => SwitchError::Locked,
-                    other => SwitchError::Mesh(other),
-                },
-            )?;
+            convert_to_mesh(world, roi_entity)?;
             ConversionReport {
                 from,
                 to: PrimaryRepresentation::Mesh,
@@ -318,4 +333,88 @@ fn convert(
     };
     record_authority_change(world, roi_entity, previous);
     Ok(report)
+}
+
+/// Extracts contours in `family` from the ROI's voxel form and makes them the body. A mesh
+/// body stays as the mesh cache, so the 3D surface does not change.
+pub(crate) fn convert_to_contour(
+    world: &mut World,
+    roi_entity: hecs::Entity,
+    family: PlaneFamily,
+) -> Result<(), SwitchError> {
+    let (source_voxel, previous_mesh) = {
+        let roi = world
+            .get::<&Roi>(roi_entity)
+            .map_err(|_| SwitchError::MissingRoi)?;
+        if roi.metadata.is_locked {
+            return Err(SwitchError::Locked);
+        }
+        match &roi.body {
+            RoiBody::Voxel(body) => (body.data.clone(), None),
+            RoiBody::Contour(_) | RoiBody::Mesh(_) => {
+                let cache = roi.voxel_cache().ok_or(SwitchError::SourceUnavailable)?;
+                if !roi.is_cache_current(RoiCacheKind::Voxel) {
+                    return Err(SwitchError::SourceUnavailable);
+                }
+                let mesh = match &roi.body {
+                    RoiBody::Mesh(body) => Some(body.data.clone()),
+                    _ => None,
+                };
+                (cache.data.clone(), mesh)
+            }
+        }
+    };
+    let extracted = extract_contours_from_voxel_data(&source_voxel, family)
+        .map_err(SwitchError::ExtractionFailed)?;
+
+    let mut roi = world
+        .get::<&mut Roi>(roi_entity)
+        .map_err(|_| SwitchError::MissingRoi)?;
+    let mesh_cache_is_current = previous_mesh.is_some()
+        || (roi.mesh_cache().is_some() && roi.is_cache_current(RoiCacheKind::Mesh));
+    roi.body = RoiBody::Contour(ContourBody::new(extracted));
+    roi.job_state = RoiJobState::default();
+    roi.end_preview();
+    roi.rebase_after_switch_to_contour(
+        source_voxel,
+        previous_mesh.map(|data| MeshCache { data, chunks: None }),
+        mesh_cache_is_current,
+    );
+    if !mesh_cache_is_current {
+        roi.enqueue_rebuild(RoiJobKind::RebuildMeshCache);
+    }
+    Ok(())
+}
+
+/// Makes the current mesh cache the body. The voxel cache stays as it was.
+pub(crate) fn convert_to_mesh(
+    world: &mut World,
+    roi_entity: hecs::Entity,
+) -> Result<(), SwitchError> {
+    let mesh = {
+        let roi = world
+            .get::<&Roi>(roi_entity)
+            .map_err(|_| SwitchError::MissingRoi)?;
+        if roi.metadata.is_locked {
+            return Err(SwitchError::Locked);
+        }
+        let cache = roi.mesh_cache().ok_or(SwitchError::SourceUnavailable)?;
+        if !roi.is_cache_current(RoiCacheKind::Mesh) {
+            return Err(SwitchError::SourceUnavailable);
+        }
+        if cache.data.vertices.is_empty() || cache.data.faces.is_empty() {
+            return Err(SwitchError::EmptyMesh);
+        }
+        cache.data.clone()
+    };
+    let mut roi = world
+        .get::<&mut Roi>(roi_entity)
+        .map_err(|_| SwitchError::MissingRoi)?;
+    let voxel_cache_is_current =
+        roi.voxel_cache().is_some() && roi.is_cache_current(RoiCacheKind::Voxel);
+    roi.body = RoiBody::Mesh(MeshBody::new(mesh));
+    roi.job_state = RoiJobState::default();
+    roi.end_preview();
+    roi.rebase_after_switch_to_mesh(voxel_cache_is_current);
+    Ok(())
 }

@@ -311,35 +311,6 @@ fn ray_plane_intersection(
     t.is_finite().then_some(origin + direction * t)
 }
 
-pub fn deform_mesh_with_brush(
-    mesh: &MeshData,
-    anchor_world_mm: [f32; 3],
-    delta_world_mm: [f32; 3],
-    radius_mm: f32,
-    strength: f32,
-) -> MeshData {
-    let mut deformed = mesh.clone();
-    if !radius_mm.is_finite()
-        || radius_mm <= 0.0
-        || !strength.is_finite()
-        || delta_world_mm.iter().any(|value| !value.is_finite())
-    {
-        return deformed;
-    }
-    let anchor = Vec3::from_array(anchor_world_mm);
-    let delta = Vec3::from_array(delta_world_mm) * strength.max(0.0);
-    for vertex in &mut deformed.vertices {
-        let distance = Vec3::from_array(vertex.world_mm).distance(anchor);
-        if distance > radius_mm {
-            continue;
-        }
-        let normalized = 1.0 - distance / radius_mm;
-        let weight = normalized * normalized * (3.0 - 2.0 * normalized);
-        vertex.world_mm = (Vec3::from_array(vertex.world_mm) + delta * weight).to_array();
-    }
-    deformed
-}
-
 pub fn deform_mesh_surface_brush(
     mesh: &MeshData,
     seed_indices: [u32; 3],
