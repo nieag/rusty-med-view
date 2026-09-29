@@ -5,6 +5,10 @@ pub use crate::app::roi::authority::{
     VoxelContourPromotionError,
 };
 pub use crate::app::roi::history::RoiEditHistoryError;
+use crate::app::roi::label_import::{
+    check_label_import_budget, label_color, label_roi_name, present_label_ids, split_labelmap,
+    LabelMask,
+};
 pub use crate::app::roi::requests::{
     ContourRepresentationStatus, RepresentationRequestState, RepresentationRequestStatus,
     RoiCacheStatus,
@@ -568,25 +572,18 @@ pub fn prepare_voxel_roi_import(
     })
 }
 
-pub fn create_voxel_roi_from_label(
+/// Imports a labelmap as one voxel ROI per non-zero label, so structures such as a liver and its
+/// tumor stay separate through every later conversion. A map with no labels becomes one empty ROI.
+///
+/// The first `MAX_SIMULTANEOUS_ROI_OVERLAYS` ROIs start visible; the rest are created hidden.
+pub fn create_voxel_rois_from_label(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     world: &mut World,
     loaded_label: &LoadedLabel,
-) -> Result<hecs::Entity, String> {
+) -> Result<Vec<hecs::Entity>, String> {
     let import_spec = prepare_voxel_roi_import(world, loaded_label)?;
-    create_voxel_roi_from_label_with_spec(device, queue, world, loaded_label, import_spec)
-}
-
-pub fn create_voxel_roi_from_label_with_spec(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    world: &mut World,
-    loaded_label: &LoadedLabel,
-    import_spec: VoxelRoiImportSpec,
-) -> Result<hecs::Entity, String> {
-    let (new_texture, new_view, new_sampler) =
-        crate::io::volume::create_texture_from_labelmap(device, queue, loaded_label);
+    let masks = label_masks_for_import(&loaded_label.data)?;
 
     let placeholder_bg = world
         .query::<&GpuVolumeResources>()
@@ -597,30 +594,74 @@ pub fn create_voxel_roi_from_label_with_spec(
         .ok_or_else(|| {
             "Cannot create a label ROI without an initialized main volume resource".to_string()
         })?;
+    let dimensions = import_spec.geometry.dimensions();
 
-    let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
-    let entity = world.spawn((
-        Roi::new_voxel(
-            RoiId(next_roi_id),
-            loaded_label.filename.clone(),
-            import_spec.geometry,
-            loaded_label.data.clone(),
-            GpuVolumeResources {
-                texture: new_texture,
-                view: new_view,
-                sampler: new_sampler,
-                bind_group: placeholder_bg,
-            },
-        ),
-        LayerSettings { opacity: 0.5 },
-        RoiTag,
-    ));
+    spawn_label_rois(
+        world,
+        import_spec.geometry,
+        &loaded_label.filename,
+        masks,
+        |mask_bytes| {
+            let (texture, view, sampler) = crate::io::volume::create_r8_texture_from_label_bytes(
+                device,
+                queue,
+                dimensions,
+                mask_bytes,
+                "NIfTI Labelmap",
+            )?;
+            Ok(Some(GpuVolumeResources {
+                texture,
+                view,
+                sampler,
+                bind_group: placeholder_bg.clone(),
+            }))
+        },
+    )
+}
 
-    if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
-        roi.metadata.is_visible = import_spec.start_visible;
+/// One mask per non-zero label, or a single all-zero mask for a map without labels. Fails when
+/// the split would exceed the import memory budget.
+fn label_masks_for_import(data: &[u8]) -> Result<Vec<LabelMask>, String> {
+    let labels = present_label_ids(data);
+    check_label_import_budget(data.len(), labels.len())?;
+    if labels.is_empty() {
+        return Ok(vec![LabelMask {
+            label: 0,
+            data: data.to_vec(),
+        }]);
     }
+    Ok(split_labelmap(data, &labels))
+}
 
-    Ok(entity)
+/// Spawns one ROI entity per mask. `gpu_for_mask` builds the GPU mirror for a mask (`None` when
+/// there is no GPU), which keeps the world-building logic testable without a device.
+fn spawn_label_rois(
+    world: &mut World,
+    geometry: VoxelGeometry,
+    filename: &str,
+    masks: Vec<LabelMask>,
+    mut gpu_for_mask: impl FnMut(&[u8]) -> Result<Option<GpuVolumeResources>, String>,
+) -> Result<Vec<hecs::Entity>, String> {
+    let already_visible = visible_voxel_overlay_count(world);
+    let label_count = masks.len();
+    let mut entities = Vec::with_capacity(label_count);
+    for (index, mask) in masks.into_iter().enumerate() {
+        let gpu_resources = gpu_for_mask(&mask.data)?;
+        let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
+        let mut roi = Roi::new_voxel_with_cache(
+            RoiId(next_roi_id),
+            label_roi_name(filename, mask.label, label_count),
+            geometry,
+            mask.data,
+            gpu_resources,
+        );
+        roi.metadata.is_visible = already_visible + index < MAX_SIMULTANEOUS_ROI_OVERLAYS;
+        if mask.label != 0 {
+            roi.metadata.color = label_color(mask.label);
+        }
+        entities.push(world.spawn((roi, LayerSettings { opacity: 0.5 }, RoiTag)));
+    }
+    Ok(entities)
 }
 
 pub fn create_empty_contour_roi(

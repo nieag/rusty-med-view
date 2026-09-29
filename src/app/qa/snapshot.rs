@@ -120,6 +120,8 @@ impl AppState {
                     max_job_queue_depth: roi.job_metrics.max_queue_depth,
                 });
             }
+            // ECS iteration order is not stable; report ROIs in creation order.
+            rois.sort_by_key(|roi: &qa::QaSnapshotRoi| roi.id);
 
             let volume = ctx
                 .scene

@@ -57,3 +57,26 @@ fn load_liver_label() {
     // Filename should be preserved
     assert_eq!(label.filename, "liver_0_label.nii");
 }
+
+#[test]
+fn liver_label_splits_into_separate_liver_and_tumor_masks() {
+    use rusty_med_view::app::roi::label_import::{present_label_ids, split_labelmap};
+
+    let data = std::fs::read(sample_path("liver_0_label.nii"))
+        .expect("liver_0_label.nii not found in qa_samples/ or crate root");
+    let label = load_label_from_bytes(&data, "liver_0_label.nii".to_string())
+        .expect("Failed to load label");
+
+    // The sample holds liver (1) and tumor (2); importing it as one ROI merged the tumor into the
+    // liver on the first contour or mesh conversion.
+    let ids = present_label_ids(&label.data);
+    assert_eq!(ids, vec![1, 2]);
+
+    let masks = split_labelmap(&label.data, &ids);
+    let counts: Vec<usize> = masks
+        .iter()
+        .map(|mask| mask.data.iter().filter(|value| **value != 0).count())
+        .collect();
+    assert_eq!(counts, vec![113_169, 546]);
+    assert!(masks.iter().all(|mask| mask.data.len() == label.data.len()));
+}

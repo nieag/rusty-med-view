@@ -150,6 +150,22 @@ pub fn create_dummy_r32_texture(
 }
 
 /// Creates a 1D colormap texture (Red/Blue/Green/etc.) for label IDs.
+/// RGBA colour of a label id in the overlay colormap. Label 0 is transparent; other ids get
+/// distinct, deterministic colours from a simple hash. The overlay shader reads the same table,
+/// and ROI metadata uses it so a split label keeps its colour everywhere.
+pub fn label_lut_rgba(label: u8) -> [u8; 4] {
+    if label == 0 {
+        return [0, 0, 0, 0];
+    }
+    let i = u32::from(label);
+    [
+        ((i * 123) % 255) as u8,
+        ((i * 231) % 255) as u8,
+        ((i * 73) % 255) as u8,
+        255, // Full opacity (modulated by layer opacity later)
+    ]
+}
+
 pub fn create_default_colormap(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -177,20 +193,7 @@ pub fn create_default_colormap(
     let mut data = Vec::with_capacity((width * 4) as usize);
 
     for i in 0..width {
-        if i == 0 {
-            // Label 0 is transparent
-            data.extend_from_slice(&[0, 0, 0, 0]);
-        } else {
-            // Generate distinct colors based on ID
-            // Simple hashing strategy to get random-looking but deterministic colors
-            let r = (i * 123) % 255;
-            let g = (i * 231) % 255;
-            let b = (i * 73) % 255;
-            data.push(r as u8);
-            data.push(g as u8);
-            data.push(b as u8);
-            data.push(255); // Full opacity (modulated by layer opacity later)
-        }
+        data.extend_from_slice(&label_lut_rgba(i as u8));
     }
 
     queue.write_texture(

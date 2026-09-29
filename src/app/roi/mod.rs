@@ -1,6 +1,7 @@
 pub mod authority;
 pub mod cache;
 pub mod history;
+pub mod label_import;
 pub mod model;
 pub mod preview;
 pub mod requests;

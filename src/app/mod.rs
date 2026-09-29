@@ -374,13 +374,23 @@ impl ApplicationHandler<AppEvent> for App {
                                             .world
                                             .get::<&mut EditorState>(ctx.scene.entities.editor)
                                         {
-                                            editor.active_roi = Some(outcome.entity);
+                                            editor.active_roi = outcome.entities.first().copied();
                                         }
                                         let dims = outcome.dimensions;
+                                        let message = if outcome.entities.len() > 1 {
+                                            format!(
+                                                "Label Loaded: {} labels as separate ROIs ({}x{})",
+                                                outcome.entities.len(),
+                                                dims[0],
+                                                dims[1]
+                                            )
+                                        } else {
+                                            format!("Label Loaded: {}x{}", dims[0], dims[1])
+                                        };
                                         handlers::set_status_message(
                                             &mut ctx.scene.world,
                                             &ctx.scene.entities,
-                                            format!("Label Loaded: {}x{}", dims[0], dims[1]),
+                                            message,
                                         );
 
                                         dims

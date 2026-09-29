@@ -3132,3 +3132,122 @@ fn test_two_slice_commits_before_one_rebuild_keep_every_slice_in_voxel_cache() {
         "voxel cache must contain every authoritative slice, not only the last dirty one"
     );
 }
+
+fn label_import_geometry() -> VoxelGeometry {
+    VoxelGeometry::new([4, 4, 4], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap()
+}
+
+fn spawn_labels(world: &mut World, filename: &str, data: &[u8]) -> Vec<hecs::Entity> {
+    let masks = label_masks_for_import(data).expect("within the import budget");
+    spawn_label_rois(world, label_import_geometry(), filename, masks, |_| {
+        Ok(None)
+    })
+    .unwrap()
+}
+
+#[test]
+fn test_multi_label_import_creates_one_roi_per_label_with_its_own_mask() {
+    let mut world = World::new();
+    let mut data = vec![0_u8; 64];
+    data[5] = 1;
+    data[6] = 1;
+    data[40] = 2;
+
+    let entities = spawn_labels(&mut world, "liver.nii", &data);
+
+    assert_eq!(entities.len(), 2);
+    let names: Vec<String> = entities
+        .iter()
+        .map(|entity| world.get::<&Roi>(*entity).unwrap().metadata.name.clone())
+        .collect();
+    assert_eq!(names, vec!["liver.nii [label 1]", "liver.nii [label 2]"]);
+    let ids: Vec<u64> = entities
+        .iter()
+        .map(|entity| world.get::<&Roi>(*entity).unwrap().metadata.roi_id.0)
+        .collect();
+    assert_eq!(ids, vec![1, 2]);
+
+    for (entity, (label, expected)) in entities.iter().zip([(1_u8, vec![5, 6]), (2, vec![40])]) {
+        let roi = world.get::<&Roi>(*entity).unwrap();
+        assert_eq!(roi.primary_representation(), PrimaryRepresentation::Voxel);
+        assert!(roi.is_cache_current(RoiCacheKind::Voxel));
+        assert_eq!(roi.metadata.color, label_color(label));
+        let RoiAuthoritativeData::Voxel(voxel) = &roi.authoritative_data else {
+            panic!("voxel authority");
+        };
+        let occupied: Vec<usize> = voxel
+            .raw_data
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| **value != 0)
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(
+            occupied, expected,
+            "label {label} must hold only its own voxels"
+        );
+        assert!(voxel
+            .raw_data
+            .iter()
+            .all(|value| *value == 0 || *value == label));
+    }
+}
+
+#[test]
+fn test_single_label_import_keeps_the_file_name_and_id() {
+    let mut world = World::new();
+    let mut data = vec![0_u8; 64];
+    data[3] = 5;
+
+    let entities = spawn_labels(&mut world, "one.nii", &data);
+
+    assert_eq!(entities.len(), 1);
+    let roi = world.get::<&Roi>(entities[0]).unwrap();
+    assert_eq!(roi.metadata.name, "one.nii");
+    assert_eq!(roi.metadata.color, label_color(5));
+}
+
+#[test]
+fn test_labelmap_without_labels_imports_as_one_empty_roi() {
+    let mut world = World::new();
+
+    let entities = spawn_labels(&mut world, "empty.nii", &[0_u8; 64]);
+
+    assert_eq!(entities.len(), 1);
+    let roi = world.get::<&Roi>(entities[0]).unwrap();
+    assert_eq!(roi.metadata.name, "empty.nii");
+    assert_eq!(
+        roi.metadata.color,
+        [1.0, 0.2, 0.2, 1.0],
+        "keeps the default colour"
+    );
+    let RoiAuthoritativeData::Voxel(voxel) = &roi.authoritative_data else {
+        panic!("voxel authority");
+    };
+    assert!(voxel.raw_data.iter().all(|value| *value == 0));
+}
+
+#[test]
+fn test_label_import_hides_rois_beyond_the_overlay_cap() {
+    let mut world = World::new();
+    // Ten labels, one voxel each.
+    let data: Vec<u8> = (1..=10_u8).chain(std::iter::repeat_n(0, 54)).collect();
+
+    let entities = spawn_labels(&mut world, "many.nii", &data);
+
+    let visible: Vec<bool> = entities
+        .iter()
+        .map(|entity| world.get::<&Roi>(*entity).unwrap().metadata.is_visible)
+        .collect();
+    let expected: Vec<bool> = (0..10)
+        .map(|index| index < MAX_SIMULTANEOUS_ROI_OVERLAYS)
+        .collect();
+    assert_eq!(visible, expected);
+}
+
+#[test]
+fn test_label_import_budget_is_enforced_and_normal_maps_pass() {
+    // Check the budget with a large volume directly; allocating such a map would defeat the test.
+    assert!(check_label_import_budget(512 * 512 * 300, 20).is_err());
+    assert!(label_masks_for_import(&[1_u8; 64]).is_ok());
+}

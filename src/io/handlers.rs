@@ -10,7 +10,9 @@ use crate::volume;
 use hecs::World;
 
 pub struct LabelLoadOutcome {
-    pub entity: hecs::Entity,
+    /// One ROI per non-zero label, in ascending label order (a single empty ROI when the map has
+    /// no labels). The first is the one to make active.
+    pub entities: Vec<hecs::Entity>,
     pub dimensions: [u32; 3],
 }
 
@@ -62,9 +64,9 @@ pub fn handle_volume_load(
     loaded.dimensions
 }
 
-/// Handle a successfully loaded labelmap by spawning a new layer entity.
+/// Handle a successfully loaded labelmap by spawning one ROI per label.
 ///
-/// Returns the new entity ID and dimensions of the loaded labelmap.
+/// Returns the new entities and the dimensions of the loaded labelmap.
 pub fn handle_label_load(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -72,17 +74,10 @@ pub fn handle_label_load(
     loaded_label: &LoadedLabel,
 ) -> Result<LabelLoadOutcome, String> {
     log::info!("Labelmap loaded: {:?} dimensions", loaded_label.dimensions);
-    let import_spec = roi_runtime::prepare_voxel_roi_import(world, loaded_label)?;
-    let entity = roi_runtime::create_voxel_roi_from_label_with_spec(
-        device,
-        queue,
-        world,
-        loaded_label,
-        import_spec,
-    )?;
+    let entities = roi_runtime::create_voxel_rois_from_label(device, queue, world, loaded_label)?;
 
     Ok(LabelLoadOutcome {
-        entity,
+        entities,
         dimensions: loaded_label.dimensions,
     })
 }

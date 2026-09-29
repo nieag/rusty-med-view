@@ -256,6 +256,17 @@ test("qa-4 liver geometry, orientation letters, and viewport facts", async ({ pa
   expect(state.volume.spacing).toEqual([2, 2, 3]);
   expect(state.volume.orientation).toEqual([0, 0, 0, 1]);
 
+  // The sample holds liver (1) and tumor (2); each becomes its own ROI instead of merging.
+  expect(state.rois.map((roi) => roi.name)).toEqual([
+    "liver_0_label.nii [label 1]",
+    "liver_0_label.nii [label 2]",
+  ]);
+  expect(state.rois.filter((roi) => roi.active).map((roi) => roi.name)).toEqual([
+    "liver_0_label.nii [label 1]",
+  ]);
+  expect(state.rois.every((roi) => roi.authority === "Voxel" && roi.visible)).toBe(true);
+  expect(metrics.visible_rois).toBe(2);
+
   // Edge letters are derived from the affine (left, right, top, bottom).
   const byMode = Object.fromEntries(state.viewports.map((vp) => [vp.mode, vp]));
   expect(byMode.axial.edge_letters).toBe("RLAP");
