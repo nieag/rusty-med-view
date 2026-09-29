@@ -1,7 +1,12 @@
-struct VertexIn {
-  @location(0) position_ndc: vec2<f32>,
-  @location(1) color: vec4<f32>,
+// One draw per (mesh part, viewport). `row0`/`row1` map the vertex position (x, y, z, 1) to the
+// window-space NDC x and y, so the camera lives in the uniform and the mesh is uploaded once.
+struct Draw {
+  row0: vec4<f32>,
+  row1: vec4<f32>,
+  color: vec4<f32>,
 };
+
+@group(0) @binding(0) var<uniform> draw: Draw;
 
 struct VertexOut {
   @builtin(position) position: vec4<f32>,
@@ -9,10 +14,11 @@ struct VertexOut {
 };
 
 @vertex
-fn vs_main(in: VertexIn) -> VertexOut {
+fn vs_main(@location(0) position: vec3<f32>) -> VertexOut {
+  let p = vec4<f32>(position, 1.0);
   var out: VertexOut;
-  out.position = vec4<f32>(in.position_ndc, 0.0, 1.0);
-  out.color = in.color;
+  out.position = vec4<f32>(dot(draw.row0, p), dot(draw.row1, p), 0.0, 1.0);
+  out.color = draw.color;
   return out;
 }
 

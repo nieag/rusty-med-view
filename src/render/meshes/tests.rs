@@ -74,8 +74,9 @@ fn test_prepare_mesh_render_data_empty_without_main_volume() {
         cursor: hecs::Entity::DANGLING,
         window_settings: hecs::Entity::DANGLING,
     };
-    let data = prepare_mesh_render_data(&world, &entities);
-    assert!(data.chunks.is_empty());
+    let data = prepare_mesh_render_data(&world, &entities, &HashMap::new());
+    assert!(data.parts.is_empty());
+    assert!(data.draws.is_empty());
 }
 
 #[test]
@@ -109,8 +110,9 @@ fn test_prepare_mesh_render_data_skips_non_3d_viewports() {
             }],
         },
     ),));
-    let data = prepare_mesh_render_data(&world, &entities);
-    assert!(data.chunks.is_empty());
+    let data = prepare_mesh_render_data(&world, &entities, &HashMap::new());
+    assert!(data.parts.is_empty());
+    assert!(data.draws.is_empty());
 }
 
 #[test]
@@ -163,9 +165,28 @@ fn test_prepare_mesh_render_data_uses_main_volume_geometry_for_projection() {
             }],
         },
     ),));
-    let data = prepare_mesh_render_data(&world, &entities);
-    assert_eq!(data.chunks.len(), 1);
-    assert_eq!(data.chunks[0].vertices.len(), 3);
+    let data = prepare_mesh_render_data(&world, &entities, &HashMap::new());
+    assert_eq!(data.draws.len(), 1);
+    assert_eq!(data.parts.len(), 1);
+    let geometry = data.parts[0]
+        .geometry
+        .as_ref()
+        .expect("new part carries geometry");
+    assert_eq!(geometry.positions[0], world_vertex);
+    assert_eq!(geometry.indices, vec![0, 1, 2]);
+    let ndc_of = |uniform: &MeshDrawUniform, p: [f32; 3]| {
+        [
+            uniform.row0[0] * p[0]
+                + uniform.row0[1] * p[1]
+                + uniform.row0[2] * p[2]
+                + uniform.row0[3],
+            uniform.row1[0] * p[0]
+                + uniform.row1[1] * p[1]
+                + uniform.row1[2] * p[2]
+                + uniform.row1[3],
+        ]
+    };
+    let drawn_ndc = ndc_of(&data.draws[0].uniform, world_vertex);
 
     let main_geometry = crate::app::roi_runtime::main_volume_geometry(&world).unwrap();
     let viewport_rect = {
@@ -204,7 +225,10 @@ fn test_prepare_mesh_render_data_uses_main_volume_geometry_for_projection() {
     )
     .unwrap();
     let composed_ndc = viewport_uv_to_full_ndc(composed_uv, viewport_rect, [800.0, 600.0]).unwrap();
-    assert_eq!(data.chunks[0].vertices[0].position_ndc, composed_ndc);
+    assert!(
+        (drawn_ndc[0] - composed_ndc[0]).abs() < 1e-4
+            && (drawn_ndc[1] - composed_ndc[1]).abs() < 1e-4
+    );
 
     let raw_projection = ViewProjection {
         rotation: viewport_state.user_rotation,
@@ -218,7 +242,7 @@ fn test_prepare_mesh_render_data_uses_main_volume_geometry_for_projection() {
     )
     .unwrap();
     let raw_ndc = viewport_uv_to_full_ndc(raw_uv, viewport_rect, [800.0, 600.0]).unwrap();
-    assert_ne!(data.chunks[0].vertices[0].position_ndc, raw_ndc);
+    assert!((drawn_ndc[0] - raw_ndc[0]).abs() > 1e-3 || (drawn_ndc[1] - raw_ndc[1]).abs() > 1e-3);
 }
 
 #[test]
@@ -266,21 +290,21 @@ fn test_prepare_mesh_render_data_emits_wgpu_handle_for_selected_mesh_vertex() {
         });
     }
 
-    let data = prepare_mesh_render_data(&world, &entities);
+    let data = prepare_mesh_render_data(&world, &entities, &HashMap::new());
+    let key = MeshPartKey {
+        roi_entity,
+        part: MeshRenderPartKey::Handle(viewport_entity),
+    };
     let handle = data
-        .chunks
+        .parts
         .iter()
-        .find(|chunk| {
-            chunk.key.roi_entity == roi_entity
-                && chunk.key.viewport_entity == viewport_entity
-                && chunk.key.part == MeshRenderPartKey::Handle
-        })
+        .find(|part| part.key == key)
         .expect("selected vertex handle");
-    assert_eq!(handle.vertices.len(), 6);
-    assert!(handle
-        .vertices
-        .iter()
-        .all(|vertex| vertex.color == [1.0, 0.85, 0.1, 1.0]));
+    let geometry = handle.geometry.as_ref().expect("handle geometry");
+    assert_eq!(geometry.positions.len(), 4);
+    assert_eq!(geometry.indices.len(), 6);
+    let draw = data.draws.iter().find(|draw| draw.key == key).unwrap();
+    assert_eq!(draw.uniform.color, HANDLE_COLOR);
 }
 
 #[test]
@@ -306,8 +330,9 @@ fn test_prepare_mesh_render_data_skips_invalid_face_indices() {
             }],
         },
     ),));
-    let data = prepare_mesh_render_data(&world, &entities);
-    assert!(data.chunks.is_empty());
+    let data = prepare_mesh_render_data(&world, &entities, &HashMap::new());
+    assert!(data.parts.is_empty());
+    assert!(data.draws.is_empty());
 }
 
 #[test]
@@ -352,13 +377,14 @@ fn test_prepare_mesh_render_data_preserves_unchanged_chunk_identity_and_vertices
     roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     let roi_entity = world.spawn((roi,));
 
-    let before = prepare_mesh_render_data(&world, &entities);
-    let before_by_part = before
-        .chunks
+    let before = prepare_mesh_render_data(&world, &entities, &HashMap::new());
+    assert_eq!(before.parts.len(), 2);
+    assert!(before.parts.iter().all(|part| part.geometry.is_some()));
+    let known = before
+        .parts
         .iter()
-        .map(|chunk| (chunk.key.part, chunk.vertices.clone()))
+        .map(|part| (part.key, part.fingerprint))
         .collect::<HashMap<_, _>>();
-    assert_eq!(before_by_part.len(), 2);
 
     voxel.raw_data[2] = 1;
     let rebuilt = crate::convert::extract_chunked_mesh_from_voxel_data(&voxel, 16).unwrap();
@@ -370,15 +396,71 @@ fn test_prepare_mesh_render_data_preserves_unchanged_chunk_identity_and_vertices
             chunks: Some(rebuilt),
         });
     }
-    let after = prepare_mesh_render_data(&world, &entities);
-    let after_by_part = after
-        .chunks
+    let after = prepare_mesh_render_data(&world, &entities, &known);
+
+    let part_for = |chunk: MeshChunkKey| {
+        after
+            .parts
+            .iter()
+            .find(|part| part.key.part == MeshRenderPartKey::Chunk(chunk))
+            .expect("chunk part")
+    };
+    let changed = part_for(MeshChunkKey { index: [0, 0, 0] });
+    let unchanged = part_for(MeshChunkKey { index: [1, 0, 0] });
+    assert!(changed.geometry.is_some(), "an edited chunk is rebuilt");
+    assert!(
+        unchanged.geometry.is_none(),
+        "an untouched chunk is reused from the GPU"
+    );
+    assert_eq!(after.draws.len(), 2);
+}
+
+#[test]
+fn test_camera_motion_changes_only_the_draw_uniform() {
+    let (mut world, entities) = spawn_world_base();
+    let viewport = world.spawn((
+        Viewport {
+            mode: ViewMode::ThreeD,
+            rect: [0.0, 0.0, 400.0, 300.0],
+            uniform_index: 0,
+        },
+        ViewportState::default(),
+    ));
+    world.spawn((Roi::new_mesh(
+        RoiId(5),
+        "Mesh".to_string(),
+        MeshData {
+            vertices: vec![
+                MeshVertex {
+                    world_mm: [1.0, 1.0, 1.0],
+                },
+                MeshVertex {
+                    world_mm: [4.0, 1.0, 1.0],
+                },
+                MeshVertex {
+                    world_mm: [1.0, 4.0, 1.0],
+                },
+            ],
+            faces: vec![MeshFace {
+                vertex_indices: [0, 1, 2],
+            }],
+        },
+    ),));
+    let first = prepare_mesh_render_data(&world, &entities, &HashMap::new());
+    let known = first
+        .parts
         .iter()
-        .map(|chunk| (chunk.key.part, chunk.vertices.clone()))
+        .map(|part| (part.key, part.fingerprint))
         .collect::<HashMap<_, _>>();
 
-    let first = MeshRenderPartKey::Chunk(MeshChunkKey { index: [0, 0, 0] });
-    let second = MeshRenderPartKey::Chunk(MeshChunkKey { index: [1, 0, 0] });
-    assert_ne!(before_by_part[&first], after_by_part[&first]);
-    assert_eq!(before_by_part[&second], after_by_part[&second]);
+    {
+        let mut state = world.get::<&mut ViewportState>(viewport).unwrap();
+        state.zoom = 2.5;
+        state.pan = [0.1, -0.05];
+        state.user_rotation = glam::Quat::from_rotation_y(0.7).to_array();
+    }
+    let second = prepare_mesh_render_data(&world, &entities, &known);
+
+    assert!(second.parts.iter().all(|part| part.geometry.is_none()));
+    assert_ne!(first.draws[0].uniform.row0, second.draws[0].uniform.row0);
 }

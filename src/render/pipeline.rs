@@ -470,7 +470,12 @@ pub fn render_frame(
         &viewports,
     );
 
-    let mesh_data = crate::render::meshes::prepare_mesh_render_data(&scene.world, &scene.entities);
+    let known_mesh_parts = pipelines.mesh_overlay.fingerprints();
+    let mesh_data = crate::render::meshes::prepare_mesh_render_data(
+        &scene.world,
+        &scene.entities,
+        &known_mesh_parts,
+    );
     stats.mesh_batch_count = mesh_data.batch_count() as u32;
     crate::render::meshes::upload_mesh_render_data(
         &gpu.device,
