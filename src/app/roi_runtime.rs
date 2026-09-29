@@ -1643,7 +1643,22 @@ fn process_contour_voxel_rebuild_for_entity(
         };
         contour_data.clone()
     };
-    if let Some(slice_key) = dirty_slice_key {
+    // The slice-local rasterizer patches a retained cache, so it is only valid while that cache is
+    // at most one generation behind. Otherwise every authoritative slice must be rasterized.
+    let base_slice_voxel = dirty_slice_key.and_then(|_| {
+        world.get::<&Roi>(roi_entity).ok().and_then(|roi| {
+            let cache_generation = roi.dirty_state.generations.voxel;
+            let authoritative_generation = roi.dirty_state.generations.authoritative;
+            if cache_generation == authoritative_generation
+                || cache_generation.saturating_add(1) == authoritative_generation
+            {
+                roi.voxel_cache().map(|cache| cache.data.clone())
+            } else {
+                None
+            }
+        })
+    });
+    if let (Some(slice_key), Some(_)) = (dirty_slice_key, base_slice_voxel.as_ref()) {
         contour_data
             .slices
             .retain(|slice| ContourSliceKey::from_plane(slice.plane) == slice_key);
@@ -1666,19 +1681,6 @@ fn process_contour_voxel_rebuild_for_entity(
         return false;
     };
 
-    let base_slice_voxel = dirty_slice_key.and_then(|_| {
-        world.get::<&Roi>(roi_entity).ok().and_then(|roi| {
-            let cache_generation = roi.dirty_state.generations.voxel;
-            let authoritative_generation = roi.dirty_state.generations.authoritative;
-            if cache_generation == authoritative_generation
-                || cache_generation.saturating_add(1) == authoritative_generation
-            {
-                roi.voxel_cache().map(|cache| cache.data.clone())
-            } else {
-                None
-            }
-        })
-    });
     let raster_started_at = Instant::now();
     let raster_result = if let Some(base) = base_slice_voxel.as_ref() {
         rasterize_contour_preview_slices_to_voxel_data(&contour_data, base)
@@ -1701,13 +1703,15 @@ fn process_contour_voxel_rebuild_for_entity(
             return false;
         }
     };
-    let committed_mesh_dirty_region = if preview_revision.is_none() {
-        contour_slices_voxel_aabb(&contour_data, voxel_data.geometry)
-            .map(|(min, max)| RoiDirtyRegion::VoxelAabb { min, max })
-            .unwrap_or(RoiDirtyRegion::Full)
-    } else {
-        RoiDirtyRegion::Full
-    };
+    let slice_local_rebuild_lost_base = dirty_slice_key.is_some() && base_slice_voxel.is_none();
+    let committed_mesh_dirty_region =
+        if preview_revision.is_none() && !slice_local_rebuild_lost_base {
+            contour_slices_voxel_aabb(&contour_data, voxel_data.geometry)
+                .map(|(min, max)| RoiDirtyRegion::VoxelAabb { min, max })
+                .unwrap_or(RoiDirtyRegion::Full)
+        } else {
+            RoiDirtyRegion::Full
+        };
 
     if let Some(revision) = preview_revision {
         let (base_chunks, prior_preview_aabb) = world

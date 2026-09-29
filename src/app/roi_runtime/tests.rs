@@ -3052,3 +3052,83 @@ fn test_liver_explicit_voxel_rebuild_frame_timing() {
         "liver explicit rebuild: request {request:?}, first frame {first_frame:?}, max frame {max_frame:?}, frames {frames}"
     );
 }
+
+#[test]
+fn test_two_slice_commits_before_one_rebuild_keep_every_slice_in_voxel_cache() {
+    let mut world = World::new();
+    let editor = world.spawn((EditorState::default(),));
+    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    seed_current_voxel_cache_for_contour_roi(&mut world, entity);
+    let plane_at = |z: f32| PlaneDefinition {
+        family: PlaneFamily::Axial,
+        origin_mm: [0.0, 0.0, z],
+        u_axis_mm: [1.0, 0.0, 0.0],
+        v_axis_mm: [0.0, 1.0, 0.0],
+        normal_mm: [0.0, 0.0, 1.0],
+    };
+    let square_slice = |z: f32| ContourSlice {
+        plane: plane_at(z),
+        loops: vec![ContourLoop {
+            points: [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]
+                .into_iter()
+                .map(|local_mm| ContourPoint { local_mm })
+                .collect(),
+            is_closed: true,
+        }],
+    };
+    let occupied_per_layer = |world: &World| -> Vec<usize> {
+        let roi = world.get::<&Roi>(entity).unwrap();
+        let data = &roi.voxel_cache().unwrap().data;
+        (0..4)
+            .map(|z| {
+                data.raw_data[z * 16..(z + 1) * 16]
+                    .iter()
+                    .filter(|value| **value != 0)
+                    .count()
+            })
+            .collect()
+    };
+
+    let mut contour = ContourData {
+        active_plane_family: PlaneFamily::Axial,
+        slices: vec![square_slice(0.0)],
+    };
+    replace_contour_data_for_slice_with_history(
+        &mut world,
+        editor,
+        entity,
+        contour.clone(),
+        plane_at(0.0),
+    )
+    .unwrap();
+    process_contour_voxel_rebuild_jobs(&mut world);
+    assert_eq!(occupied_per_layer(&world), vec![9, 0, 0, 0]);
+
+    // Two commits land before the coordinator runs again, so the retained cache is two
+    // generations behind and the slice-local rasterizer has no valid base to patch.
+    contour.slices.push(square_slice(1.0));
+    replace_contour_data_for_slice_with_history(
+        &mut world,
+        editor,
+        entity,
+        contour.clone(),
+        plane_at(1.0),
+    )
+    .unwrap();
+    contour.slices.push(square_slice(2.0));
+    replace_contour_data_for_slice_with_history(
+        &mut world,
+        editor,
+        entity,
+        contour.clone(),
+        plane_at(2.0),
+    )
+    .unwrap();
+    process_contour_voxel_rebuild_jobs(&mut world);
+
+    assert_eq!(
+        occupied_per_layer(&world),
+        vec![9, 9, 9, 0],
+        "voxel cache must contain every authoritative slice, not only the last dirty one"
+    );
+}
