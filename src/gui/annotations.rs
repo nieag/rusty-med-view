@@ -3,6 +3,18 @@ use crate::AppEvent;
 use hecs::World;
 use winit::event_loop::EventLoopProxy;
 
+const NOTE_PREVIEW_MAX_CHARS: usize = 64;
+
+/// Shortens a note for the annotation list without splitting a multi-byte character.
+fn note_preview(note: &str) -> String {
+    if note.chars().count() > NOTE_PREVIEW_MAX_CHARS {
+        let kept: String = note.chars().take(NOTE_PREVIEW_MAX_CHARS - 3).collect();
+        format!("{kept}...")
+    } else {
+        note.to_string()
+    }
+}
+
 pub fn draw_discussion_sidebar(
     ctx: &egui::Context,
     ui: &mut egui::Ui,
@@ -143,11 +155,7 @@ pub fn draw_discussion_sidebar(
                                             },
                                         );
                                     });
-                                    let preview = if ann.note.len() > 64 {
-                                        format!("{}...", &ann.note[..61])
-                                    } else {
-                                        ann.note.clone()
-                                    };
+                                    let preview = note_preview(&ann.note);
                                     if !preview.is_empty() {
                                         ui.label(
                                             egui::RichText::new(preview)
@@ -210,4 +218,33 @@ pub fn draw_discussion_sidebar(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_note_preview_keeps_short_notes_unchanged() {
+        assert_eq!(note_preview("short note"), "short note");
+    }
+
+    #[test]
+    fn test_note_preview_truncates_ascii_notes_with_ellipsis() {
+        let preview = note_preview(&"a".repeat(100));
+
+        assert_eq!(preview.chars().count(), NOTE_PREVIEW_MAX_CHARS);
+        assert!(preview.ends_with("..."));
+    }
+
+    #[test]
+    fn test_note_preview_does_not_panic_on_multibyte_characters() {
+        // 60 ASCII bytes then a 2-byte character straddling the old byte-61 cut.
+        let note = format!("{}æøå{}", "a".repeat(60), "b".repeat(40));
+        let preview = note_preview(&note);
+
+        assert_eq!(preview.chars().count(), NOTE_PREVIEW_MAX_CHARS);
+        assert!(preview.ends_with("..."));
+        assert!(note_preview(&"😀".repeat(100)).ends_with("..."));
+    }
 }
