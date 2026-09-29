@@ -3,14 +3,13 @@ use crate::convert::{
     plane_local_mm_to_world_mm, volume_uv_to_viewport_uv, world_mm_to_volume_uv, PlaneDefinition,
     ViewportMapping,
 };
+use crate::render::roi_views::planes_are_slice_compatible;
 use hecs::World;
 use wgpu::util::DeviceExt;
 
 const INITIAL_VERTEX_CAPACITY: usize = 128;
 const LINE_WIDTH_PX: f32 = 2.0;
 const POINT_MARKER_SIZE_PX: f32 = 6.0;
-const PLANE_ORIGIN_TOLERANCE_MM: f32 = 0.5;
-const PLANE_NORMAL_ALIGNMENT_COS: f32 = 0.999;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, PartialEq)]
@@ -233,40 +232,6 @@ fn build_point_marker_triangles_ndc(
             color,
         },
     ]
-}
-
-fn normalized(v: [f32; 3]) -> Option<glam::Vec3> {
-    let vec = glam::Vec3::from_array(v);
-    let len_sq = vec.length_squared();
-    if !len_sq.is_finite() || len_sq <= 1e-12 {
-        None
-    } else {
-        Some(vec / len_sq.sqrt())
-    }
-}
-
-fn planes_are_slice_compatible(displayed: PlaneDefinition, stored: PlaneDefinition) -> bool {
-    if displayed.family != stored.family {
-        return false;
-    }
-
-    let Some(displayed_normal) = normalized(displayed.normal_mm) else {
-        return false;
-    };
-    let Some(stored_normal) = normalized(stored.normal_mm) else {
-        return false;
-    };
-
-    if displayed_normal.dot(stored_normal).abs() < PLANE_NORMAL_ALIGNMENT_COS {
-        return false;
-    }
-
-    let displayed_origin = glam::Vec3::from_array(displayed.origin_mm);
-    let stored_origin = glam::Vec3::from_array(stored.origin_mm);
-    let signed_distance = (stored_origin - displayed_origin)
-        .dot(displayed_normal)
-        .abs();
-    signed_distance <= PLANE_ORIGIN_TOLERANCE_MM
 }
 
 fn viewport_uv_to_ndc(

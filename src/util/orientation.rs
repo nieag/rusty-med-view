@@ -28,16 +28,6 @@ impl SlicePlane {
         }
     }
 
-    /// Create from viewport index (1=Axial, 2=Coronal, 3=Sagittal) [DEPRECATED]
-    pub fn from_viewport(idx: u32) -> Option<Self> {
-        match idx {
-            1 => Some(SlicePlane::Axial),
-            2 => Some(SlicePlane::Coronal),
-            3 => Some(SlicePlane::Sagittal),
-            _ => None,
-        }
-    }
-
     /// Convert to the shared plane-family abstraction.
     pub fn to_plane_family(self) -> crate::convert::PlaneFamily {
         match self {

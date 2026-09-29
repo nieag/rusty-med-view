@@ -300,40 +300,6 @@ pub fn can_enable_roi_visibility(world: &World, roi_entity: hecs::Entity) -> boo
     visible_voxel_overlay_count(world) < MAX_SIMULTANEOUS_ROI_OVERLAYS
 }
 
-#[cfg(test)]
-pub fn set_active_contour_plane_family(
-    world: &mut World,
-    roi_entity: hecs::Entity,
-    family: PlaneFamily,
-) -> Result<(), ContourPlaneFamilySwitchError> {
-    crate::app::roi::authority::set_active_contour_plane_family(world, roi_entity, family)
-}
-
-#[cfg(test)]
-pub fn request_voxel_overlay_state(
-    world: &World,
-    roi_entity: hecs::Entity,
-) -> RepresentationRequestStatus {
-    crate::app::roi::requests::request_voxel_overlay_state(world, roi_entity)
-}
-
-#[cfg(test)]
-pub fn request_mesh_cache_state(
-    world: &World,
-    roi_entity: hecs::Entity,
-) -> RepresentationRequestStatus {
-    crate::app::roi::requests::request_mesh_cache_state(world, roi_entity)
-}
-
-#[cfg(test)]
-pub fn request_contour_view_state(
-    world: &World,
-    roi_entity: hecs::Entity,
-    view_key: &ContourViewKey,
-) -> ContourRepresentationStatus {
-    crate::app::roi::requests::request_contour_view_state(world, roi_entity, view_key)
-}
-
 fn build_contour_view_data_for_plane(
     voxel_data: &VoxelData,
     view_key: &ContourViewKey,
@@ -497,28 +463,6 @@ pub(crate) fn ensure_contour_view_cache(
     }
 }
 
-#[cfg(test)]
-pub fn request_viewport_voxel_overlay_state(
-    world: &World,
-    viewport_mode: ViewMode,
-    roi_entity: hecs::Entity,
-) -> RepresentationRequestStatus {
-    crate::app::roi::requests::request_viewport_voxel_overlay_state(
-        world,
-        viewport_mode,
-        roi_entity,
-    )
-}
-
-#[cfg(test)]
-pub fn request_viewport_mesh_state(
-    world: &World,
-    viewport_mode: ViewMode,
-    roi_entity: hecs::Entity,
-) -> RepresentationRequestStatus {
-    crate::app::roi::requests::request_viewport_mesh_state(world, viewport_mode, roi_entity)
-}
-
 pub(crate) fn sync_roi_contour_view_caches_for_viewports(world: &mut World) {
     let active_roi = world
         .query::<&EditorState>()
@@ -600,106 +544,6 @@ pub(crate) fn sync_active_roi_mesh_cache_for_viewports(world: &mut World) {
         roi.mark_cache_dirty(RoiCacheKind::Mesh);
         roi.enqueue_rebuild(RoiJobKind::RebuildMeshCache);
     }
-}
-
-#[cfg(test)]
-pub fn promote_contour_view_to_authoritative(
-    world: &mut World,
-    roi_entity: hecs::Entity,
-    view_key: &ContourViewKey,
-) -> Result<(), ContourPromotionError> {
-    crate::app::roi::authority::promote_contour_view_to_authoritative(world, roi_entity, view_key)
-}
-
-#[cfg(test)]
-pub fn replace_contour_data(
-    world: &mut World,
-    roi_entity: hecs::Entity,
-    contour_data: ContourData,
-) -> Result<(), ContourMutationError> {
-    crate::app::roi::authority::replace_contour_data(world, roi_entity, contour_data)
-}
-
-#[cfg(test)]
-pub fn replace_contour_data_for_slice(
-    world: &mut World,
-    roi_entity: hecs::Entity,
-    contour_data: ContourData,
-    dirty_plane: crate::convert::PlaneDefinition,
-) -> Result<(), ContourMutationError> {
-    crate::app::roi::authority::replace_contour_data_for_slice(
-        world,
-        roi_entity,
-        contour_data,
-        dirty_plane,
-    )
-}
-
-#[cfg(test)]
-pub fn replace_contour_data_with_history(
-    world: &mut World,
-    editor_entity: hecs::Entity,
-    roi_entity: hecs::Entity,
-    contour_data: ContourData,
-) -> Result<(), ContourMutationError> {
-    crate::app::roi::history::replace_contour_data_with_history(
-        world,
-        editor_entity,
-        roi_entity,
-        contour_data,
-    )
-}
-
-#[cfg(test)]
-pub fn replace_contour_data_for_slice_with_history(
-    world: &mut World,
-    editor_entity: hecs::Entity,
-    roi_entity: hecs::Entity,
-    contour_data: ContourData,
-    dirty_plane: crate::convert::PlaneDefinition,
-) -> Result<(), ContourMutationError> {
-    crate::app::roi::history::replace_contour_data_for_slice_with_history(
-        world,
-        editor_entity,
-        roi_entity,
-        contour_data,
-        dirty_plane,
-    )
-}
-
-#[cfg(test)]
-pub fn can_undo_roi_edit(world: &World, editor_entity: hecs::Entity) -> bool {
-    crate::app::roi::history::can_undo_roi_edit(world, editor_entity)
-}
-
-#[cfg(test)]
-pub fn can_redo_roi_edit(world: &World, editor_entity: hecs::Entity) -> bool {
-    crate::app::roi::history::can_redo_roi_edit(world, editor_entity)
-}
-
-#[cfg(test)]
-pub fn clear_roi_edit_history_for_roi(
-    world: &mut World,
-    editor_entity: hecs::Entity,
-    roi_entity: hecs::Entity,
-) {
-    crate::app::roi::history::clear_roi_edit_history_for_roi(world, editor_entity, roi_entity);
-}
-
-#[cfg(test)]
-pub fn undo_roi_edit(
-    world: &mut World,
-    editor_entity: hecs::Entity,
-) -> Result<hecs::Entity, RoiEditHistoryError> {
-    crate::app::roi::history::undo_roi_edit(world, editor_entity)
-}
-
-#[cfg(test)]
-pub fn redo_roi_edit(
-    world: &mut World,
-    editor_entity: hecs::Entity,
-) -> Result<hecs::Entity, RoiEditHistoryError> {
-    crate::app::roi::history::redo_roi_edit(world, editor_entity)
 }
 
 fn approx_eq_slice<const N: usize>(lhs: [f32; N], rhs: [f32; N], epsilon: f32) -> bool {
@@ -872,30 +716,6 @@ pub fn create_empty_contour_roi(
 }
 
 #[cfg(test)]
-pub fn replace_mesh_data(
-    world: &mut World,
-    roi_entity: hecs::Entity,
-    mesh_data: MeshData,
-) -> Result<(), MeshMutationError> {
-    crate::app::roi::authority::replace_mesh_data(world, roi_entity, mesh_data)
-}
-
-#[cfg(test)]
-pub fn replace_mesh_data_with_history(
-    world: &mut World,
-    editor_entity: hecs::Entity,
-    roi_entity: hecs::Entity,
-    mesh_data: MeshData,
-) -> Result<(), MeshMutationError> {
-    crate::app::roi::history::replace_mesh_data_with_history(
-        world,
-        editor_entity,
-        roi_entity,
-        mesh_data,
-    )
-}
-
-#[cfg(test)]
 pub fn translate_mesh_data(
     world: &mut World,
     roi_entity: hecs::Entity,
@@ -915,7 +735,7 @@ pub fn translate_mesh_data(
             *coordinate += delta;
         }
     }
-    replace_mesh_data(world, roi_entity, mesh)
+    crate::app::roi::authority::replace_mesh_data(world, roi_entity, mesh)
 }
 
 #[cfg(test)]
@@ -940,22 +760,6 @@ pub fn begin_mesh_translation_preview(
         }
     }
     crate::app::roi::preview::begin_mesh_edit_preview(world, editor_entity, roi_entity, mesh)
-}
-
-#[cfg(test)]
-pub fn commit_mesh_edit_preview(
-    world: &mut World,
-    editor_entity: hecs::Entity,
-) -> Result<(), MeshMutationError> {
-    crate::app::roi::preview::commit_mesh_edit_preview(world, editor_entity)
-}
-
-#[cfg(test)]
-pub fn cancel_mesh_edit_preview(
-    world: &mut World,
-    editor_entity: hecs::Entity,
-) -> Result<(), MeshMutationError> {
-    crate::app::roi::preview::cancel_mesh_edit_preview(world, editor_entity)
 }
 
 #[cfg(test)]
@@ -1008,40 +812,6 @@ pub fn create_contour_roi_from_voxel_roi(
         );
     }
     Ok(entity)
-}
-
-#[cfg(test)]
-pub fn promote_voxel_roi_to_contour_authority(
-    world: &mut World,
-    roi_entity: hecs::Entity,
-    family: PlaneFamily,
-) -> Result<(), VoxelContourPromotionError> {
-    crate::app::roi::authority::promote_voxel_roi_to_contour_authority(world, roi_entity, family)
-}
-
-#[cfg(test)]
-pub fn promote_roi_to_contour_authority(
-    world: &mut World,
-    roi_entity: hecs::Entity,
-    family: PlaneFamily,
-) -> Result<(), VoxelContourPromotionError> {
-    crate::app::roi::authority::promote_roi_to_contour_authority(world, roi_entity, family)
-}
-
-#[cfg(test)]
-pub fn promote_current_voxel_cache_to_authority(
-    world: &mut World,
-    roi_entity: hecs::Entity,
-) -> Result<(), VoxelAuthorityPromotionError> {
-    crate::app::roi::authority::promote_current_voxel_cache_to_authority(world, roi_entity)
-}
-
-#[cfg(test)]
-pub fn promote_current_mesh_cache_to_authority(
-    world: &mut World,
-    roi_entity: hecs::Entity,
-) -> Result<(), MeshAuthorityPromotionError> {
-    crate::app::roi::authority::promote_current_mesh_cache_to_authority(world, roi_entity)
 }
 
 #[cfg(test)]
@@ -1160,15 +930,6 @@ pub fn create_mesh_roi_from_contour_roi(
         });
     }
     Ok(entity)
-}
-
-#[cfg(test)]
-pub fn cache_status(
-    world: &World,
-    roi_entity: hecs::Entity,
-    kind: RoiCacheKind,
-) -> Option<RoiCacheStatus> {
-    crate::app::roi::requests::cache_status(world, roi_entity, kind)
 }
 
 #[cfg(test)]
@@ -2230,6 +1991,10 @@ fn cache_kind_to_job_kind(kind: RoiCacheKind) -> RoiJobKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::roi::authority::*;
+    use crate::app::roi::history::*;
+    use crate::app::roi::preview::*;
+    use crate::app::roi::requests::*;
     use crate::convert::{orthogonal_plane_from_volume_uv, world_mm_to_voxel_index};
 
     fn spawn_test_roi(world: &mut World) -> hecs::Entity {
