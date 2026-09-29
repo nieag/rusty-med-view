@@ -95,6 +95,100 @@ impl SlicePlane {
     }
 }
 
+/// Anatomical letter (`R`, `L`, `A`, `P`, `S`, `I`) of the dominant axis of a world direction, in
+/// the NIfTI RAS+ world convention (+x right, +y anterior, +z superior). `None` for a zero vector.
+pub fn anatomical_letter(world_direction: [f64; 3]) -> Option<char> {
+    let [x, y, z] = world_direction;
+    let (ax, ay, az) = (x.abs(), y.abs(), z.abs());
+    if !world_direction.iter().all(|value| value.is_finite()) || ax.max(ay).max(az) <= 1e-9 {
+        return None;
+    }
+    Some(if ax >= ay && ax >= az {
+        if x >= 0.0 {
+            'R'
+        } else {
+            'L'
+        }
+    } else if ay >= az {
+        if y >= 0.0 {
+            'A'
+        } else {
+            'P'
+        }
+    } else if z >= 0.0 {
+        'S'
+    } else {
+        'I'
+    })
+}
+
+/// The letter for the opposite direction.
+pub fn opposite_letter(letter: char) -> char {
+    match letter {
+        'R' => 'L',
+        'L' => 'R',
+        'A' => 'P',
+        'P' => 'A',
+        'S' => 'I',
+        'I' => 'S',
+        other => other,
+    }
+}
+
+/// Anatomical letters of the positive and negative direction of each voxel index axis, derived
+/// from the grid's affine so reflected (LAS/LPS) and permuted volumes are labelled truthfully.
+pub fn index_axis_letters(geometry: crate::app::roi::VoxelGeometry) -> [[char; 2]; 3] {
+    let affine = geometry.ijk_to_world_affine();
+    let columns = [affine.x_axis, affine.y_axis, affine.z_axis];
+    columns.map(|column| {
+        let positive = anatomical_letter([column.x, column.y, column.z]).unwrap_or('?');
+        [positive, opposite_letter(positive)]
+    })
+}
+
+/// Letters for the four edges of a 2D slice view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdgeLetters {
+    pub left: char,
+    pub right: char,
+    pub top: char,
+    pub bottom: char,
+}
+
+impl SlicePlane {
+    /// Voxel index axes shown toward the screen's left and top edges. Both increase toward
+    /// the edge (see `screen_uv_to_volume`).
+    fn left_top_index_axes(&self) -> (usize, usize) {
+        match self {
+            SlicePlane::Axial => (0, 1),
+            SlicePlane::Coronal => (0, 2),
+            SlicePlane::Sagittal => (1, 2),
+        }
+    }
+
+    /// Anatomical letters of this view's edges for the given grid.
+    pub fn edge_letters(&self, geometry: crate::app::roi::VoxelGeometry) -> EdgeLetters {
+        let letters = index_axis_letters(geometry);
+        let (left_axis, top_axis) = self.left_top_index_axes();
+        EdgeLetters {
+            left: letters[left_axis][0],
+            right: letters[left_axis][1],
+            top: letters[top_axis][0],
+            bottom: letters[top_axis][1],
+        }
+    }
+
+    /// Anatomical plane this index-space view actually shows, from the world direction of its
+    /// depth axis: `"axial"`, `"coronal"`, or `"sagittal"`.
+    pub fn anatomical_plane_name(&self, geometry: crate::app::roi::VoxelGeometry) -> &'static str {
+        match index_axis_letters(geometry)[self.depth_axis()][0] {
+            'R' | 'L' => "sagittal",
+            'A' | 'P' => "coronal",
+            _ => "axial",
+        }
+    }
+}
+
 /// Base rotation to make Superior UP in the default 3D view.
 ///
 /// Screen projection flips Y, so this must be -90° around X: object +Z maps to world +Y

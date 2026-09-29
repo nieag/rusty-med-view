@@ -1,6 +1,7 @@
 use crate::components::*;
 use crate::convert::slice_index_from_cursor_uv;
 use crate::overlay::OverlayManager;
+use crate::util::orientation::SlicePlane;
 use crate::AppEvent;
 use hecs::{Entity, World};
 use winit::event_loop::EventLoopProxy;
@@ -44,8 +45,10 @@ pub fn draw_viewport_overlays(
 
     let mut gizmo_rotation = [0.0f32, 0.0, 0.0, 1.0];
     let mut data_orientation = [0.0f32, 0.0, 0.0, 1.0];
+    let mut main_geometry: Option<VoxelGeometry> = None;
     for (_, vol) in world.query::<&VolumeData>().with::<&MainVolumeTag>().iter() {
         data_orientation = vol.orientation();
+        main_geometry = vol.geometry;
     }
 
     for (_, (vp, vs)) in world.query::<(&Viewport, &ViewportState)>().iter() {
@@ -104,8 +107,6 @@ pub fn draw_viewport_overlays(
     for (e, mode, rect) in vps.iter() {
         let rx0 = rect.min.x;
         let ry0 = rect.min.y;
-        let rhw = rect.width() / 2.0;
-        let rhh = rect.height() / 2.0;
         let is_active = Some(*e) == active_viewport_entity;
 
         let mut label_res: Option<egui::Response> = None;
@@ -128,10 +129,7 @@ pub fn draw_viewport_overlays(
                         ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
                     }
 
-                    marker(ui, "A", egui::pos2(rx0 + rhw, ry0 + 15.0));
-                    marker(ui, "P", egui::pos2(rx0 + rhw, ry0 + rect.height() - 15.0));
-                    marker(ui, "R", egui::pos2(rx0 + 15.0, ry0 + rhh));
-                    marker(ui, "L", egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh));
+                    slice_orientation_markers(ui, *rect, SlicePlane::Axial, main_geometry);
                 }
                 ViewMode::Coronal => {
                     let slice_y = displayed_slice_number(cursor_pos[1], vol_dims[1]);
@@ -140,10 +138,7 @@ pub fn draw_viewport_overlays(
                     if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
                         ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
                     }
-                    marker(ui, "S", egui::pos2(rx0 + rhw, ry0 + 15.0));
-                    marker(ui, "I", egui::pos2(rx0 + rhw, ry0 + rect.height() - 15.0));
-                    marker(ui, "R", egui::pos2(rx0 + 15.0, ry0 + rhh));
-                    marker(ui, "L", egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh));
+                    slice_orientation_markers(ui, *rect, SlicePlane::Coronal, main_geometry);
                 }
                 ViewMode::Sagittal => {
                     let slice_x = displayed_slice_number(cursor_pos[0], vol_dims[0]);
@@ -152,10 +147,7 @@ pub fn draw_viewport_overlays(
                     if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
                         ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
                     }
-                    marker(ui, "S", egui::pos2(rx0 + rhw, ry0 + 15.0));
-                    marker(ui, "I", egui::pos2(rx0 + rhw, ry0 + rect.height() - 15.0));
-                    marker(ui, "A", egui::pos2(rx0 + 15.0, ry0 + rhh));
-                    marker(ui, "P", egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh));
+                    slice_orientation_markers(ui, *rect, SlicePlane::Sagittal, main_geometry);
                 }
                 ViewMode::Oblique => {
                     label_res = Some(draw_label(ui, "Oblique", is_active));
@@ -202,7 +194,10 @@ pub fn draw_viewport_overlays(
                 .interactable(false)
                 .show(ctx, |ui| {
                     let view_quat = super::gizmo::quat_from_array(gizmo_rotation);
-                    super::gizmo::draw_gizmo(ui, gizmo_rect, view_quat);
+                    let axis_letters = main_geometry
+                        .map(crate::util::orientation::index_axis_letters)
+                        .unwrap_or([['R', 'L'], ['A', 'P'], ['S', 'I']]);
+                    super::gizmo::draw_gizmo(ui, gizmo_rect, view_quat, axis_letters);
                 });
         }
     }
@@ -277,6 +272,56 @@ fn draw_label(ui: &mut egui::Ui, text: &str, is_active: bool) -> egui::Response 
             )
         })
         .inner
+}
+
+/// Anatomical edge letters for a 2D slice view, derived from the grid's affine, plus a hint when
+/// the index-space view is not the anatomical plane its name suggests (permuted axes).
+fn slice_orientation_markers(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    plane: SlicePlane,
+    geometry: Option<VoxelGeometry>,
+) {
+    let Some(geometry) = geometry else {
+        return;
+    };
+    let letters = plane.edge_letters(geometry);
+    let (x0, y0) = (rect.min.x, rect.min.y);
+    let (half_width, half_height) = (rect.width() / 2.0, rect.height() / 2.0);
+    marker(
+        ui,
+        &letters.top.to_string(),
+        egui::pos2(x0 + half_width, y0 + 15.0),
+    );
+    marker(
+        ui,
+        &letters.bottom.to_string(),
+        egui::pos2(x0 + half_width, y0 + rect.height() - 15.0),
+    );
+    marker(
+        ui,
+        &letters.left.to_string(),
+        egui::pos2(x0 + 15.0, y0 + half_height),
+    );
+    marker(
+        ui,
+        &letters.right.to_string(),
+        egui::pos2(x0 + rect.width() - 15.0, y0 + half_height),
+    );
+
+    let nominal = match plane {
+        SlicePlane::Axial => "axial",
+        SlicePlane::Coronal => "coronal",
+        SlicePlane::Sagittal => "sagittal",
+    };
+    let actual = plane.anatomical_plane_name(geometry);
+    if actual != nominal {
+        ui.label(
+            egui::RichText::new(format!("Shows the {actual} plane (index space)"))
+                .size(11.0)
+                .color(egui::Color32::from_rgb(255, 180, 60)),
+        );
+    }
 }
 
 fn marker(ui: &mut egui::Ui, text: &str, pos: egui::Pos2) {

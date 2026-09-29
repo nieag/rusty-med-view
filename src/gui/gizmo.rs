@@ -7,26 +7,53 @@ use glam::{Quat, Vec3};
 ///
 /// `view_rotation`: The rotation quaternion representing the volume's orientation.
 /// This should be the INVERSE of the camera's view rotation.
-pub fn draw_gizmo(ui: &mut Ui, rect: Rect, view_rotation: Quat) {
+///
+/// `axis_letters`: anatomical letters of the positive and negative direction of each voxel index
+/// axis (from the grid's affine), so a reflected or permuted volume is labelled truthfully.
+pub fn draw_gizmo(ui: &mut Ui, rect: Rect, view_rotation: Quat, axis_letters: [[char; 2]; 3]) {
     let center = rect.center();
     let radius = rect.width().min(rect.height()) / 2.0;
     let axis_length = radius * 0.7;
 
-    // Define axes with medical standard labels
-    // X = Right/Left, Y = Anterior/Posterior, Z = Superior/Inferior
+    // Colours identify the voxel index axes (i red, j green, k blue); the letters say which
+    // anatomical direction each one currently points toward.
     let axes = [
-        (Vec3::X, "R", Color32::from_rgb(255, 100, 100)), // Right (Red)
-        (Vec3::NEG_X, "L", Color32::from_rgb(180, 60, 60)), // Left
-        (Vec3::Y, "A", Color32::from_rgb(100, 255, 100)), // Anterior (Green)
-        (Vec3::NEG_Y, "P", Color32::from_rgb(60, 180, 60)), // Posterior
-        (Vec3::Z, "S", Color32::from_rgb(100, 150, 255)), // Superior (Blue)
-        (Vec3::NEG_Z, "I", Color32::from_rgb(60, 100, 180)), // Inferior
+        (
+            Vec3::X,
+            axis_letters[0][0],
+            Color32::from_rgb(255, 100, 100),
+        ),
+        (
+            Vec3::NEG_X,
+            axis_letters[0][1],
+            Color32::from_rgb(180, 60, 60),
+        ),
+        (
+            Vec3::Y,
+            axis_letters[1][0],
+            Color32::from_rgb(100, 255, 100),
+        ),
+        (
+            Vec3::NEG_Y,
+            axis_letters[1][1],
+            Color32::from_rgb(60, 180, 60),
+        ),
+        (
+            Vec3::Z,
+            axis_letters[2][0],
+            Color32::from_rgb(100, 150, 255),
+        ),
+        (
+            Vec3::NEG_Z,
+            axis_letters[2][1],
+            Color32::from_rgb(60, 100, 180),
+        ),
     ];
 
     // Transform and project axes
-    struct TransformedAxis<'a> {
+    struct TransformedAxis {
         pos2: Pos2,
-        label: &'a str,
+        label: char,
         color: Color32,
         depth: f32,
     }
@@ -52,7 +79,7 @@ pub fn draw_gizmo(ui: &mut Ui, rect: Rect, view_rotation: Quat) {
 
             TransformedAxis {
                 pos2: Pos2::new(screen_x, screen_y),
-                label,
+                label: *label,
                 color: *color,
                 depth: rotated[2],
             }
@@ -101,7 +128,7 @@ pub fn draw_gizmo(ui: &mut Ui, rect: Rect, view_rotation: Quat) {
         painter.text(
             axis.pos2,
             egui::Align2::CENTER_CENTER,
-            axis.label,
+            axis.label.to_string(),
             egui::FontId::proportional(if is_front { 11.0 } else { 9.0 }),
             Color32::WHITE,
         );

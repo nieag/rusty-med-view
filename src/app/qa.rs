@@ -137,6 +137,9 @@ pub struct QaSnapshotViewport {
     pub mesh_renderable: bool,
     pub volume_slice_in_bounds: Option<bool>,
     pub cursor_intersects_active_roi: Option<bool>,
+    /// Anatomical letters of a 2D orthogonal view's left, right, top, and bottom edges, in that
+    /// order (for example `"RLAP"`), derived from the main volume's affine.
+    pub edge_letters: Option<String>,
     pub render_blockers: Vec<String>,
     pub readiness_blockers: Vec<String>,
 }

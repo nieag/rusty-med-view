@@ -370,3 +370,125 @@ fn test_picking_3d_parity() {
     ]);
     assert!((ray_up_origin.y - 0.3).abs() < 1e-5);
 }
+
+fn geometry_from_columns(
+    column_x: [f64; 3],
+    column_y: [f64; 3],
+    column_z: [f64; 3],
+) -> crate::app::roi::VoxelGeometry {
+    use glam::{DMat4, DVec4};
+    crate::app::roi::VoxelGeometry::from_affine(
+        [8, 8, 8],
+        DMat4::from_cols(
+            DVec4::new(column_x[0], column_x[1], column_x[2], 0.0),
+            DVec4::new(column_y[0], column_y[1], column_y[2], 0.0),
+            DVec4::new(column_z[0], column_z[1], column_z[2], 0.0),
+            DVec4::W,
+        ),
+    )
+    .unwrap()
+}
+
+fn letters(left: char, right: char, top: char, bottom: char) -> EdgeLetters {
+    EdgeLetters {
+        left,
+        right,
+        top,
+        bottom,
+    }
+}
+
+#[test]
+fn test_anatomical_letter_uses_the_dominant_axis() {
+    assert_eq!(anatomical_letter([2.0, 0.5, 0.1]), Some('R'));
+    assert_eq!(anatomical_letter([-2.0, 0.5, 0.1]), Some('L'));
+    assert_eq!(anatomical_letter([0.1, 0.0, -3.0]), Some('I'));
+    assert_eq!(anatomical_letter([0.0, -1.0, 0.2]), Some('P'));
+    assert_eq!(anatomical_letter([0.0, 0.0, 0.0]), None);
+}
+
+#[test]
+fn test_ras_stored_volume_keeps_the_radiological_edge_letters() {
+    // The letters the viewer used to hard-code, which are only right for RAS storage.
+    let ras = geometry_from_columns([2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 3.0]);
+
+    assert_eq!(
+        SlicePlane::Axial.edge_letters(ras),
+        letters('R', 'L', 'A', 'P')
+    );
+    assert_eq!(
+        SlicePlane::Coronal.edge_letters(ras),
+        letters('R', 'L', 'S', 'I')
+    );
+    assert_eq!(
+        SlicePlane::Sagittal.edge_letters(ras),
+        letters('A', 'P', 'S', 'I')
+    );
+}
+
+#[test]
+fn test_las_stored_volume_swaps_left_and_right_labels() {
+    // Index i runs toward the patient's left, so the screen-left edge is the patient's left.
+    let las = geometry_from_columns([-2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 3.0]);
+
+    assert_eq!(
+        SlicePlane::Axial.edge_letters(las),
+        letters('L', 'R', 'A', 'P')
+    );
+    assert_eq!(
+        SlicePlane::Coronal.edge_letters(las),
+        letters('L', 'R', 'S', 'I')
+    );
+    assert_eq!(
+        SlicePlane::Sagittal.edge_letters(las),
+        letters('A', 'P', 'S', 'I')
+    );
+}
+
+#[test]
+fn test_lps_stored_volume_flips_left_right_and_anterior_posterior() {
+    let lps = geometry_from_columns([-2.0, 0.0, 0.0], [0.0, -2.0, 0.0], [0.0, 0.0, 3.0]);
+
+    assert_eq!(
+        SlicePlane::Axial.edge_letters(lps),
+        letters('L', 'R', 'P', 'A')
+    );
+    assert_eq!(
+        SlicePlane::Sagittal.edge_letters(lps),
+        letters('P', 'A', 'S', 'I')
+    );
+}
+
+#[test]
+fn test_permuted_axes_are_labelled_by_their_real_direction() {
+    // A sagittal acquisition stored with i -> anterior, j -> superior, k -> right.
+    let permuted = geometry_from_columns([0.0, 2.0, 0.0], [0.0, 0.0, 2.0], [3.0, 0.0, 0.0]);
+
+    assert_eq!(
+        SlicePlane::Axial.edge_letters(permuted),
+        letters('A', 'P', 'S', 'I')
+    );
+    assert_eq!(
+        SlicePlane::Axial.anatomical_plane_name(permuted),
+        "sagittal"
+    );
+    assert_eq!(
+        SlicePlane::Sagittal.anatomical_plane_name(permuted),
+        "coronal"
+    );
+}
+
+#[test]
+fn test_anatomical_plane_name_matches_the_view_for_standard_storage() {
+    let ras = geometry_from_columns([2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 3.0]);
+
+    assert_eq!(SlicePlane::Axial.anatomical_plane_name(ras), "axial");
+    assert_eq!(SlicePlane::Coronal.anatomical_plane_name(ras), "coronal");
+    assert_eq!(SlicePlane::Sagittal.anatomical_plane_name(ras), "sagittal");
+}
+
+#[test]
+fn test_anatomical_letter_rejects_non_finite_directions() {
+    assert_eq!(anatomical_letter([f64::NAN, 1.0, 0.0]), None);
+    assert_eq!(anatomical_letter([f64::INFINITY, 0.0, 0.0]), None);
+}

@@ -440,6 +440,14 @@ impl AppState {
                     ViewMode::ThreeD => has_three_d = true,
                     ViewMode::Oblique => {}
                 }
+                let edge_letters = crate::util::orientation::SlicePlane::from_mode(vp.mode)
+                    .zip(roi_runtime::main_volume_geometry(&ctx.scene.world))
+                    .map(|(plane, geometry)| {
+                        let letters = plane.edge_letters(geometry);
+                        [letters.left, letters.right, letters.top, letters.bottom]
+                            .iter()
+                            .collect::<String>()
+                    });
                 viewports.push(qa::QaSnapshotViewport {
                     mode: mode.to_string(),
                     rect: vp.rect,
@@ -463,6 +471,7 @@ impl AppState {
                     mesh_renderable,
                     volume_slice_in_bounds,
                     cursor_intersects_active_roi,
+                    edge_letters,
                     render_blockers: blockers.clone(),
                     readiness_blockers: blockers,
                 });
