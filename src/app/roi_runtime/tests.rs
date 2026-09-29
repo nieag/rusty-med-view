@@ -3132,3 +3132,23 @@ fn test_two_slice_commits_before_one_rebuild_keep_every_slice_in_voxel_cache() {
         "voxel cache must contain every authoritative slice, not only the last dirty one"
     );
 }
+
+#[test]
+fn test_label_import_rejects_geometry_the_roi_cannot_represent_instead_of_panicking() {
+    let world = World::new();
+    let label = LoadedLabel {
+        dimensions: [2, 2, 2],
+        spacing: [1.0e-5; 3],
+        origin: [0.0; 3],
+        orientation: [0.0, 0.0, 0.0, 1.0],
+        data: vec![1; 8],
+        filename: "tiny_spacing.nii".to_string(),
+    };
+
+    let result = prepare_voxel_roi_import(&world, &label);
+
+    assert!(
+        result.is_err(),
+        "a label whose affine is singular must be rejected at import"
+    );
+}

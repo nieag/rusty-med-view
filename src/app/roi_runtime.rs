@@ -570,6 +570,10 @@ pub fn prepare_voxel_roi_import(
         loaded_label.orientation,
     )
     .map_err(|error| format!("Invalid label ROI geometry: {error:?}"))?;
+    // `Roi` owns an affine reference grid that rejects more geometries than `VoxelGeometry`
+    // (for example a singular affine from a tiny spacing); reject them here instead of letting
+    // the ROI constructor panic.
+    roi_geometry_from_voxel_geometry(geometry)?;
     let geometry_matches_main = if let Some(main_geometry) = main_volume_geometry(world) {
         let differs = main_geometry.dimensions != loaded_label.dimensions
             || !approx_eq_slice(main_geometry.spacing, loaded_label.spacing, 1e-5)
