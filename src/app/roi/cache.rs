@@ -1,8 +1,17 @@
 use crate::app::components::{
-    CacheGeneration, CacheViewState, ContourCache, ContourData, ContourViewCache, ContourViewKey,
-    GpuVolumeResources, MeshCache, PreviewMeshCache, PreviewVoxelCache, Roi, RoiCacheKind,
-    RoiDirtyState, RoiJobKind, VoxelCache, VoxelData, MAX_CONTOUR_VIEW_CACHE_ENTRIES,
+    CacheFreshness, CacheViewState, ContourCache, ContourData, ContourViewCache, ContourViewKey,
+    GpuVolumeResources, MeshCache, PreviewMeshCache, PreviewVoxelCache, Revision, Roi,
+    RoiCacheKind, RoiDirtyState, VoxelCache, VoxelData, MAX_CONTOUR_VIEW_CACHE_ENTRIES,
 };
+
+/// How a shape change treats one derived cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Invalidate {
+    /// Dirty even when the cache is absent, so it is rebuilt when next demanded.
+    Always,
+    /// Dirty only when a cache exists.
+    WhenPresent,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheInstallError {
@@ -55,7 +64,7 @@ impl Roi {
         &mut self,
         key: ContourViewKey,
         data: ContourData,
-        source_generation: u64,
+        built_from: Revision,
         state: CacheViewState,
     ) {
         let geometry_identity = self.reference_geometry().identity();
@@ -66,7 +75,7 @@ impl Roi {
             .find(|view| view.key.logical_eq(&key))
         {
             existing.data = data;
-            existing.source_generation = source_generation;
+            existing.built_from = built_from;
             existing.geometry_identity = geometry_identity;
             existing.state = state;
             existing.key = key;
@@ -74,7 +83,7 @@ impl Roi {
             cache.views.push(ContourViewCache {
                 key,
                 data,
-                source_generation,
+                built_from,
                 geometry_identity,
                 state,
             });
@@ -115,8 +124,7 @@ impl Roi {
             _ => false,
         };
         if self.mesh_data().is_some()
-            && (view.source_generation != self.dirty_state.generations.authoritative
-                || !mesh_view_usable)
+            && (view.built_from != self.dirty_state.authoritative || !mesh_view_usable)
         {
             return None;
         }
@@ -143,83 +151,82 @@ impl Roi {
     }
 
     pub fn cache_generation(&self, kind: RoiCacheKind) -> u64 {
-        match kind {
-            RoiCacheKind::Voxel => self.dirty_state.generations.voxel,
-            RoiCacheKind::Contour => self.dirty_state.generations.contour,
-            RoiCacheKind::Mesh => self.dirty_state.generations.mesh,
-        }
+        self.dirty_state.freshness(kind).built_from.shape
     }
 
     pub fn is_cache_dirty(&self, kind: RoiCacheKind) -> bool {
-        match kind {
-            RoiCacheKind::Voxel => self.dirty_state.voxel_cache_dirty,
-            RoiCacheKind::Contour => self.dirty_state.contour_cache_dirty,
-            RoiCacheKind::Mesh => self.dirty_state.mesh_cache_dirty,
-        }
+        self.dirty_state.freshness(kind).dirty
     }
 
+    /// The single freshness rule: not invalidated, built from the current authoritative
+    /// revision, and on the ROI's reference grid.
     pub fn is_cache_current(&self, kind: RoiCacheKind) -> bool {
-        !self.is_cache_dirty(kind)
-            && self.cache_generation(kind) == self.dirty_state.generations.authoritative
+        self.dirty_state
+            .freshness(kind)
+            .is_current(self.dirty_state.authoritative, kind)
             && self.cache_geometry_matches(kind)
     }
 
+    /// Every derived cache is invalidated, including absent ones.
     pub fn mark_authoritative_changed(&mut self) {
-        self.dirty_state.authoritative_dirty = true;
-        self.dirty_state.generations.authoritative += 1;
-        self.mark_cache_dirty(RoiCacheKind::Voxel);
-        self.mark_cache_dirty(RoiCacheKind::Contour);
-        self.mark_cache_dirty(RoiCacheKind::Mesh);
+        self.invalidate_for_shape_change([Invalidate::Always; 3]);
     }
 
+    /// A contour edit invalidates the voxel and mesh caches always, and the contour views only
+    /// when some exist.
     pub fn mark_contour_authoritative_changed(&mut self) {
+        self.invalidate_for_shape_change([
+            Invalidate::Always,
+            Invalidate::WhenPresent,
+            Invalidate::Always,
+        ]);
+    }
+
+    /// A mesh edit invalidates the voxel and contour caches always, and the mesh cache only when
+    /// one exists.
+    pub fn mark_mesh_authoritative_changed(&mut self) {
+        self.validated_mesh_generation = None;
+        self.invalidate_for_shape_change([
+            Invalidate::Always,
+            Invalidate::Always,
+            Invalidate::WhenPresent,
+        ]);
+    }
+
+    /// Bumps the shape revision and invalidates caches by rule, in voxel, contour, mesh order.
+    fn invalidate_for_shape_change(&mut self, rules: [Invalidate; 3]) {
         self.dirty_state.authoritative_dirty = true;
-        self.dirty_state.generations.authoritative += 1;
-        self.mark_cache_dirty(RoiCacheKind::Voxel);
-        self.mark_cache_dirty(RoiCacheKind::Mesh);
-        if self.session_caches.contour.is_some() {
-            self.mark_cache_dirty(RoiCacheKind::Contour);
+        self.dirty_state.authoritative = self.dirty_state.authoritative.next_shape();
+        for (kind, rule) in [
+            RoiCacheKind::Voxel,
+            RoiCacheKind::Contour,
+            RoiCacheKind::Mesh,
+        ]
+        .into_iter()
+        .zip(rules)
+        {
+            if rule == Invalidate::Always || self.has_cache(kind) {
+                self.mark_cache_dirty(kind);
+            }
         }
     }
 
-    pub fn mark_mesh_authoritative_changed(&mut self) {
-        self.dirty_state.authoritative_dirty = true;
-        self.dirty_state.generations.authoritative += 1;
-        self.validated_mesh_generation = None;
-        self.mark_cache_dirty(RoiCacheKind::Voxel);
-        self.mark_cache_dirty(RoiCacheKind::Contour);
-        if self.session_caches.mesh.is_some() {
-            self.mark_cache_dirty(RoiCacheKind::Mesh);
+    fn has_cache(&self, kind: RoiCacheKind) -> bool {
+        match kind {
+            RoiCacheKind::Voxel => self.session_caches.voxel.is_some(),
+            RoiCacheKind::Contour => self.session_caches.contour.is_some(),
+            RoiCacheKind::Mesh => self.session_caches.mesh.is_some(),
         }
     }
 
     pub fn mark_cache_dirty(&mut self, kind: RoiCacheKind) {
-        match kind {
-            RoiCacheKind::Voxel => self.dirty_state.voxel_cache_dirty = true,
-            RoiCacheKind::Contour => self.dirty_state.contour_cache_dirty = true,
-            RoiCacheKind::Mesh => self.dirty_state.mesh_cache_dirty = true,
-        }
+        self.dirty_state.freshness_mut(kind).dirty = true;
     }
 
     pub fn finish_cache_rebuild(&mut self, kind: RoiCacheKind) {
-        let authoritative_generation = self.dirty_state.generations.authoritative;
-        match kind {
-            RoiCacheKind::Voxel => {
-                self.dirty_state.voxel_cache_dirty = false;
-                self.dirty_state.generations.voxel = authoritative_generation;
-                self.finish_job(RoiJobKind::RebuildVoxelCache);
-            }
-            RoiCacheKind::Contour => {
-                self.dirty_state.contour_cache_dirty = false;
-                self.dirty_state.generations.contour = authoritative_generation;
-                self.finish_job(RoiJobKind::RebuildContourCache);
-            }
-            RoiCacheKind::Mesh => {
-                self.dirty_state.mesh_cache_dirty = false;
-                self.dirty_state.generations.mesh = authoritative_generation;
-                self.finish_job(RoiJobKind::RebuildMeshCache);
-            }
-        }
+        *self.dirty_state.freshness_mut(kind) =
+            CacheFreshness::built_from(self.dirty_state.authoritative);
+        self.finish_job(kind.rebuild_job());
         self.dirty_state.authoritative_dirty = false;
     }
 
@@ -237,27 +244,19 @@ impl Roi {
 
     pub fn store_stale_voxel_cache(&mut self, cache: VoxelCache) {
         self.session_caches.voxel = Some(cache);
-        self.dirty_state.voxel_cache_dirty = true;
-        self.dirty_state.generations.voxel = 0;
+        self.dirty_state.voxel = CacheFreshness::invalidated();
     }
 
     pub fn discard_cache(&mut self, kind: RoiCacheKind) {
         match kind {
-            RoiCacheKind::Voxel => {
-                self.session_caches.voxel = None;
-                self.dirty_state.generations.voxel = 0;
-            }
-            RoiCacheKind::Contour => {
-                self.session_caches.contour = None;
-                self.dirty_state.generations.contour = 0;
-            }
+            RoiCacheKind::Voxel => self.session_caches.voxel = None,
+            RoiCacheKind::Contour => self.session_caches.contour = None,
             RoiCacheKind::Mesh => {
                 self.session_caches.mesh = None;
                 self.session_caches.mesh_geometry_identity = None;
-                self.dirty_state.generations.mesh = 0;
             }
         }
-        self.mark_cache_dirty(kind);
+        *self.dirty_state.freshness_mut(kind) = CacheFreshness::invalidated();
     }
 
     pub(crate) fn rebase_after_contour_promotion(
@@ -280,17 +279,16 @@ impl Roi {
             });
         }
 
-        let generation = self.next_authoritative_generation();
+        let revision = self.dirty_state.authoritative.next_shape();
         self.dirty_state = RoiDirtyState {
             authoritative_dirty: true,
-            voxel_cache_dirty: false,
-            contour_cache_dirty: false,
-            mesh_cache_dirty: !mesh_cache_is_current,
-            generations: CacheGeneration {
-                authoritative: generation,
-                voxel: generation,
-                contour: generation,
-                mesh: if mesh_cache_is_current { generation } else { 0 },
+            authoritative: revision,
+            voxel: CacheFreshness::built_from(revision),
+            contour: CacheFreshness::built_from(revision),
+            mesh: if mesh_cache_is_current {
+                CacheFreshness::built_from(revision)
+            } else {
+                CacheFreshness::invalidated()
             },
         };
     }
@@ -314,17 +312,16 @@ impl Roi {
             .as_ref()
             .map(|_| self.reference_geometry().identity());
 
-        let generation = self.next_authoritative_generation();
+        let revision = self.dirty_state.authoritative.next_shape();
         self.dirty_state = RoiDirtyState {
             authoritative_dirty: true,
-            voxel_cache_dirty: false,
-            contour_cache_dirty: true,
-            mesh_cache_dirty: !mesh_cache_is_current,
-            generations: CacheGeneration {
-                authoritative: generation,
-                voxel: generation,
-                contour: 0,
-                mesh: if mesh_cache_is_current { generation } else { 0 },
+            authoritative: revision,
+            voxel: CacheFreshness::built_from(revision),
+            contour: CacheFreshness::invalidated(),
+            mesh: if mesh_cache_is_current {
+                CacheFreshness::built_from(revision)
+            } else {
+                CacheFreshness::invalidated()
             },
         };
     }
@@ -335,22 +332,17 @@ impl Roi {
         self.session_caches.mesh_geometry_identity = None;
         self.session_caches.contour = None;
 
-        let generation = self.next_authoritative_generation();
+        let revision = self.dirty_state.authoritative.next_shape();
         self.dirty_state = RoiDirtyState {
             authoritative_dirty: true,
-            voxel_cache_dirty: !voxel_cache_is_current,
-            contour_cache_dirty: true,
-            mesh_cache_dirty: false,
-            generations: CacheGeneration {
-                authoritative: generation,
-                voxel: if voxel_cache_is_current {
-                    generation
-                } else {
-                    0
-                },
-                contour: 0,
-                mesh: generation,
+            authoritative: revision,
+            voxel: if voxel_cache_is_current {
+                CacheFreshness::built_from(revision)
+            } else {
+                CacheFreshness::invalidated()
             },
+            contour: CacheFreshness::invalidated(),
+            mesh: CacheFreshness::built_from(revision),
         };
     }
 
@@ -370,24 +362,23 @@ impl Roi {
         &mut self,
         key: ContourViewKey,
         data: ContourData,
-        source_generation: u64,
+        built_from: Revision,
     ) -> Result<(), CacheInstallError> {
-        self.install_contour_view_result(key, data, source_generation, CacheViewState::Current)
+        self.install_contour_view_result(key, data, built_from, CacheViewState::Current)
     }
 
     pub fn install_contour_view_result(
         &mut self,
         key: ContourViewKey,
         data: ContourData,
-        source_generation: u64,
+        built_from: Revision,
         state: CacheViewState,
     ) -> Result<(), CacheInstallError> {
-        self.validate_source_generation(source_generation)?;
+        self.validate_source_revision(built_from)?;
         let is_current = state == CacheViewState::Current;
-        self.upsert_contour_view_cache(key, data, source_generation, state);
+        self.upsert_contour_view_cache(key, data, built_from, state);
         if is_current {
-            self.dirty_state.contour_cache_dirty = false;
-            self.dirty_state.generations.contour = source_generation;
+            self.dirty_state.contour = CacheFreshness::built_from(built_from);
         }
         Ok(())
     }
@@ -427,8 +418,21 @@ impl Roi {
         }
     }
 
+    /// Contour views follow the form as well as the shape, so their results must match the full
+    /// authoritative revision.
+    fn validate_source_revision(&self, built_from: Revision) -> Result<(), CacheInstallError> {
+        self.validate_source_generation(built_from.shape)?;
+        if built_from.form != self.dirty_state.authoritative.form {
+            return Err(CacheInstallError::StaleGeneration {
+                expected: self.dirty_state.authoritative.form,
+                actual: built_from.form,
+            });
+        }
+        Ok(())
+    }
+
     fn validate_source_generation(&self, source_generation: u64) -> Result<(), CacheInstallError> {
-        let expected = self.dirty_state.generations.authoritative;
+        let expected = self.dirty_state.authoritative.shape;
         if source_generation != expected {
             return Err(CacheInstallError::StaleGeneration {
                 expected,
@@ -465,10 +469,6 @@ impl Roi {
         (data.geometry.identity() == self.reference_geometry().identity())
             .then_some(())
             .ok_or(CacheInstallError::GeometryMismatch)
-    }
-
-    fn next_authoritative_generation(&self) -> u64 {
-        self.dirty_state.generations.authoritative.saturating_add(1)
     }
 
     fn validate_preview_source(

@@ -256,7 +256,7 @@ fn restore_roi_edit_snapshot(
             *existing = contour;
             roi.mark_contour_authoritative_changed();
             roi.mark_all_contour_view_caches_stale();
-            let source_generation = roi.dirty_state.generations.authoritative;
+            let source_generation = roi.dirty_state.authoritative.shape;
             roi.enqueue_job(RoiJobRequest {
                 kind: RoiJobKind::RebuildVoxelCache,
                 source_generation,

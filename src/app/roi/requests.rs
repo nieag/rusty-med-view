@@ -107,7 +107,7 @@ pub fn cache_status(
 ) -> Option<RoiCacheStatus> {
     let roi = world.get::<&Roi>(roi_entity).ok()?;
     Some(RoiCacheStatus {
-        authoritative_generation: roi.dirty_state.generations.authoritative,
+        authoritative_generation: roi.dirty_state.authoritative.shape,
         cache_generation: roi.cache_generation(kind),
         is_dirty: roi.is_cache_dirty(kind),
         is_current: roi.is_cache_current(kind),
@@ -235,7 +235,7 @@ pub fn request_contour_view_state(
         };
     };
 
-    if view_cache.source_generation != roi.dirty_state.generations.authoritative {
+    if view_cache.built_from != roi.dirty_state.authoritative {
         return ContourRepresentationStatus {
             request: RepresentationRequestStatus::stale("contour_view_cache_generation_stale"),
             editable: false,

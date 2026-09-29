@@ -132,8 +132,8 @@ fn seed_current_voxel_cache_for_contour_roi(world: &mut World, entity: hecs::Ent
         },
         gpu_resources: None,
     });
-    roi.dirty_state.voxel_cache_dirty = false;
-    roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+    roi.dirty_state.voxel.dirty = false;
+    roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
 }
 
 fn square_contour_data_for_main_volume(world: &World, half_extent: f32) -> ContourData {
@@ -332,7 +332,7 @@ fn test_mesh_viewport_sync_keeps_current_mesh_cache_current() {
     },));
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let generation = roi.dirty_state.generations.authoritative;
+        let generation = roi.dirty_state.authoritative.shape;
         roi.install_mesh_cache_result(
             MeshCache {
                 data: MeshData {
@@ -611,7 +611,7 @@ fn test_promote_voxel_to_contour_authority_preserves_roi_and_rebases_voxel_cache
         PlaneFamily::Axial
     );
     assert!(roi.contour_data().unwrap().has_loops());
-    assert_eq!(roi.dirty_state.generations.authoritative, 2);
+    assert_eq!(roi.dirty_state.authoritative.shape, 2);
     assert_eq!(roi.voxel_cache().unwrap().data, source_voxel);
     assert!(roi.is_cache_current(RoiCacheKind::Voxel));
     assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildMeshCache));
@@ -643,8 +643,8 @@ fn test_promote_current_mesh_cache_to_authority_preserves_roi_and_voxel_cache() 
             data: mesh.clone(),
             chunks: None,
         });
-        roi.dirty_state.mesh_cache_dirty = false;
-        roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.mesh.dirty = false;
+        roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     }
     let (roi_id, name) = {
         let roi = world.get::<&Roi>(entity).unwrap();
@@ -660,7 +660,7 @@ fn test_promote_current_mesh_cache_to_authority_preserves_roi_and_voxel_cache() 
     assert_eq!(roi.metadata.name, name);
     assert_eq!(roi.primary_representation(), PrimaryRepresentation::Mesh);
     assert_eq!(roi.mesh_data(), Some(&mesh));
-    assert_eq!(roi.dirty_state.generations.authoritative, 2);
+    assert_eq!(roi.dirty_state.authoritative.shape, 2);
     assert!(roi.is_cache_current(RoiCacheKind::Voxel));
     assert!(!roi.is_cache_dirty(RoiCacheKind::Mesh));
     assert!(roi.session_caches.mesh.is_none());
@@ -676,7 +676,7 @@ fn test_promote_current_mesh_cache_to_authority_rejects_stale_cache() {
             data: closed_tetra_mesh_data(),
             chunks: None,
         });
-        roi.dirty_state.mesh_cache_dirty = true;
+        roi.dirty_state.mesh.dirty = true;
     }
 
     let result = promote_current_mesh_cache_to_authority(&mut world, entity);
@@ -708,7 +708,7 @@ fn test_authority_roundtrip_voxel_contour_voxel_preserves_entity() {
         RoiAuthoritativeData::Voxel(_)
     ));
     assert!(roi.is_cache_current(RoiCacheKind::Voxel));
-    assert_eq!(roi.dirty_state.generations.authoritative, 3);
+    assert_eq!(roi.dirty_state.authoritative.shape, 3);
 }
 
 #[test]
@@ -722,8 +722,8 @@ fn test_authority_roundtrip_mesh_voxel_mesh_reuses_current_mesh() {
             data: mesh.clone(),
             chunks: None,
         });
-        roi.dirty_state.mesh_cache_dirty = false;
-        roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.mesh.dirty = false;
+        roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     }
 
     promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
@@ -737,7 +737,7 @@ fn test_authority_roundtrip_mesh_voxel_mesh_reuses_current_mesh() {
     let roi = world.get::<&Roi>(entity).unwrap();
     assert_eq!(roi.primary_representation(), PrimaryRepresentation::Mesh);
     assert_eq!(roi.mesh_data(), Some(&mesh));
-    assert_eq!(roi.dirty_state.generations.authoritative, 4);
+    assert_eq!(roi.dirty_state.authoritative.shape, 4);
 }
 
 #[test]
@@ -754,12 +754,12 @@ fn test_replace_mesh_data_leaves_voxel_cache_stale_until_explicitly_requested() 
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         roi.dirty_state.authoritative_dirty = false;
-        roi.dirty_state.voxel_cache_dirty = false;
-        roi.dirty_state.contour_cache_dirty = false;
-        roi.dirty_state.mesh_cache_dirty = false;
-        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
-        roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
-        roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.voxel.dirty = false;
+        roi.dirty_state.contour.dirty = false;
+        roi.dirty_state.mesh.dirty = false;
+        roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
+        roi.dirty_state.contour.built_from = roi.dirty_state.authoritative;
+        roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     }
 
     let replacement = closed_tetra_mesh_data();
@@ -769,7 +769,7 @@ fn test_replace_mesh_data_leaves_voxel_cache_stale_until_explicitly_requested() 
     let roi = world.get::<&Roi>(entity).unwrap();
     assert_eq!(roi.mesh_data(), Some(&replacement));
     assert!(roi.dirty_state.authoritative_dirty);
-    assert_eq!(roi.dirty_state.generations.authoritative, 2);
+    assert_eq!(roi.dirty_state.authoritative.shape, 2);
     assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
     assert!(roi.is_cache_dirty(RoiCacheKind::Contour));
     assert!(!roi.is_cache_dirty(RoiCacheKind::Mesh));
@@ -804,7 +804,7 @@ fn test_mesh_rebuild_revalidates_after_authority_generation_changes() {
     let roi = world.get::<&Roi>(entity).unwrap();
     assert_ne!(
         roi.validated_mesh_generation,
-        Some(roi.dirty_state.generations.authoritative)
+        Some(roi.dirty_state.authoritative.shape)
     );
     drop(roi);
     assert!(matches!(
@@ -974,8 +974,8 @@ fn test_mesh_rebuild_contract_builds_voxel_then_enables_contour_refresh() {
             data: closed_tetra_mesh_data(),
             chunks: None,
         });
-        roi.dirty_state.mesh_cache_dirty = false;
-        roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.mesh.dirty = false;
+        roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     }
     promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
 
@@ -1019,8 +1019,8 @@ fn test_mesh_voxel_rebuild_keeps_cache_stale_until_incremental_work_completes() 
             data: closed_tetra_mesh_data(),
             chunks: None,
         });
-        roi.dirty_state.mesh_cache_dirty = false;
-        roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.mesh.dirty = false;
+        roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     }
     promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
     {
@@ -1090,8 +1090,8 @@ fn test_mesh_authority_keeps_direct_plane_contour_after_voxel_rebuild() {
             data: closed_tetra_mesh_data(),
             chunks: None,
         });
-        roi.dirty_state.mesh_cache_dirty = false;
-        roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.mesh.dirty = false;
+        roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     }
     promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
     let editor = world.spawn((EditorState::default(),));
@@ -1671,8 +1671,8 @@ fn test_create_mesh_roi_from_contour_roi_succeeds_with_current_voxel_cache() {
             data: source_voxel,
             gpu_resources: None,
         });
-        roi.dirty_state.voxel_cache_dirty = false;
-        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.voxel.dirty = false;
+        roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
     }
 
     let created = create_mesh_roi_from_contour_roi(&mut world, source)
@@ -1805,12 +1805,12 @@ fn test_set_active_contour_plane_family_updates_empty_contour_and_marks_derived_
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         roi.dirty_state.authoritative_dirty = false;
-        roi.dirty_state.voxel_cache_dirty = false;
-        roi.dirty_state.contour_cache_dirty = false;
-        roi.dirty_state.mesh_cache_dirty = false;
-        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
-        roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
-        roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.voxel.dirty = false;
+        roi.dirty_state.contour.dirty = false;
+        roi.dirty_state.mesh.dirty = false;
+        roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
+        roi.dirty_state.contour.built_from = roi.dirty_state.authoritative;
+        roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     }
 
     let result = set_active_contour_plane_family(&mut world, entity, PlaneFamily::Coronal);
@@ -1820,7 +1820,7 @@ fn test_set_active_contour_plane_family_updates_empty_contour_and_marks_derived_
     let contour = roi.contour_data().unwrap();
     assert_eq!(contour.active_plane_family, PlaneFamily::Coronal);
     assert!(roi.dirty_state.authoritative_dirty);
-    assert_eq!(roi.dirty_state.generations.authoritative, 2);
+    assert_eq!(roi.dirty_state.authoritative.shape, 2);
     assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
     assert!(!roi.is_cache_dirty(RoiCacheKind::Contour));
     assert!(roi.is_cache_dirty(RoiCacheKind::Mesh));
@@ -1833,12 +1833,12 @@ fn test_set_active_contour_plane_family_is_noop_when_unchanged() {
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         roi.dirty_state.authoritative_dirty = false;
-        roi.dirty_state.voxel_cache_dirty = false;
-        roi.dirty_state.contour_cache_dirty = false;
-        roi.dirty_state.mesh_cache_dirty = false;
-        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
-        roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
-        roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.voxel.dirty = false;
+        roi.dirty_state.contour.dirty = false;
+        roi.dirty_state.mesh.dirty = false;
+        roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
+        roi.dirty_state.contour.built_from = roi.dirty_state.authoritative;
+        roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     }
 
     let result = set_active_contour_plane_family(&mut world, entity, PlaneFamily::Sagittal);
@@ -1848,7 +1848,7 @@ fn test_set_active_contour_plane_family_is_noop_when_unchanged() {
     let contour = roi.contour_data().unwrap();
     assert_eq!(contour.active_plane_family, PlaneFamily::Sagittal);
     assert!(!roi.dirty_state.authoritative_dirty);
-    assert_eq!(roi.dirty_state.generations.authoritative, 1);
+    assert_eq!(roi.dirty_state.authoritative.shape, 1);
     assert!(!roi.is_cache_dirty(RoiCacheKind::Voxel));
     assert!(!roi.is_cache_dirty(RoiCacheKind::Contour));
     assert!(!roi.is_cache_dirty(RoiCacheKind::Mesh));
@@ -1886,12 +1886,12 @@ fn test_replace_contour_data_updates_authoritative_state_and_queues_voxel_rebuil
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         roi.dirty_state.authoritative_dirty = false;
-        roi.dirty_state.voxel_cache_dirty = false;
-        roi.dirty_state.contour_cache_dirty = false;
-        roi.dirty_state.mesh_cache_dirty = false;
-        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
-        roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
-        roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.voxel.dirty = false;
+        roi.dirty_state.contour.dirty = false;
+        roi.dirty_state.mesh.dirty = false;
+        roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
+        roi.dirty_state.contour.built_from = roi.dirty_state.authoritative;
+        roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     }
 
     let replacement = ContourData {
@@ -1922,7 +1922,7 @@ fn test_replace_contour_data_updates_authoritative_state_and_queues_voxel_rebuil
         let roi = world.get::<&Roi>(entity).unwrap();
         assert_eq!(roi.contour_data(), Some(&replacement));
         assert!(roi.dirty_state.authoritative_dirty);
-        assert_eq!(roi.dirty_state.generations.authoritative, 2);
+        assert_eq!(roi.dirty_state.authoritative.shape, 2);
         assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
         assert!(!roi.is_cache_dirty(RoiCacheKind::Contour));
         assert!(roi.is_cache_dirty(RoiCacheKind::Mesh));
@@ -1976,8 +1976,8 @@ fn test_contour_edit_history_undo_redo_restores_authority_and_requeues_rebuild()
         .get::<&Roi>(entity)
         .unwrap()
         .dirty_state
-        .generations
-        .authoritative;
+        .authoritative
+        .shape;
     {
         let editor_state = world.get::<&EditorState>(editor).unwrap();
         assert_eq!(editor_state.roi_undo_stack.len(), 1);
@@ -1989,7 +1989,7 @@ fn test_contour_edit_history_undo_redo_restores_authority_and_requeues_rebuild()
         let roi = world.get::<&Roi>(entity).unwrap();
         assert_eq!(roi.contour_data(), Some(&original));
         assert_eq!(
-            roi.dirty_state.generations.authoritative,
+            roi.dirty_state.authoritative.shape,
             generation_after_commit + 1
         );
         assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
@@ -2007,7 +2007,7 @@ fn test_contour_edit_history_undo_redo_restores_authority_and_requeues_rebuild()
         let roi = world.get::<&Roi>(entity).unwrap();
         assert_eq!(roi.contour_data(), Some(&replacement));
         assert_eq!(
-            roi.dirty_state.generations.authoritative,
+            roi.dirty_state.authoritative.shape,
             generation_after_commit + 2
         );
         assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
@@ -2086,13 +2086,13 @@ fn test_noop_contour_history_commit_does_not_advance_generation_or_record_histor
         .get::<&Roi>(entity)
         .unwrap()
         .dirty_state
-        .generations
-        .authoritative;
+        .authoritative
+        .shape;
 
     replace_contour_data_with_history(&mut world, editor, entity, contour).unwrap();
 
     let roi = world.get::<&Roi>(entity).unwrap();
-    assert_eq!(roi.dirty_state.generations.authoritative, generation_before);
+    assert_eq!(roi.dirty_state.authoritative.shape, generation_before);
     drop(roi);
     let editor_state = world.get::<&EditorState>(editor).unwrap();
     assert!(editor_state.roi_undo_stack.is_empty());
@@ -2349,7 +2349,7 @@ fn test_process_contour_voxel_rebuild_jobs_clears_running_state_on_success() {
     assert!(roi.is_cache_current(RoiCacheKind::Voxel));
     assert_eq!(
         roi.cache_generation(RoiCacheKind::Voxel),
-        roi.dirty_state.generations.authoritative
+        roi.dirty_state.authoritative.shape
     );
 }
 
@@ -2404,7 +2404,7 @@ fn test_oblique_dirty_slice_rebuild_preserves_other_authoritative_planes() {
     seed_current_voxel_cache_for_contour_roi(&mut world, entity);
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let source_generation = roi.dirty_state.generations.authoritative;
+        let source_generation = roi.dirty_state.authoritative.shape;
         roi.enqueue_job(RoiJobRequest {
             kind: RoiJobKind::RebuildVoxelCache,
             source_generation,
@@ -2485,7 +2485,7 @@ fn test_request_contour_view_state_reports_derived_promotable_when_current() {
     let key = ContourViewKey::from_plane(test_plane_definition(PlaneFamily::Coronal));
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let gen = roi.dirty_state.generations.authoritative;
+        let gen = roi.dirty_state.authoritative;
         let mut promoted_data = roi.contour_data().unwrap().clone();
         promoted_data.active_plane_family = PlaneFamily::Coronal;
         roi.upsert_contour_view_cache(key.clone(), promoted_data, gen, CacheViewState::Current);
@@ -2503,8 +2503,8 @@ fn test_voxel_primary_roi_can_build_and_request_orthogonal_contour_view_cache() 
     let entity = spawn_sparse_voxel_roi(&mut world);
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        roi.dirty_state.voxel_cache_dirty = false;
-        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.voxel.dirty = false;
+        roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
     }
     let geometry = {
         let roi = world.get::<&Roi>(entity).unwrap();
@@ -2552,8 +2552,8 @@ fn test_ensure_contour_view_cache_builds_orthogonal_view_from_current_voxel_cach
             },
             gpu_resources: None,
         });
-        roi.dirty_state.voxel_cache_dirty = false;
-        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.voxel.dirty = false;
+        roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
     }
     let plane = orthogonal_plane_from_volume_uv(
         PlaneFamily::Coronal,
@@ -2577,10 +2577,7 @@ fn test_ensure_contour_view_cache_builds_orthogonal_view_from_current_voxel_cach
         .contour_view_cache(&key)
         .expect("expected derived contour view cache");
     assert_eq!(cache.state, CacheViewState::Current);
-    assert_eq!(
-        cache.source_generation,
-        roi.dirty_state.generations.authoritative
-    );
+    assert_eq!(cache.built_from, roi.dirty_state.authoritative);
     assert_eq!(cache.data.active_plane_family, PlaneFamily::Coronal);
 }
 
@@ -2592,7 +2589,7 @@ fn test_ensure_contour_view_cache_reuses_current_matching_generation_cache() {
     let key = ContourViewKey::from_plane(test_plane_definition(PlaneFamily::Coronal));
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let generation = roi.dirty_state.generations.authoritative;
+        let generation = roi.dirty_state.authoritative;
         roi.upsert_contour_view_cache(
             key.clone(),
             ContourData {
@@ -2640,8 +2637,8 @@ fn test_ensure_contour_view_cache_matches_extracted_slice_with_tolerance() {
     let entity = spawn_sparse_voxel_roi(&mut world);
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        roi.dirty_state.voxel_cache_dirty = false;
-        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.voxel.dirty = false;
+        roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
     }
     let geometry = {
         let roi = world.get::<&Roi>(entity).unwrap();
@@ -2685,11 +2682,11 @@ fn test_request_contour_view_state_reflects_voxel_stale_rebuilding_and_missing_s
     seed_current_voxel_cache_for_contour_roi(&mut world, entity);
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let gen = roi.dirty_state.generations.authoritative;
+        let gen = roi.dirty_state.authoritative;
         let mut derived_data = roi.contour_data().unwrap().clone();
         derived_data.active_plane_family = PlaneFamily::Coronal;
         roi.upsert_contour_view_cache(key.clone(), derived_data, gen, CacheViewState::Current);
-        roi.dirty_state.voxel_cache_dirty = true;
+        roi.dirty_state.voxel.dirty = true;
     }
 
     let stale = request_contour_view_state(&world, entity, &key);
@@ -2703,7 +2700,7 @@ fn test_request_contour_view_state_reflects_voxel_stale_rebuilding_and_missing_s
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         roi.job_state.running_request = Some(RoiJobRequest {
             kind: RoiJobKind::RebuildVoxelCache,
-            source_generation: roi.dirty_state.generations.authoritative,
+            source_generation: roi.dirty_state.authoritative.shape,
             preview_revision: None,
             priority: RoiJobPriority::VisibleCommitted,
             dirty_region: RoiDirtyRegion::Full,
@@ -2730,7 +2727,7 @@ fn test_promote_contour_view_to_authoritative_marks_other_caches_stale_and_rebui
     let sagittal_key = ContourViewKey::from_plane(test_plane_definition(PlaneFamily::Sagittal));
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let gen = roi.dirty_state.generations.authoritative;
+        let gen = roi.dirty_state.authoritative;
         let mut coronal_data = roi.contour_data().unwrap().clone();
         coronal_data.active_plane_family = PlaneFamily::Coronal;
         roi.upsert_contour_view_cache(
@@ -2772,7 +2769,7 @@ fn test_promote_contour_view_rejects_stale_or_missing_cache() {
     assert_eq!(missing_result, Err(ContourPromotionError::ViewCacheMissing));
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let gen = roi.dirty_state.generations.authoritative;
+        let gen = roi.dirty_state.authoritative;
         let mut promoted_data = roi.contour_data().unwrap().clone();
         promoted_data.active_plane_family = PlaneFamily::Coronal;
         roi.upsert_contour_view_cache(key.clone(), promoted_data, gen, CacheViewState::Stale);
@@ -2787,8 +2784,13 @@ fn test_promote_contour_view_rejects_stale_or_missing_cache() {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         let mut promoted_data = roi.contour_data().unwrap().clone();
         promoted_data.active_plane_family = PlaneFamily::Coronal;
-        roi.upsert_contour_view_cache(key.clone(), promoted_data, 1, CacheViewState::Current);
-        roi.dirty_state.generations.authoritative = 2;
+        roi.upsert_contour_view_cache(
+            key.clone(),
+            promoted_data,
+            Revision::from_shape(1),
+            CacheViewState::Current,
+        );
+        roi.dirty_state.authoritative = Revision::from_shape(2);
     }
     let generation_stale = promote_contour_view_to_authoritative(&mut world, entity, &key);
     assert_eq!(
@@ -2806,8 +2808,13 @@ fn test_request_contour_view_state_marks_generation_mismatch_stale() {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         let mut promoted_data = roi.contour_data().unwrap().clone();
         promoted_data.active_plane_family = PlaneFamily::Coronal;
-        roi.upsert_contour_view_cache(key.clone(), promoted_data, 1, CacheViewState::Current);
-        roi.dirty_state.generations.authoritative = 2;
+        roi.upsert_contour_view_cache(
+            key.clone(),
+            promoted_data,
+            Revision::from_shape(1),
+            CacheViewState::Current,
+        );
+        roi.dirty_state.authoritative = Revision::from_shape(2);
     }
     let status = request_contour_view_state(&world, entity, &key);
     assert_eq!(status.request.state, RepresentationRequestState::Stale);
@@ -2856,7 +2863,7 @@ fn test_oblique_contour_view_builds_current_and_can_be_promoted() {
         let roi = world.get::<&Roi>(entity).unwrap();
         (
             roi.contour_view_cache(&key).unwrap().data.clone(),
-            roi.dirty_state.generations.authoritative,
+            roi.dirty_state.authoritative.shape,
         )
     };
     assert!(cached_data.has_loops());
@@ -2868,7 +2875,7 @@ fn test_oblique_contour_view_builds_current_and_can_be_promoted() {
         roi.contour_data().unwrap().active_plane_family,
         PlaneFamily::Oblique
     );
-    assert_eq!(roi.dirty_state.generations.authoritative, generation + 1);
+    assert_eq!(roi.dirty_state.authoritative.shape, generation + 1);
     assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
     assert!(roi.has_queued_job(RoiJobKind::RebuildVoxelCache));
     drop(roi);
@@ -2891,8 +2898,8 @@ fn test_oblique_voxel_overlay_uses_same_cache_state_contract_as_orthogonal_views
     let entity = spawn_sparse_voxel_roi(&mut world);
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        roi.dirty_state.voxel_cache_dirty = false;
-        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.voxel.dirty = false;
+        roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
     }
 
     let axial = request_viewport_voxel_overlay_state(&world, ViewMode::Axial, entity);
@@ -2914,7 +2921,7 @@ fn test_replace_contour_data_marks_existing_derived_contour_views_stale() {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         let mut derived_data = roi.contour_data().unwrap().clone();
         derived_data.active_plane_family = PlaneFamily::Coronal;
-        let gen = roi.dirty_state.generations.authoritative;
+        let gen = roi.dirty_state.authoritative;
         roi.upsert_contour_view_cache(key.clone(), derived_data, gen, CacheViewState::Current);
     }
     replace_contour_data(
@@ -2946,7 +2953,7 @@ fn test_promotion_preserves_previous_active_family_as_stale_derived_cache() {
     };
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let gen = roi.dirty_state.generations.authoritative;
+        let gen = roi.dirty_state.authoritative;
         let mut promoted_data = roi.contour_data().unwrap().clone();
         promoted_data.active_plane_family = PlaneFamily::Coronal;
         roi.upsert_contour_view_cache(
@@ -3000,8 +3007,8 @@ fn test_liver_explicit_voxel_rebuild_frame_timing() {
             data: mesh.clone(),
             chunks: None,
         });
-        roi.dirty_state.mesh_cache_dirty = false;
-        roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.mesh.dirty = false;
+        roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     }
     promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
     let seeds = mesh.faces[mesh.faces.len() / 2].vertex_indices;
@@ -3023,7 +3030,7 @@ fn test_liver_explicit_voxel_rebuild_frame_timing() {
     let roi = world.get::<&Roi>(entity).unwrap();
     assert_eq!(
         roi.validated_mesh_generation,
-        Some(roi.dirty_state.generations.authoritative)
+        Some(roi.dirty_state.authoritative.shape)
     );
     drop(roi);
 

@@ -346,10 +346,10 @@ fn test_prepare_mesh_render_data_preserves_unchanged_chunk_identity_and_vertices
         data: chunked.merged_mesh(),
         chunks: Some(chunked),
     });
-    roi.dirty_state.voxel_cache_dirty = false;
-    roi.dirty_state.mesh_cache_dirty = false;
-    roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
-    roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+    roi.dirty_state.voxel.dirty = false;
+    roi.dirty_state.mesh.dirty = false;
+    roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
+    roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     let roi_entity = world.spawn((roi,));
 
     let before = prepare_mesh_render_data(&world, &entities);

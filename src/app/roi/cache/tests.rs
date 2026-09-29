@@ -42,7 +42,7 @@ fn test_voxel_cache_result_with_mismatched_reference_geometry_is_rejected() {
             slices: Vec::new(),
         },
     );
-    let generation = roi.dirty_state.generations.authoritative;
+    let generation = roi.dirty_state.authoritative.shape;
 
     let result = roi.install_voxel_cache_result(test_voxel_cache(1), generation);
 
@@ -53,7 +53,7 @@ fn test_voxel_cache_result_with_mismatched_reference_geometry_is_rejected() {
 #[test]
 fn test_stale_voxel_result_is_rejected_without_overwriting_cache() {
     let mut roi = test_roi();
-    let generation = roi.dirty_state.generations.authoritative;
+    let generation = roi.dirty_state.authoritative.shape;
     roi.install_voxel_cache_result(test_voxel_cache(1), generation)
         .unwrap();
     roi.mark_contour_authoritative_changed();
@@ -76,7 +76,7 @@ fn test_stale_voxel_result_is_rejected_without_overwriting_cache() {
 #[test]
 fn test_superseded_preview_result_is_rejected_without_overwriting_cache() {
     let mut roi = test_roi();
-    let generation = roi.dirty_state.generations.authoritative;
+    let generation = roi.dirty_state.authoritative.shape;
     let stale_revision = roi.begin_preview();
     let current_revision = roi.begin_preview();
 
@@ -101,7 +101,7 @@ fn test_superseded_preview_result_is_rejected_without_overwriting_cache() {
 #[test]
 fn test_current_voxel_result_installs_payload_and_freshness_together() {
     let mut roi = test_roi();
-    let generation = roi.dirty_state.generations.authoritative;
+    let generation = roi.dirty_state.authoritative.shape;
 
     roi.install_voxel_cache_result(test_voxel_cache(7), generation)
         .unwrap();
@@ -114,7 +114,7 @@ fn test_current_voxel_result_installs_payload_and_freshness_together() {
 #[test]
 fn test_mesh_result_is_stamped_with_roi_geometry_identity() {
     let mut roi = test_roi();
-    let generation = roi.dirty_state.generations.authoritative;
+    let generation = roi.dirty_state.authoritative.shape;
 
     roi.install_mesh_cache_result(
         MeshCache {
@@ -137,7 +137,7 @@ fn test_mesh_result_is_stamped_with_roi_geometry_identity() {
 #[test]
 fn test_contour_view_result_is_stamped_with_roi_geometry_identity() {
     let mut roi = test_roi();
-    let generation = roi.dirty_state.generations.authoritative;
+    let generation = roi.dirty_state.authoritative;
     let key = ContourViewKey::from_plane(
         crate::convert::orthogonal_plane_from_volume_uv(
             PlaneFamily::Axial,
@@ -166,7 +166,7 @@ fn test_contour_view_result_is_stamped_with_roi_geometry_identity() {
 #[test]
 fn test_mismatched_mesh_geometry_stamp_is_not_current() {
     let mut roi = test_roi();
-    let generation = roi.dirty_state.generations.authoritative;
+    let generation = roi.dirty_state.authoritative.shape;
     roi.install_mesh_cache_result(
         MeshCache {
             data: crate::app::roi::MeshData {

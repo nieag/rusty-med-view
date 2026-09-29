@@ -330,7 +330,7 @@ fn contour_data_for_adapter(roi: &Roi) -> Option<&ContourData> {
 pub(crate) fn mesh_data_for_adapter(roi: &Roi) -> Option<&MeshData> {
     if roi.preview_state.active {
         if let Some(preview) = roi.session_caches.preview_mesh.as_ref().filter(|cache| {
-            cache.source_generation == roi.dirty_state.generations.authoritative
+            cache.source_generation == roi.dirty_state.authoritative.shape
                 && cache.preview_revision == roi.preview_state.revision
         }) {
             return Some(&preview.data);

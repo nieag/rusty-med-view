@@ -17,15 +17,15 @@ Measurements (liver sample, release build, `tests/switch_guard.rs`): extracting 
 
 ## Decision
 
-### 1. `Derived<T>`: one freshness rule
+### 1. One freshness rule
 
-A derived value records what it was built from and answers "is this current?" in one place:
+Every derived cache records what it was built from and whether it was explicitly invalidated, and answers "is this current?" in one place:
 
 ```text
-Derived<T> { value: T, built_from: Revision, geometry: GeometryIdentity }
+CacheFreshness { dirty: bool, built_from: Revision }
 ```
 
-The voxel cache (plus its GPU mirror), each contour view, the mesh, and the preview caches all use it. `is_current(ROI state)` replaces the per-cache generation fields, dirty flags, and geometry checks. Contour views live in a bounded keyed set of `Derived<ContourData>`.
+The voxel, contour, and mesh caches all use it, replacing the per-cache generation fields and dirty flags; geometry identity is still checked in `is_cache_current`. Each contour view records the `Revision` it was built from. (The original proposal wrapped each value in a `Derived<T>`; the values stay in `session_caches`, see the staging note.)
 
 `Revision` has two parts so that a lossless representation change does not invalidate everything:
 
@@ -63,7 +63,7 @@ The family dropdown, "Make displayed view editable", `RequiresConversion`, the s
 
 Each stage is its own commit series and must keep the guard tests (`tests/switch_guard.rs`), the strict QA spec, clippy, fmt, and the wasm check green.
 
-1. **`Derived<T>` and `Revision`.** Pure refactor of the cache machinery, no behaviour change. Shrinks `components.rs` and the three `mark_*_authoritative_changed` functions.
+1. **`Revision` and one freshness rule.** Pure refactor of the cache machinery, no behaviour change. *Implemented* as `Revision { shape, form }`, a per-cache `CacheFreshness { dirty, built_from }` held in `RoiDirtyState`, one `is_current` rule, and one invalidation routine driven by a per-cache rule. The cache values stay in `session_caches` rather than being wrapped in a `Derived<T>` container: the freshness rule is the part that was duplicated, and wrapping the values would only have added accessor churn at about 150 sites. Contour views record the full `Revision` they were built from.
 2. **`RoiBody`.** Typed bodies and per-ROI history. Behaviour unchanged except undo no longer moves the active ROI.
 3. **`ensure_editable` and the switch.** Inline path first, then the background path, then mesh and voxel entry.
 4. **Delete the promotion API and UI.** Then update `tests/switch_guard.rs` to exercise the new path.

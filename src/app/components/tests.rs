@@ -87,7 +87,7 @@ fn test_contour_view_key_lookup_uses_slice_key_not_exact_plane_float() {
     roi.upsert_contour_view_cache(
         key_a.clone(),
         contour,
-        roi.dirty_state.generations.authoritative,
+        roi.dirty_state.authoritative,
         CacheViewState::Current,
     );
 
@@ -122,7 +122,7 @@ fn test_oblique_slice_key_distinguishes_same_origin_different_normal() {
     let key_b = ContourViewKey::from_plane(plane_b);
     assert!(!key_a.logical_eq(&key_b));
 
-    let gen = roi.dirty_state.generations.authoritative;
+    let gen = roi.dirty_state.authoritative;
     roi.upsert_contour_view_cache(key_a, contour.clone(), gen, CacheViewState::Current);
     roi.upsert_contour_view_cache(key_b.clone(), contour, gen, CacheViewState::Current);
     let cache = roi.contour_cache().unwrap();
@@ -141,11 +141,11 @@ fn test_mark_contour_authoritative_changed_marks_existing_derived_views_dirty() 
     roi.upsert_contour_view_cache(
         ContourViewKey::from_plane(plane),
         contour,
-        roi.dirty_state.generations.authoritative,
+        roi.dirty_state.authoritative,
         CacheViewState::Current,
     );
-    roi.dirty_state.contour_cache_dirty = false;
-    roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
+    roi.dirty_state.contour.dirty = false;
+    roi.dirty_state.contour.built_from = roi.dirty_state.authoritative;
 
     roi.mark_contour_authoritative_changed();
     roi.mark_all_contour_view_caches_stale();
@@ -203,11 +203,11 @@ fn test_roi_dirty_state_defaults_match_clean_voxel_baseline() {
     let state = RoiDirtyState::default();
 
     assert!(!state.authoritative_dirty);
-    assert!(!state.voxel_cache_dirty);
-    assert!(!state.contour_cache_dirty);
-    assert!(!state.mesh_cache_dirty);
-    assert_eq!(state.generations.authoritative, 1);
-    assert_eq!(state.generations.voxel, 0);
+    assert!(!state.voxel.dirty);
+    assert!(!state.contour.dirty);
+    assert!(!state.mesh.dirty);
+    assert_eq!(state.authoritative, Revision::INITIAL);
+    assert_eq!(state.voxel.built_from, Revision::NEVER);
 }
 
 #[test]
@@ -301,11 +301,11 @@ fn test_cache_current_requires_matching_generation_and_clean_state() {
         None,
     );
 
-    roi.dirty_state.voxel_cache_dirty = false;
-    roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+    roi.dirty_state.voxel.dirty = false;
+    roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
     assert!(roi.is_cache_current(RoiCacheKind::Voxel));
 
-    roi.dirty_state.generations.voxel -= 1;
+    roi.dirty_state.voxel.built_from.shape -= 1;
     assert!(!roi.is_cache_current(RoiCacheKind::Voxel));
 }
 
@@ -325,17 +325,17 @@ fn test_mark_authoritative_changed_invalidates_all_derived_caches() {
         None,
     );
 
-    roi.dirty_state.voxel_cache_dirty = false;
-    roi.dirty_state.contour_cache_dirty = false;
-    roi.dirty_state.mesh_cache_dirty = false;
-    roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
-    roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
-    roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+    roi.dirty_state.voxel.dirty = false;
+    roi.dirty_state.contour.dirty = false;
+    roi.dirty_state.mesh.dirty = false;
+    roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
+    roi.dirty_state.contour.built_from = roi.dirty_state.authoritative;
+    roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
 
     roi.mark_authoritative_changed();
 
     assert!(roi.dirty_state.authoritative_dirty);
-    assert_eq!(roi.dirty_state.generations.authoritative, 2);
+    assert_eq!(roi.dirty_state.authoritative.shape, 2);
     assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
     assert!(roi.is_cache_dirty(RoiCacheKind::Contour));
     assert!(roi.is_cache_dirty(RoiCacheKind::Mesh));
@@ -353,17 +353,17 @@ fn test_mark_contour_authoritative_changed_invalidates_only_derived_by_default()
         },
     );
 
-    roi.dirty_state.voxel_cache_dirty = false;
-    roi.dirty_state.contour_cache_dirty = false;
-    roi.dirty_state.mesh_cache_dirty = false;
-    roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
-    roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
-    roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+    roi.dirty_state.voxel.dirty = false;
+    roi.dirty_state.contour.dirty = false;
+    roi.dirty_state.mesh.dirty = false;
+    roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
+    roi.dirty_state.contour.built_from = roi.dirty_state.authoritative;
+    roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
 
     roi.mark_contour_authoritative_changed();
 
     assert!(roi.dirty_state.authoritative_dirty);
-    assert_eq!(roi.dirty_state.generations.authoritative, 2);
+    assert_eq!(roi.dirty_state.authoritative.shape, 2);
     assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
     assert!(!roi.is_cache_dirty(RoiCacheKind::Contour));
     assert!(roi.is_cache_dirty(RoiCacheKind::Mesh));
@@ -479,7 +479,7 @@ fn test_contour_view_cache_is_bounded() {
         roi.upsert_contour_view_cache(
             ContourViewKey::from_plane(plane),
             contour.clone(),
-            1,
+            Revision::from_shape(1),
             CacheViewState::Current,
         );
     }
@@ -764,17 +764,17 @@ fn test_mark_mesh_authoritative_changed_invalidates_voxel_and_contour_without_me
     };
     let mut roi = Roi::new_mesh(RoiId(24), "Mesh".to_string(), mesh_data);
 
-    roi.dirty_state.voxel_cache_dirty = false;
-    roi.dirty_state.contour_cache_dirty = false;
-    roi.dirty_state.mesh_cache_dirty = false;
-    roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
-    roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
-    roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+    roi.dirty_state.voxel.dirty = false;
+    roi.dirty_state.contour.dirty = false;
+    roi.dirty_state.mesh.dirty = false;
+    roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
+    roi.dirty_state.contour.built_from = roi.dirty_state.authoritative;
+    roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
 
     roi.mark_mesh_authoritative_changed();
 
     assert!(roi.dirty_state.authoritative_dirty);
-    assert_eq!(roi.dirty_state.generations.authoritative, 2);
+    assert_eq!(roi.dirty_state.authoritative.shape, 2);
     assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
     assert!(roi.is_cache_dirty(RoiCacheKind::Contour));
     assert!(!roi.is_cache_dirty(RoiCacheKind::Mesh));
@@ -805,12 +805,12 @@ fn test_mark_mesh_authoritative_changed_invalidates_mesh_cache_when_present() {
         data: mesh_data,
         chunks: None,
     });
-    roi.dirty_state.voxel_cache_dirty = false;
-    roi.dirty_state.contour_cache_dirty = false;
-    roi.dirty_state.mesh_cache_dirty = false;
-    roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
-    roi.dirty_state.generations.contour = roi.dirty_state.generations.authoritative;
-    roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+    roi.dirty_state.voxel.dirty = false;
+    roi.dirty_state.contour.dirty = false;
+    roi.dirty_state.mesh.dirty = false;
+    roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
+    roi.dirty_state.contour.built_from = roi.dirty_state.authoritative;
+    roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
 
     roi.mark_mesh_authoritative_changed();
 
@@ -843,7 +843,7 @@ fn test_finish_mesh_cache_rebuild_marks_mesh_cache_current_to_authoritative_gene
         data: mesh_data,
         chunks: None,
     });
-    roi.dirty_state.mesh_cache_dirty = true;
+    roi.dirty_state.mesh.dirty = true;
     roi.enqueue_rebuild(RoiJobKind::RebuildMeshCache);
     assert_eq!(roi.start_queued_job(), Some(RoiJobKind::RebuildMeshCache));
 
@@ -853,7 +853,101 @@ fn test_finish_mesh_cache_rebuild_marks_mesh_cache_current_to_authoritative_gene
     assert!(roi.is_cache_current(RoiCacheKind::Mesh));
     assert_eq!(
         roi.cache_generation(RoiCacheKind::Mesh),
-        roi.dirty_state.generations.authoritative
+        roi.dirty_state.authoritative.shape
     );
     assert_eq!(roi.running_job_kind(), None);
+}
+
+#[test]
+fn test_revision_shape_and_form_advance_independently() {
+    let start = Revision::INITIAL;
+
+    assert_eq!(start, Revision::from_shape(1));
+    assert_eq!(Revision::default(), Revision::NEVER);
+    assert_eq!(start.next_shape(), Revision { shape: 2, form: 0 });
+    assert_eq!(start.next_form(), Revision { shape: 1, form: 1 });
+    assert_eq!(
+        start.next_form().next_shape(),
+        Revision { shape: 2, form: 1 },
+        "a shape change keeps the form"
+    );
+}
+
+#[test]
+fn test_cache_freshness_follows_the_shape_and_only_contour_views_follow_the_form() {
+    let built = CacheFreshness::built_from(Revision { shape: 3, form: 0 });
+    let same_shape_new_form = Revision { shape: 3, form: 1 };
+    let new_shape = Revision { shape: 4, form: 0 };
+
+    // The voxel and mesh caches describe the shape, so a form change leaves them current.
+    for kind in [RoiCacheKind::Voxel, RoiCacheKind::Mesh] {
+        assert!(built.is_current(Revision { shape: 3, form: 0 }, kind));
+        assert!(built.is_current(same_shape_new_form, kind), "{kind:?}");
+        assert!(!built.is_current(new_shape, kind), "{kind:?}");
+    }
+    // Contour views are expressed in the authoritative family, so they follow the form too.
+    assert!(!built.is_current(same_shape_new_form, RoiCacheKind::Contour));
+    assert!(!built.is_current(new_shape, RoiCacheKind::Contour));
+
+    // An explicit invalidation overrides matching revisions.
+    let mut invalidated = built;
+    invalidated.dirty = true;
+    assert!(!invalidated.is_current(Revision { shape: 3, form: 0 }, RoiCacheKind::Voxel));
+    assert!(!CacheFreshness::invalidated().is_current(Revision::NEVER, RoiCacheKind::Voxel));
+}
+
+#[test]
+fn test_form_change_keeps_voxel_and_mesh_caches_current_but_not_contour_views() {
+    let mut roi = Roi::new_voxel_with_cache(
+        RoiId(9),
+        "Form".to_string(),
+        VoxelGeometry::new([4, 4, 4], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap(),
+        vec![1; 64],
+        None,
+    );
+    roi.finish_cache_rebuild(RoiCacheKind::Voxel);
+    roi.finish_cache_rebuild(RoiCacheKind::Mesh);
+    roi.finish_cache_rebuild(RoiCacheKind::Contour);
+    for kind in [
+        RoiCacheKind::Voxel,
+        RoiCacheKind::Mesh,
+        RoiCacheKind::Contour,
+    ] {
+        assert!(
+            roi.is_cache_current(kind),
+            "{kind:?} before the form change"
+        );
+    }
+
+    roi.dirty_state.authoritative = roi.dirty_state.authoritative.next_form();
+
+    assert!(roi.is_cache_current(RoiCacheKind::Voxel));
+    assert!(roi.is_cache_current(RoiCacheKind::Mesh));
+    assert!(!roi.is_cache_current(RoiCacheKind::Contour));
+}
+
+#[test]
+fn test_contour_view_install_rejects_a_result_from_another_form() {
+    let mut roi = Roi::new_voxel_with_cache(
+        RoiId(10),
+        "Views".to_string(),
+        VoxelGeometry::new([4, 4, 4], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap(),
+        vec![1; 64],
+        None,
+    );
+    let key = ContourViewKey::from_plane(test_plane_definition(PlaneFamily::Coronal));
+    let contour = ContourData {
+        active_plane_family: PlaneFamily::Coronal,
+        slices: Vec::new(),
+    };
+    let stale_form = roi.dirty_state.authoritative;
+    roi.dirty_state.authoritative = stale_form.next_form();
+
+    assert!(matches!(
+        roi.install_current_contour_view_result(key.clone(), contour.clone(), stale_form),
+        Err(crate::app::roi::CacheInstallError::StaleGeneration { .. })
+    ));
+    assert!(roi
+        .install_current_contour_view_result(key, contour, roi.dirty_state.authoritative)
+        .is_ok());
 }

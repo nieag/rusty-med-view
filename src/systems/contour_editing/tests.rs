@@ -372,8 +372,8 @@ fn test_add_loop_path_reentering_existing_contour_commits_union_and_fills_voxels
             data: initial_voxel,
             gpu_resources: None,
         });
-        roi.dirty_state.voxel_cache_dirty = false;
-        roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+        roi.dirty_state.voxel.dirty = false;
+        roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
     }
     {
         let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();

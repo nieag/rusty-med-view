@@ -141,7 +141,7 @@ pub fn replace_contour_data_for_slice(
     roi.mark_contour_authoritative_changed();
     roi.mark_all_contour_view_caches_stale();
     roi.job_state = RoiJobState::default();
-    let source_generation = roi.dirty_state.generations.authoritative;
+    let source_generation = roi.dirty_state.authoritative.shape;
     roi.enqueue_job(RoiJobRequest {
         kind: RoiJobKind::RebuildVoxelCache,
         source_generation,
@@ -186,10 +186,10 @@ pub fn request_mesh_voxel_cache_rebuild(
     let RoiAuthoritativeData::Mesh(mesh) = &roi.authoritative_data else {
         return Err(MeshMutationError::NotMeshRoi);
     };
-    if roi.validated_mesh_generation != Some(roi.dirty_state.generations.authoritative) {
+    if roi.validated_mesh_generation != Some(roi.dirty_state.authoritative.shape) {
         crate::convert::validate_mesh_for_voxelization(mesh)
             .map_err(MeshMutationError::InvalidMesh)?;
-        roi.validated_mesh_generation = Some(roi.dirty_state.generations.authoritative);
+        roi.validated_mesh_generation = Some(roi.dirty_state.authoritative.shape);
     }
     roi.mark_cache_dirty(RoiCacheKind::Voxel);
     roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
@@ -221,7 +221,7 @@ pub fn promote_contour_view_to_authoritative(
     if view_cache.state != CacheViewState::Current
         || roi.is_cache_dirty(RoiCacheKind::Voxel)
         || !roi.is_cache_current(RoiCacheKind::Voxel)
-        || view_cache.source_generation != roi.dirty_state.generations.authoritative
+        || view_cache.built_from != roi.dirty_state.authoritative
     {
         return Err(ContourPromotionError::ViewCacheNotCurrent);
     }
@@ -236,7 +236,7 @@ pub fn promote_contour_view_to_authoritative(
     *contour = new_data;
     contour.active_plane_family = view_key.family;
     roi.mark_contour_authoritative_changed();
-    let new_generation = roi.dirty_state.generations.authoritative;
+    let new_revision = roi.dirty_state.authoritative;
     for slice in previous_authoritative
         .slices
         .iter()
@@ -245,7 +245,7 @@ pub fn promote_contour_view_to_authoritative(
         roi.upsert_contour_view_cache(
             ContourViewKey::from_plane(slice.plane),
             previous_authoritative.clone(),
-            new_generation,
+            new_revision,
             CacheViewState::Stale,
         );
     }

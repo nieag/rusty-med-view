@@ -333,7 +333,8 @@ pub struct ContourCache {
 pub struct ContourViewCache {
     pub key: ContourViewKey,
     pub data: ContourData,
-    pub source_generation: u64,
+    /// Authoritative revision this view was derived from.
+    pub built_from: Revision,
     pub geometry_identity: GeometryIdentity,
     pub state: CacheViewState,
 }
@@ -400,32 +401,142 @@ pub enum RoiCacheKind {
     Mesh,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CacheGeneration {
-    pub authoritative: u64,
-    pub voxel: u64,
-    pub contour: u64,
-    pub mesh: u64,
-}
+impl RoiCacheKind {
+    /// Whether a cache of this kind must be rebuilt when only the authoritative representation
+    /// changes but the shape is preserved (a lossless primary-view switch). Contour views are
+    /// expressed in the authoritative family, so they follow it; the voxel and mesh caches
+    /// describe the shape and stay current.
+    pub const fn tracks_form(self) -> bool {
+        matches!(self, Self::Contour)
+    }
 
-impl Default for CacheGeneration {
-    fn default() -> Self {
-        Self {
-            authoritative: 1,
-            voxel: 0,
-            contour: 0,
-            mesh: 0,
+    /// The job that rebuilds a cache of this kind.
+    pub const fn rebuild_job(self) -> RoiJobKind {
+        match self {
+            Self::Voxel => RoiJobKind::RebuildVoxelCache,
+            Self::Contour => RoiJobKind::RebuildContourCache,
+            Self::Mesh => RoiJobKind::RebuildMeshCache,
         }
     }
 }
 
+/// Version of an ROI's authoritative data.
+///
+/// `shape` changes when the ROI's shape changes (an edit, an undo, a lossy conversion), which
+/// invalidates every derived cache. `form` changes when only the authoritative representation
+/// changes while the shape is preserved (a lossless primary-view switch), which invalidates only
+/// caches whose [`RoiCacheKind::tracks_form`] is true.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Revision {
+    pub shape: u64,
+    pub form: u64,
+}
+
+impl Revision {
+    /// Nothing has been built from this revision; also the "never built" marker of a cache.
+    pub const NEVER: Self = Self { shape: 0, form: 0 };
+    /// Revision of a newly created ROI.
+    pub const INITIAL: Self = Self { shape: 1, form: 0 };
+
+    pub const fn from_shape(shape: u64) -> Self {
+        Self { shape, form: 0 }
+    }
+
+    /// The revision after the shape changed.
+    pub const fn next_shape(self) -> Self {
+        Self {
+            shape: self.shape.saturating_add(1),
+            form: self.form,
+        }
+    }
+
+    /// The revision after the representation changed without changing the shape.
+    pub const fn next_form(self) -> Self {
+        Self {
+            shape: self.shape,
+            form: self.form.saturating_add(1),
+        }
+    }
+}
+
+/// What one derived cache was built from, and whether it was explicitly invalidated since. This
+/// is the single freshness rule for the voxel, contour, and mesh caches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CacheFreshness {
+    pub dirty: bool,
+    pub built_from: Revision,
+}
+
+impl Default for Revision {
+    fn default() -> Self {
+        Self::NEVER
+    }
+}
+
+impl CacheFreshness {
+    /// A cache that was explicitly invalidated and has not been rebuilt.
+    pub const fn invalidated() -> Self {
+        Self {
+            dirty: true,
+            built_from: Revision::NEVER,
+        }
+    }
+
+    /// A cache freshly built from `revision`.
+    pub const fn built_from(revision: Revision) -> Self {
+        Self {
+            dirty: false,
+            built_from: revision,
+        }
+    }
+
+    /// Whether the cache reflects `authoritative`. Caches that do not track the form only compare
+    /// the shape.
+    pub fn is_current(&self, authoritative: Revision, kind: RoiCacheKind) -> bool {
+        !self.dirty
+            && self.built_from.shape == authoritative.shape
+            && (!kind.tracks_form() || self.built_from.form == authoritative.form)
+    }
+}
+
+/// Freshness of the three derived caches against the authoritative revision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RoiDirtyState {
     pub authoritative_dirty: bool,
-    pub voxel_cache_dirty: bool,
-    pub contour_cache_dirty: bool,
-    pub mesh_cache_dirty: bool,
-    pub generations: CacheGeneration,
+    pub authoritative: Revision,
+    pub voxel: CacheFreshness,
+    pub contour: CacheFreshness,
+    pub mesh: CacheFreshness,
+}
+
+impl Default for RoiDirtyState {
+    fn default() -> Self {
+        Self {
+            authoritative_dirty: false,
+            authoritative: Revision::INITIAL,
+            voxel: CacheFreshness::default(),
+            contour: CacheFreshness::default(),
+            mesh: CacheFreshness::default(),
+        }
+    }
+}
+
+impl RoiDirtyState {
+    pub fn freshness(&self, kind: RoiCacheKind) -> CacheFreshness {
+        match kind {
+            RoiCacheKind::Voxel => self.voxel,
+            RoiCacheKind::Contour => self.contour,
+            RoiCacheKind::Mesh => self.mesh,
+        }
+    }
+
+    pub fn freshness_mut(&mut self, kind: RoiCacheKind) -> &mut CacheFreshness {
+        match kind {
+            RoiCacheKind::Voxel => &mut self.voxel,
+            RoiCacheKind::Contour => &mut self.contour,
+            RoiCacheKind::Mesh => &mut self.mesh,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -573,12 +684,9 @@ impl Roi {
                 preview_mesh_geometry_identity: None,
             },
             dirty_state: RoiDirtyState {
-                contour_cache_dirty: true,
-                mesh_cache_dirty: true,
-                generations: CacheGeneration {
-                    voxel: 1,
-                    ..CacheGeneration::default()
-                },
+                voxel: CacheFreshness::built_from(Revision::INITIAL),
+                contour: CacheFreshness::invalidated(),
+                mesh: CacheFreshness::invalidated(),
                 ..RoiDirtyState::default()
             },
             job_state: RoiJobState::default(),
@@ -619,8 +727,8 @@ impl Roi {
                 preview_mesh_geometry_identity: None,
             },
             dirty_state: RoiDirtyState {
-                voxel_cache_dirty: true,
-                mesh_cache_dirty: true,
+                voxel: CacheFreshness::invalidated(),
+                mesh: CacheFreshness::invalidated(),
                 ..RoiDirtyState::default()
             },
             job_state: RoiJobState::default(),
@@ -661,8 +769,8 @@ impl Roi {
                 preview_mesh_geometry_identity: None,
             },
             dirty_state: RoiDirtyState {
-                voxel_cache_dirty: true,
-                contour_cache_dirty: true,
+                voxel: CacheFreshness::invalidated(),
+                contour: CacheFreshness::invalidated(),
                 ..RoiDirtyState::default()
             },
             job_state: RoiJobState::default(),

@@ -399,7 +399,7 @@ fn test_voxel_primary_oblique_view_cache_emits_contour_vertices() {
                 loops: Vec::new(),
             }],
         },
-        roi.dirty_state.generations.authoritative,
+        roi.dirty_state.authoritative,
         CacheViewState::Current,
     );
     let roi_entity = world.spawn((roi, LayerSettings { opacity: 0.5 }, RoiTag));

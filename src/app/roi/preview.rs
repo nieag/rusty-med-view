@@ -118,7 +118,7 @@ pub fn begin_contour_move_preview(
         .get::<&mut Roi>(roi_entity)
         .map_err(|_| ContourMutationError::MissingRoi)?;
     let revision = roi.begin_preview();
-    let source_generation = roi.dirty_state.generations.authoritative;
+    let source_generation = roi.dirty_state.authoritative.shape;
     roi.enqueue_job(RoiJobRequest {
         kind: RoiJobKind::RebuildVoxelCache,
         source_generation,
@@ -210,7 +210,7 @@ pub fn commit_mesh_edit_preview(
             let mut roi = world
                 .get::<&mut Roi>(preview.roi_entity)
                 .map_err(|_| MeshMutationError::MissingRoi)?;
-            roi.validated_mesh_generation = Some(roi.dirty_state.generations.authoritative);
+            roi.validated_mesh_generation = Some(roi.dirty_state.authoritative.shape);
             Ok(())
         });
     end_roi_preview(world, preview.roi_entity);

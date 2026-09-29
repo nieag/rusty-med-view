@@ -321,10 +321,10 @@ pub(crate) fn ensure_contour_view_cache(
         } else {
             CacheViewState::Current
         };
-        let generation = roi.dirty_state.generations.authoritative;
+        let built_from = roi.dirty_state.authoritative;
         if roi
             .contour_view_cache(view_key)
-            .is_some_and(|cache| cache.source_generation == generation && cache.state == state)
+            .is_some_and(|cache| cache.built_from == built_from && cache.state == state)
         {
             return if mesh_preview.is_some() {
                 RepresentationRequestStatus::preview("mesh_plane_intersection_preview")
@@ -335,7 +335,7 @@ pub(crate) fn ensure_contour_view_cache(
         return match intersect_mesh_with_plane(mesh, view_key.plane) {
             Ok(data) => {
                 let install =
-                    roi.install_contour_view_result(view_key.clone(), data, generation, state);
+                    roi.install_contour_view_result(view_key.clone(), data, built_from, state);
                 if install.is_err() {
                     RepresentationRequestStatus::stale("mesh_plane_intersection_superseded")
                 } else if mesh_preview.is_some() {
@@ -349,19 +349,19 @@ pub(crate) fn ensure_contour_view_cache(
     }
     let contour_preview_voxel = roi.session_caches.preview_voxel.as_ref().and_then(|cache| {
         (roi.preview_state.active
-            && cache.source_generation == roi.dirty_state.generations.authoritative
+            && cache.source_generation == roi.dirty_state.authoritative.shape
             && cache.preview_revision == roi.preview_state.revision)
             .then(|| cache.data.clone())
     });
     if let Some(preview_voxel) = contour_preview_voxel {
         return match build_contour_view_data_for_plane(&preview_voxel, view_key) {
             Ok(data) => {
-                let generation = roi.dirty_state.generations.authoritative;
+                let built_from = roi.dirty_state.authoritative;
                 let revision = roi.preview_state.revision;
                 let _ = roi.install_contour_view_result(
                     view_key.clone(),
                     data,
-                    generation,
+                    built_from,
                     CacheViewState::Preview { revision },
                 );
                 RepresentationRequestStatus::preview("contour_edit_cross_plane_preview")
@@ -410,9 +410,9 @@ pub(crate) fn ensure_contour_view_cache(
         return RepresentationRequestStatus::stale("voxel_cache_stale_for_contour_view");
     }
 
-    let generation = roi.dirty_state.generations.authoritative;
+    let built_from = roi.dirty_state.authoritative;
     if let Some(cache) = roi.contour_view_cache(view_key) {
-        if cache.source_generation == generation && cache.state == CacheViewState::Current {
+        if cache.built_from == built_from && cache.state == CacheViewState::Current {
             return RepresentationRequestStatus::current();
         }
     }
@@ -424,7 +424,7 @@ pub(crate) fn ensure_contour_view_cache(
 
     match build_contour_view_data_for_plane(&voxel_data, view_key) {
         Ok(data) => {
-            match roi.install_current_contour_view_result(view_key.clone(), data, generation) {
+            match roi.install_current_contour_view_result(view_key.clone(), data, built_from) {
                 Ok(()) => RepresentationRequestStatus::current(),
                 Err(_) => RepresentationRequestStatus::stale("contour_view_result_superseded"),
             }
@@ -433,14 +433,14 @@ pub(crate) fn ensure_contour_view_cache(
             VoxelContourExtractionError::UnsupportedPlaneFamily { .. }
             | VoxelContourExtractionError::UnsupportedPlaneGeometry,
         ) => {
-            let generation = roi.dirty_state.generations.authoritative;
+            let built_from = roi.dirty_state.authoritative;
             let _ = roi.install_contour_view_result(
                 view_key.clone(),
                 ContourData {
                     active_plane_family: view_key.family,
                     slices: Vec::new(),
                 },
-                generation,
+                built_from,
                 CacheViewState::Unsupported {
                     reason: "derived_contour_view_geometry_unsupported".to_string(),
                 },
@@ -703,7 +703,7 @@ pub fn create_empty_contour_roi(
     if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
         // The empty cache is valid for the initial empty contour authority. Its generation lets
         // the first changed-slice commit use the incremental slab rasterizer.
-        let generation = roi.dirty_state.generations.authoritative;
+        let generation = roi.dirty_state.authoritative.shape;
         roi.install_voxel_cache_result(
             VoxelCache {
                 data: VoxelData {
@@ -810,7 +810,7 @@ pub fn create_contour_roi_from_voxel_roi(
         // Preserve source voxel geometry as the initial contour reference frame.
         // This keeps extracted contour projection/edit mapping aligned before any
         // contour->voxel rebuild retargets caches to main-volume geometry.
-        let generation = roi.dirty_state.generations.authoritative;
+        let generation = roi.dirty_state.authoritative.shape;
         let _ = roi.install_voxel_cache_result(
             VoxelCache {
                 data: source_voxel,
@@ -946,7 +946,7 @@ pub fn request_cache_rebuild(
 ) -> Option<RoiJobKind> {
     let mut roi = world.get::<&mut Roi>(roi_entity).ok()?;
     roi.mark_cache_dirty(kind);
-    let job_kind = cache_kind_to_job_kind(kind);
+    let job_kind = kind.rebuild_job();
     roi.enqueue_rebuild(job_kind);
     Some(job_kind)
 }
@@ -1036,7 +1036,7 @@ pub(crate) fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
     let (source_generation, voxel_data, base_chunks) = {
         let roi = world.get::<&Roi>(entity).expect("queued ROI must exist");
         (
-            roi.dirty_state.generations.authoritative,
+            roi.dirty_state.authoritative.shape,
             roi.voxel_cache()
                 .expect("current voxel cache must exist")
                 .data
@@ -1098,7 +1098,7 @@ fn resume_voxel_mesh_rebuild_work(
         return;
     };
     let is_current = world.get::<&Roi>(entity).is_ok_and(|roi| {
-        roi.dirty_state.generations.authoritative == work.source_generation
+        roi.dirty_state.authoritative.shape == work.source_generation
             && roi.is_cache_current(RoiCacheKind::Voxel)
             && roi.job_state.running_request.is_some_and(|request| {
                 request.kind == RoiJobKind::RebuildMeshCache
@@ -1141,7 +1141,7 @@ fn resume_voxel_mesh_rebuild_work(
     let Ok(mut roi) = world.get::<&mut Roi>(entity) else {
         return;
     };
-    if roi.dirty_state.generations.authoritative != work.source_generation {
+    if roi.dirty_state.authoritative.shape != work.source_generation {
         roi.job_metrics.discarded_count = roi.job_metrics.discarded_count.saturating_add(1);
         roi.finish_job(RoiJobKind::RebuildMeshCache);
         return;
@@ -1241,10 +1241,10 @@ fn process_mesh_voxel_rebuild_for_entity(
         };
         let target_geometry = roi.voxel_cache().map(|cache| cache.data.geometry);
         (
-            roi.dirty_state.generations.authoritative,
+            roi.dirty_state.authoritative.shape,
             mesh.clone(),
             target_geometry,
-            roi.validated_mesh_generation == Some(roi.dirty_state.generations.authoritative),
+            roi.validated_mesh_generation == Some(roi.dirty_state.authoritative.shape),
         )
     };
     if begin_next_job(world, roi_entity) != Some(RoiJobKind::RebuildVoxelCache) {
@@ -1303,7 +1303,7 @@ fn resume_mesh_voxel_rebuild_work(
         return false;
     };
     let is_current = world.get::<&Roi>(roi_entity).is_ok_and(|roi| {
-        roi.dirty_state.generations.authoritative == work.source_generation
+        roi.dirty_state.authoritative.shape == work.source_generation
             && matches!(roi.authoritative_data, RoiAuthoritativeData::Mesh(_))
             && roi.job_state.running_request.is_some_and(|request| {
                 request.kind == RoiJobKind::RebuildVoxelCache
@@ -1339,7 +1339,7 @@ fn resume_mesh_voxel_rebuild_work(
 
     if world
         .get::<&Roi>(roi_entity)
-        .is_ok_and(|roi| roi.dirty_state.generations.authoritative != source_generation)
+        .is_ok_and(|roi| roi.dirty_state.authoritative.shape != source_generation)
     {
         record_job_discarded(world, roi_entity, started_at.elapsed());
         if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
@@ -1490,7 +1490,7 @@ fn resume_contour_preview_mesh_work(
     let is_current = world.get::<&Roi>(roi_entity).is_ok_and(|roi| {
         roi.preview_state.active
             && roi.preview_state.revision == work.preview_revision
-            && roi.dirty_state.generations.authoritative == work.source_generation
+            && roi.dirty_state.authoritative.shape == work.source_generation
             && roi.job_state.running_request.is_some_and(|request| {
                 request.preview_revision == Some(work.preview_revision)
                     && request.source_generation == work.source_generation
@@ -1545,7 +1545,7 @@ fn resume_contour_preview_mesh_work(
     };
     if !roi.preview_state.active
         || roi.preview_state.revision != preview_revision
-        || roi.dirty_state.generations.authoritative != source_generation
+        || roi.dirty_state.authoritative.shape != source_generation
     {
         roi.job_metrics.discarded_count = roi.job_metrics.discarded_count.saturating_add(1);
         roi.finish_job(RoiJobKind::RebuildVoxelCache);
@@ -1585,7 +1585,7 @@ fn process_contour_voxel_rebuild_for_entity(
         let RoiAuthoritativeData::Contour(_) = &roi.authoritative_data else {
             return false;
         };
-        roi.dirty_state.generations.authoritative
+        roi.dirty_state.authoritative.shape
     };
 
     if begin_next_job(world, roi_entity) != Some(RoiJobKind::RebuildVoxelCache) {
@@ -1630,7 +1630,7 @@ fn process_contour_voxel_rebuild_for_entity(
         let is_current_preview = world.get::<&Roi>(roi_entity).is_ok_and(|roi| {
             roi.preview_state.active
                 && roi.preview_state.revision == revision
-                && roi.dirty_state.generations.authoritative == authoritative_generation
+                && roi.dirty_state.authoritative.shape == authoritative_generation
         });
         if !is_current_preview || preview.is_none() {
             record_job_discarded(world, roi_entity, started_at.elapsed());
@@ -1653,8 +1653,8 @@ fn process_contour_voxel_rebuild_for_entity(
     // at most one generation behind. Otherwise every authoritative slice must be rasterized.
     let base_slice_voxel = dirty_slice_key.and_then(|_| {
         world.get::<&Roi>(roi_entity).ok().and_then(|roi| {
-            let cache_generation = roi.dirty_state.generations.voxel;
-            let authoritative_generation = roi.dirty_state.generations.authoritative;
+            let cache_generation = roi.dirty_state.voxel.built_from.shape;
+            let authoritative_generation = roi.dirty_state.authoritative.shape;
             if cache_generation == authoritative_generation
                 || cache_generation.saturating_add(1) == authoritative_generation
             {
@@ -1769,7 +1769,7 @@ fn process_contour_voxel_rebuild_for_entity(
         };
         if !roi.preview_state.active
             || roi.preview_state.revision != revision
-            || roi.dirty_state.generations.authoritative != authoritative_generation
+            || roi.dirty_state.authoritative.shape != authoritative_generation
         {
             roi.job_metrics.discarded_count = roi.job_metrics.discarded_count.saturating_add(1);
             roi.finish_job(RoiJobKind::RebuildVoxelCache);
@@ -1810,7 +1810,7 @@ fn process_contour_voxel_rebuild_for_entity(
     before_commit(world, roi_entity);
 
     let is_stale = match world.get::<&Roi>(roi_entity) {
-        Ok(roi) => roi.dirty_state.generations.authoritative != authoritative_generation,
+        Ok(roi) => roi.dirty_state.authoritative.shape != authoritative_generation,
         Err(_) => return false,
     };
     if is_stale {
@@ -1987,15 +1987,6 @@ pub fn roi_voxel_stats(world: &World, roi_entity: hecs::Entity) -> Option<VoxelR
         occupied_voxels,
         volume_mm3: occupied_voxels as f32 * volume_scale_mm3,
     })
-}
-
-#[cfg(test)]
-fn cache_kind_to_job_kind(kind: RoiCacheKind) -> RoiJobKind {
-    match kind {
-        RoiCacheKind::Voxel => RoiJobKind::RebuildVoxelCache,
-        RoiCacheKind::Contour => RoiJobKind::RebuildContourCache,
-        RoiCacheKind::Mesh => RoiJobKind::RebuildMeshCache,
-    }
 }
 
 #[cfg(test)]

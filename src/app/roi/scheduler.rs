@@ -17,7 +17,7 @@ impl Roi {
     pub fn enqueue_rebuild(&mut self, kind: RoiJobKind) {
         self.enqueue_job(RoiJobRequest {
             kind,
-            source_generation: self.dirty_state.generations.authoritative,
+            source_generation: self.dirty_state.authoritative.shape,
             preview_revision: None,
             priority: RoiJobPriority::VisibleCommitted,
             dirty_region: RoiDirtyRegion::Full,

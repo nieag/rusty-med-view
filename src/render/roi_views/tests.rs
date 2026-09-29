@@ -30,8 +30,8 @@ fn spawn_voxel(world: &mut World, id: u64) -> Entity {
 
 fn mark_voxel_current_without_gpu(world: &mut World, entity: Entity) {
     let mut roi = world.get::<&mut Roi>(entity).unwrap();
-    roi.dirty_state.voxel_cache_dirty = false;
-    roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+    roi.dirty_state.voxel.dirty = false;
+    roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
 }
 
 fn make_dummy_gpu_resources() -> Option<GpuVolumeResources> {
@@ -67,8 +67,8 @@ fn mark_voxel_renderable_with_gpu(world: &mut World, entity: Entity) -> bool {
         return false;
     };
     let mut roi = world.get::<&mut Roi>(entity).unwrap();
-    roi.dirty_state.voxel_cache_dirty = false;
-    roi.dirty_state.generations.voxel = roi.dirty_state.generations.authoritative;
+    roi.dirty_state.voxel.dirty = false;
+    roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
     if let Some(cache) = roi.voxel_cache_mut() {
         cache.gpu_resources = Some(resources);
         true

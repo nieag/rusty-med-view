@@ -265,7 +265,7 @@ fn mesh_data_for_render(roi: &Roi) -> Option<&MeshData> {
 fn chunked_mesh_for_render(roi: &Roi) -> Option<&ChunkedMeshData> {
     if roi.preview_state.active {
         if let Some(preview) = roi.session_caches.preview_mesh.as_ref().filter(|cache| {
-            cache.source_generation == roi.dirty_state.generations.authoritative
+            cache.source_generation == roi.dirty_state.authoritative.shape
                 && cache.preview_revision == roi.preview_state.revision
         }) {
             return preview.chunks.as_ref();
