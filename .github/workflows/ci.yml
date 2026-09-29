@@ -52,6 +52,8 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
       - name: Run Tests
         run: cargo test
+      - name: Switch guard tests (release)
+        run: cargo test --release --test switch_guard
 
   build-native:
     name: Build Native
