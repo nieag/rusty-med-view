@@ -88,20 +88,6 @@ fn set_editor_tool(
     if roi.metadata.is_locked {
         return Err("Active ROI is locked.".to_string());
     }
-    match requested_tool {
-        EditorTool::ContourSelect | EditorTool::ContourDraw
-            if roi.primary_representation() != PrimaryRepresentation::Contour =>
-        {
-            return Err(
-                "Switch the active ROI to Contour authority before editing points or adding loops."
-                    .to_string(),
-            );
-        }
-        EditorTool::MeshDeform if roi.primary_representation() != PrimaryRepresentation::Mesh => {
-            return Err("Switch the active ROI to Mesh authority before deforming it.".to_string());
-        }
-        _ => {}
-    }
     drop(roi);
 
     if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {

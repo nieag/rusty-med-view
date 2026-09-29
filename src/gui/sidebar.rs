@@ -201,10 +201,14 @@ pub fn draw_sidebar(
             draw_roi_form(ui, world, entities, event_proxy, roi_entity);
         }
 
+        let mesh_tool_active = world
+            .get::<&EditorState>(entities.editor)
+            .is_ok_and(|editor| editor.active_tool == EditorTool::MeshDeform);
         let active_mesh_roi = new_active_roi.filter(|entity| {
-            world.get::<&Roi>(*entity).is_ok_and(|roi| {
-                roi.primary_representation() == PrimaryRepresentation::Mesh
-            })
+            mesh_tool_active
+                || world.get::<&Roi>(*entity).is_ok_and(|roi| {
+                    roi.primary_representation() == PrimaryRepresentation::Mesh
+                })
         });
         if let Some(mesh_entity) = active_mesh_roi {
             let has_mesh_preview = world
