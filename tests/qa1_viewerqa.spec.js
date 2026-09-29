@@ -2,6 +2,26 @@ const { test, expect } = require("@playwright/test");
 
 const BASE_URL = "http://localhost:8080";
 
+// The viewer renders with WebGPU. Without an adapter the app never initializes, and a spec that
+// accepts that outcome passes vacuously. Launch with WebGPU (macOS defaults below; override with
+// QA_CHROME_ARGS) and fail when the app is not ready, unless QA_ALLOW_NO_GPU=1 is set explicitly.
+const ALLOW_NO_GPU = process.env.QA_ALLOW_NO_GPU === "1";
+test.use({
+  launchOptions: {
+    args: (process.env.QA_CHROME_ARGS ?? "--enable-unsafe-webgpu --use-angle=metal")
+      .split(" ")
+      .filter(Boolean),
+  },
+});
+
+function assertAppReady(state, lastError) {
+  if (state?.qa?.ready || ALLOW_NO_GPU) return;
+  throw new Error(
+    `App did not become ready (${lastError?.category ?? "no error"}: ${lastError?.message ?? ""}). ` +
+      "This spec needs a WebGPU-capable Chrome; set QA_ALLOW_NO_GPU=1 to accept adapter failures.",
+  );
+}
+
 test("qa-1 viewer qa surface contract", async ({ page }) => {
   await page.goto(`${BASE_URL}/?qa=1`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => typeof window.__viewerQa === "object");
@@ -27,20 +47,21 @@ test("qa-1 viewer qa surface contract", async ({ page }) => {
   const lastError = await page.evaluate(() => window.__viewerQa.lastError());
   expect(lastError === null || typeof lastError === "object").toBeTruthy();
 
-  const waitReadyResolved = await page.evaluate(async () => {
-    try {
-      await window.__viewerQa.waitForReady({ timeoutMs: 100 });
-      return true;
-    } catch {
-      return false;
-    }
-  });
-  if (!waitReadyResolved) {
-    const failError = await page.evaluate(() => window.__viewerQa.lastError());
-    expect(failError).toBeTruthy();
-    expect(["wgpu.adapter", "wgpu.device", "wgpu.surface"]).toContain(
-      failError.category,
-    );
+  // Wait until the app is ready or has reported why it cannot be, rather than a fixed delay.
+  await page.waitForFunction(
+    () => {
+      const qa = window.__viewerQa;
+      return qa?.state?.()?.qa?.ready === true || !!qa?.lastError?.();
+    },
+    {},
+    { timeout: 10000 },
+  );
+  const readyState = await page.evaluate(() => window.__viewerQa.state());
+  const readyError = await page.evaluate(() => window.__viewerQa.lastError());
+  assertAppReady(readyState, readyError);
+  if (!readyState.qa.ready) {
+    expect(readyError).toBeTruthy();
+    expect(["wgpu.adapter", "wgpu.device", "wgpu.surface"]).toContain(readyError.category);
   }
 
   await page.goto(`${BASE_URL}/`, { waitUntil: "domcontentloaded" });
@@ -72,6 +93,7 @@ test("qa-2 sample preset readiness", async ({ page }) => {
     logs: window.__viewerQa.logs(),
   }));
 
+  assertAppReady(state, lastError);
   expect(state.qa.requested_sample).toBe("liver_0");
   expect(state.qa.requested_preset).toBe("image_label_mpr_basic");
 
@@ -167,6 +189,7 @@ test("qa-3 structured render facts", async ({ page }) => {
     );
   }
 
+  assertAppReady(state, lastError);
   expect(typeof state.render.frame_counter).toBe("number");
   expect(state.render.overlay_slots_max).toBeGreaterThanOrEqual(1);
   expect(typeof state.render.viewport_uniform_count).toBe("number");
@@ -205,4 +228,51 @@ test("qa-3 structured render facts", async ({ page }) => {
     expect(state.qa.ready).toBeFalsy();
     expect(state.qa.readiness_blockers.length).toBeGreaterThan(0);
   }
+});
+
+test("qa-4 liver geometry, orientation letters, and viewport facts", async ({ page }) => {
+  await page.goto(`${BASE_URL}/?qa=1&sample=liver_0&preset=image_label_mpr_basic`, {
+    waitUntil: "domcontentloaded",
+  });
+  await page.waitForFunction(() => typeof window.__viewerQa === "object");
+  await page.waitForFunction(
+    () => {
+      const qa = window.__viewerQa;
+      return qa?.state?.()?.qa?.ready === true || !!qa?.lastError?.();
+    },
+    {},
+    { timeout: 30000 },
+  );
+  const { state, lastError, metrics } = await page.evaluate(() => ({
+    state: window.__viewerQa.state(),
+    lastError: window.__viewerQa.lastError(),
+    metrics: window.__viewerQa.metrics(),
+  }));
+  assertAppReady(state, lastError);
+  if (!state.qa.ready) return; // QA_ALLOW_NO_GPU: nothing more to assert without a renderer.
+
+  // Geometry comes from the sample's sform: 2 x 2 x 3 mm voxels, RAS storage.
+  expect(state.volume.dimensions).toEqual([180, 180, 125]);
+  expect(state.volume.spacing).toEqual([2, 2, 3]);
+  expect(state.volume.orientation).toEqual([0, 0, 0, 1]);
+
+  // Edge letters are derived from the affine (left, right, top, bottom).
+  const byMode = Object.fromEntries(state.viewports.map((vp) => [vp.mode, vp]));
+  expect(byMode.axial.edge_letters).toBe("RLAP");
+  expect(byMode.coronal.edge_letters).toBe("RLSI");
+  expect(byMode.sagittal.edge_letters).toBe("APSI");
+
+  // The MPR preset puts the cursor inside the liver, and every 2D view can draw the overlay.
+  for (const mode of ["axial", "coronal", "sagittal"]) {
+    expect(byMode[mode].cursor_intersects_active_roi, mode).toBe(true);
+    expect(byMode[mode].volume_slice_in_bounds, mode).toBe(true);
+    expect(byMode[mode].overlay_renderable, mode).toBe(true);
+  }
+  expect(byMode.oblique.overlay_renderable).toBe(true);
+  expect(byMode.three_d.image_renderable).toBe(true);
+
+  // A healthy load reports no errors or warnings.
+  expect(lastError).toBeNull();
+  expect(metrics.error_count).toBe(0);
+  expect(metrics.warning_count).toBe(0);
 });

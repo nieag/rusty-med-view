@@ -53,13 +53,13 @@ Exit: the sidebar has no promotion controls; switching primary view keeps undo h
 - [ ] **2.2 `RoiBody` enum with per-authority state (L).** `Voxel`, `Contour`, `Mesh` variants own their edit state, preview, and history. Editing code takes the concrete type, so wrong-authority errors and `Missing*` variants disappear. Also fixes the split between global `EditorState` history and per-ROI caches.
 - [ ] **2.3 Automatic primary-view switch (L).** First edit gesture in a non-primary view makes that view's family primary: the clicked view's derived loops start the gesture, a background job re-derives the full set, and the edit commits when ready. Voxel and mesh ROIs become contour-primary on the first contour gesture, keeping the voxel source as an immutable baseline. The switch is an undo step (snapshot already includes the family).
 - [ ] **2.4 Remove manual promotion (M).** Delete the family dropdown, "Make displayed view editable", `RequiresConversion`, the seven promotion error enums, and `clear_roi_edit_history_for_roi` on switch. One error type for real failures. Report loss (volume delta or Dice) on each conversion.
-- [ ] **2.5 Scope decisions (S, needs your input).** Confirm voxel-to-authority promotion (`promote_current_voxel_cache_to_authority`) is removed; decide what a contour tool does to a mesh-primary ROI (convert with loss, undoable, or refuse).
+- [ ] **2.5 Scope decisions (S).** Decided: a contour tool on a mesh-primary ROI converts it to contour authority through the voxel cache, with the loss reported, and the conversion is one undo step (the mesh stays reachable through undo). Still to do: remove voxel-to-authority promotion (`promote_current_voxel_cache_to_authority`, `VoxelAuthorityPromotionError`) if confirmed unneeded; voxel stays a derived export form.
 
 ## Phase 3: Editing features and data completeness
 
 Exit: a deep-learning multi-organ segmentation can be imported, corrected, and exported without merging structures.
 
-- [ ] **3.1 Multi-label ROIs (M, needs your decision).** Today the overlay colors per label but SDF, contour, and mesh derivation use `!= 0`, and rasterization writes `1`, so a multi-organ import merges into one structure. Decide: one ROI per label at import (recommended) or a label-aware ROI. Requires the cache integrity fix in 0.1.
+- [ ] **3.1 Multi-label ROIs (M).** Decided: import one ROI per label. Today the overlay colours per label but SDF, contour, and mesh derivation use `!= 0`, and rasterization writes `1`, so a multi-organ import merges into one structure. Split a labelmap into one binary voxel ROI per non-zero label sharing the label grid's geometry, named after the file and label id, with the label's LUT colour. Memory note: N full-size binary masks; cropping each mask to its bounding box is tracked in 4.5. Requires the cache integrity fix in 0.1 (done).
 - [ ] **3.2 Subtract/erase drawing (M).** Contour drawing is union-only and a loop inside an existing loop cannot make a hole. Add subtract and hole-creating modes on `geo` boolean ops.
 - [ ] **3.3 Simplify extracted contours (M).** Voxel to contour produces a per-pixel staircase (hundreds of vertices per loop), which makes point-editing painful and inflates undo snapshots. Add simplification (Douglas-Peucker or marching squares with a tolerance) with a measured Dice bound.
 - [ ] **3.4 NIfTI labelmap export (M).** Export a selected ROI from its owned geometry, refuse stale-cache export, reload and verify geometry and occupied bounds. Depends on 0.1 and 1.1.
@@ -89,19 +89,25 @@ Do after Phases 0 to 2 so measurements reflect the final structure. Measure each
 
 - [ ] **6.1 WebGL fallback limits (S).** `request_device` uses default limits, which normally fail on a WebGL2 adapter even though the `webgl` feature is enabled. Use downlevel limits with the adapter's resolution, or drop the feature.
 - [ ] **6.2 Keep QA data out of production (S).** `index.html` copies `qa_samples` (28 MB) into the Pages deploy and `?qa=1` enables the debug API there. Gate behind a build feature or a dev-only Trunk config.
-- [ ] **6.3 CI (S).** The QA spec passes vacuously when the browser has no WebGPU adapter (it accepts the `wgpu.adapter` init failure as a valid outcome), so CI-style headless runs never exercise rendering; launch with `--enable-unsafe-webgpu` and fail on init errors. Also: Run clippy with `--all-targets --all-features`, run the Playwright QA spec against the built bundle, pin the Rust toolchain and `trunk`, and align the clippy flags documented in `clippy.toml`, `AGENTS.md`, and `ci.yml`.
+- [~] **6.3 CI (S).** Done: the QA spec (`tests/qa1_viewerqa.spec.js`) is a real gate: it launches Chrome with WebGPU (macOS defaults; override with `QA_CHROME_ARGS`), fails clearly when the app cannot initialize (`QA_ALLOW_NO_GPU=1` opts into the old lenient behaviour), waits for readiness instead of a fixed delay, and a new `qa-4` asserts the liver geometry, orientation letters, MPR viewport facts, and zero errors or warnings. `Trunk.toml` now ignores non-source directories so test artifacts no longer live-reload the page mid-run (restart `trunk serve` to pick it up). Still open: CI does not run the spec (GitHub runners have no WebGPU adapter; needs a software adapter), CI clippy still omits `--all-targets --all-features`, and the toolchain and `trunk` are unpinned; align the clippy flags documented in `clippy.toml`, `AGENTS.md`, and `ci.yml`.
 - [ ] **6.4 LICENSE and attribution (S, needs your input).** No LICENSE file; the marching-cubes table derives from an Apache-2.0 crate with only a code comment. Add a LICENSE and a NOTICE.
 - [ ] **6.5 GPU readback for visual QA (M).** Headless and headed Playwright cannot capture the WebGPU canvas. Add a wgpu readback behind `__viewerQa.screenshot()` for visual regression checks.
 - [ ] **6.6 Small UX and platform items (S).** Windowing sliders, presets, and "HU" labels are CT-specific; make ranges follow `intensity_range`. `ScreenDescriptor` uses `window.scale_factor()` while layout uses `ctx.pixels_per_point()` and diverges under egui zoom. File picker leaks its `<input>` on cancel. Scroll accumulator is shared across viewports. Viewport mouse capture during drags.
 - [ ] **6.7 Repo hygiene (S).** `qa_samples/` (28 MB) in git history; decide LFS. `target/` is 24 GB.
 
-## Decisions needed from you
+## Decisions
 
-1. Multi-label handling (3.1): one ROI per label, or a label-aware ROI.
-2. Voxel-center convention (1.3): edge-to-edge per the ADR (recommended) vs node-based.
-3. What a contour tool does to a mesh-primary ROI (2.5).
-4. Whether non-CT modalities (MR, PET) are in scope (1.6, 6.6).
+Resolved:
+
+1. Multi-label handling (3.1): one ROI per label.
+2. Voxel-centre convention (1.3): cell-centred, edge-to-edge (implemented).
+3. Contour tool on a mesh-primary ROI (2.5): convert with loss reported, as one undo step.
+
+Still open:
+
+4. Whether non-CT modalities (MR, PET) are in scope (6.6).
 5. License choice (6.4).
+6. Visual check of the oblique view and a LAS-stored file (1.4, 1.6): deferred by request.
 
 ## Not tasks now
 

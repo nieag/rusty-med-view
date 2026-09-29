@@ -6,4 +6,16 @@ port = 8080
 public_url = "/"
 
 [watch]
-ignore = ["target", ".git"]
+# Only source changes should rebuild and live-reload the page. Test artifacts, docs, and scratch
+# output are written into the project directory and used to reload the app in the middle of a run.
+ignore = [
+    "target",
+    ".git",
+    "dist",
+    "node_modules",
+    "tests",
+    "docs",
+    "qa_artifacts",
+    "test-results",
+    "playwright-report",
+]
