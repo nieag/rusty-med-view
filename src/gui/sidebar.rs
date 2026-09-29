@@ -447,19 +447,13 @@ pub fn draw_sidebar(
             })
         });
         if let Some(mesh_entity) = active_mesh_roi {
-            let (has_mesh_preview, mut brush_radius_mm, mut brush_strength) = world
+            let has_mesh_preview = world
+                .get::<&Roi>(mesh_entity)
+                .is_ok_and(|roi| roi.mesh_edit_preview().is_some());
+            let (mut brush_radius_mm, mut brush_strength) = world
                 .get::<&EditorState>(entities.editor)
-                .map(|editor| {
-                    (
-                        editor
-                            .mesh_edit_preview()
-                            .as_ref()
-                            .is_some_and(|preview| preview.roi_entity == mesh_entity),
-                        editor.mesh_brush_radius_mm,
-                        editor.mesh_brush_strength,
-                    )
-                })
-                .unwrap_or((false, 12.0, 1.0));
+                .map(|editor| (editor.mesh_brush_radius_mm, editor.mesh_brush_strength))
+                .unwrap_or((12.0, 1.0));
             let radius_changed = ui
                 .add(egui::Slider::new(&mut brush_radius_mm, 1.0..=50.0).text("Minimum radius mm"))
                 .on_hover_text("The affected surface area grows during long drags. This is the minimum radius; disconnected surfaces remain unaffected.")

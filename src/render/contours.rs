@@ -270,7 +270,6 @@ struct ContourInteraction<'a> {
     active_tool: EditorTool,
     draft: Option<&'a ContourDraft>,
     selection: Option<&'a ContourSelection>,
-    move_preview: Option<&'a ContourMovePreview>,
 }
 
 struct ContourViewportContext<'a> {
@@ -294,9 +293,9 @@ fn append_roi_contour_vertices(
     let displayed_plane = context.displayed_plane;
     let view_key = ContourViewKey::from_plane(displayed_plane);
     let is_active = interaction.active_roi == Some(roi_entity);
-    let preview_contour_data = interaction
-        .move_preview
-        .filter(|preview| is_active && preview.roi_entity == roi_entity)
+    let preview_contour_data = roi
+        .contour_move_preview()
+        .filter(|_| is_active)
         .filter(|_| {
             roi.contour_data()
                 .is_some_and(|contour| contour.active_plane_family == displayed_plane.family)
@@ -454,7 +453,7 @@ fn append_roi_contour_vertices(
 }
 
 pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> ContourRenderData {
-    let (active_roi, active_tool, contour_draft, contour_selection, contour_move_preview) = world
+    let (active_roi, active_tool, contour_draft, contour_selection) = world
         .get::<&EditorState>(entities.editor)
         .map(|editor| {
             (
@@ -462,10 +461,9 @@ pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> Con
                 editor.active_tool,
                 editor.contour_draft.clone(),
                 editor.contour_selection.clone(),
-                editor.contour_move_preview().cloned(),
             )
         })
-        .unwrap_or((None, EditorTool::Navigation, None, None, None));
+        .unwrap_or((None, EditorTool::Navigation, None, None));
     let main_geometry = {
         let mut volume_query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
         volume_query
@@ -507,7 +505,10 @@ pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> Con
             && world
                 .get::<&Roi>(active_roi)
                 .is_ok_and(|roi| roi.metadata.is_visible)
-            && (contour_draft.is_some() || contour_move_preview.is_some());
+            && (contour_draft.is_some()
+                || world
+                    .get::<&Roi>(active_roi)
+                    .is_ok_and(|roi| roi.contour_move_preview().is_some()));
         if needs_active_preview {
             contour_entities.insert(0, active_roi);
         }
@@ -517,7 +518,6 @@ pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> Con
         active_tool,
         draft: contour_draft.as_ref(),
         selection: contour_selection.as_ref(),
-        move_preview: contour_move_preview.as_ref(),
     };
 
     for (_, (viewport, viewport_state)) in world.query::<(&Viewport, &ViewportState)>().iter() {

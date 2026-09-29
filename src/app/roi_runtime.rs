@@ -750,7 +750,6 @@ pub fn translate_mesh_data(
 #[cfg(test)]
 pub fn begin_mesh_translation_preview(
     world: &mut World,
-    editor_entity: hecs::Entity,
     roi_entity: hecs::Entity,
     delta_world_mm: [f32; 3],
 ) -> Result<u64, MeshMutationError> {
@@ -768,7 +767,7 @@ pub fn begin_mesh_translation_preview(
             *coordinate += delta;
         }
     }
-    crate::app::roi::preview::begin_mesh_edit_preview(world, editor_entity, roi_entity, mesh)
+    crate::app::roi::preview::begin_mesh_edit_preview(world, roi_entity, mesh)
 }
 
 #[cfg(test)]
@@ -1618,15 +1617,10 @@ fn process_contour_voxel_rebuild_for_entity(
         })
     });
     let mut contour_data = if let Some(revision) = preview_revision {
-        let preview = world
-            .query::<&EditorState>()
-            .iter()
-            .find_map(|(_, editor)| {
-                editor
-                    .contour_move_preview()
-                    .filter(|preview| preview.roi_entity == roi_entity)
-                    .map(|preview| preview.contour_data.clone())
-            });
+        let preview = world.get::<&Roi>(roi_entity).ok().and_then(|roi| {
+            roi.contour_move_preview()
+                .map(|preview| preview.contour_data.clone())
+        });
         let is_current_preview = world.get::<&Roi>(roi_entity).is_ok_and(|roi| {
             roi.preview_state.active
                 && roi.preview_state.revision == revision

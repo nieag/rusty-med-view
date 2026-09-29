@@ -187,30 +187,39 @@ pub fn clear_contour_draft_if_inactive(world: &mut World, editor_entity: hecs::E
     }
 }
 
+/// Ends the contour drag preview of `roi_entity`, if it has one.
+fn end_contour_move_preview_of(world: &mut World, roi_entity: Option<hecs::Entity>) {
+    let Some(roi_entity) = roi_entity else {
+        return;
+    };
+    if world
+        .get::<&Roi>(roi_entity)
+        .is_ok_and(|roi| roi.contour_move_preview().is_some())
+    {
+        roi::end_roi_preview(world, roi_entity);
+    }
+}
+
 pub fn clear_contour_draft_for_roi_change(
     world: &mut World,
     editor_entity: hecs::Entity,
     new_active_roi: Option<hecs::Entity>,
 ) {
-    let mut ended_preview_roi = None;
-    let mut ended_mesh_preview_roi = None;
+    let mut previous_active_roi = None;
     if let Ok(mut editor) = world.get::<&mut EditorState>(editor_entity) {
         if editor.active_roi != new_active_roi {
             editor.contour_draft = None;
             editor.mesh_selection = None;
-            ended_preview_roi = editor
-                .take_contour_move_preview()
-                .map(|preview| preview.roi_entity);
-            ended_mesh_preview_roi = editor
-                .take_mesh_edit_preview()
-                .map(|preview| preview.roi_entity);
+            previous_active_roi = editor.active_roi;
         }
     }
-    if let Some(roi_entity) = ended_preview_roi {
-        roi::end_roi_preview(world, roi_entity);
-    }
-    if let Some(roi_entity) = ended_mesh_preview_roi {
-        roi::end_roi_preview(world, roi_entity);
+    if let Some(roi_entity) = previous_active_roi {
+        if world
+            .get::<&Roi>(roi_entity)
+            .is_ok_and(|roi| roi.edit_preview.is_some())
+        {
+            roi::end_roi_preview(world, roi_entity);
+        }
     }
 }
 
@@ -219,34 +228,26 @@ pub fn clear_contour_selection_for_roi_change(
     editor_entity: hecs::Entity,
     new_active_roi: Option<hecs::Entity>,
 ) {
-    let mut ended_preview_roi = None;
+    let mut previous_active_roi = None;
     if let Ok(mut editor) = world.get::<&mut EditorState>(editor_entity) {
         if editor.active_roi != new_active_roi {
             editor.contour_selection = None;
             editor.mesh_selection = None;
-            ended_preview_roi = editor
-                .take_contour_move_preview()
-                .map(|preview| preview.roi_entity);
+            previous_active_roi = editor.active_roi;
         }
     }
-    if let Some(roi_entity) = ended_preview_roi {
-        roi::end_roi_preview(world, roi_entity);
-    }
+    end_contour_move_preview_of(world, previous_active_roi);
 }
 
 pub fn clear_contour_selection_if_inactive(world: &mut World, editor_entity: hecs::Entity) {
-    let mut ended_preview_roi = None;
+    let mut active_roi = None;
     if let Ok(mut editor) = world.get::<&mut EditorState>(editor_entity) {
         if editor.active_tool != EditorTool::ContourSelect {
             editor.contour_selection = None;
-            ended_preview_roi = editor
-                .take_contour_move_preview()
-                .map(|preview| preview.roi_entity);
+            active_roi = editor.active_roi;
         }
     }
-    if let Some(roi_entity) = ended_preview_roi {
-        roi::end_roi_preview(world, roi_entity);
-    }
+    end_contour_move_preview_of(world, active_roi);
 }
 
 pub fn handle_contour_draw_click(
@@ -692,15 +693,9 @@ pub fn move_selected_point_preview(
     let (selection, mut contour_data, viewport) = selected_context(world, entities)?;
     let dirty_plane =
         update_selected_point_in_data(&selection, &mut contour_data, viewport, viewport_uv)?;
-    roi::begin_contour_move_preview(
-        world,
-        entities.editor,
-        selection.roi_entity,
-        contour_data,
-        dirty_plane,
-    )
-    .map(|_| ())
-    .map_err(|_| ContourEditOperationError::ReplaceFailed)
+    roi::begin_contour_move_preview(world, selection.roi_entity, contour_data, dirty_plane)
+        .map(|_| ())
+        .map_err(|_| ContourEditOperationError::ReplaceFailed)
 }
 
 fn update_selected_point_in_data(
@@ -741,14 +736,16 @@ pub fn finalize_selected_point_move(
         let editor = world
             .get::<&EditorState>(entities.editor)
             .map_err(|_| ContourEditOperationError::MissingSelection)?;
-        let preview = editor
-            .contour_move_preview()
-            .ok_or(ContourEditOperationError::MissingSelection)?;
         let selection = editor
             .contour_selection
             .as_ref()
-            .filter(|selection| selection.roi_entity == preview.roi_entity)
-            .ok_or(ContourEditOperationError::InvalidSelection)?;
+            .ok_or(ContourEditOperationError::MissingSelection)?;
+        let roi = world
+            .get::<&Roi>(selection.roi_entity)
+            .map_err(|_| ContourEditOperationError::InvalidSelection)?;
+        let preview = roi
+            .contour_move_preview()
+            .ok_or(ContourEditOperationError::MissingSelection)?;
         preview
             .contour_data
             .slices

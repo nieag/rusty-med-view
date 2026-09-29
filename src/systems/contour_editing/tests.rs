@@ -491,7 +491,6 @@ fn test_clear_contour_draft_when_tool_not_draw() {
             points: vec![],
         }),
         contour_selection: None,
-        roi_edit_preview: None,
         ..EditorState::default()
     },));
 
@@ -688,10 +687,11 @@ fn test_move_selected_point_preview_defers_authoritative_commit_until_finalize()
         assert!(roi.preview_state.active);
         assert_eq!(roi.preview_state.revision, 1);
     }
-    {
-        let editor = world.get::<&EditorState>(entities.editor).unwrap();
-        assert!(editor.contour_move_preview().is_some());
-    }
+    assert!(world
+        .get::<&Roi>(roi_entity)
+        .unwrap()
+        .contour_move_preview()
+        .is_some());
     assert!(world
         .get::<&Roi>(roi_entity)
         .unwrap()
@@ -795,10 +795,7 @@ fn test_move_selected_point_preview_defers_authoritative_commit_until_finalize()
     assert_ne!(after_points[1].local_mm, before_points[1].local_mm);
     assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
     assert!(!roi.preview_state.active);
-    {
-        let editor = world.get::<&EditorState>(entities.editor).unwrap();
-        assert!(editor.contour_move_preview().is_none());
-    }
+    assert!(roi.contour_move_preview().is_none());
     assert_eq!(roi.history.undo.len(), 1);
     drop(roi);
 

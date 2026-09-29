@@ -194,7 +194,6 @@ fn apply_roi_edit_history(
     if let Ok(mut editor) = world.get::<&mut EditorState>(editor_entity) {
         editor.contour_draft = None;
         editor.contour_selection = None;
-        editor.take_roi_edit_preview();
         editor.mesh_selection = None;
     }
     Ok(roi_entity)

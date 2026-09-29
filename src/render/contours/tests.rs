@@ -94,7 +94,6 @@ fn test_prepare_contour_render_data_emits_vertices_for_matching_slice() {
         active_tool: EditorTool::Navigation,
         contour_draft: None,
         contour_selection: None,
-        roi_edit_preview: None,
         ..EditorState::default()
     },));
     let viewport = world.spawn((
@@ -250,7 +249,6 @@ fn test_prepare_contour_render_data_uses_roi_geometry_when_main_volume_missing()
         active_tool: EditorTool::Navigation,
         contour_draft: None,
         contour_selection: None,
-        roi_edit_preview: None,
         ..EditorState::default()
     },));
     world.spawn((

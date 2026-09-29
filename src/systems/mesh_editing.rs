@@ -145,7 +145,7 @@ pub fn update_selected_mesh_deform_preview(
         radius_mm,
         strength,
     );
-    roi::begin_mesh_edit_preview(world, entities.editor, selection.roi_entity, mesh_data)
+    roi::begin_mesh_edit_preview(world, selection.roi_entity, mesh_data)
         .map_err(|_| MeshEditInteractionError::MissingActiveRoi)
 }
 

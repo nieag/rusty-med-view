@@ -862,8 +862,7 @@ fn test_mesh_edit_preview_updates_direct_contour_view_before_commit() {
         orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.25], geometry).unwrap();
     let key = ContourViewKey::from_plane(plane);
 
-    let revision =
-        begin_mesh_translation_preview(&mut world, editor, entity, [0.25, 0.0, 0.0]).unwrap();
+    let revision = begin_mesh_translation_preview(&mut world, entity, [0.25, 0.0, 0.0]).unwrap();
     let status = ensure_contour_view_cache(&mut world, entity, &key);
 
     assert_eq!(revision, 1);
@@ -934,12 +933,13 @@ fn test_cancel_mesh_edit_preview_preserves_authority() {
         "Cancel".to_string(),
         original.clone(),
     ),));
+    world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(entity);
     let geometry = VoxelGeometry::new([4; 3], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
     let plane =
         orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.25], geometry).unwrap();
     let key = ContourViewKey::from_plane(plane);
 
-    begin_mesh_translation_preview(&mut world, editor, entity, [1.0, 0.0, 0.0]).unwrap();
+    begin_mesh_translation_preview(&mut world, entity, [1.0, 0.0, 0.0]).unwrap();
     assert_eq!(
         ensure_contour_view_cache(&mut world, entity, &key).state,
         RepresentationRequestState::Preview
@@ -1096,6 +1096,7 @@ fn test_mesh_authority_keeps_direct_plane_contour_after_voxel_rebuild() {
     }
     promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
     let editor = world.spawn((EditorState::default(),));
+    world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(entity);
     let deformed = crate::systems::mesh_editing::deform_mesh_surface_brush(
         world.get::<&Roi>(entity).unwrap().mesh_data().unwrap(),
         [0, 1, 3],
@@ -1104,7 +1105,7 @@ fn test_mesh_authority_keeps_direct_plane_contour_after_voxel_rebuild() {
         1.5,
         1.0,
     );
-    crate::app::roi::begin_mesh_edit_preview(&mut world, editor, entity, deformed.clone()).unwrap();
+    crate::app::roi::begin_mesh_edit_preview(&mut world, entity, deformed.clone()).unwrap();
     commit_mesh_edit_preview(&mut world, editor).unwrap();
     assert_eq!(
         world.get::<&Roi>(entity).unwrap().mesh_data(),
@@ -1306,7 +1307,7 @@ fn test_rotated_anisotropic_roi_keeps_direct_contours_through_mesh_resample() {
         1.0,
     );
     assert_ne!(deformed, original);
-    crate::app::roi::begin_mesh_edit_preview(&mut world, editor, entity, deformed.clone()).unwrap();
+    crate::app::roi::begin_mesh_edit_preview(&mut world, entity, deformed.clone()).unwrap();
     commit_mesh_edit_preview(&mut world, editor).unwrap();
 
     let planes = [
@@ -3026,7 +3027,7 @@ fn test_liver_explicit_voxel_rebuild_frame_timing() {
         active_roi: Some(entity),
         ..EditorState::default()
     },));
-    crate::app::roi::begin_mesh_edit_preview(&mut world, editor, entity, deformed).unwrap();
+    crate::app::roi::begin_mesh_edit_preview(&mut world, entity, deformed).unwrap();
     commit_mesh_edit_preview(&mut world, editor).unwrap();
     let roi = world.get::<&Roi>(entity).unwrap();
     assert_eq!(

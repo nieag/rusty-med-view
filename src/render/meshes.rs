@@ -153,17 +153,11 @@ pub fn create_mesh_renderer(
 pub fn prepare_mesh_render_data(world: &World, entities: &AppEntities) -> MeshRenderData {
     let mut data = MeshRenderData::default();
     let roi_views = RoiRenderViews::for_world(world, RenderRepresentationRequest::default());
-    let (mesh_preview, mesh_selection, active_tool) = world
+    let (mesh_selection, active_tool) = world
         .get::<&crate::components::EditorState>(entities.editor)
         .ok()
-        .map(|editor| {
-            (
-                editor.mesh_edit_preview().cloned(),
-                editor.mesh_selection,
-                editor.active_tool,
-            )
-        })
-        .unwrap_or((None, None, crate::components::EditorTool::Navigation));
+        .map(|editor| (editor.mesh_selection, editor.active_tool))
+        .unwrap_or((None, crate::components::EditorTool::Navigation));
     for (viewport_entity, (viewport, viewport_state)) in
         world.query::<(&Viewport, &ViewportState)>().iter()
     {
@@ -186,10 +180,7 @@ pub fn prepare_mesh_render_data(world: &World, entities: &AppEntities) -> MeshRe
             let Ok(roi) = world.get::<&Roi>(mesh_view.entity) else {
                 continue;
             };
-            if let Some(preview) = mesh_preview
-                .as_ref()
-                .filter(|preview| preview.roi_entity == mesh_view.entity)
-            {
+            if let Some(preview) = roi.mesh_edit_preview() {
                 append_render_chunk(
                     mesh_view.entity,
                     viewport_entity,
@@ -230,9 +221,8 @@ pub fn prepare_mesh_render_data(world: &World, entities: &AppEntities) -> MeshRe
             if let Some(selection) = mesh_selection {
                 if let Ok(roi) = world.get::<&Roi>(selection.roi_entity) {
                     if roi.metadata.is_visible {
-                        let mesh = mesh_preview
-                            .as_ref()
-                            .filter(|preview| preview.roi_entity == selection.roi_entity)
+                        let mesh = roi
+                            .mesh_edit_preview()
                             .map(|preview| &preview.mesh_data)
                             .or_else(|| roi.mesh_data());
                         if let Some(world_mm) = mesh.and_then(|mesh| {

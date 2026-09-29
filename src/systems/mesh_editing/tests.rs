@@ -472,14 +472,14 @@ fn test_projected_mesh_drag_creates_preview_without_mutating_authority() {
         .unwrap()
         .clone();
     assert_eq!(authoritative_after, authoritative_before);
-    let editor = world.get::<&EditorState>(entities.editor).unwrap();
-    let preview = editor.mesh_edit_preview().expect("mesh preview data");
+    let roi = world.get::<&Roi>(roi_entity).unwrap();
+    let preview = roi.mesh_edit_preview().expect("mesh preview data");
     assert_ne!(
         preview.mesh_data.vertices[selection.vertex_index].world_mm,
         authoritative_before.vertices[selection.vertex_index].world_mm
     );
     let expected_preview = preview.mesh_data.clone();
-    drop(editor);
+    drop(roi);
     // Mouse event frequency must not compound the total drag displacement.
     for _ in 0..5 {
         update_selected_mesh_deform_preview(
@@ -491,7 +491,7 @@ fn test_projected_mesh_drag_creates_preview_without_mutating_authority() {
     }
     assert_eq!(
         world
-            .get::<&EditorState>(entities.editor)
+            .get::<&Roi>(roi_entity)
             .unwrap()
             .mesh_edit_preview()
             .unwrap()

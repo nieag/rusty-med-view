@@ -206,7 +206,6 @@ pub struct EditorState {
     pub active_tool: EditorTool,
     pub contour_draft: Option<ContourDraft>,
     pub contour_selection: Option<ContourSelection>,
-    pub roi_edit_preview: Option<RoiEditPreview>,
     pub mesh_selection: Option<MeshSelection>,
     pub mesh_brush_radius_mm: f32,
     pub mesh_brush_strength: f32,
@@ -219,7 +218,6 @@ impl Default for EditorState {
             active_tool: EditorTool::Navigation,
             contour_draft: None,
             contour_selection: None,
-            roi_edit_preview: None,
             mesh_selection: None,
             mesh_brush_radius_mm: 12.0,
             mesh_brush_strength: 1.0,
@@ -254,13 +252,11 @@ pub struct ContourSelection {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContourMovePreview {
-    pub roi_entity: hecs::Entity,
     pub contour_data: ContourData,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MeshEditPreview {
-    pub roi_entity: hecs::Entity,
     pub mesh_data: MeshData,
 }
 
@@ -671,6 +667,10 @@ pub struct Roi {
     pub preview_state: RoiPreviewState,
     /// Undo and redo steps of this ROI.
     pub history: RoiHistory,
+    /// In-flight interactive edit (a contour point drag or a mesh deform) that has not been
+    /// committed. It belongs to the ROI, so switching the active ROI cannot leave a preview
+    /// pointing at the wrong one.
+    pub edit_preview: Option<RoiEditPreview>,
     /// Current mesh generation already passed full voxelization validation.
     pub validated_mesh_generation: Option<u64>,
 }
@@ -739,6 +739,7 @@ impl Roi {
             job_metrics: RoiJobMetrics::default(),
             preview_state: RoiPreviewState::default(),
             history: RoiHistory::default(),
+            edit_preview: None,
             validated_mesh_generation: None,
         }
     }
@@ -782,6 +783,7 @@ impl Roi {
             job_metrics: RoiJobMetrics::default(),
             preview_state: RoiPreviewState::default(),
             history: RoiHistory::default(),
+            edit_preview: None,
             validated_mesh_generation: None,
         }
     }
@@ -825,6 +827,7 @@ impl Roi {
             job_metrics: RoiJobMetrics::default(),
             preview_state: RoiPreviewState::default(),
             history: RoiHistory::default(),
+            edit_preview: None,
             validated_mesh_generation: None,
         }
     }
