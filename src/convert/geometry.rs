@@ -520,6 +520,7 @@ pub fn index_space_affine_from_src_to_dst(
     }))
 }
 
+#[cfg(test)]
 pub fn transform_index_with_affine(index: [f32; 3], affine: [[f32; 4]; 3]) -> [f32; 3] {
     [
         affine[0][0] * index[0] + affine[0][1] * index[1] + affine[0][2] * index[2] + affine[0][3],

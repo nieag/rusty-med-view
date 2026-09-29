@@ -105,6 +105,7 @@ impl IncrementalChunkedMeshRebuild {
         self.next_key >= self.pending_keys.len()
     }
 
+    #[cfg(test)]
     pub fn remaining_chunks(&self) -> usize {
         self.pending_keys.len().saturating_sub(self.next_key)
     }
@@ -172,6 +173,7 @@ pub fn extract_mesh_from_voxel_data(
     extract_smooth_mesh_from_voxel_data(voxel_data).map_err(VoxelMeshExtractionError::SmoothMesh)
 }
 
+#[cfg(test)]
 pub fn extract_chunked_mesh_from_voxel_data(
     voxel_data: &VoxelData,
     chunk_size: u32,

@@ -10,10 +10,9 @@ use crate::components::{
 };
 use crate::convert::{
     contour_slice_contains_point, oblique_plane_from_view_rotation,
-    orthogonal_plane_from_volume_uv, plane_local_mm_to_viewport_uv, plane_local_mm_to_world_mm,
-    planes_are_same_slice, reproject_plane_local_mm, union_contour_slice_with_loop,
-    viewport_uv_to_plane_local_mm, volume_uv_to_viewport_uv, world_mm_to_volume_uv,
-    PlaneDefinition, PlaneFamily, ViewportMapping,
+    orthogonal_plane_from_volume_uv, plane_local_mm_to_world_mm, planes_are_same_slice,
+    reproject_plane_local_mm, union_contour_slice_with_loop, viewport_uv_to_plane_local_mm,
+    volume_uv_to_viewport_uv, world_mm_to_volume_uv, PlaneDefinition, PlaneFamily, ViewportMapping,
 };
 use hecs::World;
 
@@ -137,11 +136,12 @@ pub fn viewport_uv_to_contour_plane_local_mm(
     )
 }
 
+#[cfg(test)]
 pub fn contour_plane_local_mm_to_viewport_uv(
     local_mm: [f32; 2],
     viewport: ContourEditViewport,
 ) -> Option<[f32; 2]> {
-    plane_local_mm_to_viewport_uv(
+    crate::convert::plane_local_mm_to_viewport_uv(
         local_mm,
         viewport.plane,
         viewport.geometry,
@@ -668,6 +668,7 @@ fn nearest_segment_index_in_loop(
     best.map(|(idx, _)| idx)
 }
 
+#[cfg(test)]
 pub fn move_selected_point(
     world: &mut World,
     entities: &AppEntities,

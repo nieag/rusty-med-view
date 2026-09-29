@@ -40,6 +40,7 @@ impl SlicePlane {
     /// Convert from the shared plane-family abstraction.
     ///
     /// Returns `None` for non-orthogonal families (for now, `Oblique`).
+    #[cfg(test)]
     pub fn from_plane_family(family: crate::convert::PlaneFamily) -> Option<Self> {
         match family {
             crate::convert::PlaneFamily::Axial => Some(SlicePlane::Axial),

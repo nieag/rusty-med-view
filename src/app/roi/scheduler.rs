@@ -101,6 +101,7 @@ impl Roi {
         self.job_state.running_kind()
     }
 
+    #[cfg(test)]
     pub fn queued_job_kind(&self) -> Option<RoiJobKind> {
         self.job_state.queued_kind()
     }

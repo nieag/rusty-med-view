@@ -112,6 +112,7 @@ impl IncrementalMeshVoxelization {
     }
 }
 
+#[cfg(test)]
 pub fn voxelize_mesh_to_voxel_data(
     mesh: &MeshData,
     target_geometry: VoxelGeometry,

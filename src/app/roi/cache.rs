@@ -26,10 +26,6 @@ impl Roi {
         self.session_caches.mesh.as_ref()
     }
 
-    pub fn mesh_cache_mut(&mut self) -> Option<&mut MeshCache> {
-        self.session_caches.mesh.as_mut()
-    }
-
     pub fn voxel_cache(&self) -> Option<&VoxelCache> {
         self.session_caches.voxel.as_ref()
     }
@@ -168,6 +164,7 @@ impl Roi {
     }
 
     /// Every derived cache is invalidated, including absent ones.
+    #[cfg(test)]
     pub fn mark_authoritative_changed(&mut self) {
         self.invalidate_for_shape_change([Invalidate::Always; 3]);
     }
@@ -247,6 +244,7 @@ impl Roi {
         self.dirty_state.voxel = CacheFreshness::invalidated();
     }
 
+    #[cfg(test)]
     pub fn discard_cache(&mut self, kind: RoiCacheKind) {
         match kind {
             RoiCacheKind::Voxel => self.session_caches.voxel = None,

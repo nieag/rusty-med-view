@@ -182,6 +182,7 @@ impl VoxelGeometry {
             .to_array()
     }
 
+    #[cfg(test)]
     pub fn world_mm_to_ijk(self, world: [f64; 3]) -> [f64; 3] {
         self.world_to_ijk
             .transform_point3(DVec3::from_array(world))
@@ -189,6 +190,7 @@ impl VoxelGeometry {
     }
 
     /// Whether a continuous IJK point lies inside the grid's voxel cells.
+    #[cfg(test)]
     pub fn contains_voxel_center(self, ijk: [f64; 3]) -> bool {
         let point = DVec3::from_array(ijk);
         let upper = DVec3::new(
