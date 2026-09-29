@@ -192,6 +192,8 @@ Explicit rebuild pause follow-up:
   record. The same native test measured about 0 ms request and 22 ms first
   frame after the change. Resampling remains frame-budgeted. Browser impact is
   pending live confirmation.
+- Checkpoint: `8fbc4a6` (validation reuse, regression coverage, and native
+  liver timing).
 
 Correctness follow-up:
 
