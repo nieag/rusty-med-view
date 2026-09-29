@@ -111,22 +111,6 @@ fn world_direction_from_index_direction(
     Some(world.normalize().as_vec3())
 }
 
-fn index_direction_from_world_direction(
-    world_direction: Vec3,
-    geometry: VoxelGeometry,
-) -> Option<Vec3> {
-    if world_direction.length_squared() <= 1e-12 {
-        return None;
-    }
-    let index = geometry
-        .world_to_ijk_affine()
-        .transform_vector3(DVec3::from(world_direction));
-    if index.length_squared() <= 1e-12 {
-        return None;
-    }
-    Some(index.normalize().as_vec3())
-}
-
 fn orthonormalize_plane_axes(u_axis: Vec3, v_axis: Vec3) -> Option<(Vec3, Vec3, Vec3)> {
     if u_axis.length_squared() <= 1e-12 || v_axis.length_squared() <= 1e-12 {
         return None;
@@ -169,31 +153,23 @@ pub fn orthogonal_plane_from_volume_uv(
     )
 }
 
+/// Oblique reslice plane through the cursor, rotated by `rotation` in the volume's physical
+/// (millimetre) frame, the same frame the 3D view rotates. The plane axes are orthonormal in
+/// world space by construction, so plane-local coordinates are true millimetres.
 pub fn oblique_plane_from_view_rotation(
     cursor_uv: [f32; 3],
     rotation: [f32; 4],
     geometry: VoxelGeometry,
 ) -> Option<PlaneDefinition> {
     let view_rotation = normalized_orientation(rotation);
-    let u_index_dir = (view_rotation * Vec3::X).normalize_or_zero();
-    let v_index_dir = (view_rotation * Vec3::Y).normalize_or_zero();
-    if u_index_dir.length_squared() <= 1e-12 || v_index_dir.length_squared() <= 1e-12 {
-        return None;
-    }
-
-    let u_world = world_direction_from_index_direction(u_index_dir, geometry)?;
-    let v_world = world_direction_from_index_direction(v_index_dir, geometry)?;
-    let u_axis = u_world.normalize();
-    let v_axis = v_world.normalize();
-    let normal_vec = u_axis.cross(v_axis);
-    if normal_vec.length_squared() <= 1e-12 {
-        return None;
-    }
+    let frame = geometry.axis_frame();
+    let u_axis = (frame * DVec3::from(view_rotation * Vec3::X)).try_normalize()?;
+    let v_axis = (frame * DVec3::from(view_rotation * Vec3::Y)).try_normalize()?;
     PlaneDefinition::new(
         PlaneFamily::Oblique,
         volume_uv_to_world_mm(cursor_uv, geometry),
-        u_axis.to_array(),
-        v_axis.to_array(),
+        u_axis.as_vec3().to_array(),
+        v_axis.as_vec3().to_array(),
     )
 }
 
@@ -319,43 +295,45 @@ fn plane_slice_aspect(family: PlaneFamily, geometry: VoxelGeometry) -> Option<f3
     }
 }
 
-fn normalized_volume_extents(geometry: VoxelGeometry) -> [f32; 3] {
-    let extents = [
-        geometry.dimensions[0] as f32 * geometry.spacing()[0],
-        geometry.dimensions[1] as f32 * geometry.spacing()[1],
-        geometry.dimensions[2] as f32 * geometry.spacing()[2],
-    ];
-    let max_extent = extents[0].max(extents[1]).max(extents[2]).max(1e-6);
-    [
-        extents[0] / max_extent,
-        extents[1] / max_extent,
-        extents[2] / max_extent,
-    ]
-}
-
+/// Volume-UV displacement per millimetre along the plane's `u` and `v` axes, and the view window
+/// (millimetres) along each axis: the extent of the volume's projection onto that axis, so the
+/// whole volume is visible at zoom 1 and the window has the plane's true physical aspect.
 fn oblique_uv_basis_and_lengths(
     plane: PlaneDefinition,
     geometry: VoxelGeometry,
 ) -> Option<(Vec3, Vec3, f32, f32)> {
-    let u_dir = index_direction_from_world_direction(Vec3::from_array(plane.u_axis_mm), geometry)?;
-    let v_dir = index_direction_from_world_direction(Vec3::from_array(plane.v_axis_mm), geometry)?;
+    let dimensions = DVec3::new(
+        f64::from(geometry.dimensions[0]),
+        f64::from(geometry.dimensions[1]),
+        f64::from(geometry.dimensions[2]),
+    );
+    let world_to_ijk = geometry.world_to_ijk_affine();
+    let ijk_to_world = geometry.ijk_to_world_affine();
+    let axis = |direction: [f32; 3]| {
+        let direction = DVec3::from(Vec3::from_array(direction));
+        direction.is_finite().then_some(direction)
+    };
+    let (u_axis, v_axis) = (axis(plane.u_axis_mm)?, axis(plane.v_axis_mm)?);
 
-    let extents = normalized_volume_extents(geometry);
-    let lu = Vec3::new(
-        u_dir.x * extents[0],
-        u_dir.y * extents[1],
-        u_dir.z * extents[2],
-    )
-    .length()
-    .max(1e-3);
-    let lv = Vec3::new(
-        v_dir.x * extents[0],
-        v_dir.y * extents[1],
-        v_dir.z * extents[2],
-    )
-    .length()
-    .max(1e-3);
-    Some((u_dir, v_dir, lu, lv))
+    let uv_per_mm = |direction: DVec3| world_to_ijk.transform_vector3(direction) / dimensions;
+    let edges = [
+        ijk_to_world.x_axis.truncate() * dimensions.x,
+        ijk_to_world.y_axis.truncate() * dimensions.y,
+        ijk_to_world.z_axis.truncate() * dimensions.z,
+    ];
+    let window = |direction: DVec3| {
+        edges
+            .iter()
+            .map(|edge| direction.dot(*edge).abs())
+            .sum::<f64>()
+            .max(1e-3) as f32
+    };
+    Some((
+        uv_per_mm(u_axis).as_vec3(),
+        uv_per_mm(v_axis).as_vec3(),
+        window(u_axis),
+        window(v_axis),
+    ))
 }
 
 pub fn oblique_volume_uv_basis_and_lengths(
@@ -455,14 +433,14 @@ pub fn volume_uv_to_viewport_uv(
             ])
         }
         PlaneFamily::Oblique => {
-            let (u_dir, v_dir, lu, lv) = oblique_uv_basis_and_lengths(plane, geometry)?;
+            let (_, _, lu, lv) = oblique_uv_basis_and_lengths(plane, geometry)?;
             let slice_aspect = lu / lv;
             let k = mapping.screen_aspect / slice_aspect;
-            let origin_uv = Vec3::from_array(world_mm_to_volume_uv(plane.origin_mm, geometry));
-            let delta = Vec3::from_array(volume_uv) - origin_uv;
-            let du = delta.dot(u_dir);
-            let dv = delta.dot(v_dir);
-            let screen_uv = [0.5 - du / lu, 0.5 - dv / lv];
+            // The plane axes are orthonormal in millimetres, so plane-local coordinates are a
+            // plain projection of the world position.
+            let world_mm = volume_uv_to_world_mm(volume_uv, geometry);
+            let local_mm = world_mm_to_plane_local_mm(world_mm, plane);
+            let screen_uv = [0.5 - local_mm[0] / lu, 0.5 - local_mm[1] / lv];
 
             Some([
                 ((screen_uv[0] - mapping.pivot[0] - mapping.pan[0]) * mapping.zoom / k)

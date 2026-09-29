@@ -172,6 +172,8 @@ pub struct Uniforms {
     pub zoom_pivot: [f32; 2],
     pub rotation: [f32; 4], // Quaternion
     pub oblique_origin_uv: [f32; 4],
+    /// Oblique reslice basis along the plane's `u` axis: `xyz` is the volume-UV displacement per
+    /// millimetre, `w` is the view window length in millimetres (likewise for `v` below).
     pub oblique_u_dir_length: [f32; 4],
     pub oblique_v_dir_length: [f32; 4],
     // --- Overlay primitive fields ---

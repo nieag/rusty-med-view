@@ -236,49 +236,6 @@ fn legacy_viewport_uv_to_volume_uv(
     screen_uv_to_volume_uv_for_family(family, screen_uv, depth)
 }
 
-fn legacy_oblique_viewport_uv_to_volume_uv(
-    viewport_uv: [f32; 2],
-    zoom: f32,
-    pan: [f32; 2],
-    screen_aspect: f32,
-    vol_aspects: [f32; 3],
-    cursor_uv: [f32; 3],
-    rotation: [f32; 4],
-) -> [f32; 3] {
-    let view_rotation = normalized_orientation(rotation);
-    let u_axis = (view_rotation * Vec3::X).normalize_or_zero();
-    let v_axis = (view_rotation * Vec3::Y).normalize_or_zero();
-
-    let lu = Vec3::new(
-        u_axis.x * vol_aspects[0],
-        u_axis.y * vol_aspects[1],
-        u_axis.z * vol_aspects[2],
-    )
-    .length()
-    .max(1e-3);
-    let lv = Vec3::new(
-        v_axis.x * vol_aspects[0],
-        v_axis.y * vol_aspects[1],
-        v_axis.z * vol_aspects[2],
-    )
-    .length()
-    .max(1e-3);
-
-    let k = screen_aspect / (lu / lv);
-    let screen_uv = [
-        ((viewport_uv[0] - 0.5) * k) / zoom + 0.5 + pan[0],
-        (viewport_uv[1] - 0.5) / zoom + 0.5 + pan[1],
-    ];
-    let du = (0.5 - screen_uv[0]) * lu;
-    let dv = (0.5 - screen_uv[1]) * lv;
-
-    [
-        cursor_uv[0] + u_axis.x * du + v_axis.x * dv,
-        cursor_uv[1] + u_axis.y * du + v_axis.y * dv,
-        cursor_uv[2] + u_axis.z * du + v_axis.z * dv,
-    ]
-}
-
 #[test]
 fn test_viewport_uv_to_volume_uv_matches_legacy_axial_behavior() {
     let geometry = VoxelGeometry::new(
@@ -416,72 +373,6 @@ fn test_egui_top_left_y_down_convention_is_preserved() {
 
     let projected_back = volume_uv_to_viewport_uv(top_left, plane, geometry, mapping).unwrap();
     assert!(approx_eq2(projected_back, [0.0, 0.0], 1e-6));
-}
-
-#[test]
-fn test_oblique_viewport_mapping_matches_legacy_identity_rotation() {
-    let geometry = VoxelGeometry::new(
-        [96, 80, 64],
-        [1.0, 0.8, 1.2],
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    )
-    .unwrap();
-    let cursor_uv = [0.4, 0.55, 0.6];
-    let rotation = [0.0, 0.0, 0.0, 1.0];
-    let plane = oblique_plane_from_view_rotation(cursor_uv, rotation, geometry).unwrap();
-    let mapping = ViewportMapping {
-        zoom: 1.3,
-        pan: [0.04, -0.02],
-        pivot: [0.5, 0.5],
-        screen_aspect: 16.0 / 9.0,
-    };
-    let viewport_uv = [0.12, 0.77];
-
-    let new_pos = viewport_uv_to_volume_uv(viewport_uv, plane, geometry, mapping).unwrap();
-    let legacy_pos = legacy_oblique_viewport_uv_to_volume_uv(
-        viewport_uv,
-        mapping.zoom,
-        mapping.pan,
-        mapping.screen_aspect,
-        normalized_volume_extents(geometry),
-        cursor_uv,
-        rotation,
-    );
-    assert!(approx_eq(new_pos, legacy_pos, 1e-5));
-}
-
-#[test]
-fn test_oblique_viewport_mapping_matches_legacy_non_identity_rotation() {
-    let geometry = VoxelGeometry::new(
-        [120, 96, 84],
-        [0.7, 1.0, 1.4],
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    )
-    .unwrap();
-    let cursor_uv = [0.5, 0.5, 0.5];
-    let rotation = Quat::from_euler(glam::EulerRot::XYZ, 0.35, -0.2, 0.45).to_array();
-    let plane = oblique_plane_from_view_rotation(cursor_uv, rotation, geometry).unwrap();
-    let mapping = ViewportMapping {
-        zoom: 0.85,
-        pan: [-0.05, 0.07],
-        pivot: [0.5, 0.5],
-        screen_aspect: 1.0,
-    };
-    let viewport_uv = [0.9, 0.2];
-
-    let new_pos = viewport_uv_to_volume_uv(viewport_uv, plane, geometry, mapping).unwrap();
-    let legacy_pos = legacy_oblique_viewport_uv_to_volume_uv(
-        viewport_uv,
-        mapping.zoom,
-        mapping.pan,
-        mapping.screen_aspect,
-        normalized_volume_extents(geometry),
-        cursor_uv,
-        rotation,
-    );
-    assert!(approx_eq(new_pos, legacy_pos, 1e-5));
 }
 
 #[test]
@@ -645,12 +536,11 @@ fn test_plane_definition_constructor_derives_normal_and_rejects_degenerate_axes(
     .is_none());
 }
 
-// Target for the Phase 1 geometry rework. The oblique mapping treats a unit index-space direction
-// as a uv-space direction, so on anisotropic or non-cubic volumes a rotated oblique reslice is
-// sheared in patient millimetres and its plane frame (contour local coordinates) is skewed.
-// Remove `ignore` when the mapping derives its basis from an orthonormal millimetre frame.
+// The oblique mapping used to treat a unit index-space direction as a uv-space direction, so on
+// anisotropic or non-cubic volumes a rotated reslice was sheared in patient millimetres and
+// its plane frame (contour local coordinates) was skewed. The reslice must be planar and
+// orthonormal in millimetres.
 #[test]
-#[ignore = "known defect: oblique reslice is skewed in mm on anisotropic volumes (Phase 1)"]
 fn test_oblique_reslice_is_planar_and_orthogonal_in_millimetres() {
     let geometry = VoxelGeometry::new(
         [120, 96, 84],
@@ -789,4 +679,102 @@ fn test_oblique_slices_match_within_half_the_smallest_spacing() {
 
     assert!(planes_are_same_slice(oblique, near, geometry));
     assert!(!planes_are_same_slice(oblique, far, geometry));
+}
+
+#[test]
+fn test_identity_oblique_view_shows_the_whole_volume_at_unit_zoom() {
+    // The legacy window was measured in normalized units and cropped volumes whose axes differ
+    // in physical size. At zoom 1 with a matching screen aspect the view must span the volume.
+    let geometry = VoxelGeometry::new(
+        [96, 80, 64],
+        [1.0, 0.8, 1.2],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
+    let cursor_uv = [0.5, 0.5, 0.5];
+    let plane =
+        oblique_plane_from_view_rotation(cursor_uv, [0.0, 0.0, 0.0, 1.0], geometry).unwrap();
+    let (_, _, window_u, window_v) = oblique_volume_uv_basis_and_lengths(plane, geometry).unwrap();
+    let mapping = ViewportMapping {
+        zoom: 1.0,
+        pan: [0.0, 0.0],
+        pivot: [0.5, 0.5],
+        screen_aspect: window_u / window_v,
+    };
+
+    let top_left = viewport_uv_to_volume_uv([0.0, 0.0], plane, geometry, mapping).unwrap();
+    let bottom_right = viewport_uv_to_volume_uv([1.0, 1.0], plane, geometry, mapping).unwrap();
+
+    assert!(approx_eq(top_left, [1.0, 1.0, 0.5], 1e-5), "{top_left:?}");
+    assert!(
+        approx_eq(bottom_right, [0.0, 0.0, 0.5], 1e-5),
+        "{bottom_right:?}"
+    );
+}
+
+#[test]
+fn test_oblique_window_has_the_physical_aspect_of_the_plane() {
+    let geometry = VoxelGeometry::new(
+        [120, 96, 84],
+        [0.7, 1.0, 1.4],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
+    let rotation = Quat::from_euler(glam::EulerRot::XYZ, 0.35, -0.2, 0.45).to_array();
+    let plane = oblique_plane_from_view_rotation([0.5; 3], rotation, geometry).unwrap();
+    let (_, _, window_u, window_v) = oblique_volume_uv_basis_and_lengths(plane, geometry).unwrap();
+    let mapping = ViewportMapping {
+        zoom: 1.0,
+        pan: [0.0, 0.0],
+        pivot: [0.5, 0.5],
+        screen_aspect: window_u / window_v,
+    };
+    let world_at = |viewport_uv: [f32; 2]| {
+        let uv = viewport_uv_to_volume_uv(viewport_uv, plane, geometry, mapping).unwrap();
+        Vec3::from_array(volume_uv_to_world_mm(uv, geometry))
+    };
+
+    // The full viewport width and height map to the window lengths in millimetres.
+    let width_mm = (world_at([0.0, 0.5]) - world_at([1.0, 0.5])).length();
+    let height_mm = (world_at([0.5, 0.0]) - world_at([0.5, 1.0])).length();
+
+    assert!(
+        (width_mm - window_u).abs() < 1e-2 * window_u,
+        "{width_mm} vs {window_u}"
+    );
+    assert!(
+        (height_mm - window_v).abs() < 1e-2 * window_v,
+        "{height_mm} vs {window_v}"
+    );
+}
+
+#[test]
+fn test_oblique_viewport_mapping_round_trips_for_a_rotated_reslice() {
+    let geometry = VoxelGeometry::new(
+        [120, 96, 84],
+        [0.7, 1.0, 1.4],
+        [12.0, -7.0, 3.0],
+        Quat::from_euler(glam::EulerRot::XYZ, 0.2, -0.3, 0.1).to_array(),
+    )
+    .unwrap();
+    let rotation = Quat::from_euler(glam::EulerRot::XYZ, 0.35, -0.2, 0.45).to_array();
+    let plane = oblique_plane_from_view_rotation([0.45, 0.55, 0.4], rotation, geometry).unwrap();
+    let mapping = ViewportMapping {
+        zoom: 1.3,
+        pan: [0.03, -0.04],
+        pivot: [0.5, 0.5],
+        screen_aspect: 16.0 / 10.0,
+    };
+
+    for viewport_uv in [[0.2, 0.75], [0.9, 0.1], [0.5, 0.5]] {
+        let volume_uv = viewport_uv_to_volume_uv(viewport_uv, plane, geometry, mapping).unwrap();
+        let back = volume_uv_to_viewport_uv(volume_uv, plane, geometry, mapping).unwrap();
+
+        assert!(
+            approx_eq2(back, viewport_uv, 1e-4),
+            "{viewport_uv:?} -> {back:?}"
+        );
+    }
 }

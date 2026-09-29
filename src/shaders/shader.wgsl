@@ -39,6 +39,8 @@ struct Uniforms {
     zoom_pivot: vec2<f32>,
     rotation: vec4<f32>, // quaternion [x, y, z, w]
     oblique_origin_uv: vec4<f32>,
+    // Oblique reslice basis: xyz = volume-UV displacement per millimetre along the plane axis,
+    // w = view window length in millimetres. Same contract as `Uniforms` in components.rs.
     oblique_u_dir_length: vec4<f32>,
     oblique_v_dir_length: vec4<f32>,
     // Overlay primitive fields

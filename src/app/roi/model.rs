@@ -219,25 +219,34 @@ impl VoxelGeometry {
         ]
     }
 
+    /// Orthonormal frame of the grid axes in world space: the columns are the unit `i`, `j`, and
+    /// `k` directions with shear removed. A reflection is kept, so the determinant is -1 for an
+    /// LAS-like grid. Rotating in this frame rotates in the volume's physical (millimetre) frame.
+    pub fn axis_frame(self) -> DMat3 {
+        let linear = linear_part(&self.ijk_to_world);
+        let unit = |axis: DVec3, fallback: DVec3| axis.try_normalize().unwrap_or(fallback);
+        let x = unit(linear.x_axis, DVec3::X);
+        let y_raw = unit(linear.y_axis, DVec3::Y);
+        let z_raw = unit(linear.z_axis, DVec3::Z);
+        let handedness = DMat3::from_cols(x, y_raw, z_raw).determinant().signum();
+        let y = (y_raw - x * y_raw.dot(x))
+            .try_normalize()
+            .unwrap_or_else(|| x.any_orthonormal_vector());
+        let z = x.cross(y) * if handedness < 0.0 { -1.0 } else { 1.0 };
+        DMat3::from_cols(x, y, z)
+    }
+
     /// Proper-rotation view of the grid axes as a quaternion `[x, y, z, w]` with `w >= 0`.
     ///
     /// A reflection is folded into the x axis and shear is removed, so this is only a
     /// display-orientation approximation for consumers that cannot use the affine. Registration
     /// and measurement must use [`Self::ijk_to_world_affine`].
     pub fn orientation(self) -> [f32; 4] {
-        let linear = linear_part(&self.ijk_to_world);
-        let unit = |axis: DVec3, fallback: DVec3| axis.try_normalize().unwrap_or(fallback);
-        let mut x = unit(linear.x_axis, DVec3::X);
-        let y_raw = unit(linear.y_axis, DVec3::Y);
-        let z_raw = unit(linear.z_axis, DVec3::Z);
-        if DMat3::from_cols(x, y_raw, z_raw).determinant() < 0.0 {
-            x = -x;
+        let mut frame = self.axis_frame();
+        if frame.determinant() < 0.0 {
+            frame.x_axis = -frame.x_axis;
         }
-        let y = (y_raw - x * y_raw.dot(x))
-            .try_normalize()
-            .unwrap_or_else(|| x.any_orthonormal_vector());
-        let z = x.cross(y);
-        let mut rotation = DQuat::from_mat3(&DMat3::from_cols(x, y, z)).normalize();
+        let mut rotation = DQuat::from_mat3(&frame).normalize();
         if rotation.w < 0.0 {
             rotation = -rotation;
         }
