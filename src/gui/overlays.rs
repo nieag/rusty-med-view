@@ -1,8 +1,17 @@
 use crate::components::*;
+use crate::convert::slice_index_from_cursor_uv;
 use crate::overlay::OverlayManager;
 use crate::AppEvent;
 use hecs::{Entity, World};
 use winit::event_loop::EventLoopProxy;
+
+/// One-based slice number shown to the user, consistent with how scrolling picks slices.
+fn displayed_slice_number(cursor_uv: f32, dimension: u32) -> u32 {
+    if dimension == 0 {
+        return 0;
+    }
+    slice_index_from_cursor_uv(cursor_uv, dimension) as u32 + 1
+}
 
 /// Viewport layout inputs for overlay drawing.
 pub struct OverlayViewCtx<'a> {
@@ -112,7 +121,7 @@ pub fn draw_viewport_overlays(
                     }
                 }
                 ViewMode::Axial => {
-                    let slice_z = (cursor_pos[2] * vol_dims[2] as f32).round() as u32;
+                    let slice_z = displayed_slice_number(cursor_pos[2], vol_dims[2]);
                     label_res = Some(draw_label(ui, "Axial (Top)", is_active));
                     ui.label(format!("Slice: {} / {}", slice_z, vol_dims[2]));
                     if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
@@ -125,7 +134,7 @@ pub fn draw_viewport_overlays(
                     marker(ui, "L", egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh));
                 }
                 ViewMode::Coronal => {
-                    let slice_y = (cursor_pos[1] * vol_dims[1] as f32).round() as u32;
+                    let slice_y = displayed_slice_number(cursor_pos[1], vol_dims[1]);
                     label_res = Some(draw_label(ui, "Coronal (Front)", is_active));
                     ui.label(format!("Slice: {} / {}", slice_y, vol_dims[1]));
                     if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
@@ -137,7 +146,7 @@ pub fn draw_viewport_overlays(
                     marker(ui, "L", egui::pos2(rx0 + rect.width() - 15.0, ry0 + rhh));
                 }
                 ViewMode::Sagittal => {
-                    let slice_x = (cursor_pos[0] * vol_dims[0] as f32).round() as u32;
+                    let slice_x = displayed_slice_number(cursor_pos[0], vol_dims[0]);
                     label_res = Some(draw_label(ui, "Sagittal (Side)", is_active));
                     ui.label(format!("Slice: {} / {}", slice_x, vol_dims[0]));
                     if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
@@ -517,5 +526,33 @@ fn world_to_screen(
         ))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::convert::slice_center_uv;
+
+    #[test]
+    fn test_displayed_slice_number_is_one_based_for_every_slice() {
+        for dimension in [1_u32, 2, 4, 125, 180] {
+            for index in 0..dimension {
+                let cursor_uv = slice_center_uv(index as i32, dimension);
+
+                assert_eq!(
+                    displayed_slice_number(cursor_uv, dimension),
+                    index + 1,
+                    "dimension {dimension}, index {index}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_displayed_slice_number_never_exceeds_dimension() {
+        assert_eq!(displayed_slice_number(1.0, 125), 125);
+        assert_eq!(displayed_slice_number(2.0, 125), 125);
+        assert_eq!(displayed_slice_number(0.5, 0), 0);
     }
 }
