@@ -30,7 +30,19 @@ fn approx(actual: [f64; 3], expected: [f64; 3]) {
 /// Minimal single-file NIfTI-1 (uint8, sform only) for end-to-end loader tests.
 fn build_nifti(dimensions: [i16; 3], srow: [[f32; 4]; 3]) -> Vec<u8> {
     let voxels = dimensions.iter().map(|d| *d as usize).product::<usize>();
-    let mut bytes = vec![0u8; 352 + voxels];
+    build_nifti_with_data(dimensions, srow, 2, 8, &vec![0u8; voxels])
+}
+
+/// Single-file NIfTI-1 with an explicit datatype (2 = uint8, 16 = float32) and raw payload.
+fn build_nifti_with_data(
+    dimensions: [i16; 3],
+    srow: [[f32; 4]; 3],
+    datatype: i16,
+    bitpix: i16,
+    payload: &[u8],
+) -> Vec<u8> {
+    let mut bytes = vec![0u8; 352];
+    bytes.extend_from_slice(payload);
     bytes[0..4].copy_from_slice(&348i32.to_le_bytes());
     let dims = [
         3i16,
@@ -45,8 +57,8 @@ fn build_nifti(dimensions: [i16; 3], srow: [[f32; 4]; 3]) -> Vec<u8> {
     for (index, dim) in dims.iter().enumerate() {
         bytes[40 + index * 2..42 + index * 2].copy_from_slice(&dim.to_le_bytes());
     }
-    bytes[70..72].copy_from_slice(&2i16.to_le_bytes()); // uint8
-    bytes[72..74].copy_from_slice(&8i16.to_le_bytes());
+    bytes[70..72].copy_from_slice(&datatype.to_le_bytes());
+    bytes[72..74].copy_from_slice(&bitpix.to_le_bytes());
     let pixdim = [1.0f32, 2.0, 2.0, 3.0, 0.0, 0.0, 0.0, 0.0];
     for (index, value) in pixdim.iter().enumerate() {
         bytes[76 + index * 4..80 + index * 4].copy_from_slice(&value.to_le_bytes());
@@ -63,6 +75,19 @@ fn build_nifti(dimensions: [i16; 3], srow: [[f32; 4]; 3]) -> Vec<u8> {
     bytes[344..348].copy_from_slice(b"n+1\0");
     bytes
 }
+
+fn float32_payload(values: &[f32]) -> Vec<u8> {
+    values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
+}
+
+const UNIT_SROW: [[f32; 4]; 3] = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+];
 
 #[test]
 fn test_gzip_detection() {
@@ -226,4 +251,86 @@ fn test_loading_a_label_with_a_singular_grid_is_rejected_by_the_loader() {
         load_nifti_from_bytes(&bytes),
         Err(LoadError::InvalidGeometry(_))
     ));
+}
+
+#[test]
+fn test_metre_units_are_converted_to_millimetres() {
+    // 2 mm voxels declared in metres, with a 0.1 m offset.
+    let mut header = header(
+        1,
+        0,
+        [
+            [0.002, 0.0, 0.0, 0.1],
+            [0.0, 0.002, 0.0, 0.0],
+            [0.0, 0.0, 0.003, 0.0],
+        ],
+    );
+    header.xyzt_units = 1;
+    let geometry = geometry_from_header(&header, [4, 4, 4]).unwrap();
+
+    approx(world_of(geometry, [0.0, 0.0, 0.0]), [100.0, 0.0, 0.0]);
+    assert!((geometry.spacing()[0] - 2.0).abs() < 1e-4);
+    assert!((geometry.spacing()[2] - 3.0).abs() < 1e-4);
+}
+
+#[test]
+fn test_micron_units_are_converted_to_millimetres() {
+    let mut header = header(0, 0, NO_SFORM);
+    header.xyzt_units = 3;
+    header.pixdim = [1.0, 2000.0, 2000.0, 3000.0, 0.0, 0.0, 0.0, 0.0];
+    let geometry = geometry_from_header(&header, [4, 4, 4]).unwrap();
+
+    assert!((geometry.spacing()[0] - 2.0).abs() < 1e-4);
+    assert!((geometry.spacing()[2] - 3.0).abs() < 1e-4);
+}
+
+#[test]
+fn test_unknown_or_millimetre_units_are_left_unchanged() {
+    for units in [0u8, 2] {
+        let mut header = header(0, 0, NO_SFORM);
+        header.xyzt_units = units;
+        let geometry = geometry_from_header(&header, [4, 4, 4]).unwrap();
+
+        assert_eq!(geometry.spacing(), [2.0, 2.0, 3.0], "units {units}");
+    }
+}
+
+#[test]
+fn test_gzip_expansion_is_bounded() {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    use std::io::Write;
+
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&vec![7u8; 1000]).unwrap();
+    let compressed = encoder.finish().unwrap();
+
+    assert_eq!(
+        decompress_gzip_with_limit(&compressed, 1000).unwrap().len(),
+        1000
+    );
+    assert!(matches!(
+        decompress_gzip_with_limit(&compressed, 999),
+        Err(LoadError::DecompressionFailed(_))
+    ));
+}
+
+#[test]
+fn test_label_values_must_be_integers_in_the_u8_range() {
+    let load = |values: &[f32]| {
+        let bytes = build_nifti_with_data([2, 1, 1], UNIT_SROW, 16, 32, &float32_payload(values));
+        load_label_from_bytes(&bytes, "labels.nii".to_string())
+    };
+
+    assert_eq!(load(&[0.0, 3.0]).unwrap().data, vec![0, 3]);
+    assert_eq!(load(&[1.0004, 255.0]).unwrap().data, vec![1, 255]);
+    for invalid in [300.0, -1.0, 0.7, f32::NAN] {
+        assert!(
+            matches!(
+                load(&[0.0, invalid]),
+                Err(LoadError::InvalidLabelValue { .. })
+            ),
+            "value {invalid} must be rejected, not clamped"
+        );
+    }
 }

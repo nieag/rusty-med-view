@@ -36,6 +36,8 @@ pub enum LoadError {
     DimensionError(String),
     #[error("Invalid spatial geometry: {0}")]
     InvalidGeometry(String),
+    #[error("Labelmap value {value} at voxel [{x}, {y}, {z}] is not an integer in 0..=255")]
+    InvalidLabelValue { value: f64, x: u32, y: u32, z: u32 },
 }
 
 /// Check if data starts with gzip magic bytes
@@ -43,13 +45,26 @@ fn is_gzipped(data: &[u8]) -> bool {
     data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b
 }
 
+/// Largest decompressed NIfTI accepted. A tiny gzip stream can expand by orders of magnitude, so
+/// expansion is bounded instead of trusting the input.
+const MAX_DECOMPRESSED_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
 /// Decompress gzipped data
 fn decompress_gzip(data: &[u8]) -> Result<Vec<u8>, LoadError> {
-    let mut decoder = GzDecoder::new(data);
+    decompress_gzip_with_limit(data, MAX_DECOMPRESSED_BYTES)
+}
+
+fn decompress_gzip_with_limit(data: &[u8], limit: usize) -> Result<Vec<u8>, LoadError> {
+    let mut decoder = GzDecoder::new(data).take(limit as u64 + 1);
     let mut decompressed = Vec::new();
     decoder
         .read_to_end(&mut decompressed)
         .map_err(|e| LoadError::DecompressionFailed(e.into()))?;
+    if decompressed.len() > limit {
+        return Err(LoadError::DecompressionFailed(
+            format!("decompressed data exceeds the {limit} byte limit").into(),
+        ));
+    }
     Ok(decompressed)
 }
 
@@ -73,6 +88,21 @@ fn spatial_affine_rows(header: &NiftiHeader) -> Option<[[f32; 4]; 3]> {
 /// Full IJK-to-world affine for the header. Reflections and shear in the sform are preserved;
 /// without a usable sform or qform the legacy `pixdim` scale with zero origin is used.
 fn spatial_affine(header: &NiftiHeader) -> Result<DMat4, LoadError> {
+    let to_mm = spatial_unit_to_mm(header);
+    Ok(DMat4::from_scale(DVec3::splat(to_mm)) * spatial_affine_in_header_units(header)?)
+}
+
+/// Millimetres per spatial unit declared in `xyzt_units` (1 = metre, 2 = millimetre,
+/// 3 = micron). Unknown is treated as millimetres, the near-universal convention.
+fn spatial_unit_to_mm(header: &NiftiHeader) -> f64 {
+    match header.xyzt_units & 0x07 {
+        1 => 1000.0,
+        3 => 0.001,
+        _ => 1.0,
+    }
+}
+
+fn spatial_affine_in_header_units(header: &NiftiHeader) -> Result<DMat4, LoadError> {
     if let Some([row_x, row_y, row_z]) = spatial_affine_rows(header) {
         let column = |index: usize, w: f64| {
             DVec4::new(
@@ -265,6 +295,13 @@ fn parse_nifti_raw(data: &[u8]) -> Result<ParsedNifti, LoadError> {
     })
 }
 
+/// A labelmap voxel as a `u8` id, or `None` when it is not (within float noise) an integer in
+/// `0..=255`. Silent clamping used to turn probability maps and wide label ids into wrong labels.
+fn label_value(value: f64) -> Option<u8> {
+    let rounded = value.round();
+    ((value - rounded).abs() <= 1e-3 && (0.0..=255.0).contains(&rounded)).then_some(rounded as u8)
+}
+
 /// Load a NIfTI volume from raw bytes (works on both native and WASM)
 ///
 /// Automatically handles gzip decompression if the file is compressed.
@@ -288,7 +325,9 @@ pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
     for z in 0..depth as u16 {
         for y in 0..height as u16 {
             for x in 0..width as u16 {
-                let value: f64 = volume.get_f64(&[x, y, z]).unwrap_or(0.0);
+                let value: f64 = volume
+                    .get_f64(&[x, y, z])
+                    .map_err(|e| LoadError::VolumeParseFailed(e.into()))?;
                 intensity_data.push((value * scl_slope as f64 + scl_inter as f64) as f32);
             }
         }
@@ -333,8 +372,16 @@ pub fn load_label_from_bytes(
     for z in 0..depth as u16 {
         for y in 0..height as u16 {
             for x in 0..width as u16 {
-                let value: f64 = volume.get_f64(&[x, y, z]).unwrap_or(0.0);
-                label_data.push(value.clamp(0.0, 255.0) as u8);
+                let value: f64 = volume
+                    .get_f64(&[x, y, z])
+                    .map_err(|e| LoadError::VolumeParseFailed(e.into()))?;
+                let label = label_value(value).ok_or(LoadError::InvalidLabelValue {
+                    value,
+                    x: u32::from(x),
+                    y: u32::from(y),
+                    z: u32::from(z),
+                })?;
+                label_data.push(label);
             }
         }
     }
