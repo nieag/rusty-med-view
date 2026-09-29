@@ -282,6 +282,17 @@ test("qa-4 liver geometry, orientation letters, and viewport facts", async ({ pa
   expect(byMode.oblique.overlay_renderable).toBe(true);
   expect(byMode.three_d.image_renderable).toBe(true);
 
+  // Contours and the 3D mesh must actually be drawn, not just be renderable: the batch counts
+  // are what the renderer submitted (regression: a stale 1x1 surface size clipped both to nothing).
+  await page.waitForFunction(
+    () => {
+      const render = window.__viewerQa.state().render;
+      return render.contour_batch_count > 0 && render.mesh_batch_count > 0;
+    },
+    null,
+    { timeout: 15000 },
+  );
+
   // A healthy load reports no errors or warnings.
   expect(lastError).toBeNull();
   expect(metrics.error_count).toBe(0);

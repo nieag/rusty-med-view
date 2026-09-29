@@ -239,21 +239,19 @@ impl ApplicationHandler<AppEvent> for App {
                 ctx.window.request_redraw();
             }
             WindowEvent::Resized(size) => {
-                ctx.gpu.config.width = size.width;
-                ctx.gpu.config.height = size.height;
-                ctx.gpu.surface.configure(&ctx.gpu.device, &ctx.gpu.config);
-                let mut query = ctx
-                    .scene
-                    .world
-                    .query_one::<&mut WindowSettings>(ctx.settings_entity)
-                    .unwrap();
-                if let Some(settings) = query.get() {
-                    settings.width = size.width;
-                    settings.height = size.height;
-                }
+                apply_surface_size(ctx, size);
                 ctx.window.request_redraw();
             }
             WindowEvent::RedrawRequested => {
+                // The window is the truth. On the web the initial resize can arrive before the
+                // context exists; without this the surface and the ROI overlays stay 1x1.
+                let size = ctx.window.inner_size();
+                if size.width > 0
+                    && size.height > 0
+                    && (size.width != ctx.gpu.config.width || size.height != ctx.gpu.config.height)
+                {
+                    apply_surface_size(ctx, size);
+                }
                 qa_runtime.frame_counter = qa_runtime.frame_counter.saturating_add(1);
                 qa_runtime.last_presented_frame = Some(qa_runtime.frame_counter);
                 let (repaint_after, frame_stats) = pipeline::render_frame(
@@ -633,5 +631,21 @@ impl ApplicationHandler<AppEvent> for App {
                 ctx.window.request_redraw();
             }
         }
+    }
+}
+
+/// Reconfigures the surface for a new window size and records it for the systems that clip
+/// overlays to the window.
+fn apply_surface_size(ctx: &mut RenderingContext, size: winit::dpi::PhysicalSize<u32>) {
+    ctx.gpu.config.width = size.width;
+    ctx.gpu.config.height = size.height;
+    ctx.gpu.surface.configure(&ctx.gpu.device, &ctx.gpu.config);
+    if let Ok(mut settings) = ctx
+        .scene
+        .world
+        .get::<&mut WindowSettings>(ctx.settings_entity)
+    {
+        settings.width = size.width;
+        settings.height = size.height;
     }
 }
