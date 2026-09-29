@@ -206,7 +206,12 @@ pub fn commit_mesh_edit_preview(
                 editor_entity,
                 preview.roi_entity,
                 preview.mesh_data,
-            )
+            )?;
+            let mut roi = world
+                .get::<&mut Roi>(preview.roi_entity)
+                .map_err(|_| MeshMutationError::MissingRoi)?;
+            roi.validated_mesh_generation = Some(roi.dirty_state.generations.authoritative);
+            Ok(())
         });
     end_roi_preview(world, preview.roi_entity);
     result

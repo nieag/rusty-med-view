@@ -121,8 +121,8 @@ invalid previews are discarded without changing authority or undo history.
 ## Implementation status
 
 Current phase: Phase 4 GPU QA and live usability verification. The milestone
-is not complete: reported scattered voxel output still needs representative
-verification after the seam fixes.
+is not complete: a liver deform/build test found no tears, but scattered voxel
+output and the browser impact of the rebuild-pause fix still need confirmation.
 
 Completed:
 
@@ -168,13 +168,30 @@ Completed:
 
 Pending:
 
-- [ ] Verify chunk-seam fixes with the QA liver deformation and explicit
-  **Build voxels** workflow; confirm no tears or scattered occupancy.
+- [ ] Finish QA liver deformation and explicit **Build voxels** verification:
+  one live run found no tears, but scattered occupancy was not reported.
+- [ ] Recheck the immediate **Build voxels** pause in the browser after
+  validation reuse; native release timing is not browser acceptance.
 - [ ] Complete GPU QA across axial/oblique views and rotated/anisotropic grids.
 - [ ] Decide whether the measured ~101 ms synchronous liver SDF setup is
   acceptable for v0 editing, or split it across frames.
 - [ ] Audit remaining extraction/topology and deformation validity guarantees
   before accepting the smooth-meshing milestone.
+
+Explicit rebuild pause follow-up:
+
+- The live liver workflow reported an immediate 0.5–1 s freeze on clicking
+  **Build voxels**, while deformation produced no visible tears in that run.
+- A release-mode liver test at the actual request/scheduler seam reproduced
+  two synchronous stages: about 69 ms in the request and 82 ms in the first
+  frame. Full mesh validation ran in both stages; the first frame also built
+  the voxelizer's triangle acceleration structure.
+- A successfully committed mesh preview now records that its exact authority
+  generation passed full validation. The explicit request and voxelizer reuse
+  it; other mesh entry paths still validate, and authority changes clear the
+  record. The same native test measured about 0 ms request and 22 ms first
+  frame after the change. Resampling remains frame-budgeted. Browser impact is
+  pending live confirmation.
 
 Correctness follow-up:
 

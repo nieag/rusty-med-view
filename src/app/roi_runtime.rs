@@ -1465,7 +1465,7 @@ fn process_mesh_voxel_rebuild_for_entity(
     frame_started_at: Instant,
     frame_budget: Duration,
 ) -> bool {
-    let (source_generation, mesh, target_geometry) = {
+    let (source_generation, mesh, target_geometry, prevalidated) = {
         let Ok(roi) = world.get::<&Roi>(roi_entity) else {
             return false;
         };
@@ -1477,6 +1477,7 @@ fn process_mesh_voxel_rebuild_for_entity(
             roi.dirty_state.generations.authoritative,
             mesh.clone(),
             target_geometry,
+            roi.validated_mesh_generation == Some(roi.dirty_state.generations.authoritative),
         )
     };
     if begin_next_job(world, roi_entity) != Some(RoiJobKind::RebuildVoxelCache) {
@@ -1488,7 +1489,11 @@ fn process_mesh_voxel_rebuild_for_entity(
         return false;
     };
     let voxelization_started_at = Instant::now();
-    let rebuild = match IncrementalMeshVoxelization::begin(&mesh, target_geometry) {
+    let rebuild = match if prevalidated {
+        IncrementalMeshVoxelization::begin_prevalidated(&mesh, target_geometry)
+    } else {
+        IncrementalMeshVoxelization::begin(&mesh, target_geometry)
+    } {
         Ok(work) => work,
         Err(error) => {
             log::warn!("Mesh voxel rebuild failed for ROI {roi_entity:?}: {error:?}");
@@ -3004,6 +3009,36 @@ mod tests {
             world.get::<&Roi>(entity).unwrap().queued_job_kind(),
             Some(RoiJobKind::RebuildVoxelCache)
         );
+    }
+
+    #[test]
+    fn test_mesh_rebuild_revalidates_after_authority_generation_changes() {
+        let mut world = World::new();
+        let entity = world.spawn((Roi::new_mesh(
+            RoiId(301),
+            "Mesh".to_string(),
+            closed_tetra_mesh_data(),
+        ),));
+        crate::app::roi::request_mesh_voxel_cache_rebuild(&mut world, entity).unwrap();
+        assert_eq!(
+            world.get::<&Roi>(entity).unwrap().validated_mesh_generation,
+            Some(1)
+        );
+
+        replace_mesh_data(&mut world, entity, simple_mesh_data()).unwrap();
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert_ne!(
+            roi.validated_mesh_generation,
+            Some(roi.dirty_state.generations.authoritative)
+        );
+        drop(roi);
+        assert!(matches!(
+            crate::app::roi::request_mesh_voxel_cache_rebuild(&mut world, entity),
+            Err(MeshMutationError::InvalidMesh(_))
+        ));
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert_eq!(roi.validated_mesh_generation, None);
+        assert_eq!(roi.queued_job_kind(), None);
     }
 
     #[test]
@@ -5158,5 +5193,98 @@ mod tests {
             .contour_view_cache(&previous_active_key)
             .expect("expected previous active family stale derived cache");
         assert_eq!(preserved.state, CacheViewState::Stale);
+    }
+
+    #[test]
+    #[ignore = "full liver mesh-to-voxel timing; run explicitly for milestone QA"]
+    fn test_liver_explicit_voxel_rebuild_frame_timing() {
+        let bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/qa_samples/liver_0_label.nii"
+        ))
+        .unwrap();
+        let label =
+            crate::nifti_loader::load_label_from_bytes(&bytes, "liver_0_label.nii".into()).unwrap();
+        let geometry = VoxelGeometry {
+            dimensions: label.dimensions,
+            spacing: label.spacing,
+            origin: label.origin,
+            orientation: label.orientation,
+        };
+        let voxel_data = VoxelData {
+            geometry,
+            raw_data: label.data,
+        };
+        let mesh = crate::convert::extract_chunked_mesh_from_voxel_data(
+            &voxel_data,
+            crate::convert::DEFAULT_MESH_CHUNK_SIZE,
+        )
+        .unwrap()
+        .merged_mesh();
+        let mut world = World::new();
+        let entity = world.spawn((Roi::new_voxel_with_cache(
+            RoiId(900),
+            "Liver timing".to_string(),
+            geometry,
+            voxel_data.raw_data,
+            None,
+        ),));
+        {
+            let mut roi = world.get::<&mut Roi>(entity).unwrap();
+            roi.session_caches.mesh = Some(MeshCache {
+                data: mesh.clone(),
+                chunks: None,
+            });
+            roi.dirty_state.mesh_cache_dirty = false;
+            roi.dirty_state.generations.mesh = roi.dirty_state.generations.authoritative;
+        }
+        promote_current_mesh_cache_to_authority(&mut world, entity).unwrap();
+        let seeds = mesh.faces[mesh.faces.len() / 2].vertex_indices;
+        let anchor = mesh.vertices[seeds[0] as usize].world_mm;
+        let deformed = crate::systems::mesh_editing::deform_mesh_surface_brush(
+            &mesh,
+            seeds,
+            anchor,
+            [2.0, 1.0, -1.0],
+            20.0,
+            1.0,
+        );
+        let editor = world.spawn((EditorState {
+            active_roi: Some(entity),
+            ..EditorState::default()
+        },));
+        crate::app::roi::begin_mesh_edit_preview(&mut world, editor, entity, deformed).unwrap();
+        commit_mesh_edit_preview(&mut world, editor).unwrap();
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert_eq!(
+            roi.validated_mesh_generation,
+            Some(roi.dirty_state.generations.authoritative)
+        );
+        drop(roi);
+
+        let started = Instant::now();
+        crate::app::roi::request_mesh_voxel_cache_rebuild(&mut world, entity).unwrap();
+        let request = started.elapsed();
+        let mut first_frame = Duration::ZERO;
+        let mut max_frame = Duration::ZERO;
+        let mut frames = 0;
+        while !world
+            .get::<&Roi>(entity)
+            .unwrap()
+            .is_cache_current(RoiCacheKind::Voxel)
+        {
+            let started = Instant::now();
+            advance_roi_work(&mut world, None);
+            let frame = started.elapsed();
+            frames += 1;
+            if frames == 1 {
+                first_frame = frame;
+            }
+            max_frame = max_frame.max(frame);
+            assert!(frames < 2000, "voxel rebuild failed to converge");
+        }
+        eprintln!(
+            "liver explicit rebuild: request {request:?}, first frame {first_frame:?}, max frame {max_frame:?}, frames {frames}"
+        );
     }
 }

@@ -504,6 +504,8 @@ pub struct Roi {
     pub job_state: RoiJobState,
     pub job_metrics: RoiJobMetrics,
     pub preview_state: RoiPreviewState,
+    /// Current mesh generation already passed full voxelization validation.
+    pub validated_mesh_generation: Option<u64>,
 }
 
 impl Roi {
@@ -578,6 +580,7 @@ impl Roi {
             job_state: RoiJobState::default(),
             job_metrics: RoiJobMetrics::default(),
             preview_state: RoiPreviewState::default(),
+            validated_mesh_generation: None,
         }
     }
 
@@ -619,6 +622,7 @@ impl Roi {
             job_state: RoiJobState::default(),
             job_metrics: RoiJobMetrics::default(),
             preview_state: RoiPreviewState::default(),
+            validated_mesh_generation: None,
         }
     }
 
@@ -660,6 +664,7 @@ impl Roi {
             job_state: RoiJobState::default(),
             job_metrics: RoiJobMetrics::default(),
             preview_state: RoiPreviewState::default(),
+            validated_mesh_generation: None,
         }
     }
 

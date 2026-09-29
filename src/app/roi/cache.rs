@@ -186,6 +186,7 @@ impl Roi {
     pub fn mark_mesh_authoritative_changed(&mut self) {
         self.dirty_state.authoritative_dirty = true;
         self.dirty_state.generations.authoritative += 1;
+        self.validated_mesh_generation = None;
         self.mark_cache_dirty(RoiCacheKind::Voxel);
         self.mark_cache_dirty(RoiCacheKind::Contour);
         if self.session_caches.mesh.is_some() {
@@ -330,6 +331,7 @@ impl Roi {
     }
 
     pub(crate) fn rebase_after_mesh_promotion(&mut self, voxel_cache_is_current: bool) {
+        self.validated_mesh_generation = None;
         self.session_caches.mesh = None;
         self.session_caches.mesh_geometry_identity = None;
         self.session_caches.contour = None;

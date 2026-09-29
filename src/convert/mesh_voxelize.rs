@@ -32,8 +32,23 @@ pub struct IncrementalMeshVoxelization {
 
 impl IncrementalMeshVoxelization {
     pub fn begin(mesh: &MeshData, geometry: VoxelGeometry) -> Result<Self, MeshVoxelizationError> {
+        Self::begin_impl(mesh, geometry, false)
+    }
+
+    pub(crate) fn begin_prevalidated(
+        mesh: &MeshData,
+        geometry: VoxelGeometry,
+    ) -> Result<Self, MeshVoxelizationError> {
+        Self::begin_impl(mesh, geometry, true)
+    }
+
+    fn begin_impl(
+        mesh: &MeshData,
+        geometry: VoxelGeometry,
+        prevalidated: bool,
+    ) -> Result<Self, MeshVoxelizationError> {
         validate_target_geometry(geometry)?;
-        let (welded_vertices, indices) = welded_closed_mesh(mesh)?;
+        let (welded_vertices, indices) = welded_closed_mesh(mesh, !prevalidated)?;
         let vertices = welded_vertices
             .iter()
             .enumerate()
@@ -107,7 +122,7 @@ pub fn voxelize_mesh_to_voxel_data(
 }
 
 pub fn validate_mesh_for_voxelization(mesh: &MeshData) -> Result<(), MeshVoxelizationError> {
-    welded_closed_mesh(mesh).map(|_| ())
+    welded_closed_mesh(mesh, true).map(|_| ())
 }
 
 fn validate_target_geometry(geometry: VoxelGeometry) -> Result<(), MeshVoxelizationError> {
@@ -126,6 +141,7 @@ fn validate_target_geometry(geometry: VoxelGeometry) -> Result<(), MeshVoxelizat
 
 fn welded_closed_mesh(
     mesh: &MeshData,
+    check_intersections: bool,
 ) -> Result<(WeldedVertices, TriangleIndices), MeshVoxelizationError> {
     if mesh.vertices.is_empty() || mesh.faces.is_empty() {
         return Err(MeshVoxelizationError::EmptyMesh);
@@ -200,7 +216,9 @@ fn welded_closed_mesh(
             return Err(MeshVoxelizationError::InconsistentWinding { edge });
         }
     }
-    validate_surface_intersections(&welded_vertices, &welded_faces)?;
+    if check_intersections {
+        validate_surface_intersections(&welded_vertices, &welded_faces)?;
+    }
     Ok((welded_vertices, welded_faces))
 }
 
