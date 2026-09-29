@@ -275,7 +275,10 @@ impl ApplicationHandler<AppEvent> for App {
                     qa_runtime.last_render_error = Some(category.to_string());
                 }
 
-                if repaint_after.is_zero() || frame_stats.roi_work_pending {
+                if repaint_after.is_zero()
+                    || frame_stats.roi_work_pending
+                    || frame_stats.camera_settling
+                {
                     ctx.window.request_redraw();
                 }
             }

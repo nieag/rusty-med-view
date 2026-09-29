@@ -54,3 +54,44 @@ fn test_main_shader_and_eight_overlay_bindings_validate() {
 
     assert!(error.is_none(), "main shader validation failed: {error:?}");
 }
+
+#[test]
+fn test_camera_motion_is_still_at_rest_moving_on_change_and_settles() {
+    let mut motion = CameraMotion::default();
+    let viewport = hecs::Entity::DANGLING;
+    let still = [0.0_f32; CAMERA_KEY_LEN];
+    let start = Instant::now() + std::time::Duration::from_secs(10);
+    let second = std::time::Duration::from_secs(1);
+
+    assert!(
+        !motion.is_moving(viewport, still, start),
+        "a first sight is not motion"
+    );
+    assert!(!motion.is_moving(viewport, still, start + second));
+
+    // Any component of the key counts, e.g. the cursor moving in a 2D view.
+    let mut cursor_moved = still;
+    cursor_moved[8] = 0.2;
+    let t = start + 2 * second;
+    assert!(
+        motion.is_moving(viewport, cursor_moved, t),
+        "a change is motion"
+    );
+    assert!(motion.is_moving(
+        viewport,
+        cursor_moved,
+        t + std::time::Duration::from_millis(100)
+    ));
+    assert!(
+        !motion.is_moving(
+            viewport,
+            cursor_moved,
+            t + CAMERA_SETTLE + std::time::Duration::from_millis(1)
+        ),
+        "still for the settle time returns to full quality"
+    );
+
+    let mut rotated = cursor_moved;
+    rotated[3] = 0.3;
+    assert!(motion.is_moving(viewport, rotated, t + 3 * second));
+}

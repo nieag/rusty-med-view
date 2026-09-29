@@ -10,6 +10,7 @@ use crate::render::{contours, geometry};
 use crate::systems;
 use hecs::World;
 use std::sync::Arc;
+use web_time::Instant;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
@@ -261,6 +262,9 @@ pub struct RenderFrameStats {
     pub viewport_uniform_count: u32,
     pub contour_batch_count: u32,
     pub mesh_batch_count: u32,
+    /// The 3D camera moved recently, so the frame used reduced raymarch quality and one more
+    /// frame at full quality is due.
+    pub camera_settling: bool,
     pub mesh_chunks_uploaded: u32,
     pub mesh_chunks_reused: u32,
     pub roi_work_pending: bool,
@@ -308,7 +312,7 @@ fn prepare_uniforms(
     scene: &mut SceneState,
     gpu: &GpuState,
     volume_res: &VolumeResources,
-) -> ViewportList {
+) -> (ViewportList, bool) {
     let (overlay_bytes, overlay_count, dragging_idx, overlay_mouse_uv) =
         systems::get_overlay_render_data(&scene.world, &scene.entities);
     if !overlay_bytes.is_empty() {
@@ -320,8 +324,33 @@ fn prepare_uniforms(
     for (e, vp) in scene.world.query::<&Viewport>().iter() {
         viewports.push((e, vp.rect, vp.uniform_index, vp.mode));
     }
+    let now = Instant::now();
+    let mut settling = false;
     for (e, _, u_idx, _) in &viewports {
         let mut u = systems::sys_prepare_render_data(&mut scene.world, &scene.entities, *e);
+        if u.view_mode == 0 {
+            // Anything that changes the 3D image (camera, the cursor crosshair, windowing)
+            // counts as motion: interacting in a 2D view moves the cursor, and re-marching a
+            // zoomed-in 3D view at full quality on every such frame makes the 2D views lag.
+            let key = [
+                u.zoom,
+                u.pan[0],
+                u.pan[1],
+                u.rotation[0],
+                u.rotation[1],
+                u.rotation[2],
+                u.rotation[3],
+                u.cursor_pos[0],
+                u.cursor_pos[1],
+                u.cursor_pos[2],
+                u.window_params[0],
+                u.window_params[1],
+            ];
+            if scene.camera_motion.is_moving(*e, key, now) {
+                u.ray_steps = MOVING_RAY_STEPS;
+                settling = true;
+            }
+        }
         u.overlay_primitive_count = overlay_count;
         u.overlay_dragging_idx = dragging_idx;
         u.overlay_mouse_uv = overlay_mouse_uv;
@@ -332,7 +361,7 @@ fn prepare_uniforms(
             bytemuck::cast_slice(&[u]),
         );
     }
-    viewports
+    (viewports, settling)
 }
 
 /// Acquire the next surface texture, reconfiguring if needed. Returns None to skip the frame.
@@ -439,7 +468,8 @@ pub fn render_frame(
 
     let roi_work_status = run_frame_systems(scene, gui, gpu, volume_res, window, event_proxy);
     stats.roi_work_pending = roi_work_status.pending;
-    let viewports = prepare_uniforms(scene, gpu, volume_res);
+    let (viewports, camera_settling) = prepare_uniforms(scene, gpu, volume_res);
+    stats.camera_settling = camera_settling;
     stats.viewport_uniform_count = viewports.len() as u32;
     let frame = match acquire_surface_texture(&gpu.surface, &gpu.device, &gpu.config) {
         AcquireSurfaceResult::Frame(f) => f,
@@ -516,3 +546,36 @@ pub fn render_frame(
 
 #[cfg(test)]
 mod tests;
+
+/// Raymarch steps of the 3D view while the camera moves (full quality is `FULL_RAY_STEPS`).
+const MOVING_RAY_STEPS: u32 = 48;
+/// How long the camera must be still before the 3D view returns to full quality.
+const CAMERA_SETTLE: web_time::Duration = web_time::Duration::from_millis(200);
+
+/// Number of values that identify what a 3D viewport currently shows.
+pub const CAMERA_KEY_LEN: usize = 12;
+
+/// Remembers the last camera of each viewport and when it last changed.
+#[derive(Default)]
+pub struct CameraMotion {
+    last: std::collections::HashMap<hecs::Entity, ([f32; CAMERA_KEY_LEN], Instant)>,
+}
+
+impl CameraMotion {
+    /// Whether what the viewport shows changed within the settle time (recording this frame's
+    /// key as a side effect).
+    pub fn is_moving(
+        &mut self,
+        viewport: hecs::Entity,
+        key: [f32; CAMERA_KEY_LEN],
+        now: Instant,
+    ) -> bool {
+        // A camera seen for the first time counts as still (unless the clock is too young to say).
+        let seen_at = now.checked_sub(CAMERA_SETTLE).unwrap_or(now);
+        let entry = self.last.entry(viewport).or_insert((key, seen_at));
+        if entry.0 != key {
+            *entry = (key, now);
+        }
+        now.duration_since(entry.1) < CAMERA_SETTLE
+    }
+}

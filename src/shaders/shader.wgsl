@@ -50,7 +50,7 @@ struct Uniforms {
     zoom: f32,
     view_mode: u32,
     overlay_flags: u32,
-    _padding: u32,
+    ray_steps: u32,
 };
 
 @group(0) @binding(0) var t_diffuse: texture_3d<f32>;
@@ -526,9 +526,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         } else {
             let start_pos = cam_pos_obj + ray_dir_obj * max(t_hit.x, 0.0);
             let total_dist = t_hit.y - max(t_hit.x, 0.0);
-            let steps = 128;
+            // Fewer steps while the camera moves; the density per step is rescaled so the
+            // image keeps its brightness.
+            let steps = i32(clamp(uniforms.ray_steps, 8u, 256u));
+            let density_scale = 128.0 / f32(steps);
             let step_size = total_dist / f32(steps);
-            var current_pos = start_pos;
+            // Start each ray at a per-pixel offset within its first step (interleaved gradient
+            // noise). With few steps this trades visible banding for fine noise, so the image
+            // looks the same at reduced quality instead of changing character.
+            let dither = fract(52.9829189 * fract(dot(in.clip_position.xy, vec2<f32>(0.06711056, 0.00583715))));
+            var current_pos = start_pos + ray_dir_obj * (dither * step_size);
             
             // Accumulators
             var acc_density = 0.0;
@@ -540,7 +547,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 // 1. Sample Volume (Density) with windowing
                 let raw_voxel = textureSampleLevel(t_diffuse, s_diffuse, tex_coord, 0.0).r;
                 let voxel = apply_window(raw_voxel, uniforms.window_params.x, uniforms.window_params.y);
-                let density = voxel * 0.05; 
+                let density = voxel * 0.05 * density_scale; 
                 
                 // 2. Sample Overlays (Color)
                 var overlay_color = vec3<f32>(0.0);

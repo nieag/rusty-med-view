@@ -38,6 +38,8 @@ pub struct VolumeResources {
 pub struct SceneState {
     pub world: World,
     pub entities: AppEntities,
+    /// Tracks camera movement so the 3D raymarch can drop quality while it moves.
+    pub camera_motion: crate::render::pipeline::CameraMotion,
 }
 
 pub struct RenderingContext {
@@ -237,7 +239,11 @@ impl RenderingContext {
                 dummy_r8,
                 default_lut,
             },
-            scene: SceneState { world, entities },
+            scene: SceneState {
+                world,
+                entities,
+                camera_motion: Default::default(),
+            },
             gui,
             settings_entity,
             event_proxy,

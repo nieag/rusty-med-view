@@ -5,6 +5,9 @@ use glam::Vec3;
 use hecs::World;
 
 /// Prepare a `Uniforms` struct for the given viewport mode.
+/// Raymarch steps of the 3D view at rest.
+pub const FULL_RAY_STEPS: u32 = 128;
+
 pub fn sys_prepare_render_data(
     world: &mut World,
     entities: &AppEntities,
@@ -172,7 +175,7 @@ pub fn sys_prepare_render_data(
         zoom: zoom_val,
         view_mode,
         overlay_flags,
-        _padding: 0,
+        ray_steps: FULL_RAY_STEPS,
     }
 }
 

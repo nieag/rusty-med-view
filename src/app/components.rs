@@ -184,7 +184,8 @@ pub struct Uniforms {
     pub zoom: f32,
     pub view_mode: u32,
     pub overlay_flags: u32,
-    pub _padding: u32,
+    /// Raymarch steps of the 3D view; fewer while the camera moves (see `CameraMotion`).
+    pub ray_steps: u32,
 }
 
 // --- GUI / Editor ---
