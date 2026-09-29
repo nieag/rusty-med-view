@@ -21,7 +21,7 @@ pub use history::{
 pub use preview::{
     begin_contour_move_preview, begin_mesh_edit_preview, cancel_mesh_edit_preview,
     cancel_roi_edit_preview, commit_contour_move_preview, commit_mesh_edit_preview,
-    end_roi_preview, mesh_edit_preview_for_roi,
+    end_roi_preview, mesh_edit_preview_for_roi, set_mesh_edit_preview,
 };
 
 pub use model::{

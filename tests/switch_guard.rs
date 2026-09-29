@@ -111,3 +111,66 @@ fn test_switch_timing_budget() {
         }
     }
 }
+
+/// The mesh brush runs on every pointer move of a drag, so its per-update cost is a budget too.
+/// A push into the liver must stay valid (the collision limit) and fast enough to feel live.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "slow in debug builds; run with --release")]
+fn test_mesh_deform_update_is_fast_and_keeps_the_liver_valid() {
+    use rusty_med_view::convert::{
+        deform_mesh_surface_brush_limited, extract_mesh_from_voxel_data,
+        validate_mesh_for_voxelization, MeshDeformBase,
+    };
+    let source = liver_label();
+    let mesh = extract_mesh_from_voxel_data(&source).unwrap();
+
+    let started = Instant::now();
+    let base = MeshDeformBase::new(&mesh).unwrap();
+    let base_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+    // Push the topmost triangle straight down through the liver, deeper than it is thick.
+    let (face, top) = mesh
+        .faces
+        .iter()
+        .map(|face| {
+            let z = face
+                .vertex_indices
+                .iter()
+                .map(|i| mesh.vertices[*i as usize].world_mm[2])
+                .sum::<f32>()
+                / 3.0;
+            (face, z)
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .unwrap();
+    let anchor = mesh.vertices[face.vertex_indices[0] as usize].world_mm;
+    let mut worst_ms = 0.0_f64;
+    let mut last = (mesh.clone(), 1.0);
+    for depth in [5.0_f32, 20.0, 60.0, 200.0] {
+        let started = Instant::now();
+        last = deform_mesh_surface_brush_limited(
+            &base,
+            &mesh,
+            face.vertex_indices,
+            anchor,
+            [0.0, 0.0, -depth],
+            12.0,
+            1.0,
+        );
+        let ms = started.elapsed().as_secs_f64() * 1000.0;
+        println!(
+            "push {depth} mm (top z {top:.1}): fraction {:.3}, {ms:.1} ms",
+            last.1
+        );
+        // A 200 mm push moves the whole liver; it only has to stay valid, not stay interactive.
+        if depth <= 60.0 {
+            worst_ms = worst_ms.max(ms);
+        }
+    }
+    println!("base build {base_ms:.1} ms, worst update up to 60 mm {worst_ms:.1} ms");
+    validate_mesh_for_voxelization(&last.0).expect("the limited push keeps the liver valid");
+    if !cfg!(debug_assertions) {
+        assert!(base_ms < 400.0, "base build {base_ms:.1} ms");
+        assert!(worst_ms < 250.0, "worst deform update {worst_ms:.1} ms");
+    }
+}

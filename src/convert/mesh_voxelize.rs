@@ -256,7 +256,11 @@ fn validate_surface_intersections(
     Ok(())
 }
 
-fn faces_overlap_beyond_shared_boundary(vertices: &[[f32; 3]], a: [u32; 3], b: [u32; 3]) -> bool {
+pub(crate) fn faces_overlap_beyond_shared_boundary(
+    vertices: &[[f32; 3]],
+    a: [u32; 3],
+    b: [u32; 3],
+) -> bool {
     use glam::DVec3;
     let point = |v: u32| DVec3::from_array(vertices[v as usize].map(f64::from));
     let pa = a.map(point);

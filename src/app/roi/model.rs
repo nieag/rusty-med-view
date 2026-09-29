@@ -397,6 +397,9 @@ pub struct ContourMovePreview {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MeshEditPreview {
     pub mesh_data: MeshData,
+    /// Welded topology of the mesh being deformed, built once when the drag starts and reused by
+    /// every preview update of that drag.
+    pub deform_base: Option<std::sync::Arc<crate::convert::MeshDeformBase>>,
 }
 
 /// A voxel ROI: a read-only source such as a model prediction. It has no edit operations and

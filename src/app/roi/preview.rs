@@ -122,11 +122,26 @@ pub fn begin_mesh_edit_preview(
     roi_entity: hecs::Entity,
     mesh_data: crate::app::roi::MeshData,
 ) -> Result<u64, MeshMutationError> {
+    set_mesh_edit_preview(world, roi_entity, mesh_data, None)
+}
+
+/// Sets the mesh preview together with the deform topology shared by a whole drag.
+pub fn set_mesh_edit_preview(
+    world: &mut World,
+    roi_entity: hecs::Entity,
+    mesh_data: crate::app::roi::MeshData,
+    deform_base: Option<std::sync::Arc<crate::convert::MeshDeformBase>>,
+) -> Result<u64, MeshMutationError> {
     let mut roi = world
         .get::<&mut Roi>(roi_entity)
         .map_err(|_| MeshMutationError::MissingRoi)?;
     match &mut roi.body {
-        RoiBody::Mesh(body) => body.preview = Some(MeshEditPreview { mesh_data }),
+        RoiBody::Mesh(body) => {
+            body.preview = Some(MeshEditPreview {
+                mesh_data,
+                deform_base,
+            })
+        }
         _ => return Err(MeshMutationError::NotMeshRoi),
     }
     Ok(roi.begin_preview())
@@ -139,15 +154,25 @@ pub fn commit_mesh_edit_preview(
     editor_entity: hecs::Entity,
 ) -> Result<(), MeshMutationError> {
     let roi_entity = active_roi(world, editor_entity).ok_or(MeshMutationError::MissingPreview)?;
+    // Validate before taking the preview: an invalid deformation is reported and the preview
+    // stays, so the user's drag is not thrown away and can still be cancelled or adjusted.
+    {
+        let roi = world
+            .get::<&Roi>(roi_entity)
+            .map_err(|_| MeshMutationError::MissingRoi)?;
+        let preview = roi
+            .mesh_edit_preview()
+            .ok_or(MeshMutationError::MissingPreview)?;
+        crate::convert::validate_mesh_for_voxelization(&preview.mesh_data)
+            .map_err(MeshMutationError::InvalidMesh)?;
+    }
     let preview = world
         .get::<&mut Roi>(roi_entity)
         .map_err(|_| MeshMutationError::MissingRoi)?
         .take_mesh_edit_preview()
         .ok_or(MeshMutationError::MissingPreview)?;
-    let result = crate::convert::validate_mesh_for_voxelization(&preview.mesh_data)
-        .map_err(MeshMutationError::InvalidMesh)
-        .and_then(|()| {
-            replace_mesh_data_with_history(world, roi_entity, preview.mesh_data)?;
+    let result =
+        replace_mesh_data_with_history(world, roi_entity, preview.mesh_data).and_then(|()| {
             let mut roi = world
                 .get::<&mut Roi>(roi_entity)
                 .map_err(|_| MeshMutationError::MissingRoi)?;
@@ -323,7 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_mesh_preview_preserves_authority_and_history() {
+    fn test_invalid_mesh_preview_is_kept_and_leaves_authority_and_history_alone() {
         let mut world = World::new();
         let original = MeshData {
             vertices: [
@@ -367,16 +392,19 @@ mod tests {
             commit_mesh_edit_preview(&mut world, editor_entity),
             Err(MeshMutationError::InvalidMesh(_))
         ));
-        assert!(world
-            .get::<&Roi>(roi_entity)
-            .unwrap()
-            .mesh_edit_preview()
-            .is_none());
+        // The rejected drag is kept so the user can adjust or cancel it; nothing was committed.
         let roi = world.get::<&Roi>(roi_entity).unwrap();
-        assert!(!roi.preview_state.active);
+        assert!(roi.mesh_edit_preview().is_some());
+        assert!(roi.preview_state.active);
         assert_eq!(roi.mesh_data(), Some(&original));
         drop(roi);
         assert!(!crate::app::roi::can_undo_roi_edit(&world, editor_entity));
+
+        cancel_mesh_edit_preview(&mut world, editor_entity).unwrap();
+        let roi = world.get::<&Roi>(roi_entity).unwrap();
+        assert!(roi.mesh_edit_preview().is_none());
+        assert!(!roi.preview_state.active);
+        drop(roi);
         crate::app::roi::request_mesh_voxel_cache_rebuild(&mut world, roi_entity).unwrap();
     }
 }

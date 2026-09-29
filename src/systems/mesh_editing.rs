@@ -3,13 +3,15 @@ use crate::components::{
     AppEntities, EditorState, EditorTool, MeshBody, MeshData, MeshSelection, Roi, RoiBody,
     ViewMode, Viewport, ViewportState,
 };
+#[cfg(test)]
+use crate::convert::{apply_displacement, brush_displacement};
+use crate::convert::{deform_mesh_surface_brush_limited, MeshDeformBase};
 use crate::render::geometry::{
     build_display_projection_context, project_world_mm_to_viewport_uv_3d, DisplayProjectionContext,
 };
 use glam::Vec3;
 use hecs::World;
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MeshEditInteractionError {
@@ -135,7 +137,7 @@ pub fn update_selected_mesh_deform_preview(
     drop(viewport_state);
     drop(viewport);
 
-    let mesh = {
+    let (mesh, existing_base) = {
         let roi = world
             .get::<&Roi>(selection.roi_entity)
             .map_err(|_| MeshEditInteractionError::MissingActiveRoi)?;
@@ -145,12 +147,24 @@ pub fn update_selected_mesh_deform_preview(
         let mesh = roi
             .mesh_data()
             .ok_or(MeshEditInteractionError::ActiveRoiNotMesh)?;
-        mesh.clone()
+        (
+            mesh.clone(),
+            roi.mesh_edit_preview()
+                .and_then(|preview| preview.deform_base.clone()),
+        )
+    };
+    // The topology is built once per drag; the preview carries it between updates.
+    let base = match existing_base {
+        Some(base) => base,
+        None => {
+            Arc::new(MeshDeformBase::new(&mesh).ok_or(MeshEditInteractionError::ActiveRoiNotMesh)?)
+        }
     };
     let anchor_world_mm = selection.anchor_world_mm;
     let delta_world_mm = drag_delta_world_mm(start_uv, current_uv, anchor_world_mm, projection)
         .ok_or(MeshEditInteractionError::ProjectionFailed)?;
-    let mesh_data = deform_mesh_surface_brush(
+    let (mesh_data, _applied_fraction) = deform_mesh_surface_brush_limited(
+        &base,
         &mesh,
         selection.triangle_vertex_indices,
         anchor_world_mm,
@@ -158,7 +172,7 @@ pub fn update_selected_mesh_deform_preview(
         radius_mm,
         strength,
     );
-    roi::begin_mesh_edit_preview(world, selection.roi_entity, mesh_data)
+    roi::set_mesh_edit_preview(world, selection.roi_entity, mesh_data, Some(base))
         .map_err(|_| MeshEditInteractionError::MissingActiveRoi)
 }
 
@@ -311,6 +325,8 @@ fn ray_plane_intersection(
     t.is_finite().then_some(origin + direction * t)
 }
 
+/// The brush without collision limiting, for tests of the falloff itself.
+#[cfg(test)]
 pub fn deform_mesh_surface_brush(
     mesh: &MeshData,
     seed_indices: [u32; 3],
@@ -319,100 +335,18 @@ pub fn deform_mesh_surface_brush(
     radius_mm: f32,
     strength: f32,
 ) -> MeshData {
-    let mut deformed = mesh.clone();
-    if !radius_mm.is_finite()
-        || radius_mm <= 0.0
-        || !strength.is_finite()
-        || delta_world_mm.iter().any(|value| !value.is_finite())
-    {
-        return deformed;
-    }
-    let delta = Vec3::from_array(delta_world_mm) * strength.max(0.0);
-    // Grow locally with displacement; commit validation handles folds that
-    // this influence falloff alone cannot prevent.
-    let radius_mm = radius_mm.max(1.5 * delta.length());
-    if !delta.is_finite() || !radius_mm.is_finite() {
-        return deformed;
-    }
-    let mut adjacency = vec![Vec::new(); mesh.vertices.len()];
-    for face in &mesh.faces {
-        let [a, b, c] = face.vertex_indices.map(|index| index as usize);
-        if [a, b, c].iter().any(|index| *index >= mesh.vertices.len()) {
-            return deformed;
-        }
-        for (from, to) in [(a, b), (b, c), (c, a)] {
-            adjacency[from].push(to);
-            adjacency[to].push(from);
-        }
-    }
-    let anchor = Vec3::from_array(anchor_world_mm);
-    let mut distances = vec![f32::INFINITY; mesh.vertices.len()];
-    let mut queue = BinaryHeap::new();
-    for index in seed_indices.map(|index| index as usize) {
-        let Some(vertex) = mesh.vertices.get(index) else {
-            return deformed;
-        };
-        let distance = Vec3::from_array(vertex.world_mm).distance(anchor);
-        if distance <= radius_mm && distance < distances[index] {
-            distances[index] = distance;
-            queue.push(MeshBrushQueueEntry { distance, index });
-        }
-    }
-    while let Some(MeshBrushQueueEntry { distance, index }) = queue.pop() {
-        if distance != distances[index] {
-            continue;
-        }
-        for &next in &adjacency[index] {
-            let edge_length = Vec3::from_array(mesh.vertices[index].world_mm)
-                .distance(Vec3::from_array(mesh.vertices[next].world_mm));
-            let next_distance = distance + edge_length;
-            if next_distance <= radius_mm && next_distance < distances[next] {
-                distances[next] = next_distance;
-                queue.push(MeshBrushQueueEntry {
-                    distance: next_distance,
-                    index: next,
-                });
-            }
-        }
-    }
-    for (vertex, distance) in deformed.vertices.iter_mut().zip(distances) {
-        if !distance.is_finite() {
-            continue;
-        }
-        let normalized = 1.0 - distance / radius_mm;
-        let weight = normalized * normalized * (3.0 - 2.0 * normalized);
-        vertex.world_mm = (Vec3::from_array(vertex.world_mm) + delta * weight).to_array();
-    }
-    deformed
-}
-
-#[derive(Debug, Clone, Copy)]
-struct MeshBrushQueueEntry {
-    distance: f32,
-    index: usize,
-}
-
-impl PartialEq for MeshBrushQueueEntry {
-    fn eq(&self, other: &Self) -> bool {
-        self.distance.to_bits() == other.distance.to_bits() && self.index == other.index
-    }
-}
-
-impl Eq for MeshBrushQueueEntry {}
-
-impl Ord for MeshBrushQueueEntry {
-    fn cmp(&self, other: &Self) -> Ordering {
-        other
-            .distance
-            .total_cmp(&self.distance)
-            .then_with(|| other.index.cmp(&self.index))
-    }
-}
-
-impl PartialOrd for MeshBrushQueueEntry {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
+    let Some(base) = MeshDeformBase::new(mesh) else {
+        return mesh.clone();
+    };
+    let displacement = brush_displacement(
+        &base,
+        seed_indices,
+        anchor_world_mm,
+        delta_world_mm,
+        radius_mm,
+        strength,
+    );
+    apply_displacement(&base, mesh, &displacement, 1.0)
 }
 
 #[cfg(test)]
