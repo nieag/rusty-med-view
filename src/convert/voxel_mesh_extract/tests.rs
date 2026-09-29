@@ -8,12 +8,7 @@ fn geometry(
     origin: [f32; 3],
     orientation: [f32; 4],
 ) -> VoxelGeometry {
-    VoxelGeometry {
-        dimensions,
-        spacing,
-        origin,
-        orientation,
-    }
+    VoxelGeometry::new(dimensions, spacing, origin, orientation).unwrap()
 }
 
 fn voxel_data_with_single_occupied(
@@ -37,12 +32,12 @@ fn voxel_data_with_single_occupied(
 fn test_empty_voxel_data_produces_empty_mesh() {
     let voxel = VoxelData {
         geometry: geometry(
-            [0, 0, 0],
+            [2, 2, 2],
             [1.0, 1.0, 1.0],
             [0.0, 0.0, 0.0],
             Quat::IDENTITY.to_array(),
         ),
-        raw_data: Vec::new(),
+        raw_data: vec![0; 8],
     };
 
     let mesh = extract_mesh_from_voxel_data(&voxel).expect("empty data should succeed");
@@ -87,7 +82,7 @@ fn test_roi_owned_geometry_controls_vertex_placement() {
     let identity_mesh = extract_mesh_from_voxel_data(&identity).unwrap();
 
     for (rotated, local) in mesh.vertices.iter().zip(&identity_mesh.vertices) {
-        let expected = Vec3::from_array(voxel.geometry.origin)
+        let expected = Vec3::from_array(voxel.geometry.origin())
             + Quat::from_array(rotation) * Vec3::from_array(local.world_mm);
         assert!(Vec3::from_array(rotated.world_mm).distance(expected) < 1e-5);
     }
@@ -431,12 +426,7 @@ fn test_liver_dirty_mesh_rebuild_matches_clean_full_rebuild() {
     let label =
         crate::nifti_loader::load_label_from_bytes(&bytes, "liver_0_label.nii".into()).unwrap();
     let mut voxels = VoxelData {
-        geometry: geometry(
-            label.dimensions,
-            label.spacing,
-            label.origin,
-            label.orientation,
-        ),
+        geometry: label.geometry,
         raw_data: label.data,
     };
     let base = extract_chunked_mesh_from_voxel_data(&voxels, DEFAULT_MESH_CHUNK_SIZE).unwrap();

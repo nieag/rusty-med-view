@@ -14,11 +14,17 @@ fn test_plane_definition(family: PlaneFamily) -> PlaneDefinition {
 fn test_aspect_ratio_cubic() {
     let vol = VolumeData {
         dimensions: [100, 100, 100],
-        spacing: [1.0, 1.0, 1.0],
-        origin: [0.0, 0.0, 0.0],
+        geometry: Some(
+            VoxelGeometry::new(
+                [100, 100, 100],
+                [1.0, 1.0, 1.0],
+                [0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap(),
+        ),
         intensities: vec![],
         intensity_range: [0.0, 1.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
     };
     let ar = vol.aspect_ratios();
     assert!((ar[0] - 1.0).abs() < 1e-6);
@@ -30,11 +36,18 @@ fn test_aspect_ratio_cubic() {
 fn test_aspect_ratio_anisotropic() {
     let vol = VolumeData {
         dimensions: [256, 256, 128],
-        spacing: [1.0, 1.0, 2.0], // Physical size is 256, 256, 256
-        origin: [0.0, 0.0, 0.0],
+        // Physical size is 256, 256, 256
+        geometry: Some(
+            VoxelGeometry::new(
+                [256, 256, 128],
+                [1.0, 1.0, 2.0],
+                [0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap(),
+        ),
         intensities: vec![],
         intensity_range: [0.0, 1.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
     };
     let ar = vol.aspect_ratios();
     assert!((ar[0] - 1.0).abs() < 1e-6);
@@ -46,11 +59,9 @@ fn test_aspect_ratio_anisotropic() {
 fn test_aspect_ratio_zero_dims() {
     let vol = VolumeData {
         dimensions: [0, 0, 0],
-        spacing: [1.0, 1.0, 1.0],
-        origin: [0.0, 0.0, 0.0],
+        geometry: None,
         intensities: vec![],
         intensity_range: [0.0, 1.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
     };
     let ar = vol.aspect_ratios();
     assert_eq!(ar, [1.0, 1.0, 1.0]);
@@ -149,12 +160,13 @@ fn test_new_voxel_roi_initializes_voxel_primary_state() {
     let roi = Roi::new_voxel_with_cache(
         RoiId(7),
         "Liver".to_string(),
-        VoxelGeometry {
-            dimensions: [16, 16, 8],
-            spacing: [1.0, 1.0, 1.0],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new(
+            [16, 16, 8],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         vec![1; 16 * 16 * 8],
         None,
     );
@@ -163,18 +175,11 @@ fn test_new_voxel_roi_initializes_voxel_primary_state() {
     assert_eq!(roi.metadata.name, "Liver");
     assert_eq!(roi.primary_representation(), PrimaryRepresentation::Voxel);
     assert_eq!(roi.reference_geometry().dimensions(), [16, 16, 8]);
-    assert!(matches!(
-        roi.authoritative_data,
-        RoiAuthoritativeData::Voxel(VoxelData {
-            geometry: VoxelGeometry {
-                dimensions: [16, 16, 8],
-                spacing: [1.0, 1.0, 1.0],
-                origin: [0.0, 0.0, 0.0],
-                orientation: [0.0, 0.0, 0.0, 1.0],
-            },
-            ..
-        })
-    ));
+    let RoiAuthoritativeData::Voxel(authoritative_voxel) = &roi.authoritative_data else {
+        panic!("a new voxel ROI has voxel authority");
+    };
+    assert_eq!(authoritative_voxel.geometry.dimensions(), [16, 16, 8]);
+    assert_eq!(authoritative_voxel.geometry.spacing(), [1.0, 1.0, 1.0]);
     let voxel_cache = roi.voxel_cache().expect("voxel cache should exist");
     assert_eq!(voxel_cache.data.raw_data.len(), 16 * 16 * 8);
     assert_eq!(voxel_cache.data.geometry.dimensions, [16, 16, 8]);
@@ -210,12 +215,13 @@ fn test_new_voxel_roi_without_gpu_still_has_current_cpu_voxel_cache() {
     let roi = Roi::new_voxel_with_cache(
         RoiId(8),
         "Kidney".to_string(),
-        VoxelGeometry {
-            dimensions: [8, 8, 8],
-            spacing: [0.5, 0.5, 0.5],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new(
+            [8, 8, 8],
+            [0.5, 0.5, 0.5],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         vec![1; 8 * 8 * 8],
         None,
     );
@@ -228,12 +234,13 @@ fn test_new_voxel_roi_without_gpu_still_has_current_cpu_voxel_cache() {
 
 #[test]
 fn test_new_voxel_roi_copies_authoritative_data_into_session_voxel_cache() {
-    let geometry = VoxelGeometry {
-        dimensions: [6, 5, 4],
-        spacing: [0.9, 1.1, 1.3],
-        origin: [1.0, 2.0, 3.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [6, 5, 4],
+        [0.9, 1.1, 1.3],
+        [1.0, 2.0, 3.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     let raw_data = vec![0, 1, 0, 1, 1, 0, 1, 0];
     let roi = Roi::new_voxel_with_cache(
         RoiId(77),
@@ -261,12 +268,13 @@ fn test_renderable_voxel_cache_requires_gpu_resources_even_when_cache_current() 
     let mut roi = Roi::new_voxel_with_cache(
         RoiId(88),
         "No GPU".to_string(),
-        VoxelGeometry {
-            dimensions: [4, 4, 4],
-            spacing: [1.0, 1.0, 1.0],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new(
+            [4, 4, 4],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         vec![1; 64],
         None,
     );
@@ -282,12 +290,13 @@ fn test_cache_current_requires_matching_generation_and_clean_state() {
     let mut roi = Roi::new_voxel_with_cache(
         RoiId(12),
         "Aorta".to_string(),
-        VoxelGeometry {
-            dimensions: [8, 8, 8],
-            spacing: [0.75, 0.75, 0.75],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new(
+            [8, 8, 8],
+            [0.75, 0.75, 0.75],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         vec![1; 8 * 8 * 8],
         None,
     );
@@ -305,12 +314,13 @@ fn test_mark_authoritative_changed_invalidates_all_derived_caches() {
     let mut roi = Roi::new_voxel_with_cache(
         RoiId(9),
         "Spleen".to_string(),
-        VoxelGeometry {
-            dimensions: [4, 4, 4],
-            spacing: [1.0, 1.0, 1.0],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new(
+            [4, 4, 4],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         vec![1; 64],
         None,
     );
@@ -364,12 +374,13 @@ fn test_enqueue_rebuild_preserves_multiple_representation_jobs() {
     let mut roi = Roi::new_voxel_with_cache(
         RoiId(10),
         "Pancreas".to_string(),
-        VoxelGeometry {
-            dimensions: [4, 4, 4],
-            spacing: [1.0, 1.0, 1.0],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new(
+            [4, 4, 4],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         vec![0; 64],
         None,
     );
@@ -396,12 +407,7 @@ fn test_interactive_job_priority_and_preview_supersession() {
     let mut roi = Roi::new_voxel_with_cache(
         RoiId(20),
         "Priority".to_string(),
-        VoxelGeometry {
-            dimensions: [8, 8, 8],
-            spacing: [1.0; 3],
-            origin: [0.0; 3],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new([8, 8, 8], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap(),
         vec![0; 512],
         None,
     );
@@ -488,12 +494,13 @@ fn test_finish_cache_rebuild_marks_cache_current_and_clears_job() {
     let mut roi = Roi::new_voxel_with_cache(
         RoiId(11),
         "Heart".to_string(),
-        VoxelGeometry {
-            dimensions: [4, 4, 4],
-            spacing: [1.0, 1.0, 1.0],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new(
+            [4, 4, 4],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         vec![0; 64],
         None,
     );
@@ -511,12 +518,13 @@ fn test_finish_cache_rebuild_marks_cache_current_and_clears_job() {
 
 #[test]
 fn test_voxel_geometry_is_preserved_on_constructor() {
-    let geometry = VoxelGeometry {
-        dimensions: [12, 10, 8],
-        spacing: [0.8, 0.8, 1.5],
-        origin: [0.0, 0.0, 0.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [12, 10, 8],
+        [0.8, 0.8, 1.5],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
 
     let roi = Roi::new_voxel_with_cache(
         RoiId(13),
@@ -622,7 +630,7 @@ fn test_new_contour_roi_initializes_contour_primary_state() {
             }],
         }],
     };
-    let reference_geometry = RoiGeometry::from_legacy_parts(
+    let reference_geometry = VoxelGeometry::new(
         [16, 16, 8],
         [1.0, 1.0, 1.0],
         [0.0, 0.0, 0.0],
@@ -658,12 +666,13 @@ fn test_contour_accessor_rejects_voxel_roi() {
     let voxel_roi = Roi::new_voxel_with_cache(
         RoiId(15),
         "Body".to_string(),
-        VoxelGeometry {
-            dimensions: [8, 8, 8],
-            spacing: [1.0, 1.0, 1.0],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new(
+            [8, 8, 8],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         vec![0; 8 * 8 * 8],
         None,
     );
@@ -712,12 +721,13 @@ fn test_mesh_accessor_rejects_non_mesh_rois() {
     let voxel_roi = Roi::new_voxel_with_cache(
         RoiId(22),
         "Voxel".to_string(),
-        VoxelGeometry {
-            dimensions: [4, 4, 4],
-            spacing: [1.0, 1.0, 1.0],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new(
+            [4, 4, 4],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         vec![0; 4 * 4 * 4],
         None,
     );

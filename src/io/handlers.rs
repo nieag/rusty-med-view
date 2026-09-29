@@ -38,11 +38,9 @@ pub fn handle_volume_load(
         .next()
     {
         vol.dimensions = volume_data.dimensions;
-        vol.spacing = volume_data.spacing;
-        vol.origin = volume_data.origin;
+        vol.geometry = volume_data.geometry;
         vol.intensities = volume_data.intensities.clone();
         vol.intensity_range = volume_data.intensity_range;
-        vol.orientation = volume_data.orientation;
 
         gpu_res.texture = new_texture;
         gpu_res.view = new_view;

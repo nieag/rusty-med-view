@@ -134,7 +134,7 @@ pub fn build_display_projection_context(
         cursor_pos,
         display_aspect_ratios: main_volume.aspect_ratios(),
         composed_rotation_3d: crate::util::orientation::compose_view_rotation(
-            main_volume.orientation,
+            main_volume.orientation(),
             viewport_state.user_rotation,
         ),
     })
@@ -237,12 +237,13 @@ mod tests {
             pivot: [0.5, 0.5],
             rotation: [0.0, 0.0, 0.0, 1.0],
             aspect_ratios: [1.0, 1.0, 1.0],
-            geometry: VoxelGeometry {
-                dimensions: [64, 64, 64],
-                spacing: [1.0, 1.0, 1.0],
-                origin: [0.0, 0.0, 0.0],
-                orientation: [0.0, 0.0, 0.0, 1.0],
-            },
+            geometry: VoxelGeometry::new(
+                [64, 64, 64],
+                [1.0, 1.0, 1.0],
+                [0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap(),
             cursor_pos: [0.5, 0.5, 0.5],
         }
     }

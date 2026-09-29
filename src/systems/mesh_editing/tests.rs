@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::roi::VoxelGeometry;
 use crate::components::{
     AnnotationState, GuiState, InputState, MainVolumeTag, MeshFace, MeshVertex, ProtocolState,
     RoiId, Transform, VolumeData, VolumeWindowing, WindowSettings,
@@ -9,11 +10,17 @@ fn spawn_mesh_edit_world() -> (World, AppEntities, hecs::Entity) {
     world.spawn((
         VolumeData {
             dimensions: [10, 10, 10],
-            spacing: [1.0, 1.0, 1.0],
-            origin: [0.0, 0.0, 0.0],
+            geometry: Some(
+                VoxelGeometry::new(
+                    [10, 10, 10],
+                    [1.0, 1.0, 1.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                )
+                .unwrap(),
+            ),
             intensities: Vec::new(),
             intensity_range: [0.0, 1.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
         },
         MainVolumeTag,
     ));
@@ -220,12 +227,13 @@ fn test_surface_brush_expands_area_with_strength_scaled_drag() {
 fn test_chunked_surface_stays_closed_after_deformation() {
     use crate::convert::{extract_chunked_mesh_from_voxel_data, validate_mesh_for_voxelization};
     let voxels = crate::components::VoxelData {
-        geometry: crate::components::VoxelGeometry {
-            dimensions: [4; 3],
-            spacing: [1.0; 3],
-            origin: [0.0; 3],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        geometry: crate::components::VoxelGeometry::new(
+            [4; 3],
+            [1.0; 3],
+            [0.0; 3],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         raw_data: vec![1; 64],
     };
     let chunks = extract_chunked_mesh_from_voxel_data(&voxels, 2).unwrap();
@@ -252,12 +260,13 @@ fn test_chunked_surface_stays_closed_after_deformation() {
 #[test]
 fn test_deformed_chunked_mesh_resamples_on_rotated_anisotropic_grid() {
     use crate::convert::{extract_chunked_mesh_from_voxel_data, voxelize_mesh_to_voxel_data};
-    let geometry = crate::components::VoxelGeometry {
-        dimensions: [8; 3],
-        spacing: [1.0, 2.0, 3.0],
-        origin: [10.0, -20.0, 30.0],
-        orientation: glam::Quat::from_rotation_y(0.4).to_array(),
-    };
+    let geometry = crate::components::VoxelGeometry::new(
+        [8; 3],
+        [1.0, 2.0, 3.0],
+        [10.0, -20.0, 30.0],
+        glam::Quat::from_rotation_y(0.4).to_array(),
+    )
+    .unwrap();
     let mut voxels = crate::components::VoxelData {
         geometry,
         raw_data: vec![0; 512],
@@ -285,7 +294,7 @@ fn test_deformed_chunked_mesh_resamples_on_rotated_anisotropic_grid() {
 
     // A broad brush moving one IJK step must shift occupancy in the owned
     // grid, not world X, and must not leave detached voxels at chunk seams.
-    let delta = glam::Quat::from_array(geometry.orientation) * Vec3::X * geometry.spacing[0];
+    let delta = glam::Quat::from_array(geometry.orientation()) * Vec3::X * geometry.spacing()[0];
     let translated =
         deform_mesh_surface_brush(&mesh, seeds, anchor, delta.to_array(), 10000.0, 1.0);
     let actual = voxelize_mesh_to_voxel_data(&translated, geometry).unwrap();
@@ -314,12 +323,7 @@ fn test_liver_deformation_preserves_closed_surface_and_local_voxel_changes() {
     .unwrap();
     let label =
         crate::nifti_loader::load_label_from_bytes(&bytes, "liver_0_label.nii".into()).unwrap();
-    let geometry = crate::components::VoxelGeometry {
-        dimensions: label.dimensions,
-        spacing: label.spacing,
-        origin: label.origin,
-        orientation: label.orientation,
-    };
+    let geometry = label.geometry;
     let voxels = crate::components::VoxelData {
         geometry,
         raw_data: label.data,
@@ -400,7 +404,7 @@ fn test_liver_deformation_preserves_closed_surface_and_local_voxel_changes() {
             assert!(
                 world.distance(Vec3::from_array(anchor))
                     <= radius.max(1.5 * Vec3::from_array(delta).length())
-                        + Vec3::from_array(geometry.spacing).length()
+                        + Vec3::from_array(geometry.spacing()).length()
                         + Vec3::from_array(delta).length(),
                 "voxel changed outside brush neighbourhood: {ijk:?}"
             );

@@ -190,12 +190,8 @@ mod tests {
 
     #[test]
     fn test_closed_voxel_mesh_intersection_produces_closed_loop() {
-        let geometry = VoxelGeometry {
-            dimensions: [4, 4, 4],
-            spacing: [1.0; 3],
-            origin: [0.0; 3],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        };
+        let geometry =
+            VoxelGeometry::new([4, 4, 4], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
         let mut raw_data = vec![0_u8; 64];
         for z in 1..=2 {
             for y in 1..=2 {
@@ -217,12 +213,8 @@ mod tests {
 
     #[test]
     fn test_plane_missing_mesh_returns_empty_contour_data() {
-        let geometry = VoxelGeometry {
-            dimensions: [2, 2, 2],
-            spacing: [1.0; 3],
-            origin: [0.0; 3],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        };
+        let geometry =
+            VoxelGeometry::new([2, 2, 2], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
         let mesh = extract_mesh_from_voxel_data(&VoxelData {
             geometry,
             raw_data: vec![1; 8],

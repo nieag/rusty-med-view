@@ -7,12 +7,13 @@ fn index(dimensions: [u32; 3], x: u32, y: u32, z: u32) -> usize {
 }
 
 fn identity_geometry(dimensions: [u32; 3]) -> VoxelGeometry {
-    VoxelGeometry {
+    VoxelGeometry::new(
         dimensions,
-        spacing: [1.0, 1.0, 1.0],
-        origin: [0.0, 0.0, 0.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    }
+        [1.0, 1.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap()
 }
 
 fn square_loop(half_extent: f32) -> ContourLoop {
@@ -129,12 +130,13 @@ fn test_rasterize_multiple_loops_use_even_odd_fill() {
 
 #[test]
 fn test_rasterize_preserves_target_geometry_in_result() {
-    let geometry = VoxelGeometry {
-        dimensions: [3, 4, 2],
-        spacing: [0.7, 1.1, 2.3],
-        origin: [5.0, -2.0, 8.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [3, 4, 2],
+        [0.7, 1.1, 2.3],
+        [5.0, -2.0, 8.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     let contour = ContourData {
         active_plane_family: PlaneFamily::Sagittal,
         slices: Vec::new(),
@@ -315,12 +317,8 @@ fn test_full_and_slice_local_rasterizers_agree_for_every_plane_depth() {
     };
 
     for dim_z in [4_u32, 5] {
-        let geometry = VoxelGeometry {
-            dimensions: [8, 8, dim_z],
-            spacing: [1.0; 3],
-            origin: [0.0; 3],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        };
+        let geometry =
+            VoxelGeometry::new([8, 8, dim_z], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
         let mut plane =
             orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry).unwrap();
         let square = ContourLoop {

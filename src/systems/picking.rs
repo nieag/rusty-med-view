@@ -56,11 +56,7 @@ pub fn get_voxel_at_mouse(
     let (vol_aspects, vol_dims, main_geometry) = {
         let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
         if let Some((_, vol)) = query.iter().next() {
-            (
-                vol.aspect_ratios(),
-                Some(vol.dimensions),
-                VoxelGeometry::new(vol.dimensions, vol.spacing, vol.origin, vol.orientation).ok(),
-            )
+            (vol.aspect_ratios(), Some(vol.dimensions), vol.geometry)
         } else {
             ([1.0, 1.0, 1.0], None, None)
         }
@@ -168,7 +164,7 @@ pub fn get_voxel_at_mouse(
             let mut data_orientation = [0.0f32, 0.0, 0.0, 1.0];
             let mut vol_aspects = [1.0f32; 3];
             for (_, vol) in world.query::<&VolumeData>().iter() {
-                data_orientation = vol.orientation;
+                data_orientation = vol.orientation();
                 vol_aspects = vol.aspect_ratios();
             }
 
@@ -307,20 +303,27 @@ mod tests {
     #[test]
     fn test_2d_picking_uses_active_viewport_aspect_ratio() {
         let mut world = World::new();
-        let geometry = VoxelGeometry {
-            dimensions: [100, 100, 100],
-            spacing: [1.0, 1.0, 1.0],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        };
+        let geometry = VoxelGeometry::new(
+            [100, 100, 100],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap();
         world.spawn((
             VolumeData {
                 dimensions: geometry.dimensions,
-                spacing: geometry.spacing,
-                origin: geometry.origin,
+                geometry: Some(
+                    VoxelGeometry::new(
+                        geometry.dimensions,
+                        geometry.spacing(),
+                        geometry.origin(),
+                        geometry.orientation(),
+                    )
+                    .unwrap(),
+                ),
                 intensities: Vec::new(),
                 intensity_range: [0.0, 1.0],
-                orientation: geometry.orientation,
             },
             MainVolumeTag,
         ));

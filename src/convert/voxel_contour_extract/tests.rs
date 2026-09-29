@@ -6,12 +6,13 @@ use crate::convert::{
 use glam::Quat;
 
 fn identity_geometry(dimensions: [u32; 3]) -> VoxelGeometry {
-    VoxelGeometry {
+    VoxelGeometry::new(
         dimensions,
-        spacing: [1.0, 1.0, 1.0],
-        origin: [0.0, 0.0, 0.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    }
+        [1.0, 1.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap()
 }
 
 fn voxel_data_with_fill(
@@ -157,12 +158,13 @@ fn test_sagittal_extraction_geometry_preserves_slice_depth() {
 
 #[test]
 fn test_extraction_preserves_origin_and_spacing_through_plane_local_points() {
-    let geometry = VoxelGeometry {
-        dimensions: [4, 4, 3],
-        spacing: [1.5, 2.0, 2.5],
-        origin: [10.0, -5.0, 3.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [4, 4, 3],
+        [1.5, 2.0, 2.5],
+        [10.0, -5.0, 3.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     let mut raw = vec![
         0_u8;
         (geometry.dimensions[0] * geometry.dimensions[1] * geometry.dimensions[2])
@@ -205,12 +207,8 @@ fn test_axial_voxel_contour_voxel_roundtrip_preserves_mask_geometry() {
 #[test]
 fn test_non_identity_orientation_roundtrip_preserves_mask_geometry() {
     let orientation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2).to_array();
-    let geometry = VoxelGeometry {
-        dimensions: [6, 6, 3],
-        spacing: [0.7, 1.3, 2.1],
-        origin: [12.0, -9.5, 4.25],
-        orientation,
-    };
+    let geometry =
+        VoxelGeometry::new([6, 6, 3], [0.7, 1.3, 2.1], [12.0, -9.5, 4.25], orientation).unwrap();
     let voxel = voxel_data_with_geometry_fill(
         geometry,
         [[1, 1, 1], [2, 1, 1], [1, 2, 1], [3, 4, 1], [4, 4, 1]],
@@ -285,21 +283,23 @@ fn test_extract_preserves_hole_as_inner_loop_and_roundtrip() {
 #[test]
 fn test_requested_slice_extraction_uses_requested_display_plane() {
     let dimensions = [4, 4, 4];
-    let geometry = VoxelGeometry {
+    let geometry = VoxelGeometry::new(
         dimensions,
-        spacing: [1.0, 1.0, 2.0],
-        origin: [10.0, 20.0, 30.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+        [1.0, 1.0, 2.0],
+        [10.0, 20.0, 30.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     let mut raw_data = vec![0_u8; 64];
     raw_data[voxel_index([1, 1, 2], dimensions)] = 1;
     let voxel_data = VoxelData { geometry, raw_data };
-    let display_geometry = VoxelGeometry {
-        dimensions: [7, 7, 7],
-        spacing: [0.5, 0.5, 1.0],
-        origin: [10.0, 20.0, 30.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let display_geometry = VoxelGeometry::new(
+        [7, 7, 7],
+        [0.5, 0.5, 1.0],
+        [10.0, 20.0, 30.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     // Display index 4 sits at z = 34 mm, which is the centre of the source volume's layer 2
     // (30 mm + 2 * 2 mm), the layer holding the filled voxel.
     let display_uv = crate::convert::voxel_index_to_volume_uv([3.0, 3.0, 4.0], [7, 7, 7]);

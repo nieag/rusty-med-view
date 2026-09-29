@@ -2,9 +2,7 @@ pub use crate::app::roi::{
     ContourData, ContourLoop, ContourPoint, ContourSlice, MeshData, MeshFace, MeshVertex,
     PrimaryRepresentation, RoiAuthoritativeData, RoiId, RoiMetadata, VoxelData, VoxelGeometry,
 };
-use crate::convert::{
-    ChunkedMeshData, GeometryIdentity, PlaneDefinition, PlaneFamily, RoiGeometry,
-};
+use crate::convert::{ChunkedMeshData, GeometryIdentity, PlaneDefinition, PlaneFamily};
 use glam::Vec3;
 use web_time::Instant;
 
@@ -102,17 +100,27 @@ pub struct InputState {
 // --- Volume Data ---
 pub struct VolumeData {
     pub dimensions: [u32; 3],
-    pub spacing: [f32; 3],
-    pub origin: [f32; 3],
+    /// Validated grid with the full IJK-to-world affine; `None` for the empty placeholder volume.
+    pub geometry: Option<VoxelGeometry>,
     pub intensities: Vec<f32>,
     pub intensity_range: [f32; 2],
-    pub orientation: [f32; 4], // Quaternion
 }
 
 impl VolumeData {
+    /// Millimetre voxel size per axis, or unit spacing for the empty placeholder volume.
+    pub fn spacing(&self) -> [f32; 3] {
+        self.geometry.map_or([1.0; 3], VoxelGeometry::spacing)
+    }
+
+    /// Proper-rotation view of the grid axes (identity for the empty placeholder volume).
+    pub fn orientation(&self) -> [f32; 4] {
+        self.geometry
+            .map_or([0.0, 0.0, 0.0, 1.0], VoxelGeometry::orientation)
+    }
+
     pub fn aspect_ratios(&self) -> [f32; 3] {
         let d = self.dimensions;
-        let s = self.spacing;
+        let s = self.spacing();
         // avoid div by zero if empty
         if d[0] == 0 || d[1] == 0 || d[2] == 0 {
             return [1.0, 1.0, 1.0];
@@ -497,7 +505,7 @@ pub struct Roi {
     pub metadata: RoiMetadata,
     /// Immutable reference grid for conversions involving this ROI.
     ///
-    pub reference_geometry: RoiGeometry,
+    pub reference_geometry: VoxelGeometry,
     pub authoritative_data: RoiAuthoritativeData,
     pub session_caches: RoiSessionCaches,
     pub dirty_state: RoiDirtyState,
@@ -509,8 +517,8 @@ pub struct Roi {
 }
 
 impl Roi {
-    pub fn reference_geometry(&self) -> &RoiGeometry {
-        &self.reference_geometry
+    pub fn reference_geometry(&self) -> VoxelGeometry {
+        self.reference_geometry
     }
 
     pub fn primary_representation(&self) -> PrimaryRepresentation {
@@ -539,13 +547,7 @@ impl Roi {
         gpu_resources: Option<GpuVolumeResources>,
     ) -> Self {
         let voxel_data = VoxelData { geometry, raw_data };
-        let reference_geometry = RoiGeometry::from_legacy_parts(
-            voxel_data.geometry.dimensions,
-            voxel_data.geometry.spacing,
-            voxel_data.geometry.origin,
-            voxel_data.geometry.orientation,
-        )
-        .expect("voxel ROI constructors require valid reference geometry");
+        let reference_geometry = voxel_data.geometry;
         Self {
             metadata: RoiMetadata {
                 roi_id,
@@ -592,7 +594,7 @@ impl Roi {
     pub fn new_contour_with_geometry(
         roi_id: RoiId,
         name: String,
-        reference_geometry: RoiGeometry,
+        reference_geometry: VoxelGeometry,
         contour_data: ContourData,
     ) -> Self {
         Self {
@@ -634,7 +636,7 @@ impl Roi {
     pub fn new_mesh_with_geometry(
         roi_id: RoiId,
         name: String,
-        reference_geometry: RoiGeometry,
+        reference_geometry: VoxelGeometry,
         mesh_data: MeshData,
     ) -> Self {
         Self {
@@ -690,14 +692,9 @@ pub struct VolumeWindowing {
 }
 
 #[cfg(test)]
-fn unit_test_roi_geometry() -> RoiGeometry {
-    RoiGeometry::from_legacy_parts(
-        [1, 1, 1],
-        [1.0, 1.0, 1.0],
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    )
-    .expect("unit test geometry is valid")
+fn unit_test_roi_geometry() -> VoxelGeometry {
+    VoxelGeometry::new([1, 1, 1], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0])
+        .expect("unit test geometry is valid")
 }
 
 impl Default for VolumeWindowing {
@@ -719,9 +716,8 @@ pub enum LoadResult {
 #[derive(Debug)]
 pub struct LoadedLabel {
     pub dimensions: [u32; 3],
-    pub spacing: [f32; 3],
-    pub origin: [f32; 3],
-    pub orientation: [f32; 4],
+    /// Validated grid with the full IJK-to-world affine from the NIfTI sform or qform.
+    pub geometry: VoxelGeometry,
     pub data: Vec<u8>,
     pub filename: String,
 }

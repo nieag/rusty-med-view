@@ -6,12 +6,13 @@ use crate::app::components::{
 use crate::convert::PlaneFamily;
 
 fn test_geometry() -> VoxelGeometry {
-    VoxelGeometry {
-        dimensions: [2, 2, 2],
-        spacing: [1.0, 1.0, 1.0],
-        origin: [0.0, 0.0, 0.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    }
+    VoxelGeometry::new(
+        [2, 2, 2],
+        [1.0, 1.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap()
 }
 
 fn spawn_voxel(world: &mut World, id: u64) -> Entity {

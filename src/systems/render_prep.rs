@@ -59,11 +59,11 @@ pub fn sys_prepare_render_data(
     let mut main_query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
     for (_, vol) in main_query.iter() {
         volume_dims = [vol.dimensions[0], vol.dimensions[1], vol.dimensions[2], 0];
-        volume_spacing = [vol.spacing[0], vol.spacing[1], vol.spacing[2], 0.0];
+        let spacing = vol.spacing();
+        volume_spacing = [spacing[0], spacing[1], spacing[2], 0.0];
         volume_intensity_range = vol.intensity_range;
-        data_orientation = vol.orientation;
-        main_geometry =
-            VoxelGeometry::new(vol.dimensions, vol.spacing, vol.origin, vol.orientation).ok();
+        data_orientation = vol.orientation();
+        main_geometry = vol.geometry;
     }
 
     let composed_rotation = if view_mode == 0 {

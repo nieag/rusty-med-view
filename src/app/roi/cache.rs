@@ -3,7 +3,6 @@ use crate::app::components::{
     GpuVolumeResources, MeshCache, PreviewMeshCache, PreviewVoxelCache, Roi, RoiCacheKind,
     RoiDirtyState, RoiJobKind, VoxelCache, VoxelData, MAX_CONTOUR_VIEW_CACHE_ENTRIES,
 };
-use crate::convert::RoiGeometry;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheInstallError {
@@ -463,15 +462,7 @@ impl Roi {
     }
 
     fn validate_voxel_data_geometry(&self, data: &VoxelData) -> Result<(), CacheInstallError> {
-        let reference = self.reference_geometry();
-        let actual = RoiGeometry::from_legacy_parts(
-            data.geometry.dimensions,
-            data.geometry.spacing,
-            data.geometry.origin,
-            data.geometry.orientation,
-        )
-        .map_err(|_| CacheInstallError::GeometryMismatch)?;
-        (actual.identity() == reference.identity())
+        (data.geometry.identity() == self.reference_geometry().identity())
             .then_some(())
             .ok_or(CacheInstallError::GeometryMismatch)
     }

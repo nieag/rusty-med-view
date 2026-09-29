@@ -13,11 +13,17 @@ fn spawn_world_base() -> (World, AppEntities) {
     world.spawn((
         VolumeData {
             dimensions: [10, 10, 10],
-            spacing: [1.0, 1.0, 1.0],
-            origin: [0.0, 0.0, 0.0],
+            geometry: Some(
+                VoxelGeometry::new(
+                    [10, 10, 10],
+                    [1.0, 1.0, 1.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                )
+                .unwrap(),
+            ),
             intensities: vec![],
             intensity_range: [0.0, 1.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
         },
         MainVolumeTag,
     ));
@@ -113,7 +119,16 @@ fn test_prepare_mesh_render_data_uses_main_volume_geometry_for_projection() {
     {
         let mut query = world.query::<&mut VolumeData>().with::<&MainVolumeTag>();
         let (_, vol) = query.iter().next().expect("main volume");
-        vol.orientation = glam::Quat::from_rotation_z(std::f32::consts::FRAC_PI_2).to_array();
+        let base = vol.geometry.expect("main volume geometry");
+        vol.geometry = Some(
+            VoxelGeometry::new(
+                vol.dimensions,
+                base.spacing(),
+                base.origin(),
+                glam::Quat::from_rotation_z(std::f32::consts::FRAC_PI_2).to_array(),
+            )
+            .unwrap(),
+        );
     }
     let user_rotation = glam::Quat::from_rotation_x(std::f32::consts::FRAC_PI_4).to_array();
     world.spawn((
@@ -164,7 +179,7 @@ fn test_prepare_mesh_render_data_uses_main_volume_geometry_for_projection() {
     let (main_orientation, main_aspect_ratios) = {
         let mut q = world.query::<&VolumeData>().with::<&MainVolumeTag>();
         let vol = q.iter().next().unwrap().1;
-        (vol.orientation, vol.aspect_ratios())
+        (vol.orientation(), vol.aspect_ratios())
     };
     let uv = crate::convert::world_mm_to_volume_uv(world_vertex, main_geometry);
     let screen_aspect = viewport_rect[2] / viewport_rect[3];
@@ -306,12 +321,8 @@ fn test_prepare_mesh_render_data_preserves_unchanged_chunk_identity_and_vertices
         },
         ViewportState::default(),
     ));
-    let geometry = VoxelGeometry {
-        dimensions: [32, 2, 1],
-        spacing: [1.0; 3],
-        origin: [0.0; 3],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry =
+        VoxelGeometry::new([32, 2, 1], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
     let mut voxel = VoxelData {
         geometry,
         raw_data: vec![0; 64],

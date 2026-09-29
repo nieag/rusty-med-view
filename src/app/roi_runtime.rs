@@ -15,8 +15,7 @@ use crate::convert::{
     contour_geometry_voxel_aabb, contour_slices_voxel_aabb, extract_contour_slice_from_voxel_data,
     intersect_mesh_with_plane, rasterize_contour_preview_slices_to_voxel_data,
     rasterize_contours_to_voxel_data, IncrementalChunkedMeshRebuild, IncrementalMeshVoxelization,
-    PlaneFamily, RoiGeometry, VoxelContourExtractionError, VoxelMeshExtractionError,
-    DEFAULT_MESH_CHUNK_SIZE,
+    PlaneFamily, VoxelContourExtractionError, VoxelMeshExtractionError, DEFAULT_MESH_CHUNK_SIZE,
 };
 #[cfg(test)]
 use crate::convert::{extract_contours_from_voxel_data, extract_mesh_from_voxel_data};
@@ -97,16 +96,6 @@ fn plane_family_label(family: PlaneFamily) -> &'static str {
         PlaneFamily::Sagittal => "Sagittal",
         PlaneFamily::Oblique => "Oblique",
     }
-}
-
-fn roi_geometry_from_voxel_geometry(geometry: VoxelGeometry) -> Result<RoiGeometry, String> {
-    RoiGeometry::from_legacy_parts(
-        geometry.dimensions,
-        geometry.spacing,
-        geometry.origin,
-        geometry.orientation,
-    )
-    .map_err(|error| format!("Invalid ROI reference geometry: {error}"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -252,13 +241,7 @@ pub fn recreate_scene_bind_groups(
 pub fn main_volume_geometry(world: &World) -> Option<VoxelGeometry> {
     let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
     let (_, volume) = query.iter().next()?;
-    VoxelGeometry::new(
-        volume.dimensions,
-        volume.spacing,
-        volume.origin,
-        volume.orientation,
-    )
-    .ok()
+    volume.geometry
 }
 
 pub fn renderable_voxel_overlay_rois(
@@ -546,12 +529,6 @@ pub(crate) fn sync_active_roi_mesh_cache_for_viewports(world: &mut World) {
     }
 }
 
-fn approx_eq_slice<const N: usize>(lhs: [f32; N], rhs: [f32; N], epsilon: f32) -> bool {
-    lhs.into_iter()
-        .zip(rhs)
-        .all(|(left, right)| (left - right).abs() <= epsilon)
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VoxelRoiImportSpec {
     pub geometry: VoxelGeometry,
@@ -563,33 +540,20 @@ pub fn prepare_voxel_roi_import(
     world: &World,
     loaded_label: &LoadedLabel,
 ) -> Result<VoxelRoiImportSpec, String> {
-    let geometry = VoxelGeometry::new(
-        loaded_label.dimensions,
-        loaded_label.spacing,
-        loaded_label.origin,
-        loaded_label.orientation,
-    )
-    .map_err(|error| format!("Invalid label ROI geometry: {error:?}"))?;
-    // `Roi` owns an affine reference grid that rejects more geometries than `VoxelGeometry`
-    // (for example a singular affine from a tiny spacing); reject them here instead of letting
-    // the ROI constructor panic.
-    roi_geometry_from_voxel_geometry(geometry)?;
+    // The loader already validated the geometry (finite, non-singular affine), so the ROI
+    // constructor cannot fail on it.
+    let geometry = loaded_label.geometry;
     let geometry_matches_main = if let Some(main_geometry) = main_volume_geometry(world) {
-        let differs = main_geometry.dimensions != loaded_label.dimensions
-            || !approx_eq_slice(main_geometry.spacing, loaded_label.spacing, 1e-5)
-            || !approx_eq_slice(main_geometry.origin, loaded_label.origin, 1e-5)
-            || !approx_eq_slice(main_geometry.orientation, loaded_label.orientation, 1e-5);
+        let differs = main_geometry.identity() != geometry.identity();
         if differs {
             log::warn!(
-                "Loaded label geometry differs from main volume geometry; preserving label-owned geometry. label dims={:?} spacing={:?} origin={:?} orientation={:?}, main dims={:?} spacing={:?} origin={:?} orientation={:?}",
-                loaded_label.dimensions,
-                loaded_label.spacing,
-                loaded_label.origin,
-                loaded_label.orientation,
+                "Loaded label geometry differs from main volume geometry; preserving label-owned geometry. label dims={:?} spacing={:?} origin={:?}, main dims={:?} spacing={:?} origin={:?}",
+                geometry.dimensions,
+                geometry.spacing(),
+                geometry.origin(),
                 main_geometry.dimensions,
-                main_geometry.spacing,
-                main_geometry.origin,
-                main_geometry.orientation
+                main_geometry.spacing(),
+                main_geometry.origin(),
             );
         }
         !differs
@@ -670,7 +634,7 @@ pub fn create_empty_contour_roi(
 
     let reference_voxel_geometry = main_volume_geometry(world)
         .ok_or_else(|| "Missing main volume geometry; contour ROI was not created.".to_string())?;
-    let reference_geometry = roi_geometry_from_voxel_geometry(reference_voxel_geometry)?;
+    let reference_geometry = reference_voxel_geometry;
     let voxel_count = reference_voxel_geometry
         .dimensions
         .into_iter()
@@ -794,8 +758,7 @@ pub fn create_contour_roi_from_voxel_roi(
         .map(|roi| roi.metadata.name.clone())
         .unwrap_or_else(|| "Voxel ROI".to_string());
     let new_name = format!("{source_name} ({} Contour)", plane_family_label(family));
-    let reference_geometry = roi_geometry_from_voxel_geometry(source_voxel.geometry)
-        .expect("voxel ROI geometry was validated at creation");
+    let reference_geometry = source_voxel.geometry;
 
     let entity = world.spawn((
         Roi::new_contour_with_geometry(RoiId(next_roi_id), new_name, reference_geometry, extracted),
@@ -846,8 +809,7 @@ pub fn create_mesh_roi_from_voxel_roi(
         Roi::new_mesh_with_geometry(
             RoiId(next_roi_id),
             format!("{source_name} (Mesh)"),
-            roi_geometry_from_voxel_geometry(source_voxel.geometry)
-                .expect("voxel ROI geometry was validated at creation"),
+            source_voxel.geometry,
             extracted,
         ),
         LayerSettings { opacity: 0.5 },
@@ -918,8 +880,7 @@ pub fn create_mesh_roi_from_contour_roi(
         Roi::new_mesh_with_geometry(
             RoiId(next_roi_id),
             format!("{source_name} (Mesh)"),
-            roi_geometry_from_voxel_geometry(source_voxel.geometry)
-                .expect("contour voxel cache geometry was validated at installation"),
+            source_voxel.geometry,
             extracted,
         ),
         LayerSettings { opacity: 0.5 },
@@ -1977,9 +1938,9 @@ pub fn roi_voxel_stats(world: &World, roi_entity: hecs::Entity) -> Option<VoxelR
         .filter(|value| **value != 0)
         .count() as u64;
 
-    let volume_scale_mm3 = voxel_data.geometry.spacing[0]
-        * voxel_data.geometry.spacing[1]
-        * voxel_data.geometry.spacing[2];
+    let volume_scale_mm3 = voxel_data.geometry.spacing()[0]
+        * voxel_data.geometry.spacing()[1]
+        * voxel_data.geometry.spacing()[2];
 
     Some(VoxelRoiStats {
         occupied_voxels,

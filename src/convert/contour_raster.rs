@@ -140,7 +140,7 @@ pub fn rasterize_contours_to_voxel_data(
     target_geometry: VoxelGeometry,
 ) -> Result<VoxelData, ContourRasterizationError> {
     if target_geometry
-        .spacing
+        .spacing()
         .iter()
         .any(|s| !s.is_finite() || *s <= 0.0)
     {

@@ -277,12 +277,13 @@ mod tests {
 
     fn voxel_data(raw_data: Vec<u8>) -> VoxelData {
         VoxelData {
-            geometry: VoxelGeometry {
-                dimensions: [3, 3, 3],
-                spacing: [1.0, 2.0, 3.0],
-                origin: [10.0, 20.0, 30.0],
-                orientation: [0.0, 0.0, 0.0, 1.0],
-            },
+            geometry: VoxelGeometry::new(
+                [3, 3, 3],
+                [1.0, 2.0, 3.0],
+                [10.0, 20.0, 30.0],
+                [0.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap(),
             raw_data,
         }
     }
@@ -325,12 +326,8 @@ mod tests {
         for spacing in [[1.0; 3], [0.7, 1.3, 2.1]] {
             for pattern in 1_u16..256 {
                 let source = VoxelData {
-                    geometry: VoxelGeometry {
-                        dimensions: [2; 3],
-                        spacing,
-                        origin: [0.0; 3],
-                        orientation: [0.0, 0.0, 0.0, 1.0],
-                    },
+                    geometry: VoxelGeometry::new([2; 3], spacing, [0.0; 3], [0.0, 0.0, 0.0, 1.0])
+                        .unwrap(),
                     raw_data: (0..8)
                         .map(|bit| u8::from(pattern & (1 << bit) != 0))
                         .collect(),
@@ -368,12 +365,13 @@ mod tests {
         let dimensions = [3, 2, 2];
         for pattern in 1_u16..(1 << 12) {
             let source = VoxelData {
-                geometry: VoxelGeometry {
+                geometry: VoxelGeometry::new(
                     dimensions,
-                    spacing: [0.7, 1.3, 2.1],
-                    origin: [10.0, 20.0, 30.0],
-                    orientation: [0.0, 0.0, 0.0, 1.0],
-                },
+                    [0.7, 1.3, 2.1],
+                    [10.0, 20.0, 30.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                )
+                .unwrap(),
                 raw_data: (0..12)
                     .map(|bit| u8::from(pattern & (1 << bit) != 0))
                     .collect(),

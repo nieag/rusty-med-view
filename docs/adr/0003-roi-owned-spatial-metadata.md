@@ -2,17 +2,17 @@
 
 Voxel-authoritative ROI data owns its own spatial metadata instead of borrowing dimensions, spacing, origin, or orientation from the current main volume. Imported labelmaps may differ from the displayed image geometry, so ROI conversion, volume measurement, mesh extraction, and overlay projection must use an explicit ROI-native-to-world geometry contract.
 
-## Current import convention
+## Import convention
 
-Until the affine migration is complete, NIfTI import uses the first usable spatial transform in this order:
+NIfTI import follows the NIfTI-1 precedence and keeps the full affine:
 
-1. non-degenerate finite `sform` rows;
-2. a valid coded `qform` reconstructed from NIfTI quaternion fields;
-3. legacy fallback: `pixdim` spacing, zero origin, and identity orientation.
+1. an `sform` with `sform_code > 0` and non-degenerate, finite rows;
+2. a `qform` with `qform_code > 0` and usable quaternion fields, reconstructed to an affine;
+3. legacy fallback when neither is present: a `pixdim` scale with zero origin. Non-positive `pixdim` is rejected, never defaulted.
 
-The current runtime then stores a decomposed spacing, origin, and quaternion approximation. It preserves rigid orientation and translation but cannot preserve shear and silently normalizes invalid quaternions to identity. This is compatibility behavior, not the target contract.
+The result is validated into a `VoxelGeometry` (dimensions plus an IJK-to-world affine and its inverse). Reflections, such as an LAS-stored volume, and shear are preserved. Singular or non-finite transforms are rejected at import with an error; they never become identity. `spacing()`, `origin()`, and `orientation()` on `VoxelGeometry` are derived views for consumers that still think in decomposed terms (the orientation view folds a reflection into the x axis and removes shear); registration and measurement use the affine.
 
-## Target coordinate contract
+## Coordinate contract
 
 - A validated, immutable ROI-owned IJK-to-world affine is the source of truth.
 - Integer IJK coordinates denote voxel centres; continuous grid bounds are `[-0.5, dimension - 0.5]`.

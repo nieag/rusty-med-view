@@ -9,12 +9,13 @@ fn spawn_test_roi(world: &mut World) -> hecs::Entity {
     world.spawn((Roi::new_voxel_with_cache(
         RoiId(1),
         "Test".to_string(),
-        VoxelGeometry {
-            dimensions: [4, 4, 4],
-            spacing: [1.0, 1.0, 1.0],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new(
+            [4, 4, 4],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         vec![1; 64],
         None,
     ),))
@@ -26,12 +27,13 @@ fn spawn_sparse_voxel_roi(world: &mut World) -> hecs::Entity {
     world.spawn((Roi::new_voxel_with_cache(
         RoiId(2),
         "Sparse".to_string(),
-        VoxelGeometry {
-            dimensions: [4, 4, 4],
-            spacing: [1.0, 1.0, 1.0],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new(
+            [4, 4, 4],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         raw,
         None,
     ),))
@@ -41,11 +43,11 @@ fn spawn_main_volume(world: &mut World, spacing: [f32; 3], origin: [f32; 3]) {
     world.spawn((
         VolumeData {
             dimensions: [4, 4, 4],
-            spacing,
-            origin,
+            geometry: Some(
+                VoxelGeometry::new([4, 4, 4], spacing, origin, [0.0, 0.0, 0.0, 1.0]).unwrap(),
+            ),
             intensities: vec![],
             intensity_range: [0.0, 1.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
         },
         MainVolumeTag,
     ));
@@ -66,12 +68,13 @@ fn spawn_test_contour_roi(
     family: PlaneFamily,
     with_loops: bool,
 ) -> hecs::Entity {
-    let geometry = VoxelGeometry {
-        dimensions: [4, 4, 4],
-        spacing: [1.0, 1.0, 1.0],
-        origin: [0.0, 0.0, 0.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [4, 4, 4],
+        [1.0, 1.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     let slices = if with_loops {
         vec![ContourSlice {
             plane: test_plane_definition(family),
@@ -97,7 +100,7 @@ fn spawn_test_contour_roi(
     let entity = world.spawn((Roi::new_contour_with_geometry(
         RoiId(100),
         "Contour".to_string(),
-        roi_geometry_from_voxel_geometry(geometry).unwrap(),
+        geometry,
         ContourData {
             active_plane_family: family,
             slices,
@@ -118,12 +121,13 @@ fn seed_current_voxel_cache_for_contour_roi(world: &mut World, entity: hecs::Ent
     let mut roi = world.get::<&mut Roi>(entity).unwrap();
     roi.session_caches.voxel = Some(VoxelCache {
         data: VoxelData {
-            geometry: VoxelGeometry {
-                dimensions: [4, 4, 4],
-                spacing: [1.0, 1.0, 1.0],
-                origin: [0.0, 0.0, 0.0],
-                orientation: [0.0, 0.0, 0.0, 1.0],
-            },
+            geometry: VoxelGeometry::new(
+                [4, 4, 4],
+                [1.0, 1.0, 1.0],
+                [0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap(),
             raw_data: vec![0; 64],
         },
         gpu_resources: None,
@@ -262,12 +266,13 @@ fn test_voxel_roi_stats_use_nonzero_voxels_and_volume_spacing() {
     let entity = world.spawn((Roi::new_voxel_with_cache(
         RoiId(2),
         "Mask".to_string(),
-        VoxelGeometry {
-            dimensions: [2, 2, 2],
-            spacing: [0.5, 0.5, 2.0],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new(
+            [2, 2, 2],
+            [0.5, 0.5, 2.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         vec![0, 1, 2, 0, 0, 3, 4, 0],
         None,
     ),));
@@ -395,13 +400,13 @@ fn test_main_volume_geometry_reads_main_volume_fields() {
     let geometry = main_volume_geometry(&world).unwrap();
 
     assert_eq!(geometry.dimensions, [4, 4, 4]);
-    assert_eq!(geometry.spacing, [0.25, 0.5, 2.0]);
-    assert_eq!(geometry.origin, [3.0, -1.5, 2.25]);
-    assert_eq!(geometry.orientation, [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(geometry.spacing(), [0.25, 0.5, 2.0]);
+    assert_eq!(geometry.origin(), [3.0, -1.5, 2.25]);
+    assert_eq!(geometry.orientation(), [0.0, 0.0, 0.0, 1.0]);
 }
 
 #[test]
-fn test_main_volume_geometry_rejects_invalid_metadata() {
+fn test_main_volume_geometry_is_none_for_the_placeholder_volume() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
     let (_, volume) = world
@@ -410,7 +415,7 @@ fn test_main_volume_geometry_rejects_invalid_metadata() {
         .into_iter()
         .next()
         .unwrap();
-    volume.orientation = [0.0; 4];
+    volume.geometry = None;
 
     assert!(main_volume_geometry(&world).is_none());
 }
@@ -435,8 +440,15 @@ fn test_display_volume_change_does_not_retarget_contour_roi_geometry() {
         .next()
         .unwrap();
     volume.dimensions = [9, 8, 7];
-    volume.spacing = [0.25, 2.0, 3.0];
-    volume.origin = [10.0, -4.0, 2.0];
+    volume.geometry = Some(
+        VoxelGeometry::new(
+            [9, 8, 7],
+            [0.25, 2.0, 3.0],
+            [10.0, -4.0, 2.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
+    );
 
     let roi = world.get::<&Roi>(entity).unwrap();
     assert_eq!(roi.reference_geometry().identity(), identity_before);
@@ -493,18 +505,22 @@ fn test_prepare_voxel_roi_import_uses_label_geometry_without_main_volume() {
     let world = World::new();
     let loaded_label = LoadedLabel {
         dimensions: [2, 2, 2],
-        spacing: [1.25, 1.5, 2.0],
-        origin: [5.0, 6.0, 7.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
+        geometry: VoxelGeometry::new(
+            [2, 2, 2],
+            [1.25, 1.5, 2.0],
+            [5.0, 6.0, 7.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         data: vec![0; 8],
         filename: "Label".to_string(),
     };
 
     let import_spec = prepare_voxel_roi_import(&world, &loaded_label).unwrap();
     assert_eq!(import_spec.geometry.dimensions, [2, 2, 2]);
-    assert_eq!(import_spec.geometry.spacing, [1.25, 1.5, 2.0]);
-    assert_eq!(import_spec.geometry.origin, [5.0, 6.0, 7.0]);
-    assert_eq!(import_spec.geometry.orientation, [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(import_spec.geometry.spacing(), [1.25, 1.5, 2.0]);
+    assert_eq!(import_spec.geometry.origin(), [5.0, 6.0, 7.0]);
+    assert_eq!(import_spec.geometry.orientation(), [0.0, 0.0, 0.0, 1.0]);
     assert!(import_spec.geometry_matches_main);
     assert!(import_spec.start_visible);
 }
@@ -515,9 +531,13 @@ fn test_prepare_voxel_roi_import_preserves_label_geometry_even_when_main_volume_
     spawn_main_volume(&mut world, [0.5, 0.5, 2.0], [10.0, 10.0, 10.0]);
     let loaded_label = LoadedLabel {
         dimensions: [3, 4, 5],
-        spacing: [0.75, 0.8, 1.25],
-        origin: [-2.0, 4.5, 6.0],
-        orientation: [0.0, 0.0, 1.0, 0.0],
+        geometry: VoxelGeometry::new(
+            [3, 4, 5],
+            [0.75, 0.8, 1.25],
+            [-2.0, 4.5, 6.0],
+            [0.0, 0.0, 1.0, 0.0],
+        )
+        .unwrap(),
         data: vec![0; 60],
         filename: "Label".to_string(),
     };
@@ -525,29 +545,11 @@ fn test_prepare_voxel_roi_import_preserves_label_geometry_even_when_main_volume_
     let import_spec = prepare_voxel_roi_import(&world, &loaded_label).unwrap();
 
     assert_eq!(import_spec.geometry.dimensions, [3, 4, 5]);
-    assert_eq!(import_spec.geometry.spacing, [0.75, 0.8, 1.25]);
-    assert_eq!(import_spec.geometry.origin, [-2.0, 4.5, 6.0]);
-    assert_eq!(import_spec.geometry.orientation, [0.0, 0.0, 1.0, 0.0]);
+    assert_eq!(import_spec.geometry.spacing(), [0.75, 0.8, 1.25]);
+    assert_eq!(import_spec.geometry.origin(), [-2.0, 4.5, 6.0]);
+    assert_eq!(import_spec.geometry.orientation(), [0.0, 0.0, 1.0, 0.0]);
     assert!(!import_spec.geometry_matches_main);
     assert!(import_spec.start_visible);
-}
-
-#[test]
-fn test_prepare_voxel_roi_import_rejects_invalid_label_geometry_before_gpu_creation() {
-    let world = World::new();
-    let loaded_label = LoadedLabel {
-        dimensions: [2, 2, 2],
-        spacing: [1.0; 3],
-        origin: [0.0; 3],
-        orientation: [0.0; 4],
-        data: vec![0; 8],
-        filename: "Invalid label".to_string(),
-    };
-
-    assert_eq!(
-        prepare_voxel_roi_import(&world, &loaded_label).unwrap_err(),
-        "Invalid label ROI geometry: InvalidOrientation"
-    );
 }
 
 #[test]
@@ -931,12 +933,7 @@ fn test_cancel_mesh_edit_preview_preserves_authority() {
         "Cancel".to_string(),
         original.clone(),
     ),));
-    let geometry = VoxelGeometry {
-        dimensions: [4; 3],
-        spacing: [1.0; 3],
-        origin: [0.0; 3],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new([4; 3], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
     let plane =
         orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.25], geometry).unwrap();
     let key = ContourViewKey::from_plane(plane);
@@ -1242,12 +1239,13 @@ fn test_visible_inactive_mesh_roi_keeps_direct_contours_in_multiple_viewports() 
 #[test]
 fn test_rotated_anisotropic_roi_keeps_direct_contours_through_mesh_resample() {
     let mut world = World::new();
-    let geometry = VoxelGeometry {
-        dimensions: [8; 3],
-        spacing: [0.7, 1.3, 2.1],
-        origin: [10.0, 20.0, 30.0],
-        orientation: glam::Quat::from_rotation_y(0.4).to_array(),
-    };
+    let geometry = VoxelGeometry::new(
+        [8; 3],
+        [0.7, 1.3, 2.1],
+        [10.0, 20.0, 30.0],
+        glam::Quat::from_rotation_y(0.4).to_array(),
+    )
+    .unwrap();
     let mut raw_data = vec![0; 8 * 8 * 8];
     for z in 2..=5 {
         for y in 2..=5 {
@@ -1574,12 +1572,13 @@ fn test_voxel_data_for_display_surface_extraction_accepts_mismatched_geometry() 
     let source = world.spawn((Roi::new_voxel_with_cache(
         RoiId(42),
         "Mismatched".to_string(),
-        VoxelGeometry {
-            dimensions: [4, 4, 4],
-            spacing: [2.0, 2.0, 2.0],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new(
+            [4, 4, 4],
+            [2.0, 2.0, 2.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         {
             let mut raw = vec![0_u8; 64];
             raw[21] = 1;
@@ -1599,12 +1598,13 @@ fn test_create_mesh_roi_from_voxel_roi_accepts_mismatched_geometry() {
     let source = world.spawn((Roi::new_voxel_with_cache(
         RoiId(43),
         "Mismatched".to_string(),
-        VoxelGeometry {
-            dimensions: [4, 4, 4],
-            spacing: [2.0, 2.0, 2.0],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new(
+            [4, 4, 4],
+            [2.0, 2.0, 2.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         {
             let mut raw = vec![0_u8; 64];
             raw[21] = 1;
@@ -1624,12 +1624,13 @@ fn test_create_mesh_roi_from_voxel_roi_spawns_mesh_when_geometry_is_mismatched()
     let source = world.spawn((Roi::new_voxel_with_cache(
         RoiId(44),
         "Mismatched".to_string(),
-        VoxelGeometry {
-            dimensions: [4, 4, 4],
-            spacing: [2.0, 2.0, 2.0],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new(
+            [4, 4, 4],
+            [2.0, 2.0, 2.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         {
             let mut raw = vec![0_u8; 64];
             raw[21] = 1;
@@ -1651,12 +1652,13 @@ fn test_create_mesh_roi_from_contour_roi_succeeds_with_current_voxel_cache() {
     let mut world = World::new();
     let source = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
     let source_voxel = VoxelData {
-        geometry: VoxelGeometry {
-            dimensions: [4, 4, 4],
-            spacing: [1.0, 1.0, 1.0],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        geometry: VoxelGeometry::new(
+            [4, 4, 4],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         raw_data: {
             let mut raw = vec![0_u8; 64];
             raw[(2 * 4 + 1) * 4 + 1] = 1;
@@ -2383,16 +2385,17 @@ fn test_oblique_dirty_slice_rebuild_preserves_other_authoritative_planes() {
     };
     let first_slice = make_slice(1.0);
     let first_key = ContourSliceKey::from_plane(first_slice.plane);
-    let geometry = VoxelGeometry {
-        dimensions: [4, 4, 4],
-        spacing: [1.0, 1.0, 1.0],
-        origin: [0.0, 0.0, 0.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [4, 4, 4],
+        [1.0, 1.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     let entity = world.spawn((Roi::new_contour_with_geometry(
         RoiId(101),
         "Oblique".to_string(),
-        roi_geometry_from_voxel_geometry(geometry).unwrap(),
+        geometry,
         ContourData {
             active_plane_family: PlaneFamily::Oblique,
             slices: vec![first_slice, make_slice(2.0)],
@@ -2538,12 +2541,13 @@ fn test_ensure_contour_view_cache_builds_orthogonal_view_from_current_voxel_cach
         raw_data[(2 * 4 + 1) * 4 + 1] = 1;
         roi.session_caches.voxel = Some(VoxelCache {
             data: VoxelData {
-                geometry: VoxelGeometry {
-                    dimensions: [4, 4, 4],
-                    spacing: [1.0, 1.0, 1.0],
-                    origin: [0.0, 0.0, 0.0],
-                    orientation: [0.0, 0.0, 0.0, 1.0],
-                },
+                geometry: VoxelGeometry::new(
+                    [4, 4, 4],
+                    [1.0, 1.0, 1.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                )
+                .unwrap(),
                 raw_data,
             },
             gpu_resources: None,
@@ -2554,12 +2558,13 @@ fn test_ensure_contour_view_cache_builds_orthogonal_view_from_current_voxel_cach
     let plane = orthogonal_plane_from_volume_uv(
         PlaneFamily::Coronal,
         [0.5, 2.0 / 3.0, 0.5],
-        VoxelGeometry {
-            dimensions: [4, 4, 4],
-            spacing: [1.0, 1.0, 1.0],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new(
+            [4, 4, 4],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
     )
     .unwrap();
     let key = ContourViewKey::from_plane(plane);
@@ -2970,12 +2975,7 @@ fn test_liver_explicit_voxel_rebuild_frame_timing() {
     .unwrap();
     let label =
         crate::nifti_loader::load_label_from_bytes(&bytes, "liver_0_label.nii".into()).unwrap();
-    let geometry = VoxelGeometry {
-        dimensions: label.dimensions,
-        spacing: label.spacing,
-        origin: label.origin,
-        orientation: label.orientation,
-    };
+    let geometry = label.geometry;
     let voxel_data = VoxelData {
         geometry,
         raw_data: label.data,
@@ -3130,25 +3130,5 @@ fn test_two_slice_commits_before_one_rebuild_keep_every_slice_in_voxel_cache() {
         occupied_per_layer(&world),
         vec![9, 9, 9, 0],
         "voxel cache must contain every authoritative slice, not only the last dirty one"
-    );
-}
-
-#[test]
-fn test_label_import_rejects_geometry_the_roi_cannot_represent_instead_of_panicking() {
-    let world = World::new();
-    let label = LoadedLabel {
-        dimensions: [2, 2, 2],
-        spacing: [1.0e-5; 3],
-        origin: [0.0; 3],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-        data: vec![1; 8],
-        filename: "tiny_spacing.nii".to_string(),
-    };
-
-    let result = prepare_voxel_roi_import(&world, &label);
-
-    assert!(
-        result.is_err(),
-        "a label whose affine is singular must be rejected at import"
     );
 }

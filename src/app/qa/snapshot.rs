@@ -129,22 +129,34 @@ impl AppState {
                 .iter()
                 .next()
                 .map(|(_, v)| {
-                    let world_bounds = if v.dimensions.iter().all(|d| *d > 0) {
-                        let max = [
-                            v.origin[0] + v.spacing[0] * (v.dimensions[0] as f32 - 1.0),
-                            v.origin[1] + v.spacing[1] * (v.dimensions[1] as f32 - 1.0),
-                            v.origin[2] + v.spacing[2] * (v.dimensions[2] as f32 - 1.0),
-                        ];
-                        Some([v.origin, max])
-                    } else {
-                        None
-                    };
+                    // Axis-aligned bounds of the voxel centres, from the full affine so rotated,
+                    // reflected, or sheared grids are bounded correctly.
+                    let world_bounds = v.geometry.map(|geometry| {
+                        let last = v.dimensions.map(|d| f64::from(d.saturating_sub(1)));
+                        let mut min = [f32::INFINITY; 3];
+                        let mut max = [f32::NEG_INFINITY; 3];
+                        for corner in 0..8_u32 {
+                            let ijk = std::array::from_fn(|axis| {
+                                if corner >> axis & 1 == 1 {
+                                    last[axis]
+                                } else {
+                                    0.0
+                                }
+                            });
+                            let world = geometry.ijk_to_world_mm(ijk);
+                            for axis in 0..3 {
+                                min[axis] = min[axis].min(world[axis] as f32);
+                                max[axis] = max[axis].max(world[axis] as f32);
+                            }
+                        }
+                        [min, max]
+                    });
                     qa::QaSnapshotVolume {
                         loaded: v.dimensions != [0, 0, 0],
                         dimensions: v.dimensions,
-                        spacing: v.spacing,
-                        origin: v.origin,
-                        orientation: v.orientation,
+                        spacing: v.spacing(),
+                        origin: v.geometry.map_or([0.0; 3], VoxelGeometry::origin),
+                        orientation: v.orientation(),
                         world_bounds,
                     }
                 })

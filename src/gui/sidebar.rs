@@ -97,13 +97,7 @@ fn focus_cursor_on_first_extracted_slice(
             Some((
                 contour.active_plane_family,
                 slice.plane.origin_mm,
-                VoxelGeometry::new(
-                    volume.dimensions,
-                    volume.spacing,
-                    volume.origin,
-                    volume.orientation,
-                )
-                .ok()?,
+                volume.geometry?,
             ))
         })() else {
             return;
@@ -179,7 +173,9 @@ pub fn draw_sidebar(
             {
                 ui.label(format!(
                     "Spacing: {:.2}×{:.2}×{:.2} mm",
-                    vd.spacing[0], vd.spacing[1], vd.spacing[2]
+                    vd.spacing()[0],
+                    vd.spacing()[1],
+                    vd.spacing()[2]
                 ));
                 ui.label(format!(
                     "Range: {:.0} to {:.0} HU",

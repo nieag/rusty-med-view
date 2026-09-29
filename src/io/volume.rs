@@ -75,11 +75,9 @@ pub fn create_texture_from_nifti(
 
     let volume_data = VolumeData {
         dimensions: loaded.dimensions,
-        spacing: loaded.spacing,
-        origin: loaded.origin,
+        geometry: Some(loaded.geometry),
         intensities: loaded.float_data.clone(),
         intensity_range: loaded.intensity_range,
-        orientation: loaded.orientation,
     };
 
     (texture, view, sampler, volume_data)

@@ -128,11 +128,14 @@ pub fn validate_mesh_for_voxelization(mesh: &MeshData) -> Result<(), MeshVoxeliz
 fn validate_target_geometry(geometry: VoxelGeometry) -> Result<(), MeshVoxelizationError> {
     if geometry.dimensions.contains(&0)
         || geometry
-            .spacing
+            .spacing()
             .iter()
             .any(|value| !value.is_finite() || *value <= 0.0)
-        || geometry.origin.iter().any(|value| !value.is_finite())
-        || geometry.orientation.iter().any(|value| !value.is_finite())
+        || geometry.origin().iter().any(|value| !value.is_finite())
+        || geometry
+            .orientation()
+            .iter()
+            .any(|value| !value.is_finite())
     {
         return Err(MeshVoxelizationError::InvalidTargetGeometry);
     }

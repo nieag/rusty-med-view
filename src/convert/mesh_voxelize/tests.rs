@@ -4,12 +4,13 @@ use crate::convert::extract_mesh_from_voxel_data;
 use glam::Quat;
 
 fn geometry() -> VoxelGeometry {
-    VoxelGeometry {
-        dimensions: [4, 4, 4],
-        spacing: [1.0, 2.0, 3.0],
-        origin: [10.0, 20.0, 30.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    }
+    VoxelGeometry::new(
+        [4, 4, 4],
+        [1.0, 2.0, 3.0],
+        [10.0, 20.0, 30.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap()
 }
 
 #[test]
@@ -60,12 +61,13 @@ fn test_incremental_voxelization_matches_solid_block_after_one_voxel_steps() {
 
 #[test]
 fn test_smooth_mesh_roundtrip_preserves_rotated_anisotropic_grid() {
-    let geometry = VoxelGeometry {
-        dimensions: [5, 4, 3],
-        spacing: [1.5, 2.0, 3.5],
-        origin: [10.0, -4.0, 22.0],
-        orientation: Quat::from_rotation_y(0.4).to_array(),
-    };
+    let geometry = VoxelGeometry::new(
+        [5, 4, 3],
+        [1.5, 2.0, 3.5],
+        [10.0, -4.0, 22.0],
+        Quat::from_rotation_y(0.4).to_array(),
+    )
+    .unwrap();
     let mut raw_data = vec![0; 60];
     for z in 1..=2 {
         for y in 1..=2 {
@@ -264,12 +266,7 @@ fn test_mesh_voxelization_is_deterministic() {
 
 #[test]
 fn test_edge_touching_voxel_shells_roundtrip() {
-    let geometry = VoxelGeometry {
-        dimensions: [5, 5, 4],
-        spacing: [1.0; 3],
-        origin: [0.0; 3],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new([5, 5, 4], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
     let mut raw_data = vec![0_u8; 100];
     raw_data[linear_index([1, 1, 1], geometry.dimensions)] = 1;
     raw_data[linear_index([2, 2, 1], geometry.dimensions)] = 1;

@@ -30,10 +30,10 @@ pub fn signed_distance_from_voxel_data(
         .map(|value| *value != 0)
         .collect::<Vec<_>>();
     let distance_to_inside =
-        squared_distance_transform(&inside, dimensions, voxel_data.geometry.spacing);
+        squared_distance_transform(&inside, dimensions, voxel_data.geometry.spacing());
     let outside = inside.iter().map(|value| !value).collect::<Vec<_>>();
     let distance_to_outside =
-        squared_distance_transform(&outside, dimensions, voxel_data.geometry.spacing);
+        squared_distance_transform(&outside, dimensions, voxel_data.geometry.spacing());
 
     Ok(inside
         .into_iter()
@@ -175,12 +175,8 @@ mod tests {
 
     fn voxel_data(dimensions: [u32; 3], spacing: [f32; 3], raw_data: Vec<u8>) -> VoxelData {
         VoxelData {
-            geometry: VoxelGeometry {
-                dimensions,
-                spacing,
-                origin: [0.0; 3],
-                orientation: [0.0, 0.0, 0.0, 1.0],
-            },
+            geometry: VoxelGeometry::new(dimensions, spacing, [0.0; 3], [0.0, 0.0, 0.0, 1.0])
+                .unwrap(),
             raw_data,
         }
     }

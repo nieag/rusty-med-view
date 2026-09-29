@@ -144,12 +144,8 @@ mod tests {
     }
 
     fn test_slice(loops: Vec<ContourLoop>) -> ContourSlice {
-        let geometry = VoxelGeometry {
-            dimensions: [9, 9, 1],
-            spacing: [1.0; 3],
-            origin: [0.0; 3],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        };
+        let geometry =
+            VoxelGeometry::new([9, 9, 1], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
         ContourSlice {
             plane: orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.0], geometry)
                 .unwrap(),
@@ -181,12 +177,8 @@ mod tests {
 
     #[test]
     fn test_union_preserves_existing_hole_and_raster_topology() {
-        let geometry = VoxelGeometry {
-            dimensions: [9, 9, 1],
-            spacing: [1.0; 3],
-            origin: [0.0; 3],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        };
+        let geometry =
+            VoxelGeometry::new([9, 9, 1], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
         let slice = test_slice(vec![
             square([-3.0, -3.0], [3.0, 3.0]),
             square([-1.0, -1.0], [1.0, 1.0]),

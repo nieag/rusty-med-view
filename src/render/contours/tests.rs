@@ -55,12 +55,13 @@ fn test_planes_are_slice_compatible_respects_origin_tolerance() {
 
 #[test]
 fn test_projection_helper_local_world_viewport_roundtrip_stays_stable() {
-    let geometry = VoxelGeometry {
-        dimensions: [16, 16, 16],
-        spacing: [1.0, 1.0, 1.0],
-        origin: [0.0, 0.0, 0.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [16, 16, 16],
+        [1.0, 1.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     let plane =
         orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry).unwrap();
     let mapping = ViewportMapping {
@@ -136,21 +137,28 @@ fn test_prepare_contour_render_data_emits_vertices_for_matching_slice() {
     world.spawn((
         VolumeData {
             dimensions: [32, 32, 32],
-            spacing: [1.0, 1.0, 1.0],
-            origin: [0.0, 0.0, 0.0],
+            geometry: Some(
+                VoxelGeometry::new(
+                    [32, 32, 32],
+                    [1.0, 1.0, 1.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                )
+                .unwrap(),
+            ),
             intensities: vec![],
             intensity_range: [0.0, 1.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
         },
         MainVolumeTag,
     ));
 
-    let geometry = VoxelGeometry {
-        dimensions: [32, 32, 32],
-        spacing: [1.0, 1.0, 1.0],
-        origin: [0.0, 0.0, 0.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [32, 32, 32],
+        [1.0, 1.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     let plane =
         orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry).unwrap();
     let mut roi = Roi::new_contour(
@@ -179,12 +187,13 @@ fn test_prepare_contour_render_data_emits_vertices_for_matching_slice() {
     );
     roi.session_caches.voxel = Some(VoxelCache {
         data: VoxelData {
-            geometry: VoxelGeometry {
-                dimensions: [16, 16, 16],
-                spacing: [2.0, 2.0, 2.0],
-                origin: [100.0, 100.0, 100.0],
-                orientation: [0.0, 0.0, 0.0, 1.0],
-            },
+            geometry: VoxelGeometry::new(
+                [16, 16, 16],
+                [2.0, 2.0, 2.0],
+                [100.0, 100.0, 100.0],
+                [0.0, 0.0, 0.0, 1.0],
+            )
+            .unwrap(),
             raw_data: vec![0; 16 * 16 * 16],
         },
         gpu_resources: None,
@@ -280,12 +289,13 @@ fn test_prepare_contour_render_data_uses_roi_geometry_when_main_volume_missing()
         },
     ));
 
-    let geometry = VoxelGeometry {
-        dimensions: [32, 32, 32],
-        spacing: [1.5, 0.75, 2.0],
-        origin: [12.0, -8.0, 4.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [32, 32, 32],
+        [1.5, 0.75, 2.0],
+        [12.0, -8.0, 4.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     let plane =
         orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry).unwrap();
     let mut roi = Roi::new_contour(
@@ -341,20 +351,27 @@ fn test_prepare_contour_render_data_uses_roi_geometry_when_main_volume_missing()
 #[test]
 fn test_voxel_primary_oblique_view_cache_emits_contour_vertices() {
     let mut world = World::new();
-    let geometry = VoxelGeometry {
-        dimensions: [8, 8, 8],
-        spacing: [1.0, 1.0, 1.0],
-        origin: [0.0, 0.0, 0.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [8, 8, 8],
+        [1.0, 1.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     world.spawn((
         VolumeData {
             dimensions: geometry.dimensions,
-            spacing: geometry.spacing,
-            origin: geometry.origin,
+            geometry: Some(
+                VoxelGeometry::new(
+                    geometry.dimensions,
+                    geometry.spacing(),
+                    geometry.origin(),
+                    geometry.orientation(),
+                )
+                .unwrap(),
+            ),
             intensities: Vec::new(),
             intensity_range: [0.0, 1.0],
-            orientation: geometry.orientation,
         },
         MainVolumeTag,
     ));

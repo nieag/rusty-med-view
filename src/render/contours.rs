@@ -465,15 +465,10 @@ pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> Con
         .unwrap_or((None, EditorTool::Navigation, None, None, None));
     let main_geometry = {
         let mut volume_query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
-        volume_query.iter().next().and_then(|(_, volume)| {
-            VoxelGeometry::new(
-                volume.dimensions,
-                volume.spacing,
-                volume.origin,
-                volume.orientation,
-            )
-            .ok()
-        })
+        volume_query
+            .iter()
+            .next()
+            .and_then(|(_, volume)| volume.geometry)
     };
     let cursor_uv = world
         .get::<&Transform>(entities.cursor)

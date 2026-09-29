@@ -1,4 +1,6 @@
 use super::*;
+use crate::app::roi::VoxelGeometryError;
+use glam::{DMat4, DVec4};
 
 fn approx_eq(lhs: [f32; 3], rhs: [f32; 3], epsilon: f32) -> bool {
     lhs.into_iter()
@@ -17,12 +19,13 @@ fn approx_eq2(lhs: [f32; 2], rhs: [f32; 2], epsilon: f32) -> bool {
 }
 
 fn identity_geometry() -> VoxelGeometry {
-    VoxelGeometry {
-        dimensions: [10, 10, 10],
-        spacing: [1.0, 1.0, 1.0],
-        origin: [0.0, 0.0, 0.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    }
+    VoxelGeometry::new(
+        [10, 10, 10],
+        [1.0, 1.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap()
 }
 
 fn default_mapping() -> ViewportMapping {
@@ -62,12 +65,13 @@ fn test_volume_uv_voxel_index_roundtrip_handles_zero_and_one_dimensions() {
 #[test]
 fn test_voxel_world_roundtrip_with_origin_spacing_and_rotation() {
     let orientation = Quat::from_euler(glam::EulerRot::XYZ, 0.4, -0.25, 0.7).to_array();
-    let geometry = VoxelGeometry {
-        dimensions: [32, 24, 16],
-        spacing: [0.5, 0.8, 2.0],
-        origin: [12.0, -4.0, 3.0],
+    let geometry = VoxelGeometry::new(
+        [32, 24, 16],
+        [0.5, 0.8, 2.0],
+        [12.0, -4.0, 3.0],
         orientation,
-    };
+    )
+    .unwrap();
     let index = [6.5, 3.25, 2.0];
     let world = voxel_index_to_world_mm(index, geometry);
     let index_roundtrip = world_mm_to_voxel_index(world, geometry);
@@ -76,12 +80,13 @@ fn test_voxel_world_roundtrip_with_origin_spacing_and_rotation() {
 
 #[test]
 fn test_identity_geometry_maps_origin_and_index_as_expected() {
-    let geometry = VoxelGeometry {
-        dimensions: [8, 8, 8],
-        spacing: [0.5, 2.0, 1.0],
-        origin: [10.0, -1.0, 3.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [8, 8, 8],
+        [0.5, 2.0, 1.0],
+        [10.0, -1.0, 3.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
 
     let world_at_zero = voxel_index_to_world_mm([0.0, 0.0, 0.0], geometry);
     assert_eq!(world_at_zero, [10.0, -1.0, 3.0]);
@@ -104,18 +109,20 @@ fn test_index_space_affine_identity_geometry_maps_index_to_itself() {
 
 #[test]
 fn test_index_space_affine_matches_world_mapping_for_shifted_geometry() {
-    let src = VoxelGeometry {
-        dimensions: [64, 48, 24],
-        spacing: [0.7, 1.1, 2.0],
-        origin: [10.0, -4.0, 2.0],
-        orientation: Quat::from_euler(glam::EulerRot::XYZ, 0.2, -0.3, 0.1).to_array(),
-    };
-    let dst = VoxelGeometry {
-        dimensions: [64, 48, 24],
-        spacing: [0.9, 0.8, 1.5],
-        origin: [4.0, -8.0, 5.0],
-        orientation: Quat::from_euler(glam::EulerRot::XYZ, -0.25, 0.1, 0.5).to_array(),
-    };
+    let src = VoxelGeometry::new(
+        [64, 48, 24],
+        [0.7, 1.1, 2.0],
+        [10.0, -4.0, 2.0],
+        Quat::from_euler(glam::EulerRot::XYZ, 0.2, -0.3, 0.1).to_array(),
+    )
+    .unwrap();
+    let dst = VoxelGeometry::new(
+        [64, 48, 24],
+        [0.9, 0.8, 1.5],
+        [4.0, -8.0, 5.0],
+        Quat::from_euler(glam::EulerRot::XYZ, -0.25, 0.1, 0.5).to_array(),
+    )
+    .unwrap();
 
     let affine = index_space_affine_from_src_to_dst(src, dst).unwrap();
     let src_index = [11.25, 9.5, 3.0];
@@ -124,34 +131,6 @@ fn test_index_space_affine_matches_world_mapping_for_shifted_geometry() {
     let world = voxel_index_to_world_mm(src_index, src);
     let expected = world_mm_to_voxel_index(world, dst);
     assert!(approx_eq(mapped, expected, 1e-5));
-}
-
-#[test]
-fn test_index_space_affine_rejects_invalid_orientation() {
-    let valid = VoxelGeometry {
-        dimensions: [4, 4, 4],
-        spacing: [1.0; 3],
-        origin: [0.0; 3],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
-    let invalid = VoxelGeometry {
-        orientation: [0.0; 4],
-        ..valid
-    };
-
-    assert!(index_space_affine_from_src_to_dst(invalid, valid).is_none());
-}
-
-#[test]
-fn test_plane_factory_rejects_invalid_geometry_orientation() {
-    let geometry = VoxelGeometry {
-        dimensions: [4, 4, 4],
-        spacing: [1.0; 3],
-        origin: [0.0; 3],
-        orientation: [0.0; 4],
-    };
-
-    assert!(orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5; 3], geometry).is_none());
 }
 
 #[test]
@@ -181,12 +160,13 @@ fn test_orthogonal_plane_axes_match_radiological_mapping() {
 
 #[test]
 fn test_oblique_plane_axes_are_normalized_and_orthogonal() {
-    let geometry = VoxelGeometry {
-        dimensions: [24, 20, 16],
-        spacing: [0.7, 1.3, 2.1],
-        origin: [2.0, -3.0, 5.0],
-        orientation: Quat::from_euler(glam::EulerRot::XYZ, 0.1, -0.2, 0.3).to_array(),
-    };
+    let geometry = VoxelGeometry::new(
+        [24, 20, 16],
+        [0.7, 1.3, 2.1],
+        [2.0, -3.0, 5.0],
+        Quat::from_euler(glam::EulerRot::XYZ, 0.1, -0.2, 0.3).to_array(),
+    )
+    .unwrap();
 
     let plane = oblique_plane_from_view_rotation(
         [0.4, 0.35, 0.6],
@@ -301,12 +281,13 @@ fn legacy_oblique_viewport_uv_to_volume_uv(
 
 #[test]
 fn test_viewport_uv_to_volume_uv_matches_legacy_axial_behavior() {
-    let geometry = VoxelGeometry {
-        dimensions: [120, 80, 40],
-        spacing: [0.5, 1.0, 2.0],
-        origin: [0.0, 0.0, 0.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [120, 80, 40],
+        [0.5, 1.0, 2.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     let plane =
         orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.25, 0.75, 0.3], geometry).unwrap();
     let mapping = ViewportMapping {
@@ -324,12 +305,13 @@ fn test_viewport_uv_to_volume_uv_matches_legacy_axial_behavior() {
 
 #[test]
 fn test_viewport_uv_to_volume_uv_matches_legacy_coronal_behavior() {
-    let geometry = VoxelGeometry {
-        dimensions: [80, 64, 96],
-        spacing: [0.8, 0.8, 1.5],
-        origin: [1.0, -2.0, 3.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [80, 64, 96],
+        [0.8, 0.8, 1.5],
+        [1.0, -2.0, 3.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     let plane =
         orthogonal_plane_from_volume_uv(PlaneFamily::Coronal, [0.6, 0.4, 0.2], geometry).unwrap();
     let mapping = ViewportMapping {
@@ -347,12 +329,13 @@ fn test_viewport_uv_to_volume_uv_matches_legacy_coronal_behavior() {
 
 #[test]
 fn test_viewport_uv_to_volume_uv_matches_legacy_sagittal_behavior() {
-    let geometry = VoxelGeometry {
-        dimensions: [70, 120, 90],
-        spacing: [1.0, 0.6, 1.4],
-        origin: [5.0, 2.0, -1.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [70, 120, 90],
+        [1.0, 0.6, 1.4],
+        [5.0, 2.0, -1.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     let plane =
         orthogonal_plane_from_volume_uv(PlaneFamily::Sagittal, [0.55, 0.1, 0.9], geometry).unwrap();
     let mapping = ViewportMapping {
@@ -437,12 +420,13 @@ fn test_egui_top_left_y_down_convention_is_preserved() {
 
 #[test]
 fn test_oblique_viewport_mapping_matches_legacy_identity_rotation() {
-    let geometry = VoxelGeometry {
-        dimensions: [96, 80, 64],
-        spacing: [1.0, 0.8, 1.2],
-        origin: [0.0, 0.0, 0.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [96, 80, 64],
+        [1.0, 0.8, 1.2],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     let cursor_uv = [0.4, 0.55, 0.6];
     let rotation = [0.0, 0.0, 0.0, 1.0];
     let plane = oblique_plane_from_view_rotation(cursor_uv, rotation, geometry).unwrap();
@@ -469,12 +453,13 @@ fn test_oblique_viewport_mapping_matches_legacy_identity_rotation() {
 
 #[test]
 fn test_oblique_viewport_mapping_matches_legacy_non_identity_rotation() {
-    let geometry = VoxelGeometry {
-        dimensions: [120, 96, 84],
-        spacing: [0.7, 1.0, 1.4],
-        origin: [0.0, 0.0, 0.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [120, 96, 84],
+        [0.7, 1.0, 1.4],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     let cursor_uv = [0.5, 0.5, 0.5];
     let rotation = Quat::from_euler(glam::EulerRot::XYZ, 0.35, -0.2, 0.45).to_array();
     let plane = oblique_plane_from_view_rotation(cursor_uv, rotation, geometry).unwrap();
@@ -501,12 +486,13 @@ fn test_oblique_viewport_mapping_matches_legacy_non_identity_rotation() {
 
 #[test]
 fn test_shared_oblique_uniform_basis_matches_viewport_mapping_for_oriented_geometry() {
-    let geometry = VoxelGeometry {
-        dimensions: [120, 96, 84],
-        spacing: [0.7, 1.0, 1.4],
-        origin: [12.0, -7.0, 3.0],
-        orientation: Quat::from_euler(glam::EulerRot::XYZ, 0.2, -0.3, 0.1).to_array(),
-    };
+    let geometry = VoxelGeometry::new(
+        [120, 96, 84],
+        [0.7, 1.0, 1.4],
+        [12.0, -7.0, 3.0],
+        Quat::from_euler(glam::EulerRot::XYZ, 0.2, -0.3, 0.1).to_array(),
+    )
+    .unwrap();
     let cursor_uv = [0.45, 0.55, 0.4];
     let plane = oblique_plane_from_view_rotation(
         cursor_uv,
@@ -549,7 +535,7 @@ fn test_roi_geometry_roundtrips_rotated_anisotropic_affine() {
         DVec4::new(0.0, 0.0, 4.0, 0.0),
         DVec4::new(10.0, -5.0, 2.5, 1.0),
     );
-    let geometry = RoiGeometry::new([9, 8, 7], affine).unwrap();
+    let geometry = VoxelGeometry::from_affine([9, 8, 7], affine).unwrap();
     let ijk = [2.25, 3.5, 1.75];
 
     let world = geometry.ijk_to_world_mm(ijk);
@@ -565,7 +551,7 @@ fn test_roi_geometry_roundtrips_rotated_anisotropic_affine() {
 
 #[test]
 fn test_roi_geometry_preserves_reflection_in_identity() {
-    let reflected = RoiGeometry::new(
+    let reflected = VoxelGeometry::from_affine(
         [4, 5, 6],
         DMat4::from_cols(
             DVec4::new(-1.0, 0.0, 0.0, 0.0),
@@ -575,7 +561,7 @@ fn test_roi_geometry_preserves_reflection_in_identity() {
         ),
     )
     .unwrap();
-    let unreflected = RoiGeometry::new(
+    let unreflected = VoxelGeometry::from_affine(
         [4, 5, 6],
         DMat4::from_cols(
             DVec4::new(1.0, 0.0, 0.0, 0.0),
@@ -596,38 +582,39 @@ fn test_roi_geometry_preserves_reflection_in_identity() {
 #[test]
 fn test_roi_geometry_rejects_invalid_affines() {
     assert_eq!(
-        RoiGeometry::new([0, 2, 3], DMat4::IDENTITY),
-        Err(RoiGeometryError::EmptyDimensions)
+        VoxelGeometry::from_affine([0, 2, 3], DMat4::IDENTITY),
+        Err(VoxelGeometryError::EmptyDimensions)
     );
     assert_eq!(
-        RoiGeometry::new(
+        VoxelGeometry::from_affine(
             [2, 2, 2],
             DMat4::from_cols(DVec4::X, DVec4::Y, DVec4::Z, DVec4::new(0.0, 0.0, 0.0, 2.0),),
         ),
-        Err(RoiGeometryError::NonAffineTransform)
+        Err(VoxelGeometryError::NonAffineTransform)
     );
     assert_eq!(
-        RoiGeometry::new(
+        VoxelGeometry::from_affine(
             [2, 2, 2],
             DMat4::from_cols(DVec4::ZERO, DVec4::Y, DVec4::Z, DVec4::W),
         ),
-        Err(RoiGeometryError::SingularAffine)
+        Err(VoxelGeometryError::SingularAffine)
     );
 }
 
 #[test]
 fn test_roi_geometry_legacy_conversion_matches_existing_voxel_world_mapping() {
-    let legacy = VoxelGeometry {
-        dimensions: [8, 7, 6],
-        spacing: [0.5, 1.25, 2.0],
-        origin: [4.0, -3.0, 8.0],
-        orientation: Quat::from_euler(glam::EulerRot::XYZ, 0.1, -0.3, 0.25).to_array(),
-    };
-    let geometry = RoiGeometry::from_legacy_parts(
+    let legacy = VoxelGeometry::new(
+        [8, 7, 6],
+        [0.5, 1.25, 2.0],
+        [4.0, -3.0, 8.0],
+        Quat::from_euler(glam::EulerRot::XYZ, 0.1, -0.3, 0.25).to_array(),
+    )
+    .unwrap();
+    let geometry = VoxelGeometry::new(
         legacy.dimensions,
-        legacy.spacing,
-        legacy.origin,
-        legacy.orientation,
+        legacy.spacing(),
+        legacy.origin(),
+        legacy.orientation(),
     )
     .unwrap();
     let ijk = [3.25, 1.5, 5.0];
@@ -665,12 +652,13 @@ fn test_plane_definition_constructor_derives_normal_and_rejects_degenerate_axes(
 #[test]
 #[ignore = "known defect: oblique reslice is skewed in mm on anisotropic volumes (Phase 1)"]
 fn test_oblique_reslice_is_planar_and_orthogonal_in_millimetres() {
-    let geometry = VoxelGeometry {
-        dimensions: [120, 96, 84],
-        spacing: [0.7, 1.0, 1.4],
-        origin: [0.0, 0.0, 0.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [120, 96, 84],
+        [0.7, 1.0, 1.4],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     let rotation = Quat::from_euler(glam::EulerRot::XYZ, 0.35, -0.2, 0.45).to_array();
     let plane = oblique_plane_from_view_rotation([0.5; 3], rotation, geometry).unwrap();
     let mapping = ViewportMapping {

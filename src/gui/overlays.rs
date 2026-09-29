@@ -45,7 +45,7 @@ pub fn draw_viewport_overlays(
     let mut gizmo_rotation = [0.0f32, 0.0, 0.0, 1.0];
     let mut data_orientation = [0.0f32, 0.0, 0.0, 1.0];
     for (_, vol) in world.query::<&VolumeData>().with::<&MainVolumeTag>().iter() {
-        data_orientation = vol.orientation;
+        data_orientation = vol.orientation();
     }
 
     for (_, (vp, vs)) in world.query::<(&Viewport, &ViewportState)>().iter() {
@@ -309,8 +309,7 @@ fn draw_annotations(
     let focused_id = ann_ctx.focused_id;
     let cursor_pos = ann_ctx.cursor_pos;
     let aspect_ratios = vol.aspect_ratios();
-    let geometry =
-        VoxelGeometry::new(vol.dimensions, vol.spacing, vol.origin, vol.orientation).ok()?;
+    let geometry = vol.geometry?;
     let proj = crate::render::geometry::ViewProjection {
         zoom: view.zoom,
         pan: view.pan,
@@ -359,10 +358,8 @@ fn draw_annotations(
             let plane_origin = glam::Vec3::from_array(plane.origin_mm);
             let plane_normal = glam::Vec3::from_array(plane.normal_mm).normalize_or_zero();
             let distance_mm = (ann_world - plane_origin).dot(plane_normal).abs();
-            let tolerance_mm = vol.spacing[0]
-                .min(vol.spacing[1])
-                .min(vol.spacing[2])
-                .max(0.5);
+            let spacing = vol.spacing();
+            let tolerance_mm = spacing[0].min(spacing[1]).min(spacing[2]).max(0.5);
             if distance_mm > tolerance_mm {
                 continue;
             }

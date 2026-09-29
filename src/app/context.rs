@@ -113,11 +113,9 @@ impl RenderingContext {
             volume::create_dummy_r32_texture(&device, &queue);
         let volume_data = VolumeData {
             dimensions: [0, 0, 0],
-            spacing: [1.0, 1.0, 1.0],
-            origin: [0.0, 0.0, 0.0],
+            geometry: None,
             intensities: vec![],
             intensity_range: [0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
         };
 
         let dummy_r8 = volume::create_dummy_r8_texture(&device, &queue);

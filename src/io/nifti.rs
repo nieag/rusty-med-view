@@ -3,7 +3,9 @@
 //!
 //! Supports both `.nii` and `.nii.gz` files via gzip detection.
 
+use crate::app::roi::VoxelGeometry;
 use flate2::read::GzDecoder;
+use glam::{DMat4, DVec3, DVec4};
 use nifti::{InMemNiftiVolume, NiftiHeader, RandomAccessNiftiVolume};
 use std::io::{Cursor, Read};
 use thiserror::Error;
@@ -13,16 +15,12 @@ use thiserror::Error;
 pub struct LoadedVolume {
     /// Volume dimensions [width, height, depth]
     pub dimensions: [u32; 3],
-    /// Voxel spacing in mm [x, y, z]
-    pub spacing: [f32; 3],
-    /// Origin/translation in patient/world mm from NIfTI sform
-    pub origin: [f32; 3],
+    /// Validated voxel grid with the full IJK-to-world affine from the NIfTI sform or qform
+    pub geometry: VoxelGeometry,
     /// Raw intensity data as f32 (HU or similar units)
     pub float_data: Vec<f32>,
     /// Data range [min, max]
     pub intensity_range: [f32; 2],
-    /// Orientation quaternion from NIfTI affine matrix [x, y, z, w]
-    pub orientation: [f32; 4],
 }
 
 /// Error type for NIfTI loading operations
@@ -36,6 +34,8 @@ pub enum LoadError {
     VolumeParseFailed(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("Invalid volume dimensions: {0}")]
     DimensionError(String),
+    #[error("Invalid spatial geometry: {0}")]
+    InvalidGeometry(String),
 }
 
 /// Check if data starts with gzip magic bytes
@@ -53,32 +53,14 @@ fn decompress_gzip(data: &[u8]) -> Result<Vec<u8>, LoadError> {
     Ok(decompressed)
 }
 
-/// Extract rotation matrix from the NIfTI spatial affine and convert to quaternion.
-///
-/// Prefer valid sform rows, then fall back to qform. This matters for common
-/// NIfTI pairs where the image stores patient-space translation in qform while
-/// the label stores it in sform.
-fn extract_orientation_from_header(header: &NiftiHeader) -> [f32; 4] {
-    let Some([row_x, row_y, row_z]) = spatial_affine_rows(header) else {
-        return [0.0, 0.0, 0.0, 1.0];
-    };
-    calculate_orientation_from_rows(row_x, row_y, row_z)
-}
-
-/// Extract translation/origin from the NIfTI spatial affine.
-fn extract_origin_from_header(header: &NiftiHeader) -> [f32; 3] {
-    let Some([row_x, row_y, row_z]) = spatial_affine_rows(header) else {
-        return [0.0, 0.0, 0.0];
-    };
-    extract_origin_from_rows(row_x, row_y, row_z)
-}
-
+/// Spatial affine rows from the header, following the NIfTI-1 precedence: a valid sform
+/// (`sform_code > 0`), then a valid qform (`qform_code > 0`). `None` means neither is usable.
 fn spatial_affine_rows(header: &NiftiHeader) -> Option<[[f32; 4]; 3]> {
-    if has_valid_sform_axes(header.srow_x, header.srow_y, header.srow_z) {
+    if header.sform_code > 0 && has_valid_sform_axes(header.srow_x, header.srow_y, header.srow_z) {
         return Some([header.srow_x, header.srow_y, header.srow_z]);
     }
 
-    if header.qform_code != 0 && qform_fields_are_usable(header) {
+    if header.qform_code > 0 && qform_fields_are_usable(header) {
         let rows = qform_affine_rows(header)?;
         if has_valid_sform_axes(rows[0], rows[1], rows[2]) {
             return Some(rows);
@@ -86,6 +68,50 @@ fn spatial_affine_rows(header: &NiftiHeader) -> Option<[[f32; 4]; 3]> {
     }
 
     None
+}
+
+/// Full IJK-to-world affine for the header. Reflections and shear in the sform are preserved;
+/// without a usable sform or qform the legacy `pixdim` scale with zero origin is used.
+fn spatial_affine(header: &NiftiHeader) -> Result<DMat4, LoadError> {
+    if let Some([row_x, row_y, row_z]) = spatial_affine_rows(header) {
+        let column = |index: usize, w: f64| {
+            DVec4::new(
+                f64::from(row_x[index]),
+                f64::from(row_y[index]),
+                f64::from(row_z[index]),
+                w,
+            )
+        };
+        return Ok(DMat4::from_cols(
+            column(0, 0.0),
+            column(1, 0.0),
+            column(2, 0.0),
+            column(3, 1.0),
+        ));
+    }
+
+    let spacing = [header.pixdim[1], header.pixdim[2], header.pixdim[3]];
+    if spacing
+        .iter()
+        .any(|value| !value.is_finite() || *value <= 0.0)
+    {
+        return Err(LoadError::InvalidGeometry(format!(
+            "no usable sform or qform and pixdim spacing {spacing:?} is not positive"
+        )));
+    }
+    Ok(DMat4::from_scale(DVec3::new(
+        f64::from(spacing[0]),
+        f64::from(spacing[1]),
+        f64::from(spacing[2]),
+    )))
+}
+
+fn geometry_from_header(
+    header: &NiftiHeader,
+    dimensions: [u32; 3],
+) -> Result<VoxelGeometry, LoadError> {
+    VoxelGeometry::from_affine(dimensions, spatial_affine(header)?)
+        .map_err(|error| LoadError::InvalidGeometry(error.to_string()))
 }
 
 fn qform_fields_are_usable(header: &NiftiHeader) -> bool {
@@ -134,19 +160,6 @@ fn qform_affine_rows(header: &NiftiHeader) -> Option<[[f32; 4]; 3]> {
     }
 }
 
-fn extract_origin_from_rows(srow_x: [f32; 4], srow_y: [f32; 4], srow_z: [f32; 4]) -> [f32; 3] {
-    if !has_valid_sform_axes(srow_x, srow_y, srow_z) {
-        return [0.0, 0.0, 0.0];
-    }
-
-    let origin = [srow_x[3], srow_y[3], srow_z[3]];
-    if origin.iter().all(|component| component.is_finite()) {
-        origin
-    } else {
-        [0.0, 0.0, 0.0]
-    }
-}
-
 fn has_valid_sform_axes(srow_x: [f32; 4], srow_y: [f32; 4], srow_z: [f32; 4]) -> bool {
     let col0 = [srow_x[0], srow_y[0], srow_z[0]];
     let col1 = [srow_x[1], srow_y[1], srow_z[1]];
@@ -155,6 +168,9 @@ fn has_valid_sform_axes(srow_x: [f32; 4], srow_y: [f32; 4], srow_z: [f32; 4]) ->
     let len0 = (col0[0] * col0[0] + col0[1] * col0[1] + col0[2] * col0[2]).sqrt();
     let len1 = (col1[0] * col1[0] + col1[1] * col1[1] + col1[2] * col1[2]).sqrt();
     let len2 = (col2[0] * col2[0] + col2[1] * col2[1] + col2[2] * col2[2]).sqrt();
+    let translation_finite = [srow_x[3], srow_y[3], srow_z[3]]
+        .iter()
+        .all(|value| value.is_finite());
 
     len0 >= 1e-6
         && len1 >= 1e-6
@@ -162,93 +178,7 @@ fn has_valid_sform_axes(srow_x: [f32; 4], srow_y: [f32; 4], srow_z: [f32; 4]) ->
         && len0.is_finite()
         && len1.is_finite()
         && len2.is_finite()
-}
-
-/// Calculate orientation quaternion from sform rows.
-/// Split out for unit testing without NiftiHeader.
-fn calculate_orientation_from_rows(
-    srow_x: [f32; 4],
-    srow_y: [f32; 4],
-    srow_z: [f32; 4],
-) -> [f32; 4] {
-    // Build 3x3 matrix (column vectors)
-    // srow_x = [m00, m01, m02, tx] means first row of rotation is [m00, m01, m02]
-    // We want column vectors for normalization
-    let col0 = [srow_x[0], srow_y[0], srow_z[0]];
-    let col1 = [srow_x[1], srow_y[1], srow_z[1]];
-    let col2 = [srow_x[2], srow_y[2], srow_z[2]];
-
-    // Check if sform is valid (non-zero columns)
-    let len0 = (col0[0] * col0[0] + col0[1] * col0[1] + col0[2] * col0[2]).sqrt();
-    let len1 = (col1[0] * col1[0] + col1[1] * col1[1] + col1[2] * col1[2]).sqrt();
-    let len2 = (col2[0] * col2[0] + col2[1] * col2[1] + col2[2] * col2[2]).sqrt();
-
-    if len0 < 1e-6 || len1 < 1e-6 || len2 < 1e-6 {
-        // Invalid sform, return identity quaternion
-        return [0.0, 0.0, 0.0, 1.0];
-    }
-
-    // Normalize columns to get pure rotation (removes scale)
-    let col0 = normalize_vec3(col0);
-    let col1 = normalize_vec3(col1);
-    let col2 = normalize_vec3(col2);
-
-    // Rotation matrix (row-major for quaternion conversion)
-    // m[row][col]
-    let m = [
-        [col0[0], col1[0], col2[0]],
-        [col0[1], col1[1], col2[1]],
-        [col0[2], col1[2], col2[2]],
-    ];
-
-    // Convert rotation matrix to quaternion using Shepperd's method
-    rotation_matrix_to_quaternion(m)
-}
-
-/// Normalize a 3D vector to unit length
-fn normalize_vec3(v: [f32; 3]) -> [f32; 3] {
-    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    if len > 1e-8 {
-        [v[0] / len, v[1] / len, v[2] / len]
-    } else {
-        [1.0, 0.0, 0.0] // Default to X axis if degenerate
-    }
-}
-
-/// Convert a 3x3 rotation matrix to quaternion [x, y, z, w]
-/// Uses Shepperd's method for numerical stability
-fn rotation_matrix_to_quaternion(m: [[f32; 3]; 3]) -> [f32; 4] {
-    let trace = m[0][0] + m[1][1] + m[2][2];
-
-    if trace > 0.0 {
-        let s = (trace + 1.0).sqrt() * 2.0; // s = 4 * w
-        let w = 0.25 * s;
-        let x = (m[2][1] - m[1][2]) / s;
-        let y = (m[0][2] - m[2][0]) / s;
-        let z = (m[1][0] - m[0][1]) / s;
-        [x, y, z, w]
-    } else if m[0][0] > m[1][1] && m[0][0] > m[2][2] {
-        let s = (1.0 + m[0][0] - m[1][1] - m[2][2]).sqrt() * 2.0; // s = 4 * x
-        let w = (m[2][1] - m[1][2]) / s;
-        let x = 0.25 * s;
-        let y = (m[0][1] + m[1][0]) / s;
-        let z = (m[0][2] + m[2][0]) / s;
-        [x, y, z, w]
-    } else if m[1][1] > m[2][2] {
-        let s = (1.0 + m[1][1] - m[0][0] - m[2][2]).sqrt() * 2.0; // s = 4 * y
-        let w = (m[0][2] - m[2][0]) / s;
-        let x = (m[0][1] + m[1][0]) / s;
-        let y = 0.25 * s;
-        let z = (m[1][2] + m[2][1]) / s;
-        [x, y, z, w]
-    } else {
-        let s = (1.0 + m[2][2] - m[0][0] - m[1][1]).sqrt() * 2.0; // s = 4 * z
-        let w = (m[1][0] - m[0][1]) / s;
-        let x = (m[0][2] + m[2][0]) / s;
-        let y = (m[1][2] + m[2][1]) / s;
-        let z = 0.25 * s;
-        [x, y, z, w]
-    }
+        && translation_finite
 }
 
 /// Shared parsed result from decompression + header parsing + volume loading.
@@ -346,8 +276,7 @@ pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
         total_voxels,
     } = parse_nifti_raw(data)?;
 
-    let spacing = [header.pixdim[1], header.pixdim[2], header.pixdim[3]];
-    let origin = extract_origin_from_header(&header);
+    let geometry = geometry_from_header(&header, [width, height, depth])?;
     let scl_slope = if header.scl_slope == 0.0 {
         1.0
     } else {
@@ -377,15 +306,11 @@ pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
         max_val = min_val + 1.0;
     }
 
-    let orientation = extract_orientation_from_header(&header);
-
     Ok(LoadedVolume {
         dimensions: [width, height, depth],
-        spacing,
-        origin,
+        geometry,
         float_data: intensity_data,
         intensity_range: [min_val, max_val],
-        orientation,
     })
 }
 
@@ -402,9 +327,7 @@ pub fn load_label_from_bytes(
         ..
     } = parse_nifti_raw(data)?;
 
-    let spacing = [header.pixdim[1], header.pixdim[2], header.pixdim[3]];
-    let origin = extract_origin_from_header(&header);
-    let orientation = extract_orientation_from_header(&header);
+    let geometry = geometry_from_header(&header, [width, height, depth])?;
 
     let mut label_data = Vec::with_capacity(total_voxels);
     for z in 0..depth as u16 {
@@ -418,9 +341,7 @@ pub fn load_label_from_bytes(
 
     Ok(crate::components::LoadedLabel {
         dimensions: [width, height, depth],
-        spacing,
-        origin,
-        orientation,
+        geometry,
         data: label_data,
         filename,
     })

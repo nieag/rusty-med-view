@@ -103,7 +103,7 @@ fn extract_oblique_contour_slice(
     }
 
     let base_step = geometry
-        .spacing
+        .spacing()
         .into_iter()
         .filter(|spacing| spacing.is_finite() && *spacing > 1e-6)
         .fold(f32::INFINITY, f32::min);

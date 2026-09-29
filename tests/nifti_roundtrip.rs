@@ -23,9 +23,10 @@ fn load_liver_volume() {
     assert!(vol.dimensions[2] > 0);
 
     // Voxel spacing must be positive
-    assert!(vol.spacing[0] > 0.0);
-    assert!(vol.spacing[1] > 0.0);
-    assert!(vol.spacing[2] > 0.0);
+    let spacing = vol.geometry.spacing();
+    assert!(spacing[0] > 0.0);
+    assert!(spacing[1] > 0.0);
+    assert!(spacing[2] > 0.0);
 
     // Data length must match declared dimensions
     let expected_len = (vol.dimensions[0] * vol.dimensions[1] * vol.dimensions[2]) as usize;

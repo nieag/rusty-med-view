@@ -5,12 +5,13 @@ use crate::components::{
 };
 
 fn test_geometry() -> VoxelGeometry {
-    VoxelGeometry {
-        dimensions: [64, 48, 32],
-        spacing: [1.0, 1.0, 1.0],
-        origin: [0.0, 0.0, 0.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    }
+    VoxelGeometry::new(
+        [64, 48, 32],
+        [1.0, 1.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap()
 }
 
 fn spawn_test_entities(
@@ -42,11 +43,17 @@ fn spawn_test_entities(
     world.spawn((
         crate::components::VolumeData {
             dimensions: test_geometry().dimensions,
-            spacing: test_geometry().spacing,
-            origin: test_geometry().origin,
+            geometry: Some(
+                VoxelGeometry::new(
+                    test_geometry().dimensions,
+                    test_geometry().spacing(),
+                    test_geometry().origin(),
+                    test_geometry().orientation(),
+                )
+                .unwrap(),
+            ),
             intensities: vec![],
             intensity_range: [0.0, 1.0],
-            orientation: test_geometry().orientation,
         },
         MainVolumeTag,
     ));
@@ -90,21 +97,22 @@ fn spawn_test_contour_roi(world: &mut World, family: PlaneFamily) -> hecs::Entit
 }
 
 fn spawn_test_contour_roi_with_loop(world: &mut World, family: PlaneFamily) -> hecs::Entity {
-    let geometry = VoxelGeometry {
-        dimensions: [64, 48, 32],
-        spacing: [1.0, 1.0, 1.0],
-        origin: [0.0, 0.0, 0.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [64, 48, 32],
+        [1.0, 1.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     let plane = orthogonal_plane_from_volume_uv(family, [0.4, 0.55, 0.2], geometry).unwrap();
     let entity = world.spawn((Roi::new_contour_with_geometry(
         crate::components::RoiId(101),
         "ContourWithLoop".to_string(),
-        crate::convert::RoiGeometry::from_legacy_parts(
+        VoxelGeometry::new(
             geometry.dimensions,
-            geometry.spacing,
-            geometry.origin,
-            geometry.orientation,
+            geometry.spacing(),
+            geometry.origin(),
+            geometry.orientation(),
         )
         .unwrap(),
         ContourData {
@@ -207,7 +215,7 @@ fn test_contour_edit_rejects_invalid_main_volume_geometry() {
         .query_mut::<&mut crate::components::VolumeData>()
         .with::<&MainVolumeTag>()
     {
-        volume.orientation = [0.0; 4];
+        volume.geometry = None;
     }
     let contour = ContourData {
         active_plane_family: PlaneFamily::Axial,
@@ -520,12 +528,13 @@ fn test_contour_selection_rejects_non_contour_active_roi() {
     let voxel_roi = world.spawn((Roi::new_voxel_with_cache(
         crate::components::RoiId(1),
         "Voxel".to_string(),
-        VoxelGeometry {
-            dimensions: [8, 8, 8],
-            spacing: [1.0, 1.0, 1.0],
-            origin: [0.0, 0.0, 0.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
+        VoxelGeometry::new(
+            [8, 8, 8],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
         vec![0; 512],
         None,
     ),));
@@ -900,12 +909,13 @@ fn test_delete_selected_point_removes_expected_point() {
 fn test_delete_below_valid_size_removes_loop_and_clears_selection() {
     let mut world = World::new();
     let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
-    let geometry = VoxelGeometry {
-        dimensions: [64, 48, 32],
-        spacing: [1.0, 1.0, 1.0],
-        origin: [0.0, 0.0, 0.0],
-        orientation: [0.0, 0.0, 0.0, 1.0],
-    };
+    let geometry = VoxelGeometry::new(
+        [64, 48, 32],
+        [1.0, 1.0, 1.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
     let plane =
         orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.4, 0.55, 0.2], geometry).unwrap();
     let roi_entity = world.spawn((Roi::new_contour(

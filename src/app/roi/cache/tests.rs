@@ -16,12 +16,8 @@ fn test_roi() -> Roi {
 fn test_voxel_cache(value: u8) -> VoxelCache {
     VoxelCache {
         data: crate::app::roi::VoxelData {
-            geometry: VoxelGeometry {
-                dimensions: [1, 1, 1],
-                spacing: [1.0; 3],
-                origin: [0.0; 3],
-                orientation: [0.0, 0.0, 0.0, 1.0],
-            },
+            geometry: VoxelGeometry::new([1, 1, 1], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0])
+                .unwrap(),
             raw_data: vec![value],
         },
         gpu_resources: None,
@@ -30,7 +26,7 @@ fn test_voxel_cache(value: u8) -> VoxelCache {
 
 #[test]
 fn test_voxel_cache_result_with_mismatched_reference_geometry_is_rejected() {
-    let reference_geometry = RoiGeometry::from_legacy_parts(
+    let reference_geometry = VoxelGeometry::new(
         [2, 2, 2],
         [1.0, 1.0, 1.0],
         [0.0, 0.0, 0.0],
@@ -146,12 +142,7 @@ fn test_contour_view_result_is_stamped_with_roi_geometry_identity() {
         crate::convert::orthogonal_plane_from_volume_uv(
             PlaneFamily::Axial,
             [0.5, 0.5, 0.5],
-            VoxelGeometry {
-                dimensions: [1, 1, 1],
-                spacing: [1.0; 3],
-                origin: [0.0; 3],
-                orientation: [0.0, 0.0, 0.0, 1.0],
-            },
+            VoxelGeometry::new([1, 1, 1], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap(),
         )
         .unwrap(),
     );
@@ -188,7 +179,7 @@ fn test_mismatched_mesh_geometry_stamp_is_not_current() {
     )
     .unwrap();
     roi.session_caches.mesh_geometry_identity = Some(
-        RoiGeometry::from_legacy_parts([2, 1, 1], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0])
+        VoxelGeometry::new([2, 1, 1], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0])
             .unwrap()
             .identity(),
     );

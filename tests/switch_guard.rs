@@ -18,13 +18,7 @@ fn liver_label() -> VoxelData {
     let bytes =
         std::fs::read("qa_samples/liver_0_label.nii").expect("qa_samples/liver_0_label.nii");
     let label = load_label_from_bytes(&bytes, "liver_0_label.nii".to_string()).expect("label");
-    let geometry = VoxelGeometry::new(
-        label.dimensions,
-        label.spacing,
-        label.origin,
-        label.orientation,
-    )
-    .expect("geometry");
+    let geometry = label.geometry;
     // Collapse to a binary mask, which is what contour authority represents.
     let raw_data = label.data.iter().map(|v| u8::from(*v != 0)).collect();
     VoxelData { geometry, raw_data }
