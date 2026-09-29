@@ -673,3 +673,46 @@ fn test_plane_definition_constructor_derives_normal_and_rejects_degenerate_axes(
     )
     .is_none());
 }
+
+// Target for the Phase 1 geometry rework. The oblique mapping treats a unit index-space direction
+// as a uv-space direction, so on anisotropic or non-cubic volumes a rotated oblique reslice is
+// sheared in patient millimetres and its plane frame (contour local coordinates) is skewed.
+// Remove `ignore` when the mapping derives its basis from an orthonormal millimetre frame.
+#[test]
+#[ignore = "known defect: oblique reslice is skewed in mm on anisotropic volumes (Phase 1)"]
+fn test_oblique_reslice_is_planar_and_orthogonal_in_millimetres() {
+    let geometry = VoxelGeometry {
+        dimensions: [120, 96, 84],
+        spacing: [0.7, 1.0, 1.4],
+        origin: [0.0, 0.0, 0.0],
+        orientation: [0.0, 0.0, 0.0, 1.0],
+    };
+    let rotation = Quat::from_euler(glam::EulerRot::XYZ, 0.35, -0.2, 0.45).to_array();
+    let plane = oblique_plane_from_view_rotation([0.5; 3], rotation, geometry).unwrap();
+    let mapping = ViewportMapping {
+        zoom: 0.85,
+        pan: [-0.05, 0.07],
+        pivot: [0.5, 0.5],
+        screen_aspect: 1.0,
+    };
+    let world_at = |viewport_uv: [f32; 2]| {
+        let uv = viewport_uv_to_volume_uv(viewport_uv, plane, geometry, mapping).unwrap();
+        Vec3::from_array(volume_uv_to_world_mm(uv, geometry))
+    };
+
+    let origin = world_at([0.5, 0.5]);
+    let horizontal = world_at([0.6, 0.5]) - origin;
+    let vertical = world_at([0.5, 0.6]) - origin;
+    let normal = Vec3::from_array(plane.normal_mm);
+
+    assert!(
+        horizontal.dot(normal).abs() < 1e-3,
+        "horizontal leaves plane"
+    );
+    assert!(vertical.dot(normal).abs() < 1e-3, "vertical leaves plane");
+    let cosine = horizontal.normalize().dot(vertical.normalize());
+    assert!(
+        cosine.abs() < 1e-4,
+        "screen axes skewed in mm: cos = {cosine}"
+    );
+}
