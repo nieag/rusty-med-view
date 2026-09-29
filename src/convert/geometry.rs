@@ -197,6 +197,68 @@ pub fn oblique_plane_from_view_rotation(
     )
 }
 
+/// Voxel-grid depth axis of an orthogonal plane family; `None` for oblique planes.
+pub(crate) fn orthogonal_depth_axis(family: PlaneFamily) -> Option<usize> {
+    match family {
+        PlaneFamily::Axial => Some(2),
+        PlaneFamily::Coronal => Some(1),
+        PlaneFamily::Sagittal => Some(0),
+        PlaneFamily::Oblique => None,
+    }
+}
+
+/// Nearest voxel layer along `axis`, or `None` when the plane is not finite. The layer may lie
+/// outside the volume; callers must treat those slices as empty rather than clamp them.
+pub(crate) fn nearest_depth_layer(
+    origin_mm: [f32; 3],
+    axis: usize,
+    geometry: VoxelGeometry,
+) -> Option<i64> {
+    let depth = world_mm_to_voxel_index(origin_mm, geometry)[axis];
+    depth.is_finite().then(|| depth.round() as i64)
+}
+
+/// Minimum |cos| between plane normals for two planes to be treated as parallel.
+pub(crate) const PLANE_NORMAL_ALIGNMENT_COS: f32 = 0.999;
+
+/// Whether two planes denote the same contour slice on this grid.
+///
+/// Different families never match and normals must be parallel. Orthogonal planes match when
+/// they select the same voxel layer, so the rule follows the voxel spacing (a fixed millimetre
+/// tolerance merged adjacent slices on sub-half-millimetre grids). Oblique planes have no layers
+/// and match within half the smallest voxel spacing.
+pub fn planes_are_same_slice(
+    first: PlaneDefinition,
+    second: PlaneDefinition,
+    geometry: VoxelGeometry,
+) -> bool {
+    if first.family != second.family {
+        return false;
+    }
+    let (Some(first_normal), Some(second_normal)) = (
+        Vec3::from_array(first.normal_mm).try_normalize(),
+        Vec3::from_array(second.normal_mm).try_normalize(),
+    ) else {
+        return false;
+    };
+    if first_normal.dot(second_normal).abs() < PLANE_NORMAL_ALIGNMENT_COS {
+        return false;
+    }
+    if let Some(axis) = orthogonal_depth_axis(first.family) {
+        return match (
+            nearest_depth_layer(first.origin_mm, axis, geometry),
+            nearest_depth_layer(second.origin_mm, axis, geometry),
+        ) {
+            (Some(first_layer), Some(second_layer)) => first_layer == second_layer,
+            _ => false,
+        };
+    }
+    let spacing = geometry.spacing();
+    let tolerance_mm = 0.5 * spacing[0].min(spacing[1]).min(spacing[2]);
+    let offset = Vec3::from_array(second.origin_mm) - Vec3::from_array(first.origin_mm);
+    offset.dot(first_normal).abs() <= tolerance_mm
+}
+
 pub fn plane_local_mm_to_world_mm(local: [f32; 2], plane: PlaneDefinition) -> [f32; 3] {
     let origin = Vec3::from_array(plane.origin_mm);
     let u_axis = Vec3::from_array(plane.u_axis_mm);

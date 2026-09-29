@@ -688,3 +688,105 @@ fn test_oblique_reslice_is_planar_and_orthogonal_in_millimetres() {
         "screen axes skewed in mm: cos = {cosine}"
     );
 }
+
+fn axial_plane_at(z_mm: f32) -> PlaneDefinition {
+    PlaneDefinition {
+        family: PlaneFamily::Axial,
+        origin_mm: [0.0, 0.0, z_mm],
+        u_axis_mm: [1.0, 0.0, 0.0],
+        v_axis_mm: [0.0, 1.0, 0.0],
+        normal_mm: [0.0, 0.0, 1.0],
+    }
+}
+
+fn grid_with_spacing(spacing: [f32; 3]) -> VoxelGeometry {
+    VoxelGeometry::new([64, 64, 64], spacing, [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap()
+}
+
+#[test]
+fn test_same_slice_follows_the_voxel_layer_on_a_one_millimetre_grid() {
+    let geometry = grid_with_spacing([1.0; 3]);
+    let displayed = axial_plane_at(10.0);
+
+    assert!(planes_are_same_slice(
+        displayed,
+        axial_plane_at(10.4),
+        geometry
+    ));
+    assert!(!planes_are_same_slice(
+        displayed,
+        axial_plane_at(10.8),
+        geometry
+    ));
+}
+
+#[test]
+fn test_adjacent_layers_stay_distinct_on_a_sub_half_millimetre_grid() {
+    // A fixed 0.5 mm tolerance merged neighbouring slices of a 0.3 mm grid into one contour.
+    let geometry = grid_with_spacing([0.3, 0.3, 0.3]);
+
+    assert!(!planes_are_same_slice(
+        axial_plane_at(3.0),
+        axial_plane_at(3.3),
+        geometry
+    ));
+    assert!(planes_are_same_slice(
+        axial_plane_at(3.0),
+        axial_plane_at(3.05),
+        geometry
+    ));
+}
+
+#[test]
+fn test_thick_slices_are_not_split_by_a_millimetre_offset() {
+    // Layers 5 mm apart: a sub-millimetre cursor offset stays in the same layer.
+    let geometry = grid_with_spacing([1.0, 1.0, 5.0]);
+
+    assert!(planes_are_same_slice(
+        axial_plane_at(10.0),
+        axial_plane_at(11.9),
+        geometry
+    ));
+    assert!(!planes_are_same_slice(
+        axial_plane_at(10.0),
+        axial_plane_at(12.6),
+        geometry
+    ));
+}
+
+#[test]
+fn test_same_slice_requires_matching_family_and_parallel_normals() {
+    let geometry = grid_with_spacing([1.0; 3]);
+    let axial = axial_plane_at(10.0);
+    let other_family = PlaneDefinition {
+        family: PlaneFamily::Coronal,
+        ..axial
+    };
+    let tilted = PlaneDefinition {
+        normal_mm: [0.0, 0.2, 0.98],
+        ..axial
+    };
+
+    assert!(!planes_are_same_slice(axial, other_family, geometry));
+    assert!(!planes_are_same_slice(axial, tilted, geometry));
+}
+
+#[test]
+fn test_oblique_slices_match_within_half_the_smallest_spacing() {
+    let geometry = grid_with_spacing([0.4, 1.0, 2.0]);
+    let oblique = PlaneDefinition {
+        family: PlaneFamily::Oblique,
+        ..axial_plane_at(10.0)
+    };
+    let near = PlaneDefinition {
+        origin_mm: [0.0, 0.0, 10.15],
+        ..oblique
+    };
+    let far = PlaneDefinition {
+        origin_mm: [0.0, 0.0, 10.3],
+        ..oblique
+    };
+
+    assert!(planes_are_same_slice(oblique, near, geometry));
+    assert!(!planes_are_same_slice(oblique, far, geometry));
+}

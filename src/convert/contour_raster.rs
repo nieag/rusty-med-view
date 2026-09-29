@@ -1,7 +1,8 @@
 use crate::app::roi::{ContourData, VoxelData, VoxelGeometry};
 use crate::convert::{
-    plane_local_mm_to_world_mm, voxel_index_to_world_mm, world_mm_to_plane_local_mm,
-    world_mm_to_voxel_index, PlaneDefinition, PlaneFamily,
+    nearest_depth_layer, orthogonal_depth_axis, plane_local_mm_to_world_mm,
+    voxel_index_to_world_mm, world_mm_to_plane_local_mm, world_mm_to_voxel_index, PlaneDefinition,
+    PlaneFamily,
 };
 use glam::Vec3;
 
@@ -117,22 +118,6 @@ struct RasterSlice {
     /// filling both. Oblique slices keep the slab-distance rule.
     depth_layer: Option<(usize, i64)>,
     loops: Vec<Vec<[f32; 2]>>,
-}
-
-fn orthogonal_depth_axis(family: PlaneFamily) -> Option<usize> {
-    match family {
-        PlaneFamily::Axial => Some(2),
-        PlaneFamily::Coronal => Some(1),
-        PlaneFamily::Sagittal => Some(0),
-        PlaneFamily::Oblique => None,
-    }
-}
-
-/// Nearest voxel layer along `axis`, or `None` when the plane is not finite. The layer may lie
-/// outside the volume; callers must treat those slices as empty rather than clamp them.
-fn nearest_depth_layer(origin_mm: [f32; 3], axis: usize, geometry: VoxelGeometry) -> Option<i64> {
-    let depth = world_mm_to_voxel_index(origin_mm, geometry)[axis];
-    depth.is_finite().then(|| depth.round() as i64)
 }
 
 pub fn rasterize_contours_to_voxel_data(

@@ -28,7 +28,7 @@ pub fn extract_contour_slice_from_voxel_data(
         .ok_or(VoxelContourExtractionError::UnsupportedPlaneGeometry)?;
     let source_normal = normalized(reference_plane.normal_mm)
         .ok_or(VoxelContourExtractionError::UnsupportedPlaneGeometry)?;
-    if requested_normal.dot(source_normal).abs() < 0.999 {
+    if requested_normal.dot(source_normal).abs() < crate::convert::PLANE_NORMAL_ALIGNMENT_COS {
         return Err(VoxelContourExtractionError::UnsupportedPlaneGeometry);
     }
 

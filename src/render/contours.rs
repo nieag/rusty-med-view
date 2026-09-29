@@ -3,7 +3,6 @@ use crate::convert::{
     plane_local_mm_to_world_mm, volume_uv_to_viewport_uv, world_mm_to_volume_uv, PlaneDefinition,
     ViewportMapping,
 };
-use crate::render::roi_views::planes_are_slice_compatible;
 use hecs::World;
 use wgpu::util::DeviceExt;
 
@@ -321,7 +320,11 @@ fn append_roi_contour_vertices(
 
     if let Some(contour_data) = contour_data {
         for (slice_idx, contour_slice) in contour_data.slices.iter().enumerate() {
-            if !planes_are_slice_compatible(displayed_plane, contour_slice.plane) {
+            if !crate::convert::planes_are_same_slice(
+                displayed_plane,
+                contour_slice.plane,
+                context.geometry,
+            ) {
                 continue;
             }
 

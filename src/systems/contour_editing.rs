@@ -11,14 +11,14 @@ use crate::components::{
 use crate::convert::{
     contour_slice_contains_point, oblique_plane_from_view_rotation,
     orthogonal_plane_from_volume_uv, plane_local_mm_to_viewport_uv, plane_local_mm_to_world_mm,
-    reproject_plane_local_mm, union_contour_slice_with_loop, viewport_uv_to_plane_local_mm,
-    volume_uv_to_viewport_uv, world_mm_to_volume_uv, PlaneDefinition, PlaneFamily, ViewportMapping,
+    planes_are_same_slice, reproject_plane_local_mm, union_contour_slice_with_loop,
+    viewport_uv_to_plane_local_mm, volume_uv_to_viewport_uv, world_mm_to_volume_uv,
+    PlaneDefinition, PlaneFamily, ViewportMapping,
 };
 use hecs::World;
 
 const LOOP_CLOSE_RADIUS_PX: f32 = 10.0;
 const SELECTION_RADIUS_PX: f32 = 10.0;
-const SLICE_MATCH_DISTANCE_MM: f32 = 0.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContourEditMappingError {
@@ -172,24 +172,6 @@ impl From<ContourEditMappingError> for ContourDrawClickError {
     }
 }
 
-fn planes_match_for_slice(lhs: PlaneDefinition, rhs: PlaneDefinition) -> bool {
-    if lhs.family != rhs.family {
-        return false;
-    }
-    let lhs_n = glam::Vec3::from_array(lhs.normal_mm).normalize_or_zero();
-    let rhs_n = glam::Vec3::from_array(rhs.normal_mm).normalize_or_zero();
-    if lhs_n.length_squared() <= 1e-12 || rhs_n.length_squared() <= 1e-12 {
-        return false;
-    }
-    if lhs_n.dot(rhs_n).abs() < 0.999 {
-        return false;
-    }
-
-    let lhs_o = glam::Vec3::from_array(lhs.origin_mm);
-    let rhs_o = glam::Vec3::from_array(rhs.origin_mm);
-    (lhs_o - rhs_o).dot(lhs_n).abs() <= SLICE_MATCH_DISTANCE_MM
-}
-
 fn contour_data_for_active_roi(world: &World, roi_entity: hecs::Entity) -> Option<ContourData> {
     world
         .get::<&Roi>(roi_entity)
@@ -289,7 +271,7 @@ pub fn handle_contour_draw_click(
     let existing_slice = contour_data
         .slices
         .iter()
-        .find(|slice| planes_match_for_slice(slice.plane, viewport.plane))
+        .find(|slice| planes_are_same_slice(slice.plane, viewport.plane, viewport.geometry))
         .cloned();
 
     let viewport_rect = world
@@ -306,7 +288,7 @@ pub fn handle_contour_draw_click(
             .as_ref()
             .map(|draft| {
                 draft.roi_entity != roi_entity
-                    || !planes_match_for_slice(draft.plane, viewport.plane)
+                    || !planes_are_same_slice(draft.plane, viewport.plane, viewport.geometry)
             })
             .unwrap_or(true);
         if reset_draft {
@@ -390,7 +372,7 @@ pub fn handle_contour_draw_click(
         if let Some(existing_slice) = next_contour_data
             .slices
             .iter_mut()
-            .find(|slice| planes_match_for_slice(slice.plane, viewport.plane))
+            .find(|slice| planes_are_same_slice(slice.plane, viewport.plane, viewport.geometry))
         {
             committed_plane = existing_slice.plane;
             for point in &mut loop_to_commit.points {
@@ -544,7 +526,7 @@ pub fn handle_contour_select_click(
     let mut candidate_points = Vec::new();
     let mut candidate_loops = Vec::new();
     for (slice_idx, slice) in contour_data.slices.iter().enumerate() {
-        if !planes_match_for_slice(slice.plane, viewport.plane) {
+        if !planes_are_same_slice(slice.plane, viewport.plane, viewport.geometry) {
             continue;
         }
         for (loop_idx, contour_loop) in slice.loops.iter().enumerate() {

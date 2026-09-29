@@ -32,28 +32,6 @@ fn test_build_point_marker_triangles_produces_quad_geometry() {
 }
 
 #[test]
-fn test_planes_are_slice_compatible_respects_origin_tolerance() {
-    let displayed = PlaneDefinition {
-        family: PlaneFamily::Axial,
-        origin_mm: [0.0, 0.0, 10.0],
-        u_axis_mm: [1.0, 0.0, 0.0],
-        v_axis_mm: [0.0, 1.0, 0.0],
-        normal_mm: [0.0, 0.0, 1.0],
-    };
-    let near = PlaneDefinition {
-        origin_mm: [0.0, 0.0, 10.4],
-        ..displayed
-    };
-    let far = PlaneDefinition {
-        origin_mm: [0.0, 0.0, 10.8],
-        ..displayed
-    };
-
-    assert!(planes_are_slice_compatible(displayed, near));
-    assert!(!planes_are_slice_compatible(displayed, far));
-}
-
-#[test]
 fn test_projection_helper_local_world_viewport_roundtrip_stays_stable() {
     let geometry = VoxelGeometry::new(
         [16, 16, 16],

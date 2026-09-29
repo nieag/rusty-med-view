@@ -5,8 +5,6 @@ use crate::app::components::{
 use hecs::{Entity, World};
 
 pub const DEFAULT_MAX_VOXEL_OVERLAYS: usize = MAX_VOXEL_OVERLAY_SLOTS;
-const PLANE_ORIGIN_TOLERANCE_MM: f32 = 0.5;
-const PLANE_NORMAL_ALIGNMENT_COS: f32 = 0.999;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VoxelOverlayView {
@@ -227,40 +225,6 @@ fn has_mesh_geometry(mesh: &MeshData) -> bool {
     !mesh.vertices.is_empty() && !mesh.faces.is_empty()
 }
 
-fn normalized(v: [f32; 3]) -> Option<glam::Vec3> {
-    let vec = glam::Vec3::from_array(v);
-    let len_sq = vec.length_squared();
-    if !len_sq.is_finite() || len_sq <= 1e-12 {
-        None
-    } else {
-        Some(vec / len_sq.sqrt())
-    }
-}
-
-pub(crate) fn planes_are_slice_compatible(
-    displayed: crate::convert::PlaneDefinition,
-    stored: crate::convert::PlaneDefinition,
-) -> bool {
-    if displayed.family != stored.family {
-        return false;
-    }
-    let Some(displayed_normal) = normalized(displayed.normal_mm) else {
-        return false;
-    };
-    let Some(stored_normal) = normalized(stored.normal_mm) else {
-        return false;
-    };
-    if displayed_normal.dot(stored_normal).abs() < PLANE_NORMAL_ALIGNMENT_COS {
-        return false;
-    }
-    let displayed_origin = glam::Vec3::from_array(displayed.origin_mm);
-    let stored_origin = glam::Vec3::from_array(stored.origin_mm);
-    let signed_distance = (stored_origin - displayed_origin)
-        .dot(displayed_normal)
-        .abs();
-    signed_distance <= PLANE_ORIGIN_TOLERANCE_MM
-}
-
 pub fn displayed_plane_for_viewport(
     mode: crate::app::components::ViewMode,
     cursor_uv: [f32; 3],
@@ -434,7 +398,8 @@ pub fn contour_renderable_in_viewport(
     };
 
     contour_data.slices.iter().any(|slice| {
-        planes_are_slice_compatible(displayed_plane, slice.plane) && !slice.loops.is_empty()
+        crate::convert::planes_are_same_slice(displayed_plane, slice.plane, geometry)
+            && !slice.loops.is_empty()
     })
 }
 
