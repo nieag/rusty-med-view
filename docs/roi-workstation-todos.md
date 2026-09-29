@@ -69,6 +69,7 @@ Exit: a deep-learning multi-organ segmentation can be imported, corrected, and e
 
 Do after Phases 0 to 2 so measurements reflect the final structure. Measure each against a large volume (for example 512x512x300) before and after.
 
+- [ ] **4.0 Reported slowness in the running app (S to triage).** The user reported general performance issues after Phase 2 (2026-09-29) without details. First step: profile the release wasm on the liver sample (frame time while idle, while switching contour family, while drawing) and record what is slow before changing anything. Known candidates: the contour view of every visible ROI is rebuilt per viewport, the mesh rebuild (about 0.8 s for the liver), and a redraw every frame while jobs are pending.
 - [ ] **4.1 Loader (M).** Per-voxel `get_f64` loop and up to three CPU copies of the intensities; wasm parse runs on the main thread with no progress. Fast typed path, drop copies, chunk or yield with progress.
 - [ ] **4.2 Image texture format (M).** R32Float is 4 bytes per voxel and nearest-only (oblique slices look blocky). Evaluate R16Float or normalized u16 with `float32-filterable` or linear sampling.
 - [ ] **4.3 GPU mesh rendering (L).** Meshes are projected on the CPU every frame, compared and re-uploaded whole, and drawn flat and translucent with no depth or lighting. Upload world-space vertices once, project on the GPU with a uniform matrix, add depth and normals.
