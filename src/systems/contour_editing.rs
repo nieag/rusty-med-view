@@ -1,4 +1,4 @@
-use crate::app::roi;
+use crate::app::roi::{self, EditTarget, Readiness, SwitchError};
 #[cfg(test)]
 use crate::app::roi_runtime;
 #[cfg(test)]
@@ -47,6 +47,21 @@ pub fn resolve_active_contour_edit_viewport(
     world: &World,
     entities: &AppEntities,
     contour_data: &ContourData,
+) -> Result<ContourEditViewport, ContourEditMappingError> {
+    let viewport = resolve_active_edit_view(world, entities)?;
+    if viewport.plane.family != contour_data.active_plane_family {
+        return Err(ContourEditMappingError::PlaneFamilyMismatch {
+            contour_family: contour_data.active_plane_family,
+            viewport_family: viewport.plane.family,
+        });
+    }
+    Ok(viewport)
+}
+
+/// The active 2D viewport and the plane it shows, whatever family the ROI's contours are in.
+fn resolve_active_edit_view(
+    world: &World,
+    entities: &AppEntities,
 ) -> Result<ContourEditViewport, ContourEditMappingError> {
     let input = world
         .get::<&InputState>(entities.input)
@@ -98,13 +113,6 @@ pub fn resolve_active_contour_edit_viewport(
         ViewMode::ThreeD => return Err(ContourEditMappingError::UnsupportedViewportMode),
     }
     .ok_or(ContourEditMappingError::PlaneUnavailable)?;
-
-    if plane.family != contour_data.active_plane_family {
-        return Err(ContourEditMappingError::PlaneFamilyMismatch {
-            contour_family: contour_data.active_plane_family,
-            viewport_family: plane.family,
-        });
-    }
 
     let screen_aspect = if viewport.rect[3] > 0.0 {
         viewport.rect[2] / viewport.rect[3]
@@ -161,6 +169,9 @@ pub enum ContourDrawClickError {
     MissingActiveRoi,
     ActiveRoiNotContour,
     Mapping(ContourEditMappingError),
+    /// The ROI is being prepared for contour editing; the click is ignored.
+    SwitchPending,
+    Switch(SwitchError),
     ProjectionFailed,
     LoopNeedsThreePoints,
     CommitFailed,
@@ -169,6 +180,60 @@ pub enum ContourDrawClickError {
 impl From<ContourEditMappingError> for ContourDrawClickError {
     fn from(value: ContourEditMappingError) -> Self {
         ContourDrawClickError::Mapping(value)
+    }
+}
+
+/// Why an ROI could not be made contour-editable in the active view.
+enum ContourPrepareError {
+    Mapping(ContourEditMappingError),
+    Pending,
+    Switch(SwitchError),
+}
+
+impl From<ContourPrepareError> for ContourDrawClickError {
+    fn from(value: ContourPrepareError) -> Self {
+        match value {
+            ContourPrepareError::Mapping(error) => Self::Mapping(error),
+            ContourPrepareError::Pending => Self::SwitchPending,
+            ContourPrepareError::Switch(error) => Self::Switch(error),
+        }
+    }
+}
+
+impl From<ContourPrepareError> for ContourSelectClickError {
+    fn from(value: ContourPrepareError) -> Self {
+        match value {
+            ContourPrepareError::Mapping(error) => Self::Mapping(error),
+            ContourPrepareError::Pending => Self::SwitchPending,
+            ContourPrepareError::Switch(error) => Self::Switch(error),
+        }
+    }
+}
+
+/// Makes the ROI's contours editable in the family of the active viewport, converting the ROI
+/// if needed (see `app::roi::switch`). Editing works in whichever 2D view the user is in.
+fn prepare_contour_edit(
+    world: &mut World,
+    entities: &AppEntities,
+    roi_entity: hecs::Entity,
+) -> Result<(), ContourPrepareError> {
+    let family = resolve_active_edit_view(world, entities)
+        .map_err(ContourPrepareError::Mapping)?
+        .plane
+        .family;
+    match roi::ensure_editable(world, roi_entity, EditTarget::Contour(family))
+        .map_err(ContourPrepareError::Switch)?
+    {
+        Readiness::Ready => Ok(()),
+        Readiness::Pending => Err(ContourPrepareError::Pending),
+        Readiness::Switched(report) => {
+            if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
+                editor.contour_draft = None;
+                editor.contour_selection = None;
+            }
+            crate::io::handlers::set_status_message(world, entities, report.message());
+            Ok(())
+        }
     }
 }
 
@@ -263,6 +328,7 @@ pub fn handle_contour_draw_click(
         return Err(ContourDrawClickError::ToolNotActive);
     }
     let roi_entity = active_roi.ok_or(ContourDrawClickError::MissingActiveRoi)?;
+    prepare_contour_edit(world, entities, roi_entity)?;
 
     let contour_data = contour_data_for_active_roi(world, roi_entity)
         .ok_or(ContourDrawClickError::ActiveRoiNotContour)?;
@@ -412,6 +478,9 @@ pub enum ContourSelectClickError {
     MissingActiveRoi,
     ActiveRoiNotContour,
     Mapping(ContourEditMappingError),
+    /// The ROI is being prepared for contour editing; the click is ignored.
+    SwitchPending,
+    Switch(SwitchError),
 }
 
 impl From<ContourEditMappingError> for ContourSelectClickError {
@@ -513,6 +582,7 @@ pub fn handle_contour_select_click(
         return Err(ContourSelectClickError::ToolNotActive);
     }
     let roi_entity = active_roi.ok_or(ContourSelectClickError::MissingActiveRoi)?;
+    prepare_contour_edit(world, entities, roi_entity)?;
 
     let contour_data = contour_data_for_active_roi(world, roi_entity)
         .ok_or(ContourSelectClickError::ActiveRoiNotContour)?;

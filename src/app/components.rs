@@ -261,6 +261,8 @@ pub struct MeshSelection {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RoiEditSnapshot {
+    // Boxed: a voxel body is far larger than a contour or mesh body.
+    Voxel(Box<VoxelData>),
     Contour(ContourData),
     Mesh(MeshData),
 }
@@ -637,6 +639,8 @@ pub struct RoiJobState {
     // ponytail: one timestamp covers a coalesced ROI work cycle; split by representation only if
     // a measured bottleneck needs finer attribution.
     pub work_cycle_started_at: Option<Instant>,
+    /// A representation switch waiting for derived data (see `app::roi::switch`).
+    pub pending_switch: Option<crate::app::roi::switch::PendingSwitch>,
 }
 
 pub struct Roi {

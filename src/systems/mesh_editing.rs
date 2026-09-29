@@ -19,6 +19,9 @@ pub enum MeshEditInteractionError {
     ViewportNotThreeD,
     ActiveRoiNotMesh,
     ActiveRoiLocked,
+    /// The ROI is being prepared for mesh editing; the click is ignored.
+    SwitchPending,
+    Switch(roi::SwitchError),
     MissingSelection,
     InvalidBrush,
     ProjectionFailed,
@@ -55,6 +58,16 @@ pub fn select_mesh_vertex(
         .ok_or(MeshEditInteractionError::ProjectionFailed)?;
     drop(viewport_state);
     drop(viewport);
+
+    match roi::ensure_editable(world, roi_entity, roi::EditTarget::Mesh) {
+        Ok(roi::Readiness::Ready) => {}
+        Ok(roi::Readiness::Switched(report)) => {
+            crate::io::handlers::set_status_message(world, entities, report.message());
+        }
+        Ok(roi::Readiness::Pending) => return Err(MeshEditInteractionError::SwitchPending),
+        Err(roi::SwitchError::Locked) => return Err(MeshEditInteractionError::ActiveRoiLocked),
+        Err(error) => return Err(MeshEditInteractionError::Switch(error)),
+    }
 
     let roi = world
         .get::<&Roi>(roi_entity)

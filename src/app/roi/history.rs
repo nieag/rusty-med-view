@@ -1,7 +1,7 @@
 use crate::app::components::{
     ContourBody, ContourData, ContourSliceKey, EditorState, MeshBody, MeshData, Roi, RoiBody,
     RoiDirtyRegion, RoiEditHistoryEntry, RoiEditSnapshot, RoiHistory, RoiJobKind, RoiJobPriority,
-    RoiJobRequest, RoiJobState,
+    RoiJobRequest, RoiJobState, VoxelBody,
 };
 use crate::app::roi::authority::{
     replace_contour_data, replace_contour_data_for_slice, replace_mesh_data, ContourMutationError,
@@ -18,7 +18,6 @@ pub enum RoiEditHistoryError {
     NoUndo,
     NoRedo,
     Locked,
-    RepresentationChanged,
 }
 
 /// Replaces the ROI's contour data and records the previous data as an undo step.
@@ -211,7 +210,9 @@ fn capture_roi_edit_snapshot(
             Ok(RoiEditSnapshot::Contour(contour.clone()))
         }
         RoiBody::Mesh(MeshBody { data: mesh, .. }) => Ok(RoiEditSnapshot::Mesh(mesh.clone())),
-        RoiBody::Voxel(_) => Err(RoiEditHistoryError::RepresentationChanged),
+        RoiBody::Voxel(VoxelBody { data: voxel }) => {
+            Ok(RoiEditSnapshot::Voxel(Box::new(voxel.clone())))
+        }
     }
 }
 
@@ -229,12 +230,12 @@ fn restore_roi_edit_snapshot(
     }
     roi.job_state = RoiJobState::default();
     roi.end_preview();
-    match (&mut roi.body, snapshot) {
-        (
-            RoiBody::Contour(ContourBody { data: existing, .. }),
-            RoiEditSnapshot::Contour(contour),
-        ) => {
-            *existing = contour;
+    // A snapshot of a different authority is an authority change being reversed: the body is
+    // replaced, and every derived cache is rebuilt from the restored one.
+    match snapshot {
+        RoiEditSnapshot::Contour(contour) => {
+            let same_authority = matches!(roi.body, RoiBody::Contour(_));
+            roi.body = RoiBody::Contour(ContourBody::new(contour));
             roi.mark_contour_authoritative_changed();
             roi.mark_all_contour_view_caches_stale();
             let source_generation = roi.dirty_state.authoritative.shape;
@@ -244,19 +245,41 @@ fn restore_roi_edit_snapshot(
                 preview_revision: None,
                 priority: RoiJobPriority::VisibleCommitted,
                 dirty_region: match dirty_region {
-                    RoiDirtyRegion::ContourSlice(key) => RoiDirtyRegion::ContourSlice(key),
+                    RoiDirtyRegion::ContourSlice(key) if same_authority => {
+                        RoiDirtyRegion::ContourSlice(key)
+                    }
                     _ => RoiDirtyRegion::Full,
                 },
             });
         }
-        (RoiBody::Mesh(MeshBody { data: existing, .. }), RoiEditSnapshot::Mesh(mesh)) => {
-            *existing = mesh;
+        RoiEditSnapshot::Mesh(mesh) => {
+            roi.body = RoiBody::Mesh(MeshBody::new(mesh));
             roi.mark_mesh_authoritative_changed();
             roi.mark_all_contour_view_caches_stale();
         }
-        _ => return Err(RoiEditHistoryError::RepresentationChanged),
+        RoiEditSnapshot::Voxel(voxel) => {
+            roi.body = RoiBody::Voxel(VoxelBody { data: *voxel });
+            roi.mark_voxel_authoritative_changed();
+            roi.mark_all_contour_view_caches_stale();
+        }
     }
     Ok(())
+}
+
+/// Records an authority change (the ROI's previous body) as one undo step.
+pub(crate) fn record_authority_change(
+    world: &mut World,
+    roi_entity: hecs::Entity,
+    previous: RoiEditSnapshot,
+) {
+    let _ = record_history_entry(
+        world,
+        roi_entity,
+        RoiEditHistoryEntry {
+            snapshot: previous,
+            dirty_region: RoiDirtyRegion::Full,
+        },
+    );
 }
 
 fn record_history_entry(

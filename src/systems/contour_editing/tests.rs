@@ -521,7 +521,7 @@ fn test_nearest_point_hit_respects_threshold() {
 }
 
 #[test]
-fn test_contour_selection_rejects_non_contour_active_roi() {
+fn test_contour_selection_converts_a_voxel_roi_to_contours_of_the_viewport_family() {
     let mut world = World::new();
     let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     let voxel_roi = world.spawn((Roi::new_voxel_with_cache(
@@ -544,11 +544,18 @@ fn test_contour_selection_rejects_non_contour_active_roi() {
     }
 
     let result = handle_contour_select_click(&mut world, &entities, [0.5, 0.5]);
-    assert_eq!(result, Err(ContourSelectClickError::ActiveRoiNotContour));
+
+    assert_eq!(result, Ok(None));
+    let roi = world.get::<&Roi>(voxel_roi).unwrap();
+    assert_eq!(
+        roi.contour_data().map(|data| data.active_plane_family),
+        Some(PlaneFamily::Axial),
+        "the first contour gesture converts the ROI in the family of the view it happened in"
+    );
 }
 
 #[test]
-fn test_contour_selection_rejects_mismatched_plane_family() {
+fn test_contour_selection_in_another_family_waits_for_the_voxel_source() {
     let mut world = World::new();
     let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     let roi_entity = spawn_test_contour_roi(&mut world, PlaneFamily::Coronal);
@@ -559,15 +566,14 @@ fn test_contour_selection_rejects_mismatched_plane_family() {
     }
 
     let result = handle_contour_select_click(&mut world, &entities, [0.5, 0.5]);
+    assert_eq!(result, Err(ContourSelectClickError::SwitchPending));
+    let roi = world.get::<&Roi>(roi_entity).unwrap();
     assert_eq!(
-        result,
-        Err(ContourSelectClickError::Mapping(
-            ContourEditMappingError::PlaneFamilyMismatch {
-                contour_family: PlaneFamily::Coronal,
-                viewport_family: PlaneFamily::Axial,
-            }
-        ))
+        roi.contour_data().map(|data| data.active_plane_family),
+        Some(PlaneFamily::Coronal),
+        "the ROI stays as it was until its voxel source is ready"
     );
+    assert!(roi.job_state.pending_switch.is_some());
 }
 
 #[test]

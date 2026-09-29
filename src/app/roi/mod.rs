@@ -6,6 +6,7 @@ pub mod model;
 pub mod preview;
 pub mod requests;
 pub mod scheduler;
+pub mod switch;
 
 pub use authority::{
     promote_contour_view_to_authoritative, promote_current_mesh_cache_to_authority,
@@ -38,4 +39,8 @@ pub use requests::{
     request_viewport_mesh_state, request_viewport_voxel_overlay_state, request_voxel_overlay_state,
     ContourRepresentationStatus, RepresentationRequestState, RepresentationRequestStatus,
     RoiCacheStatus,
+};
+pub use switch::{
+    complete_pending_switches, ensure_editable, ConversionReport, EditTarget, Readiness,
+    SwitchError,
 };

@@ -202,6 +202,16 @@ pub fn sys_handle_mouse_button(
                 Err(crate::systems::ContourDrawClickError::Mapping(error)) => {
                     set_status_message(world, entities, format!("Contour draw blocked: {error:?}"));
                 }
+                Err(crate::systems::ContourDrawClickError::SwitchPending) => {
+                    set_status_message(
+                        world,
+                        entities,
+                        "Preparing the ROI for contour editing...".to_string(),
+                    );
+                }
+                Err(crate::systems::ContourDrawClickError::Switch(error)) => {
+                    set_status_message(world, entities, error.message());
+                }
                 Err(_) => {}
             }
             return;
@@ -241,6 +251,16 @@ pub fn sys_handle_mouse_button(
                         format!("Contour selection blocked: {error:?}"),
                     );
                 }
+                Err(crate::systems::ContourSelectClickError::SwitchPending) => {
+                    set_status_message(
+                        world,
+                        entities,
+                        "Preparing the ROI for contour editing...".to_string(),
+                    );
+                }
+                Err(crate::systems::ContourSelectClickError::Switch(error)) => {
+                    set_status_message(world, entities, error.message());
+                }
                 Err(_) => {}
             }
             return;
@@ -255,6 +275,16 @@ pub fn sys_handle_mouse_button(
                     set_status_message(world, entities, "Selected mesh surface.".to_string())
                 }
                 Ok(None) => {}
+                Err(crate::systems::MeshEditInteractionError::SwitchPending) => {
+                    set_status_message(
+                        world,
+                        entities,
+                        "Preparing the ROI for mesh editing...".to_string(),
+                    );
+                }
+                Err(crate::systems::MeshEditInteractionError::Switch(error)) => {
+                    set_status_message(world, entities, error.message());
+                }
                 Err(error) => set_status_message(
                     world,
                     entities,

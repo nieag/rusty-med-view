@@ -3,6 +3,7 @@ use crate::app::roi::authority::*;
 use crate::app::roi::history::*;
 use crate::app::roi::preview::*;
 use crate::app::roi::requests::*;
+use crate::app::roi::switch::*;
 use crate::convert::{orthogonal_plane_from_volume_uv, world_mm_to_voxel_index};
 
 fn spawn_test_roi(world: &mut World) -> hecs::Entity {
@@ -3343,4 +3344,227 @@ fn test_history_is_capped_per_roi_and_clearing_one_roi_leaves_the_other() {
     clear_roi_edit_history_for_roi(&mut world, busy);
     assert!(world.get::<&Roi>(busy).unwrap().history.undo.is_empty());
     assert_eq!(world.get::<&Roi>(quiet).unwrap().history.undo.len(), 1);
+}
+
+// --- Automatic primary-representation switching (ensure_editable) ---
+
+fn spawn_editor_for(world: &mut World, roi: hecs::Entity) -> hecs::Entity {
+    world.spawn((EditorState {
+        active_roi: Some(roi),
+        ..EditorState::default()
+    },))
+}
+
+fn contour_of(world: &World, entity: hecs::Entity) -> ContourData {
+    world
+        .get::<&Roi>(entity)
+        .unwrap()
+        .contour_data()
+        .cloned()
+        .expect("contour body")
+}
+
+#[test]
+fn test_ensure_editable_converts_a_voxel_roi_and_undo_restores_it() {
+    let mut world = World::new();
+    let entity = spawn_sparse_voxel_roi(&mut world);
+    let editor = spawn_editor_for(&mut world, entity);
+    let original = world
+        .get::<&Roi>(entity)
+        .unwrap()
+        .voxel_cache()
+        .unwrap()
+        .data
+        .clone();
+
+    let readiness = ensure_editable(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial));
+
+    let Ok(Readiness::Switched(report)) = readiness else {
+        panic!("a voxel ROI converts inline, got {readiness:?}");
+    };
+    assert!(report.lossless);
+    assert_eq!(report.from, PrimaryRepresentation::Voxel);
+    assert!(contour_of(&world, entity).has_loops());
+
+    undo_roi_edit(&mut world, editor).unwrap();
+    advance_roi_work(&mut world, None);
+
+    let roi = world.get::<&Roi>(entity).unwrap();
+    let RoiBody::Voxel(VoxelBody { data }) = &roi.body else {
+        panic!("undo restores the voxel body");
+    };
+    assert_eq!(*data, original);
+    assert!(roi.is_cache_current(RoiCacheKind::Voxel));
+    assert_eq!(roi.voxel_cache().unwrap().data, original);
+}
+
+#[test]
+fn test_ensure_editable_is_ready_when_the_target_is_already_primary() {
+    let mut world = World::new();
+    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+
+    let readiness = ensure_editable(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial));
+
+    assert_eq!(readiness, Ok(Readiness::Ready));
+    assert!(world.get::<&Roi>(entity).unwrap().history.undo.is_empty());
+}
+
+#[test]
+fn test_ensure_editable_switches_contour_family_inline_when_voxels_are_current() {
+    let mut world = World::new();
+    let entity = spawn_sparse_voxel_roi(&mut world);
+    let editor = spawn_editor_for(&mut world, entity);
+    ensure_editable(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial)).unwrap();
+    let axial = contour_of(&world, entity);
+
+    let readiness = ensure_editable(
+        &mut world,
+        entity,
+        EditTarget::Contour(PlaneFamily::Coronal),
+    );
+
+    assert!(matches!(readiness, Ok(Readiness::Switched(report)) if report.lossless));
+    let coronal = contour_of(&world, entity);
+    assert_eq!(coronal.active_plane_family, PlaneFamily::Coronal);
+    assert!(coronal.has_loops());
+    assert!(world
+        .get::<&Roi>(entity)
+        .unwrap()
+        .is_cache_current(RoiCacheKind::Voxel));
+
+    undo_roi_edit(&mut world, editor).unwrap();
+    assert_eq!(contour_of(&world, entity), axial);
+}
+
+#[test]
+fn test_ensure_editable_waits_for_stale_voxels_then_completes() {
+    let mut world = World::new();
+    let entity = spawn_sparse_voxel_roi(&mut world);
+    ensure_editable(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial)).unwrap();
+    let axial = contour_of(&world, entity);
+    // An edit leaves the voxel cache stale until the background rebuild finishes.
+    replace_contour_data_with_history(&mut world, entity, axial).ok();
+    {
+        let mut roi = world.get::<&mut Roi>(entity).unwrap();
+        roi.mark_contour_authoritative_changed();
+        roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
+    }
+
+    let first = ensure_editable(
+        &mut world,
+        entity,
+        EditTarget::Contour(PlaneFamily::Coronal),
+    );
+    let second = ensure_editable(
+        &mut world,
+        entity,
+        EditTarget::Contour(PlaneFamily::Coronal),
+    );
+
+    assert_eq!(first, Ok(Readiness::Pending));
+    assert_eq!(second, Ok(Readiness::Pending));
+    assert_eq!(
+        contour_of(&world, entity).active_plane_family,
+        PlaneFamily::Axial
+    );
+
+    for _ in 0..20 {
+        advance_roi_work(&mut world, None);
+    }
+
+    assert_eq!(
+        contour_of(&world, entity).active_plane_family,
+        PlaneFamily::Coronal
+    );
+    assert!(world
+        .get::<&Roi>(entity)
+        .unwrap()
+        .job_state
+        .pending_switch
+        .is_none());
+}
+
+#[test]
+fn test_a_pending_switch_is_dropped_when_the_roi_is_edited_first() {
+    let mut world = World::new();
+    let entity = spawn_sparse_voxel_roi(&mut world);
+    ensure_editable(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial)).unwrap();
+    {
+        let mut roi = world.get::<&mut Roi>(entity).unwrap();
+        roi.mark_contour_authoritative_changed();
+    }
+    assert_eq!(
+        ensure_editable(
+            &mut world,
+            entity,
+            EditTarget::Contour(PlaneFamily::Coronal)
+        ),
+        Ok(Readiness::Pending)
+    );
+    world
+        .get::<&mut Roi>(entity)
+        .unwrap()
+        .mark_contour_authoritative_changed();
+
+    for _ in 0..20 {
+        advance_roi_work(&mut world, None);
+    }
+
+    assert_eq!(
+        contour_of(&world, entity).active_plane_family,
+        PlaneFamily::Axial,
+        "an edit made while waiting cancels the switch"
+    );
+}
+
+#[test]
+fn test_ensure_editable_refuses_locked_rois_and_oblique_targets() {
+    let mut world = World::new();
+    let entity = spawn_sparse_voxel_roi(&mut world);
+
+    assert_eq!(
+        ensure_editable(
+            &mut world,
+            entity,
+            EditTarget::Contour(PlaneFamily::Oblique)
+        ),
+        Err(SwitchError::UnsupportedTarget)
+    );
+    world.get::<&mut Roi>(entity).unwrap().metadata.is_locked = true;
+    assert_eq!(
+        ensure_editable(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial)),
+        Err(SwitchError::Locked)
+    );
+    assert_eq!(
+        world.get::<&Roi>(entity).unwrap().primary_representation(),
+        PrimaryRepresentation::Voxel
+    );
+}
+
+#[test]
+fn test_ensure_editable_converts_a_mesh_roi_to_contours_with_a_loss_report_and_undo() {
+    let mut world = World::new();
+    let entity = spawn_sparse_voxel_roi(&mut world);
+    let mesh = closed_tetra_mesh_data();
+    {
+        let mut roi = world.get::<&mut Roi>(entity).unwrap();
+        roi.body = RoiBody::Mesh(MeshBody::new(mesh.clone()));
+        roi.mark_mesh_authoritative_changed();
+    }
+    let editor = spawn_editor_for(&mut world, entity);
+
+    let first = ensure_editable(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial));
+    assert_eq!(first, Ok(Readiness::Pending));
+    let mut report = None;
+    for _ in 0..40 {
+        advance_roi_work(&mut world, None);
+        if world.get::<&Roi>(entity).unwrap().contour_data().is_some() {
+            report = Some(());
+            break;
+        }
+    }
+
+    assert!(report.is_some(), "the switch completes once voxels exist");
+    undo_roi_edit(&mut world, editor).unwrap();
+    assert_eq!(world.get::<&Roi>(entity).unwrap().mesh_data(), Some(&mesh));
 }

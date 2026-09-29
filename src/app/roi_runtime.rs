@@ -162,6 +162,20 @@ pub fn advance_roi_work(world: &mut World, gpu: Option<&RoiWorkGpuContext<'_>>) 
         process_contour_voxel_rebuild_jobs(world);
         process_mesh_voxel_rebuild_jobs(world);
     }
+    let installed_voxel_bodies =
+        process_voxel_body_install_jobs(world, gpu.map(|gpu| (gpu.device, gpu.queue)));
+    if let (true, Some(gpu)) = (installed_voxel_bodies, gpu) {
+        recreate_scene_bind_groups(gpu.device, world, &gpu.bind_groups, active_roi);
+    }
+    for (_, outcome) in crate::app::roi::complete_pending_switches(world) {
+        set_runtime_status_message(
+            world,
+            match outcome {
+                Ok(report) => report.message(),
+                Err(error) => error.message(),
+            },
+        );
+    }
 
     // Demand is resolved after voxel-producing work so a newly current voxel cache can schedule
     // its mesh in this same frame.
@@ -1905,6 +1919,81 @@ fn process_contour_voxel_rebuild_for_entity(
     drop(roi);
     set_runtime_status_message(world, "Contour voxel cache rebuilt.".to_string());
     true
+}
+
+/// A voxel ROI's voxel cache is its own body. It is rebuilt only when an undo restored a voxel
+/// body: the cache is replaced by the body and uploaded to the GPU.
+fn process_voxel_body_install_jobs(
+    world: &mut World,
+    upload_context: Option<(&wgpu::Device, &wgpu::Queue)>,
+) -> bool {
+    let entities = world
+        .query::<&Roi>()
+        .iter()
+        .filter(|(_, roi)| {
+            matches!(roi.body, RoiBody::Voxel(_))
+                && roi.running_job_kind().is_none()
+                && roi.has_queued_job(RoiJobKind::RebuildVoxelCache)
+        })
+        .map(|(entity, _)| entity)
+        .collect::<Vec<_>>();
+    let mut installed_any = false;
+    for entity in entities {
+        if begin_next_job(world, entity) != Some(RoiJobKind::RebuildVoxelCache) {
+            continue;
+        }
+        let Some((data, generation)) = world.get::<&Roi>(entity).ok().and_then(|roi| {
+            let RoiBody::Voxel(body) = &roi.body else {
+                return None;
+            };
+            Some((body.data.clone(), roi.dirty_state.authoritative.shape))
+        }) else {
+            continue;
+        };
+        let gpu_resources = match upload_context {
+            Some((device, queue)) => {
+                let Some(bind_group) = main_volume_bind_group(world) else {
+                    fail_contour_voxel_rebuild(world, entity);
+                    continue;
+                };
+                match crate::io::volume::create_texture_from_voxel_data(device, queue, &data) {
+                    Ok((texture, view, sampler)) => Some(GpuVolumeResources {
+                        texture,
+                        view,
+                        sampler,
+                        bind_group,
+                    }),
+                    Err(error) => {
+                        set_runtime_status_message(
+                            world,
+                            format!("Voxel upload failed ({error})."),
+                        );
+                        fail_contour_voxel_rebuild(world, entity);
+                        continue;
+                    }
+                }
+            }
+            None => None,
+        };
+        let Ok(mut roi) = world.get::<&mut Roi>(entity) else {
+            continue;
+        };
+        if roi
+            .install_voxel_cache_result(
+                VoxelCache {
+                    data,
+                    gpu_resources,
+                },
+                generation,
+            )
+            .is_ok()
+        {
+            installed_any = true;
+        } else {
+            roi.finish_job(RoiJobKind::RebuildVoxelCache);
+        }
+    }
+    installed_any
 }
 
 fn requeue_contour_voxel_rebuild(world: &mut World, roi_entity: hecs::Entity) {

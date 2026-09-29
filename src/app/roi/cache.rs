@@ -1,7 +1,7 @@
 use crate::app::components::{
     CacheFreshness, CacheViewState, ContourCache, ContourData, ContourViewCache, ContourViewKey,
     GpuVolumeResources, MeshCache, PreviewMeshCache, PreviewVoxelCache, Revision, Roi,
-    RoiCacheKind, RoiDirtyState, VoxelCache, VoxelData, MAX_CONTOUR_VIEW_CACHE_ENTRIES,
+    RoiCacheKind, RoiDirtyState, RoiJobKind, VoxelCache, VoxelData, MAX_CONTOUR_VIEW_CACHE_ENTRIES,
 };
 
 /// How a shape change treats one derived cache.
@@ -177,6 +177,18 @@ impl Roi {
             Invalidate::WhenPresent,
             Invalidate::Always,
         ]);
+    }
+
+    /// A voxel body was installed: the voxel cache must be rebuilt from it, and the derived
+    /// contour and mesh forms are stale.
+    pub fn mark_voxel_authoritative_changed(&mut self) {
+        self.invalidate_for_shape_change([
+            Invalidate::Always,
+            Invalidate::WhenPresent,
+            Invalidate::Always,
+        ]);
+        self.session_caches.contour = None;
+        self.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
     }
 
     /// A mesh edit invalidates the voxel and contour caches always, and the mesh cache only when
