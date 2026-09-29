@@ -309,7 +309,7 @@ pub(crate) fn ensure_contour_view_cache(
         }
     }
     let mesh_preview_revision = roi.preview_state.revision;
-    if matches!(&roi.authoritative_data, RoiAuthoritativeData::Mesh(_)) {
+    if matches!(&roi.body, RoiBody::Mesh(_)) {
         let mesh = mesh_preview
             .as_ref()
             .or_else(|| roi.mesh_data())
@@ -460,7 +460,7 @@ pub(crate) fn sync_roi_contour_view_caches_for_viewports(world: &mut World) {
     roi_entities.extend(world.query::<&Roi>().iter().filter_map(|(entity, roi)| {
         (Some(entity) != active_roi
             && roi.metadata.is_visible
-            && matches!(roi.authoritative_data, RoiAuthoritativeData::Mesh(_)))
+            && matches!(roi.body, RoiBody::Mesh(_)))
         .then_some(entity)
     }));
     let main_geometry = main_volume_geometry(world);
@@ -520,7 +520,7 @@ pub(crate) fn sync_active_roi_mesh_cache_for_viewports(world: &mut World) {
     let Ok(mut roi) = world.get::<&mut Roi>(active_roi) else {
         return;
     };
-    if matches!(&roi.authoritative_data, RoiAuthoritativeData::Mesh(_))
+    if matches!(&roi.body, RoiBody::Mesh(_))
         || roi.is_cache_current(RoiCacheKind::Mesh)
         || roi.has_queued_job(RoiJobKind::RebuildMeshCache)
         || roi.running_job_kind() == Some(RoiJobKind::RebuildMeshCache)
@@ -780,9 +780,9 @@ pub fn create_contour_roi_from_voxel_roi(
         let roi = world
             .get::<&Roi>(source_roi)
             .map_err(|_| VoxelContourCreationError::MissingRoi)?;
-        match &roi.authoritative_data {
-            RoiAuthoritativeData::Voxel(voxel) => voxel.clone(),
-            RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh(_) => {
+        match &roi.body {
+            RoiBody::Voxel(VoxelBody { data: voxel }) => voxel.clone(),
+            RoiBody::Contour(_) | RoiBody::Mesh(_) => {
                 return Err(VoxelContourCreationError::NotVoxelRoi);
             }
         }
@@ -875,9 +875,9 @@ pub fn voxel_data_for_display_surface_extraction(
         let roi = world
             .get::<&Roi>(source_roi)
             .map_err(|_| DisplayVoxelSourceError::MissingRoi)?;
-        match &roi.authoritative_data {
-            RoiAuthoritativeData::Voxel(voxel) => voxel.clone(),
-            RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh(_) => {
+        match &roi.body {
+            RoiBody::Voxel(VoxelBody { data: voxel }) => voxel.clone(),
+            RoiBody::Contour(_) | RoiBody::Mesh(_) => {
                 return Err(DisplayVoxelSourceError::NotVoxelRoi);
             }
         }
@@ -895,7 +895,7 @@ pub fn create_mesh_roi_from_contour_roi(
         let roi = world
             .get::<&Roi>(source_roi)
             .map_err(|_| ContourMeshCreationError::MissingRoi)?;
-        if !matches!(&roi.authoritative_data, RoiAuthoritativeData::Contour(_)) {
+        if !matches!(&roi.body, RoiBody::Contour(_)) {
             return Err(ContourMeshCreationError::NotContourRoi);
         }
         let Some(cache) = roi.voxel_cache() else {
@@ -1022,7 +1022,7 @@ pub(crate) fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
     }
 
     let entity = world.query::<&Roi>().iter().find_map(|(entity, roi)| {
-        (!matches!(roi.authoritative_data, RoiAuthoritativeData::Mesh(_))
+        (!matches!(roi.body, RoiBody::Mesh(_))
             && roi.running_job_kind().is_none()
             && roi.has_queued_job(RoiJobKind::RebuildMeshCache)
             && roi.voxel_cache().is_some()
@@ -1202,7 +1202,7 @@ fn process_mesh_voxel_rebuild_jobs_with_context(
         .query::<&Roi>()
         .iter()
         .filter_map(|(entity, roi)| {
-            (matches!(roi.authoritative_data, RoiAuthoritativeData::Mesh(_))
+            (matches!(roi.body, RoiBody::Mesh(_))
                 && roi.running_job_kind().is_none()
                 && roi.has_queued_job(RoiJobKind::RebuildVoxelCache))
             .then_some(entity)
@@ -1235,7 +1235,7 @@ fn process_mesh_voxel_rebuild_for_entity(
         let Ok(roi) = world.get::<&Roi>(roi_entity) else {
             return false;
         };
-        let RoiAuthoritativeData::Mesh(mesh) = &roi.authoritative_data else {
+        let RoiBody::Mesh(MeshBody { data: mesh, .. }) = &roi.body else {
             return false;
         };
         let target_geometry = roi.voxel_cache().map(|cache| cache.data.geometry);
@@ -1303,7 +1303,7 @@ fn resume_mesh_voxel_rebuild_work(
     };
     let is_current = world.get::<&Roi>(roi_entity).is_ok_and(|roi| {
         roi.dirty_state.authoritative.shape == work.source_generation
-            && matches!(roi.authoritative_data, RoiAuthoritativeData::Mesh(_))
+            && matches!(roi.body, RoiBody::Mesh(_))
             && roi.job_state.running_request.is_some_and(|request| {
                 request.kind == RoiJobKind::RebuildVoxelCache
                     && request.source_generation == work.source_generation
@@ -1444,7 +1444,7 @@ fn process_contour_voxel_rebuild_jobs_with_hook(
 
     let mut rebuild_entities = Vec::new();
     for (entity, roi) in world.query::<&Roi>().iter() {
-        if !matches!(roi.authoritative_data, RoiAuthoritativeData::Contour(_)) {
+        if !matches!(roi.body, RoiBody::Contour(_)) {
             continue;
         }
         if roi.running_job_kind().is_none() && roi.has_queued_job(RoiJobKind::RebuildVoxelCache) {
@@ -1581,7 +1581,7 @@ fn process_contour_voxel_rebuild_for_entity(
         let Ok(roi) = world.get::<&Roi>(roi_entity) else {
             return false;
         };
-        let RoiAuthoritativeData::Contour(_) = &roi.authoritative_data else {
+        let RoiBody::Contour(_) = &roi.body else {
             return false;
         };
         roi.dirty_state.authoritative.shape
@@ -1638,7 +1638,10 @@ fn process_contour_voxel_rebuild_for_entity(
         let Ok(roi) = world.get::<&Roi>(roi_entity) else {
             return false;
         };
-        let RoiAuthoritativeData::Contour(contour_data) = &roi.authoritative_data else {
+        let RoiBody::Contour(ContourBody {
+            data: contour_data, ..
+        }) = &roi.body
+        else {
             return false;
         };
         contour_data.clone()
@@ -1957,14 +1960,14 @@ fn set_runtime_status_message(world: &mut World, message: String) {
 
 pub fn roi_voxel_stats(world: &World, roi_entity: hecs::Entity) -> Option<VoxelRoiStats> {
     let roi = world.get::<&Roi>(roi_entity).ok()?;
-    let voxel_data = match &roi.authoritative_data {
-        RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh(_) => {
+    let voxel_data = match &roi.body {
+        RoiBody::Contour(_) | RoiBody::Mesh(_) => {
             if !roi.is_cache_current(RoiCacheKind::Voxel) {
                 return None;
             }
             &roi.voxel_cache()?.data
         }
-        RoiAuthoritativeData::Voxel(voxel) => voxel,
+        RoiBody::Voxel(VoxelBody { data: voxel }) => voxel,
     };
 
     let occupied_voxels = voxel_data

@@ -216,7 +216,7 @@ pub fn clear_contour_draft_for_roi_change(
     if let Some(roi_entity) = previous_active_roi {
         if world
             .get::<&Roi>(roi_entity)
-            .is_ok_and(|roi| roi.edit_preview.is_some())
+            .is_ok_and(|roi| roi.has_edit_preview())
         {
             roi::end_roi_preview(world, roi_entity);
         }

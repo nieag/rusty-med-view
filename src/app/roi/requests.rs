@@ -1,5 +1,5 @@
 use crate::app::components::{
-    CacheViewState, ContourViewKey, Roi, RoiAuthoritativeData, RoiCacheKind, RoiJobKind, ViewMode,
+    CacheViewState, ContourViewKey, Roi, RoiBody, RoiCacheKind, RoiJobKind, ViewMode,
 };
 use hecs::World;
 
@@ -146,7 +146,7 @@ pub fn request_mesh_cache_state(
     let Ok(roi) = world.get::<&Roi>(roi_entity) else {
         return RepresentationRequestStatus::blocked("roi_missing");
     };
-    if matches!(roi.authoritative_data, RoiAuthoritativeData::Mesh(_)) {
+    if matches!(roi.body, RoiBody::Mesh(_)) {
         return RepresentationRequestStatus::current();
     }
     if roi.mesh_cache().is_none() {
@@ -184,7 +184,7 @@ pub fn request_contour_view_state(
     };
     let contour = roi.contour_data();
     let contour_primary = contour.is_some();
-    let mesh_primary = matches!(&roi.authoritative_data, RoiAuthoritativeData::Mesh(_));
+    let mesh_primary = matches!(&roi.body, RoiBody::Mesh(_));
     if let Some(contour) = contour {
         if contour.active_plane_family == view_key.family {
             return ContourRepresentationStatus {

@@ -1,6 +1,7 @@
 pub use crate::app::roi::{
-    ContourData, ContourLoop, ContourPoint, ContourSlice, MeshData, MeshFace, MeshVertex,
-    PrimaryRepresentation, RoiAuthoritativeData, RoiId, RoiMetadata, VoxelData, VoxelGeometry,
+    ContourBody, ContourData, ContourLoop, ContourMovePreview, ContourPoint, ContourSlice,
+    MeshBody, MeshData, MeshEditPreview, MeshFace, MeshVertex, PrimaryRepresentation, RoiBody,
+    RoiId, RoiMetadata, VoxelBody, VoxelData, VoxelGeometry,
 };
 use crate::convert::{ChunkedMeshData, GeometryIdentity, PlaneDefinition, PlaneFamily};
 use glam::Vec3;
@@ -248,22 +249,6 @@ pub struct ContourSelection {
     pub slice_index: usize,
     pub loop_index: usize,
     pub point_index: Option<usize>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ContourMovePreview {
-    pub contour_data: ContourData,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct MeshEditPreview {
-    pub mesh_data: MeshData,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum RoiEditPreview {
-    ContourMove(ContourMovePreview),
-    MeshDeform(MeshEditPreview),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -659,7 +644,7 @@ pub struct Roi {
     /// Immutable reference grid for conversions involving this ROI.
     ///
     pub reference_geometry: VoxelGeometry,
-    pub authoritative_data: RoiAuthoritativeData,
+    pub body: RoiBody,
     pub session_caches: RoiSessionCaches,
     pub dirty_state: RoiDirtyState,
     pub job_state: RoiJobState,
@@ -667,10 +652,6 @@ pub struct Roi {
     pub preview_state: RoiPreviewState,
     /// Undo and redo steps of this ROI.
     pub history: RoiHistory,
-    /// In-flight interactive edit (a contour point drag or a mesh deform) that has not been
-    /// committed. It belongs to the ROI, so switching the active ROI cannot leave a preview
-    /// pointing at the wrong one.
-    pub edit_preview: Option<RoiEditPreview>,
     /// Current mesh generation already passed full voxelization validation.
     pub validated_mesh_generation: Option<u64>,
 }
@@ -681,10 +662,10 @@ impl Roi {
     }
 
     pub fn primary_representation(&self) -> PrimaryRepresentation {
-        match &self.authoritative_data {
-            RoiAuthoritativeData::Voxel(_) => PrimaryRepresentation::Voxel,
-            RoiAuthoritativeData::Contour(_) => PrimaryRepresentation::Contour,
-            RoiAuthoritativeData::Mesh(_) => PrimaryRepresentation::Mesh,
+        match &self.body {
+            RoiBody::Voxel(_) => PrimaryRepresentation::Voxel,
+            RoiBody::Contour(_) => PrimaryRepresentation::Contour,
+            RoiBody::Mesh(_) => PrimaryRepresentation::Mesh,
         }
     }
 
@@ -716,7 +697,9 @@ impl Roi {
                 color: [1.0, 0.2, 0.2, 1.0],
             },
             reference_geometry,
-            authoritative_data: RoiAuthoritativeData::Voxel(voxel_data.clone()),
+            body: RoiBody::Voxel(VoxelBody {
+                data: voxel_data.clone(),
+            }),
             session_caches: RoiSessionCaches {
                 voxel: Some(VoxelCache {
                     data: voxel_data,
@@ -739,7 +722,6 @@ impl Roi {
             job_metrics: RoiJobMetrics::default(),
             preview_state: RoiPreviewState::default(),
             history: RoiHistory::default(),
-            edit_preview: None,
             validated_mesh_generation: None,
         }
     }
@@ -764,7 +746,7 @@ impl Roi {
                 color: [1.0, 0.2, 0.2, 1.0],
             },
             reference_geometry,
-            authoritative_data: RoiAuthoritativeData::Contour(contour_data),
+            body: RoiBody::Contour(ContourBody::new(contour_data)),
             session_caches: RoiSessionCaches {
                 voxel: None,
                 contour: None,
@@ -783,7 +765,6 @@ impl Roi {
             job_metrics: RoiJobMetrics::default(),
             preview_state: RoiPreviewState::default(),
             history: RoiHistory::default(),
-            edit_preview: None,
             validated_mesh_generation: None,
         }
     }
@@ -808,7 +789,7 @@ impl Roi {
                 color: [1.0, 0.2, 0.2, 1.0],
             },
             reference_geometry,
-            authoritative_data: RoiAuthoritativeData::Mesh(mesh_data),
+            body: RoiBody::Mesh(MeshBody::new(mesh_data)),
             session_caches: RoiSessionCaches {
                 voxel: None,
                 contour: None,
@@ -827,22 +808,21 @@ impl Roi {
             job_metrics: RoiJobMetrics::default(),
             preview_state: RoiPreviewState::default(),
             history: RoiHistory::default(),
-            edit_preview: None,
             validated_mesh_generation: None,
         }
     }
 
     pub fn contour_data(&self) -> Option<&ContourData> {
-        match &self.authoritative_data {
-            RoiAuthoritativeData::Contour(contour) => Some(contour),
-            RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Mesh(_) => None,
+        match &self.body {
+            RoiBody::Contour(ContourBody { data: contour, .. }) => Some(contour),
+            RoiBody::Voxel(_) | RoiBody::Mesh(_) => None,
         }
     }
 
     pub fn mesh_data(&self) -> Option<&MeshData> {
-        match &self.authoritative_data {
-            RoiAuthoritativeData::Mesh(mesh) => Some(mesh),
-            RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Contour(_) => None,
+        match &self.body {
+            RoiBody::Mesh(MeshBody { data: mesh, .. }) => Some(mesh),
+            RoiBody::Voxel(_) | RoiBody::Contour(_) => None,
         }
     }
 }

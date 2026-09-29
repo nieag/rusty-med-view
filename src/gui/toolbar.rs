@@ -123,14 +123,10 @@ fn set_editor_tool(
         editor.mesh_selection = None;
     }
     drop(editor);
-    let cancel_preview =
-        world
-            .get::<&Roi>(active_roi)
-            .is_ok_and(|roi| match roi.edit_preview.as_ref() {
-                Some(RoiEditPreview::ContourMove(_)) => requested_tool != EditorTool::ContourSelect,
-                Some(RoiEditPreview::MeshDeform(_)) => requested_tool != EditorTool::MeshDeform,
-                None => false,
-            });
+    let cancel_preview = world.get::<&Roi>(active_roi).is_ok_and(|roi| {
+        (roi.contour_move_preview().is_some() && requested_tool != EditorTool::ContourSelect)
+            || (roi.mesh_edit_preview().is_some() && requested_tool != EditorTool::MeshDeform)
+    });
     if cancel_preview {
         crate::app::roi::cancel_roi_edit_preview(world, entities.editor);
     }

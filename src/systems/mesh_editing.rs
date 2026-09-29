@@ -1,6 +1,6 @@
 use crate::app::roi;
 use crate::components::{
-    AppEntities, EditorState, EditorTool, MeshData, MeshSelection, Roi, RoiAuthoritativeData,
+    AppEntities, EditorState, EditorTool, MeshBody, MeshData, MeshSelection, Roi, RoiBody,
     ViewMode, Viewport, ViewportState,
 };
 use crate::render::geometry::{
@@ -62,8 +62,8 @@ pub fn select_mesh_vertex(
     if roi.metadata.is_locked {
         return Err(MeshEditInteractionError::ActiveRoiLocked);
     }
-    let mesh = match &roi.authoritative_data {
-        RoiAuthoritativeData::Mesh(mesh) => mesh,
+    let mesh = match &roi.body {
+        RoiBody::Mesh(MeshBody { data: mesh, .. }) => mesh,
         _ => return Err(MeshEditInteractionError::ActiveRoiNotMesh),
     };
     let selection =

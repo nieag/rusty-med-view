@@ -261,10 +261,7 @@ fn chunked_mesh_for_render(roi: &Roi) -> Option<&ChunkedMeshData> {
             return preview.chunks.as_ref();
         }
     }
-    if matches!(
-        roi.authoritative_data,
-        crate::components::RoiAuthoritativeData::Mesh(_)
-    ) {
+    if matches!(roi.body, crate::components::RoiBody::Mesh(_)) {
         return None;
     }
     roi.is_cache_current(crate::components::RoiCacheKind::Mesh)

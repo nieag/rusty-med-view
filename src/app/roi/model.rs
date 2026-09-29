@@ -385,12 +385,67 @@ pub struct MeshData {
     pub faces: Vec<MeshFace>,
 }
 
+/// Preview of a contour point drag that has not been committed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContourMovePreview {
+    pub contour_data: ContourData,
+}
+
+/// Preview of a mesh deformation that has not been committed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeshEditPreview {
+    pub mesh_data: MeshData,
+}
+
+/// A voxel ROI: a read-only source such as a model prediction. It has no edit operations and
+/// therefore no preview.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VoxelBody {
+    pub data: VoxelData,
+}
+
+/// A contour ROI and its in-flight point drag, if any.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContourBody {
+    pub data: ContourData,
+    pub preview: Option<ContourMovePreview>,
+}
+
+impl ContourBody {
+    pub fn new(data: ContourData) -> Self {
+        Self {
+            data,
+            preview: None,
+        }
+    }
+}
+
+/// A mesh ROI and its in-flight deformation, if any.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeshBody {
+    pub data: MeshData,
+    pub preview: Option<MeshEditPreview>,
+}
+
+impl MeshBody {
+    pub fn new(data: MeshData) -> Self {
+        Self {
+            data,
+            preview: None,
+        }
+    }
+}
+
+/// The authoritative representation of an ROI, with the edit state that only that
+/// representation has: a contour drag cannot exist on a mesh ROI, and a voxel ROI cannot be
+/// edited at all.
 // `VoxelGeometry` is a `Copy` affine plus its cached inverse, stored inline on purpose: there are
 // only a handful of ROIs, and recomputing the inverse in the mapping hot paths would cost more
 // than the size imbalance between variants.
 #[allow(clippy::large_enum_variant)]
-pub enum RoiAuthoritativeData {
-    Voxel(VoxelData),
-    Contour(ContourData),
-    Mesh(MeshData),
+#[derive(Debug, Clone, PartialEq)]
+pub enum RoiBody {
+    Voxel(VoxelBody),
+    Contour(ContourBody),
+    Mesh(MeshBody),
 }

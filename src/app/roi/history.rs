@@ -1,7 +1,7 @@
 use crate::app::components::{
-    ContourData, ContourSliceKey, EditorState, MeshData, Roi, RoiAuthoritativeData, RoiDirtyRegion,
-    RoiEditHistoryEntry, RoiEditSnapshot, RoiHistory, RoiJobKind, RoiJobPriority, RoiJobRequest,
-    RoiJobState,
+    ContourBody, ContourData, ContourSliceKey, EditorState, MeshBody, MeshData, Roi, RoiBody,
+    RoiDirtyRegion, RoiEditHistoryEntry, RoiEditSnapshot, RoiHistory, RoiJobKind, RoiJobPriority,
+    RoiJobRequest, RoiJobState,
 };
 use crate::app::roi::authority::{
     replace_contour_data, replace_contour_data_for_slice, replace_mesh_data, ContourMutationError,
@@ -206,10 +206,12 @@ fn capture_roi_edit_snapshot(
     let roi = world
         .get::<&Roi>(roi_entity)
         .map_err(|_| RoiEditHistoryError::MissingRoi)?;
-    match &roi.authoritative_data {
-        RoiAuthoritativeData::Contour(contour) => Ok(RoiEditSnapshot::Contour(contour.clone())),
-        RoiAuthoritativeData::Mesh(mesh) => Ok(RoiEditSnapshot::Mesh(mesh.clone())),
-        RoiAuthoritativeData::Voxel(_) => Err(RoiEditHistoryError::RepresentationChanged),
+    match &roi.body {
+        RoiBody::Contour(ContourBody { data: contour, .. }) => {
+            Ok(RoiEditSnapshot::Contour(contour.clone()))
+        }
+        RoiBody::Mesh(MeshBody { data: mesh, .. }) => Ok(RoiEditSnapshot::Mesh(mesh.clone())),
+        RoiBody::Voxel(_) => Err(RoiEditHistoryError::RepresentationChanged),
     }
 }
 
@@ -227,8 +229,11 @@ fn restore_roi_edit_snapshot(
     }
     roi.job_state = RoiJobState::default();
     roi.end_preview();
-    match (&mut roi.authoritative_data, snapshot) {
-        (RoiAuthoritativeData::Contour(existing), RoiEditSnapshot::Contour(contour)) => {
+    match (&mut roi.body, snapshot) {
+        (
+            RoiBody::Contour(ContourBody { data: existing, .. }),
+            RoiEditSnapshot::Contour(contour),
+        ) => {
             *existing = contour;
             roi.mark_contour_authoritative_changed();
             roi.mark_all_contour_view_caches_stale();
@@ -244,7 +249,7 @@ fn restore_roi_edit_snapshot(
                 },
             });
         }
-        (RoiAuthoritativeData::Mesh(existing), RoiEditSnapshot::Mesh(mesh)) => {
+        (RoiBody::Mesh(MeshBody { data: existing, .. }), RoiEditSnapshot::Mesh(mesh)) => {
             *existing = mesh;
             roi.mark_mesh_authoritative_changed();
             roi.mark_all_contour_view_caches_stale();

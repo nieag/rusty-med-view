@@ -703,10 +703,7 @@ fn test_authority_roundtrip_voxel_contour_voxel_preserves_entity() {
     let roi = world.get::<&Roi>(entity).unwrap();
     assert_eq!(roi.metadata.roi_id, roi_id);
     assert_eq!(roi.primary_representation(), PrimaryRepresentation::Voxel);
-    assert!(matches!(
-        roi.authoritative_data,
-        RoiAuthoritativeData::Voxel(_)
-    ));
+    assert!(matches!(roi.body, RoiBody::Voxel(_)));
     assert!(roi.is_cache_current(RoiCacheKind::Voxel));
     assert_eq!(roi.dirty_state.authoritative.shape, 3);
 }
@@ -1342,10 +1339,7 @@ fn test_rotated_anisotropic_roi_keeps_direct_contours_through_mesh_resample() {
     }
     let roi = world.get::<&Roi>(entity).unwrap();
     assert!(roi.is_cache_current(RoiCacheKind::Voxel));
-    assert!(matches!(
-        roi.authoritative_data,
-        RoiAuthoritativeData::Mesh(_)
-    ));
+    assert!(matches!(roi.body, RoiBody::Mesh(_)));
     assert!(roi
         .voxel_cache()
         .unwrap()
@@ -1366,7 +1360,7 @@ fn test_create_contour_roi_from_voxel_roi_keeps_source_unchanged() {
     let source = spawn_test_roi(&mut world);
     let source_before = {
         let roi = world.get::<&Roi>(source).unwrap();
-        let RoiAuthoritativeData::Voxel(voxel) = &roi.authoritative_data else {
+        let RoiBody::Voxel(VoxelBody { data: voxel }) = &roi.body else {
             panic!("expected voxel roi");
         };
         voxel.clone()
@@ -1376,7 +1370,7 @@ fn test_create_contour_roi_from_voxel_roi_keeps_source_unchanged() {
         .expect("extraction should create contour roi");
 
     let roi = world.get::<&Roi>(source).unwrap();
-    let RoiAuthoritativeData::Voxel(voxel_after) = &roi.authoritative_data else {
+    let RoiBody::Voxel(VoxelBody { data: voxel_after }) = &roi.body else {
         panic!("source should remain voxel authoritative");
     };
     assert_eq!(*voxel_after, source_before);
@@ -1393,10 +1387,7 @@ fn test_create_contour_roi_from_voxel_roi_returns_contour_primary_roi() {
 
     let roi = world.get::<&Roi>(created).unwrap();
     assert_eq!(roi.primary_representation(), PrimaryRepresentation::Contour);
-    assert!(matches!(
-        roi.authoritative_data,
-        RoiAuthoritativeData::Contour(_)
-    ));
+    assert!(matches!(roi.body, RoiBody::Contour(_)));
     assert_eq!(roi.metadata.name, "Test (Axial Contour)");
 }
 
@@ -1492,9 +1483,9 @@ fn test_create_mesh_roi_from_voxel_roi_keeps_source_unchanged() {
     let source = spawn_sparse_voxel_roi(&mut world);
     let before = {
         let roi = world.get::<&Roi>(source).unwrap();
-        match &roi.authoritative_data {
-            RoiAuthoritativeData::Voxel(voxel) => voxel.clone(),
-            RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh(_) => {
+        match &roi.body {
+            RoiBody::Voxel(VoxelBody { data: voxel }) => voxel.clone(),
+            RoiBody::Contour(_) | RoiBody::Mesh(_) => {
                 panic!("source must remain voxel-primary")
             }
         }
@@ -1505,9 +1496,9 @@ fn test_create_mesh_roi_from_voxel_roi_keeps_source_unchanged() {
 
     let after = {
         let roi = world.get::<&Roi>(source).unwrap();
-        match &roi.authoritative_data {
-            RoiAuthoritativeData::Voxel(voxel) => voxel.clone(),
-            RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh(_) => {
+        match &roi.body {
+            RoiBody::Voxel(VoxelBody { data: voxel }) => voxel.clone(),
+            RoiBody::Contour(_) | RoiBody::Mesh(_) => {
                 panic!("source must remain voxel-primary")
             }
         }
@@ -2319,7 +2310,7 @@ fn test_process_contour_voxel_rebuild_jobs_discards_stale_generation_results() {
                 return;
             }
             let mut roi = world.get::<&mut Roi>(hook_entity).unwrap();
-            if let RoiAuthoritativeData::Contour(contour) = &mut roi.authoritative_data {
+            if let RoiBody::Contour(ContourBody { data: contour, .. }) = &mut roi.body {
                 contour.slices.clear();
             }
             roi.mark_contour_authoritative_changed();
@@ -3162,7 +3153,7 @@ fn test_multi_label_import_creates_one_roi_per_label_with_its_own_mask() {
         assert_eq!(roi.primary_representation(), PrimaryRepresentation::Voxel);
         assert!(roi.is_cache_current(RoiCacheKind::Voxel));
         assert_eq!(roi.metadata.color, label_color(label));
-        let RoiAuthoritativeData::Voxel(voxel) = &roi.authoritative_data else {
+        let RoiBody::Voxel(VoxelBody { data: voxel }) = &roi.body else {
             panic!("voxel authority");
         };
         let occupied: Vec<usize> = voxel
@@ -3211,7 +3202,7 @@ fn test_labelmap_without_labels_imports_as_one_empty_roi() {
         [1.0, 0.2, 0.2, 1.0],
         "keeps the default colour"
     );
-    let RoiAuthoritativeData::Voxel(voxel) = &roi.authoritative_data else {
+    let RoiBody::Voxel(VoxelBody { data: voxel }) = &roi.body else {
         panic!("voxel authority");
     };
     assert!(voxel.raw_data.iter().all(|value| *value == 0));

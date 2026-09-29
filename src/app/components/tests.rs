@@ -175,7 +175,10 @@ fn test_new_voxel_roi_initializes_voxel_primary_state() {
     assert_eq!(roi.metadata.name, "Liver");
     assert_eq!(roi.primary_representation(), PrimaryRepresentation::Voxel);
     assert_eq!(roi.reference_geometry().dimensions(), [16, 16, 8]);
-    let RoiAuthoritativeData::Voxel(authoritative_voxel) = &roi.authoritative_data else {
+    let RoiBody::Voxel(VoxelBody {
+        data: authoritative_voxel,
+    }) = &roi.body
+    else {
         panic!("a new voxel ROI has voxel authority");
     };
     assert_eq!(authoritative_voxel.geometry.dimensions(), [16, 16, 8]);
@@ -233,7 +236,7 @@ fn test_new_voxel_roi_without_gpu_still_has_current_cpu_voxel_cache() {
 }
 
 #[test]
-fn test_new_voxel_roi_copies_authoritative_data_into_session_voxel_cache() {
+fn test_new_voxel_roi_copies_body_into_session_voxel_cache() {
     let geometry = VoxelGeometry::new(
         [6, 5, 4],
         [0.9, 1.1, 1.3],
@@ -250,9 +253,9 @@ fn test_new_voxel_roi_copies_authoritative_data_into_session_voxel_cache() {
         None,
     );
 
-    let authoritative = match &roi.authoritative_data {
-        RoiAuthoritativeData::Voxel(voxel) => voxel,
-        RoiAuthoritativeData::Contour(_) | RoiAuthoritativeData::Mesh(_) => {
+    let authoritative = match &roi.body {
+        RoiBody::Voxel(VoxelBody { data: voxel }) => voxel,
+        RoiBody::Contour(_) | RoiBody::Mesh(_) => {
             panic!("expected voxel-authoritative ROI");
         }
     };
@@ -534,8 +537,8 @@ fn test_voxel_geometry_is_preserved_on_constructor() {
         None,
     );
 
-    match roi.authoritative_data {
-        RoiAuthoritativeData::Voxel(voxel) => assert_eq!(voxel.geometry, geometry),
+    match roi.body {
+        RoiBody::Voxel(VoxelBody { data: voxel }) => assert_eq!(voxel.geometry, geometry),
         _ => panic!("expected voxel roi"),
     }
 }
@@ -649,10 +652,7 @@ fn test_new_contour_roi_initializes_contour_primary_state() {
     assert_eq!(roi.metadata.name, "GTV");
     assert_eq!(roi.primary_representation(), PrimaryRepresentation::Contour);
     assert_eq!(roi.reference_geometry().identity(), expected_identity);
-    assert!(matches!(
-        roi.authoritative_data,
-        RoiAuthoritativeData::Contour(_)
-    ));
+    assert!(matches!(roi.body, RoiBody::Contour(_)));
     assert_eq!(roi.contour_data(), Some(&contour_data));
     assert!(roi.voxel_cache().is_none());
     assert!(roi.session_caches.contour.is_none());
@@ -703,10 +703,7 @@ fn test_new_mesh_roi_initializes_mesh_primary_state() {
     assert_eq!(roi.metadata.roi_id, RoiId(21));
     assert_eq!(roi.metadata.name, "Surface");
     assert_eq!(roi.primary_representation(), PrimaryRepresentation::Mesh);
-    assert!(matches!(
-        roi.authoritative_data,
-        RoiAuthoritativeData::Mesh(_)
-    ));
+    assert!(matches!(roi.body, RoiBody::Mesh(_)));
     assert_eq!(roi.mesh_data(), Some(&mesh_data));
     assert!(roi.voxel_cache().is_none());
     assert!(roi.session_caches.contour.is_none());

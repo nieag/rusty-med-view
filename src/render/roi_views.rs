@@ -1,6 +1,6 @@
 use crate::app::components::{
-    CacheViewState, ContourData, LayerSettings, MeshData, Roi, RoiAuthoritativeData, RoiCacheKind,
-    MAX_VOXEL_OVERLAY_SLOTS,
+    CacheViewState, ContourBody, ContourData, LayerSettings, MeshBody, MeshData, Roi, RoiBody,
+    RoiCacheKind, MAX_VOXEL_OVERLAY_SLOTS,
 };
 use hecs::{Entity, World};
 
@@ -282,9 +282,7 @@ fn collect_contour_and_mesh_views(
         } else {
             acc.contour_views.push(ContourOverlayView { entity });
         }
-    } else if matches!(roi.authoritative_data, RoiAuthoritativeData::Contour(_))
-        || roi.contour_cache().is_some()
-    {
+    } else if matches!(roi.body, RoiBody::Contour(_)) || roi.contour_cache().is_some() {
         acc.contour_skips.push(RoiRenderSkip {
             entity,
             reason: "contour_data_missing_or_empty",
@@ -300,9 +298,7 @@ fn collect_contour_and_mesh_views(
                 reason: "mesh_data_missing_or_empty",
             });
         }
-    } else if matches!(roi.authoritative_data, RoiAuthoritativeData::Mesh(_))
-        || roi.mesh_cache().is_some()
-    {
+    } else if matches!(roi.body, RoiBody::Mesh(_)) || roi.mesh_cache().is_some() {
         acc.mesh_skips.push(RoiRenderSkip {
             entity,
             reason: "mesh_data_missing_or_empty",
@@ -311,9 +307,9 @@ fn collect_contour_and_mesh_views(
 }
 
 fn contour_data_for_adapter(roi: &Roi) -> Option<&ContourData> {
-    match &roi.authoritative_data {
-        RoiAuthoritativeData::Contour(contour) => Some(contour),
-        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Mesh(_) => roi
+    match &roi.body {
+        RoiBody::Contour(ContourBody { data: contour, .. }) => Some(contour),
+        RoiBody::Voxel(_) | RoiBody::Mesh(_) => roi
             .contour_cache()?
             .views
             .iter()
@@ -336,9 +332,9 @@ pub(crate) fn mesh_data_for_adapter(roi: &Roi) -> Option<&MeshData> {
             return Some(&preview.data);
         }
     }
-    match &roi.authoritative_data {
-        RoiAuthoritativeData::Mesh(mesh) => Some(mesh),
-        RoiAuthoritativeData::Voxel(_) | RoiAuthoritativeData::Contour(_) => {
+    match &roi.body {
+        RoiBody::Mesh(MeshBody { data: mesh, .. }) => Some(mesh),
+        RoiBody::Voxel(_) | RoiBody::Contour(_) => {
             if roi.is_cache_current(RoiCacheKind::Mesh) {
                 roi.mesh_cache().map(|cache| &cache.data)
             } else {

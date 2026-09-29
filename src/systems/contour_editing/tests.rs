@@ -1,6 +1,6 @@
 use super::*;
 use crate::components::{
-    ContourData, InputState, RoiAuthoritativeData, RoiCacheKind, RoiJobKind, ViewportState,
+    ContourBody, ContourData, InputState, RoiBody, RoiCacheKind, RoiJobKind, ViewportState,
     VoxelCache, WindowSettings,
 };
 
@@ -151,7 +151,7 @@ fn spawn_test_contour_roi_with_loop(world: &mut World, family: PlaneFamily) -> h
 
 fn reframe_first_contour_slice(world: &mut World, roi_entity: hecs::Entity) {
     let mut roi = world.get::<&mut Roi>(roi_entity).unwrap();
-    let RoiAuthoritativeData::Contour(contour) = &mut roi.authoritative_data else {
+    let RoiBody::Contour(ContourBody { data: contour, .. }) = &mut roi.body else {
         panic!("expected contour authority");
     };
     let slice = &mut contour.slices[0];

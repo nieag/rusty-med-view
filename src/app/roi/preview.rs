@@ -1,6 +1,6 @@
 use crate::app::components::{
-    ContourData, ContourMovePreview, ContourSliceKey, EditorState, MeshEditPreview, Roi,
-    RoiDirtyRegion, RoiEditPreview, RoiJobKind, RoiJobPriority, RoiJobRequest,
+    ContourData, ContourMovePreview, ContourSliceKey, EditorState, MeshEditPreview, Roi, RoiBody,
+    RoiDirtyRegion, RoiJobKind, RoiJobPriority, RoiJobRequest,
 };
 use crate::app::roi::authority::{ContourMutationError, MeshMutationError};
 use crate::app::roi::history::{
@@ -11,36 +11,35 @@ use hecs::World;
 
 impl Roi {
     pub fn contour_move_preview(&self) -> Option<&ContourMovePreview> {
-        match self.edit_preview.as_ref()? {
-            RoiEditPreview::ContourMove(preview) => Some(preview),
-            RoiEditPreview::MeshDeform(_) => None,
+        match &self.body {
+            RoiBody::Contour(body) => body.preview.as_ref(),
+            _ => None,
         }
     }
 
     pub fn mesh_edit_preview(&self) -> Option<&MeshEditPreview> {
-        match self.edit_preview.as_ref()? {
-            RoiEditPreview::MeshDeform(preview) => Some(preview),
-            RoiEditPreview::ContourMove(_) => None,
+        match &self.body {
+            RoiBody::Mesh(body) => body.preview.as_ref(),
+            _ => None,
         }
     }
 
+    /// Whether an edit is in flight on this ROI.
+    pub fn has_edit_preview(&self) -> bool {
+        self.contour_move_preview().is_some() || self.mesh_edit_preview().is_some()
+    }
+
     pub fn take_contour_move_preview(&mut self) -> Option<ContourMovePreview> {
-        if !matches!(self.edit_preview, Some(RoiEditPreview::ContourMove(_))) {
-            return None;
-        }
-        match self.edit_preview.take()? {
-            RoiEditPreview::ContourMove(preview) => Some(preview),
-            RoiEditPreview::MeshDeform(_) => unreachable!("preview kind checked before take"),
+        match &mut self.body {
+            RoiBody::Contour(body) => body.preview.take(),
+            _ => None,
         }
     }
 
     pub fn take_mesh_edit_preview(&mut self) -> Option<MeshEditPreview> {
-        if !matches!(self.edit_preview, Some(RoiEditPreview::MeshDeform(_))) {
-            return None;
-        }
-        match self.edit_preview.take()? {
-            RoiEditPreview::MeshDeform(preview) => Some(preview),
-            RoiEditPreview::ContourMove(_) => unreachable!("preview kind checked before take"),
+        match &mut self.body {
+            RoiBody::Mesh(body) => body.preview.take(),
+            _ => None,
         }
     }
 
@@ -53,7 +52,11 @@ impl Roi {
     /// Ends the preview session: the preview caches and the in-flight edit are discarded.
     pub fn end_preview(&mut self) {
         self.preview_state.active = false;
-        self.edit_preview = None;
+        match &mut self.body {
+            RoiBody::Contour(body) => body.preview = None,
+            RoiBody::Mesh(body) => body.preview = None,
+            RoiBody::Voxel(_) => {}
+        }
         self.session_caches.preview_voxel = None;
         self.session_caches.preview_mesh = None;
     }
@@ -75,12 +78,10 @@ pub fn begin_contour_move_preview(
     let mut roi = world
         .get::<&mut Roi>(roi_entity)
         .map_err(|_| ContourMutationError::MissingRoi)?;
-    if roi.contour_data().is_none() {
-        return Err(ContourMutationError::NotContourRoi);
+    match &mut roi.body {
+        RoiBody::Contour(body) => body.preview = Some(ContourMovePreview { contour_data }),
+        _ => return Err(ContourMutationError::NotContourRoi),
     }
-    roi.edit_preview = Some(RoiEditPreview::ContourMove(ContourMovePreview {
-        contour_data,
-    }));
     let revision = roi.begin_preview();
     let source_generation = roi.dirty_state.authoritative.shape;
     roi.enqueue_job(RoiJobRequest {
@@ -124,10 +125,10 @@ pub fn begin_mesh_edit_preview(
     let mut roi = world
         .get::<&mut Roi>(roi_entity)
         .map_err(|_| MeshMutationError::MissingRoi)?;
-    if roi.mesh_data().is_none() {
-        return Err(MeshMutationError::NotMeshRoi);
+    match &mut roi.body {
+        RoiBody::Mesh(body) => body.preview = Some(MeshEditPreview { mesh_data }),
+        _ => return Err(MeshMutationError::NotMeshRoi),
     }
-    roi.edit_preview = Some(RoiEditPreview::MeshDeform(MeshEditPreview { mesh_data }));
     Ok(roi.begin_preview())
 }
 
@@ -179,7 +180,7 @@ pub fn cancel_roi_edit_preview(world: &mut World, editor_entity: hecs::Entity) -
     };
     let had_preview = world
         .get::<&Roi>(roi_entity)
-        .is_ok_and(|roi| roi.edit_preview.is_some());
+        .is_ok_and(|roi| roi.has_edit_preview());
     if had_preview {
         end_roi_preview(world, roi_entity);
     }
@@ -217,22 +218,16 @@ mod tests {
     }
 
     #[test]
-    fn test_a_roi_holds_one_edit_preview_and_a_new_kind_replaces_the_old() {
+    fn test_a_contour_roi_holds_only_a_contour_preview() {
         let mut roi = Roi::new_contour(RoiId(1), "test".to_string(), contour_data());
-        roi.edit_preview = Some(RoiEditPreview::ContourMove(ContourMovePreview {
+        let RoiBody::Contour(body) = &mut roi.body else {
+            unreachable!()
+        };
+        body.preview = Some(ContourMovePreview {
             contour_data: contour_data(),
-        }));
+        });
         assert!(roi.contour_move_preview().is_some());
-
-        roi.edit_preview = Some(RoiEditPreview::MeshDeform(MeshEditPreview {
-            mesh_data: crate::app::roi::MeshData {
-                vertices: Vec::new(),
-                faces: Vec::new(),
-            },
-        }));
-
-        assert!(roi.contour_move_preview().is_none());
-        assert!(roi.mesh_edit_preview().is_some());
+        assert!(roi.mesh_edit_preview().is_none());
     }
 
     #[test]
@@ -290,11 +285,11 @@ mod tests {
         );
 
         let previous_roi = world.get::<&Roi>(previous).unwrap();
-        assert!(previous_roi.edit_preview.is_none());
+        assert!(!previous_roi.has_edit_preview());
         assert!(!previous_roi.preview_state.active);
         drop(previous_roi);
         assert!(
-            world.get::<&Roi>(next).unwrap().edit_preview.is_some(),
+            world.get::<&Roi>(next).unwrap().has_edit_preview(),
             "the newly active ROI keeps its own preview"
         );
     }
@@ -308,10 +303,14 @@ mod tests {
             contour_data(),
         ),));
         world.get::<&mut Roi>(roi_entity).unwrap().begin_preview();
-        world.get::<&mut Roi>(roi_entity).unwrap().edit_preview =
-            Some(RoiEditPreview::ContourMove(ContourMovePreview {
-                contour_data: contour_data(),
-            }));
+        let mut roi = world.get::<&mut Roi>(roi_entity).unwrap();
+        let RoiBody::Contour(body) = &mut roi.body else {
+            unreachable!()
+        };
+        body.preview = Some(ContourMovePreview {
+            contour_data: contour_data(),
+        });
+        drop(roi);
         let editor_entity = world.spawn((EditorState {
             active_roi: Some(roi_entity),
             ..EditorState::default()
@@ -319,11 +318,7 @@ mod tests {
 
         assert!(cancel_roi_edit_preview(&mut world, editor_entity));
 
-        assert!(world
-            .get::<&Roi>(roi_entity)
-            .unwrap()
-            .edit_preview
-            .is_none());
+        assert!(!world.get::<&Roi>(roi_entity).unwrap().has_edit_preview());
         assert!(!world.get::<&Roi>(roi_entity).unwrap().preview_state.active);
     }
 
