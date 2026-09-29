@@ -141,7 +141,6 @@ pub fn commit_contour_move_preview(
         .ok_or(ContourMutationError::MissingPreview)?;
     let result = replace_contour_data_for_slice_with_history(
         world,
-        editor_entity,
         preview.roi_entity,
         preview.contour_data,
         dirty_plane,
@@ -201,12 +200,7 @@ pub fn commit_mesh_edit_preview(
     let result = crate::convert::validate_mesh_for_voxelization(&preview.mesh_data)
         .map_err(MeshMutationError::InvalidMesh)
         .and_then(|()| {
-            replace_mesh_data_with_history(
-                world,
-                editor_entity,
-                preview.roi_entity,
-                preview.mesh_data,
-            )?;
+            replace_mesh_data_with_history(world, preview.roi_entity, preview.mesh_data)?;
             let mut roi = world
                 .get::<&mut Roi>(preview.roi_entity)
                 .map_err(|_| MeshMutationError::MissingRoi)?;

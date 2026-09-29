@@ -13,7 +13,7 @@ fn activate_promoted_edit_tool(world: &mut World, entities: &AppEntities, tool: 
         .ok()
         .and_then(|editor| editor.active_roi);
     if let Some(roi_entity) = active_roi {
-        roi::clear_roi_edit_history_for_roi(world, entities.editor, roi_entity);
+        roi::clear_roi_edit_history_for_roi(world, roi_entity);
     }
     if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
         input.contour_move_pending_commit = false;
@@ -559,9 +559,7 @@ pub fn draw_sidebar(
                                 Ok(()) => {
                                     roi::clear_roi_edit_history_for_roi(
                                         world,
-                                        entities.editor,
-                                        entity,
-                                    );
+                                        entity,);
                                     handlers::set_status_message(
                                         world,
                                         entities,
@@ -615,9 +613,7 @@ pub fn draw_sidebar(
                             Ok(()) => {
                                 roi::clear_roi_edit_history_for_roi(
                                     world,
-                                    entities.editor,
-                                    entity,
-                                );
+                                    entity,);
                                 handlers::set_status_message(
                                     world,
                                     entities,

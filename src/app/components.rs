@@ -210,8 +210,6 @@ pub struct EditorState {
     pub mesh_selection: Option<MeshSelection>,
     pub mesh_brush_radius_mm: f32,
     pub mesh_brush_strength: f32,
-    pub roi_undo_stack: Vec<RoiEditHistoryEntry>,
-    pub roi_redo_stack: Vec<RoiEditHistoryEntry>,
 }
 
 impl Default for EditorState {
@@ -225,8 +223,6 @@ impl Default for EditorState {
             mesh_selection: None,
             mesh_brush_radius_mm: 12.0,
             mesh_brush_strength: 1.0,
-            roi_undo_stack: Vec::new(),
-            roi_redo_stack: Vec::new(),
         }
     }
 }
@@ -290,9 +286,57 @@ pub enum RoiEditSnapshot {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoiEditHistoryEntry {
-    pub roi_entity: hecs::Entity,
     pub snapshot: RoiEditSnapshot,
     pub dirty_region: RoiDirtyRegion,
+}
+
+/// Most undo (and redo) steps kept per ROI.
+pub const MAX_ROI_EDIT_HISTORY: usize = 32;
+
+/// Undo and redo steps of one ROI, oldest first. History belongs to the ROI, not to the editor:
+/// undo acts on the active ROI and never changes which ROI is active, and an ROI's steps are
+/// independent of every other ROI's.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RoiHistory {
+    pub undo: Vec<RoiEditHistoryEntry>,
+    pub redo: Vec<RoiEditHistoryEntry>,
+}
+
+impl RoiHistory {
+    /// Records a new edit: it becomes the latest undo step and invalidates redo.
+    pub fn record(&mut self, entry: RoiEditHistoryEntry) {
+        self.undo.push(entry);
+        Self::trim(&mut self.undo);
+        self.redo.clear();
+    }
+
+    /// Moves the latest step of one stack to the other, swapping its snapshot for `current` (the
+    /// state being replaced), so the step can be reversed.
+    pub fn step(&mut self, undo: bool, current: RoiEditSnapshot) {
+        let (source, destination) = if undo {
+            (&mut self.undo, &mut self.redo)
+        } else {
+            (&mut self.redo, &mut self.undo)
+        };
+        if let Some(entry) = source.pop() {
+            destination.push(RoiEditHistoryEntry {
+                snapshot: current,
+                dirty_region: entry.dirty_region,
+            });
+            Self::trim(destination);
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+    }
+
+    fn trim(stack: &mut Vec<RoiEditHistoryEntry>) {
+        if stack.len() > MAX_ROI_EDIT_HISTORY {
+            stack.remove(0);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -625,6 +669,8 @@ pub struct Roi {
     pub job_state: RoiJobState,
     pub job_metrics: RoiJobMetrics,
     pub preview_state: RoiPreviewState,
+    /// Undo and redo steps of this ROI.
+    pub history: RoiHistory,
     /// Current mesh generation already passed full voxelization validation.
     pub validated_mesh_generation: Option<u64>,
 }
@@ -692,6 +738,7 @@ impl Roi {
             job_state: RoiJobState::default(),
             job_metrics: RoiJobMetrics::default(),
             preview_state: RoiPreviewState::default(),
+            history: RoiHistory::default(),
             validated_mesh_generation: None,
         }
     }
@@ -734,6 +781,7 @@ impl Roi {
             job_state: RoiJobState::default(),
             job_metrics: RoiJobMetrics::default(),
             preview_state: RoiPreviewState::default(),
+            history: RoiHistory::default(),
             validated_mesh_generation: None,
         }
     }
@@ -776,6 +824,7 @@ impl Roi {
             job_state: RoiJobState::default(),
             job_metrics: RoiJobMetrics::default(),
             preview_state: RoiPreviewState::default(),
+            history: RoiHistory::default(),
             validated_mesh_generation: None,
         }
     }

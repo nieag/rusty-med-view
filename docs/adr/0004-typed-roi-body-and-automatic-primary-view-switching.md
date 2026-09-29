@@ -40,9 +40,9 @@ A lossless family switch therefore keeps the voxel and mesh caches current: no r
 enum RoiBody { Voxel(VoxelBody), Contour(ContourBody), Mesh(MeshBody) }
 ```
 
-Each body owns its authoritative data, its edit preview, and its undo/redo history. Editing code takes the concrete body (`&mut ContourBody`), so wrong-authority errors and `Missing*` variants disappear. `Roi` keeps identity, metadata, geometry, the derived caches, and the job queue. A `VoxelBody` is read-only: it has no edit operations.
+Each body owns its authoritative data and its edit preview. Editing code takes the concrete body (`&mut ContourBody`), so wrong-authority errors and `Missing*` variants disappear. `Roi` keeps identity, metadata, geometry, the derived caches, the job queue, and the history. A `VoxelBody` is read-only: it has no edit operations.
 
-**History moves into the body, per ROI.** Undo and redo act on the active ROI and never change it. (Today's global stack is the exception to review below.) A history entry is either an edit delta or, for an authority change, a snapshot of the previous body, so an authority change is one undo step.
+**History lives on the `Roi`, per ROI, not inside the body.** Undo and redo act on the active ROI and never change it. It cannot live inside the body because an authority change replaces the body: the history entry for that change must survive the replacement. An entry is either an edit snapshot or, for an authority change, a snapshot of the previous body, so an authority change is one undo step. *Implemented in stage 2a* (`RoiHistory` on `Roi`, 32 steps per ROI, undo and redo act on the active ROI).
 
 ### 3. Automatic switching
 
@@ -64,7 +64,7 @@ The family dropdown, "Make displayed view editable", `RequiresConversion`, the s
 Each stage is its own commit series and must keep the guard tests (`tests/switch_guard.rs`), the strict QA spec, clippy, fmt, and the wasm check green.
 
 1. **`Revision` and one freshness rule.** Pure refactor of the cache machinery, no behaviour change. *Implemented* as `Revision { shape, form }`, a per-cache `CacheFreshness { dirty, built_from }` held in `RoiDirtyState`, one `is_current` rule, and one invalidation routine driven by a per-cache rule. The cache values stay in `session_caches` rather than being wrapped in a `Derived<T>` container: the freshness rule is the part that was duplicated, and wrapping the values would only have added accessor churn at about 150 sites. Contour views record the full `Revision` they were built from.
-2. **`RoiBody`.** Typed bodies and per-ROI history. Behaviour unchanged except undo no longer moves the active ROI.
+2. **`RoiBody`.** Three commits. *2a (done):* per-ROI history; undo acts on the active ROI. *2b:* edit previews move from the global editor state into the ROI. *2c:* typed `RoiBody` variants owning their preview. Behaviour unchanged except undo no longer moves the active ROI.
 3. **`ensure_editable` and the switch.** Inline path first, then the background path, then mesh and voxel entry.
 4. **Delete the promotion API and UI.** Then update `tests/switch_guard.rs` to exercise the new path.
 

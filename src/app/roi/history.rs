@@ -1,6 +1,7 @@
 use crate::app::components::{
     ContourData, ContourSliceKey, EditorState, MeshData, Roi, RoiAuthoritativeData, RoiDirtyRegion,
-    RoiEditHistoryEntry, RoiEditSnapshot, RoiJobKind, RoiJobPriority, RoiJobRequest, RoiJobState,
+    RoiEditHistoryEntry, RoiEditSnapshot, RoiHistory, RoiJobKind, RoiJobPriority, RoiJobRequest,
+    RoiJobState,
 };
 use crate::app::roi::authority::{
     replace_contour_data, replace_contour_data_for_slice, replace_mesh_data, ContourMutationError,
@@ -9,53 +10,42 @@ use crate::app::roi::authority::{
 use crate::convert::PlaneDefinition;
 use hecs::World;
 
-const MAX_ROI_EDIT_HISTORY: usize = 32;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoiEditHistoryError {
     MissingEditorState,
     MissingRoi,
+    NoActiveRoi,
     NoUndo,
     NoRedo,
     Locked,
     RepresentationChanged,
 }
 
+/// Replaces the ROI's contour data and records the previous data as an undo step.
 pub fn replace_contour_data_with_history(
     world: &mut World,
-    editor_entity: hecs::Entity,
     roi_entity: hecs::Entity,
     contour_data: ContourData,
 ) -> Result<(), ContourMutationError> {
-    replace_contour_data_with_history_impl(world, editor_entity, roi_entity, contour_data, None)
+    replace_contour_data_with_history_impl(world, roi_entity, contour_data, None)
 }
 
+/// Like [`replace_contour_data_with_history`], with a rebuild scoped to the changed slice.
 pub fn replace_contour_data_for_slice_with_history(
     world: &mut World,
-    editor_entity: hecs::Entity,
     roi_entity: hecs::Entity,
     contour_data: ContourData,
     dirty_plane: PlaneDefinition,
 ) -> Result<(), ContourMutationError> {
-    replace_contour_data_with_history_impl(
-        world,
-        editor_entity,
-        roi_entity,
-        contour_data,
-        Some(dirty_plane),
-    )
+    replace_contour_data_with_history_impl(world, roi_entity, contour_data, Some(dirty_plane))
 }
 
 fn replace_contour_data_with_history_impl(
     world: &mut World,
-    editor_entity: hecs::Entity,
     roi_entity: hecs::Entity,
     contour_data: ContourData,
     dirty_plane: Option<PlaneDefinition>,
 ) -> Result<(), ContourMutationError> {
-    if world.get::<&EditorState>(editor_entity).is_err() {
-        return Err(ContourMutationError::MissingEditorState);
-    }
     let before = world
         .get::<&Roi>(roi_entity)
         .map_err(|_| ContourMutationError::MissingRoi)?
@@ -83,27 +73,23 @@ fn replace_contour_data_with_history_impl(
         Some(plane) => replace_contour_data_for_slice(world, roi_entity, contour_data, plane)?,
         None => replace_contour_data(world, roi_entity, contour_data)?,
     }
-    push_roi_undo_entry(
+    record_history_entry(
         world,
-        editor_entity,
+        roi_entity,
         RoiEditHistoryEntry {
-            roi_entity,
             snapshot: RoiEditSnapshot::Contour(before),
             dirty_region,
         },
     )
-    .map_err(|_| ContourMutationError::MissingEditorState)
+    .map_err(|_| ContourMutationError::MissingRoi)
 }
 
+/// Replaces the ROI's mesh data and records the previous data as an undo step.
 pub fn replace_mesh_data_with_history(
     world: &mut World,
-    editor_entity: hecs::Entity,
     roi_entity: hecs::Entity,
     mesh_data: MeshData,
 ) -> Result<(), MeshMutationError> {
-    if world.get::<&EditorState>(editor_entity).is_err() {
-        return Err(MeshMutationError::MissingEditorState);
-    }
     let before = world
         .get::<&Roi>(roi_entity)
         .map_err(|_| MeshMutationError::MissingRoi)?
@@ -114,45 +100,46 @@ pub fn replace_mesh_data_with_history(
         return Ok(());
     }
     replace_mesh_data(world, roi_entity, mesh_data)?;
-    push_roi_undo_entry(
+    record_history_entry(
         world,
-        editor_entity,
+        roi_entity,
         RoiEditHistoryEntry {
-            roi_entity,
             snapshot: RoiEditSnapshot::Mesh(before),
             dirty_region: RoiDirtyRegion::Full,
         },
     )
-    .map_err(|_| MeshMutationError::MissingEditorState)
+    .map_err(|_| MeshMutationError::MissingRoi)
 }
 
+/// Whether the active ROI has an edit to undo.
 pub fn can_undo_roi_edit(world: &World, editor_entity: hecs::Entity) -> bool {
-    world
-        .get::<&EditorState>(editor_entity)
-        .is_ok_and(|editor| !editor.roi_undo_stack.is_empty())
+    active_roi_history(world, editor_entity).is_some_and(|history| !history.undo.is_empty())
 }
 
+/// Whether the active ROI has an undone edit to redo.
 pub fn can_redo_roi_edit(world: &World, editor_entity: hecs::Entity) -> bool {
-    world
-        .get::<&EditorState>(editor_entity)
-        .is_ok_and(|editor| !editor.roi_redo_stack.is_empty())
+    active_roi_history(world, editor_entity).is_some_and(|history| !history.redo.is_empty())
 }
 
-pub fn clear_roi_edit_history_for_roi(
-    world: &mut World,
-    editor_entity: hecs::Entity,
-    roi_entity: hecs::Entity,
-) {
-    if let Ok(mut editor) = world.get::<&mut EditorState>(editor_entity) {
-        editor
-            .roi_undo_stack
-            .retain(|entry| entry.roi_entity != roi_entity);
-        editor
-            .roi_redo_stack
-            .retain(|entry| entry.roi_entity != roi_entity);
+fn active_roi_history(world: &World, editor_entity: hecs::Entity) -> Option<RoiHistory> {
+    let roi_entity = world
+        .get::<&EditorState>(editor_entity)
+        .ok()
+        .and_then(|editor| editor.active_roi)?;
+    world
+        .get::<&Roi>(roi_entity)
+        .ok()
+        .map(|roi| roi.history.clone())
+}
+
+/// Forgets every undo and redo step of one ROI.
+pub fn clear_roi_edit_history_for_roi(world: &mut World, roi_entity: hecs::Entity) {
+    if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
+        roi.history.clear();
     }
 }
 
+/// Undoes the active ROI's latest edit. Returns the ROI, which stays active.
 pub fn undo_roi_edit(
     world: &mut World,
     editor_entity: hecs::Entity,
@@ -160,6 +147,7 @@ pub fn undo_roi_edit(
     apply_roi_edit_history(world, editor_entity, true)
 }
 
+/// Redoes the active ROI's latest undone edit. Returns the ROI, which stays active.
 pub fn redo_roi_edit(
     world: &mut World,
     editor_entity: hecs::Entity,
@@ -172,14 +160,19 @@ fn apply_roi_edit_history(
     editor_entity: hecs::Entity,
     undo: bool,
 ) -> Result<hecs::Entity, RoiEditHistoryError> {
+    let roi_entity = world
+        .get::<&EditorState>(editor_entity)
+        .map_err(|_| RoiEditHistoryError::MissingEditorState)?
+        .active_roi
+        .ok_or(RoiEditHistoryError::NoActiveRoi)?;
     let entry = {
-        let editor = world
-            .get::<&EditorState>(editor_entity)
-            .map_err(|_| RoiEditHistoryError::MissingEditorState)?;
+        let roi = world
+            .get::<&Roi>(roi_entity)
+            .map_err(|_| RoiEditHistoryError::MissingRoi)?;
         let stack = if undo {
-            &editor.roi_undo_stack
+            &roi.history.undo
         } else {
-            &editor.roi_redo_stack
+            &roi.history.redo
         };
         stack.last().cloned().ok_or(if undo {
             RoiEditHistoryError::NoUndo
@@ -187,40 +180,24 @@ fn apply_roi_edit_history(
             RoiEditHistoryError::NoRedo
         })?
     };
-    let current = capture_roi_edit_snapshot(world, entry.roi_entity)?;
+    let current = capture_roi_edit_snapshot(world, roi_entity)?;
     restore_roi_edit_snapshot(
         world,
-        entry.roi_entity,
+        roi_entity,
         entry.snapshot.clone(),
         entry.dirty_region,
     )?;
 
-    let mut editor = world
-        .get::<&mut EditorState>(editor_entity)
-        .map_err(|_| RoiEditHistoryError::MissingEditorState)?;
-    let source_stack = if undo {
-        &mut editor.roi_undo_stack
-    } else {
-        &mut editor.roi_redo_stack
-    };
-    source_stack.pop();
-    let destination_stack = if undo {
-        &mut editor.roi_redo_stack
-    } else {
-        &mut editor.roi_undo_stack
-    };
-    destination_stack.push(RoiEditHistoryEntry {
-        roi_entity: entry.roi_entity,
-        snapshot: current,
-        dirty_region: entry.dirty_region,
-    });
-    trim_history_stack(destination_stack);
-    editor.active_roi = Some(entry.roi_entity);
-    editor.contour_draft = None;
-    editor.contour_selection = None;
-    editor.take_roi_edit_preview();
-    editor.mesh_selection = None;
-    Ok(entry.roi_entity)
+    if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
+        roi.history.step(undo, current);
+    }
+    if let Ok(mut editor) = world.get::<&mut EditorState>(editor_entity) {
+        editor.contour_draft = None;
+        editor.contour_selection = None;
+        editor.take_roi_edit_preview();
+        editor.mesh_selection = None;
+    }
+    Ok(roi_entity)
 }
 
 fn capture_roi_edit_snapshot(
@@ -278,22 +255,14 @@ fn restore_roi_edit_snapshot(
     Ok(())
 }
 
-fn push_roi_undo_entry(
+fn record_history_entry(
     world: &mut World,
-    editor_entity: hecs::Entity,
+    roi_entity: hecs::Entity,
     entry: RoiEditHistoryEntry,
 ) -> Result<(), RoiEditHistoryError> {
-    let mut editor = world
-        .get::<&mut EditorState>(editor_entity)
-        .map_err(|_| RoiEditHistoryError::MissingEditorState)?;
-    editor.roi_undo_stack.push(entry);
-    trim_history_stack(&mut editor.roi_undo_stack);
-    editor.roi_redo_stack.clear();
+    let mut roi = world
+        .get::<&mut Roi>(roi_entity)
+        .map_err(|_| RoiEditHistoryError::MissingRoi)?;
+    roi.history.record(entry);
     Ok(())
-}
-
-fn trim_history_stack(stack: &mut Vec<RoiEditHistoryEntry>) {
-    if stack.len() > MAX_ROI_EDIT_HISTORY {
-        stack.remove(0);
-    }
 }

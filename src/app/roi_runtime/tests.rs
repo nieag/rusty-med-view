@@ -856,6 +856,7 @@ fn test_mesh_edit_preview_updates_direct_contour_view_before_commit() {
         "Preview".to_string(),
         original.clone(),
     ),));
+    world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(entity);
     let geometry = main_volume_geometry(&world).unwrap();
     let plane =
         orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.25], geometry).unwrap();
@@ -868,9 +869,9 @@ fn test_mesh_edit_preview_updates_direct_contour_view_before_commit() {
     assert_eq!(revision, 1);
     assert_eq!(status.state, RepresentationRequestState::Preview);
     {
-        let editor_state = world.get::<&EditorState>(editor).unwrap();
-        assert!(editor_state.roi_undo_stack.is_empty());
-        assert!(editor_state.roi_redo_stack.is_empty());
+        let history = world.get::<&Roi>(entity).unwrap().history.clone();
+        assert!(history.undo.is_empty());
+        assert!(history.redo.is_empty());
     }
     {
         let roi = world.get::<&Roi>(entity).unwrap();
@@ -895,9 +896,9 @@ fn test_mesh_edit_preview_updates_direct_contour_view_before_commit() {
     );
 
     {
-        let editor_state = world.get::<&EditorState>(editor).unwrap();
-        assert_eq!(editor_state.roi_undo_stack.len(), 1);
-        assert!(editor_state.roi_redo_stack.is_empty());
+        let history = world.get::<&Roi>(entity).unwrap().history.clone();
+        assert_eq!(history.undo.len(), 1);
+        assert!(history.redo.is_empty());
     }
 
     assert_eq!(undo_roi_edit(&mut world, editor), Ok(entity));
@@ -909,18 +910,18 @@ fn test_mesh_edit_preview_updates_direct_contour_view_before_commit() {
         assert!(roi.is_cache_dirty(RoiCacheKind::Contour));
     }
     {
-        let editor_state = world.get::<&EditorState>(editor).unwrap();
-        assert!(editor_state.roi_undo_stack.is_empty());
-        assert_eq!(editor_state.roi_redo_stack.len(), 1);
+        let history = world.get::<&Roi>(entity).unwrap().history.clone();
+        assert!(history.undo.is_empty());
+        assert_eq!(history.redo.len(), 1);
     }
 
     assert_eq!(redo_roi_edit(&mut world, editor), Ok(entity));
     let roi = world.get::<&Roi>(entity).unwrap();
     assert_eq!(roi.mesh_data().unwrap().vertices[0].world_mm[0], 0.25);
     drop(roi);
-    let editor_state = world.get::<&EditorState>(editor).unwrap();
-    assert_eq!(editor_state.roi_undo_stack.len(), 1);
-    assert!(editor_state.roi_redo_stack.is_empty());
+    let history = world.get::<&Roi>(entity).unwrap().history.clone();
+    assert_eq!(history.undo.len(), 1);
+    assert!(history.redo.is_empty());
 }
 
 #[test]
@@ -1944,6 +1945,7 @@ fn test_contour_edit_history_undo_redo_restores_authority_and_requeues_rebuild()
     let mut world = World::new();
     let editor = world.spawn((EditorState::default(),));
     let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(entity);
     let original = world
         .get::<&Roi>(entity)
         .unwrap()
@@ -1971,7 +1973,7 @@ fn test_contour_edit_history_undo_redo_restores_authority_and_requeues_rebuild()
         }],
     };
 
-    replace_contour_data_with_history(&mut world, editor, entity, replacement.clone()).unwrap();
+    replace_contour_data_with_history(&mut world, entity, replacement.clone()).unwrap();
     let generation_after_commit = world
         .get::<&Roi>(entity)
         .unwrap()
@@ -1979,9 +1981,9 @@ fn test_contour_edit_history_undo_redo_restores_authority_and_requeues_rebuild()
         .authoritative
         .shape;
     {
-        let editor_state = world.get::<&EditorState>(editor).unwrap();
-        assert_eq!(editor_state.roi_undo_stack.len(), 1);
-        assert!(editor_state.roi_redo_stack.is_empty());
+        let history = world.get::<&Roi>(entity).unwrap().history.clone();
+        assert_eq!(history.undo.len(), 1);
+        assert!(history.redo.is_empty());
     }
 
     assert_eq!(undo_roi_edit(&mut world, editor), Ok(entity));
@@ -1997,9 +1999,9 @@ fn test_contour_edit_history_undo_redo_restores_authority_and_requeues_rebuild()
         assert!(roi.is_cache_dirty(RoiCacheKind::Mesh));
     }
     {
-        let editor_state = world.get::<&EditorState>(editor).unwrap();
-        assert!(editor_state.roi_undo_stack.is_empty());
-        assert_eq!(editor_state.roi_redo_stack.len(), 1);
+        let history = world.get::<&Roi>(entity).unwrap().history.clone();
+        assert!(history.undo.is_empty());
+        assert_eq!(history.redo.len(), 1);
     }
 
     assert_eq!(redo_roi_edit(&mut world, editor), Ok(entity));
@@ -2012,9 +2014,9 @@ fn test_contour_edit_history_undo_redo_restores_authority_and_requeues_rebuild()
         );
         assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
     }
-    let editor_state = world.get::<&EditorState>(editor).unwrap();
-    assert_eq!(editor_state.roi_undo_stack.len(), 1);
-    assert!(editor_state.roi_redo_stack.is_empty());
+    let history = world.get::<&Roi>(entity).unwrap().history.clone();
+    assert_eq!(history.undo.len(), 1);
+    assert!(history.redo.is_empty());
 }
 
 #[test]
@@ -2022,6 +2024,7 @@ fn test_slice_local_contour_history_preserves_dirty_plane_for_undo_and_redo() {
     let mut world = World::new();
     let editor = world.spawn((EditorState::default(),));
     let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+    world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(entity);
     let original = world
         .get::<&Roi>(entity)
         .unwrap()
@@ -2033,8 +2036,7 @@ fn test_slice_local_contour_history_preserves_dirty_plane_for_undo_and_redo() {
     let mut replacement = original.clone();
     replacement.slices[0].loops[0].points[1].local_mm[0] += 0.25;
 
-    replace_contour_data_for_slice_with_history(&mut world, editor, entity, replacement, plane)
-        .unwrap();
+    replace_contour_data_for_slice_with_history(&mut world, entity, replacement, plane).unwrap();
     assert_eq!(undo_roi_edit(&mut world, editor), Ok(entity));
     assert_eq!(
         world.get::<&Roi>(entity).unwrap().job_state.pending[0].dirty_region,
@@ -2053,6 +2055,7 @@ fn test_new_contour_slice_history_uses_full_rebuild_for_safe_undo() {
     let mut world = World::new();
     let editor = world.spawn((EditorState::default(),));
     let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(entity);
     let plane = test_plane_definition(PlaneFamily::Axial);
     let replacement = ContourData {
         active_plane_family: PlaneFamily::Axial,
@@ -2062,8 +2065,7 @@ fn test_new_contour_slice_history_uses_full_rebuild_for_safe_undo() {
         }],
     };
 
-    replace_contour_data_for_slice_with_history(&mut world, editor, entity, replacement, plane)
-        .unwrap();
+    replace_contour_data_for_slice_with_history(&mut world, entity, replacement, plane).unwrap();
     assert_eq!(undo_roi_edit(&mut world, editor), Ok(entity));
     assert_eq!(
         world.get::<&Roi>(entity).unwrap().job_state.pending[0].dirty_region,
@@ -2074,7 +2076,6 @@ fn test_new_contour_slice_history_uses_full_rebuild_for_safe_undo() {
 #[test]
 fn test_noop_contour_history_commit_does_not_advance_generation_or_record_history() {
     let mut world = World::new();
-    let editor = world.spawn((EditorState::default(),));
     let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
     let contour = world
         .get::<&Roi>(entity)
@@ -2089,14 +2090,14 @@ fn test_noop_contour_history_commit_does_not_advance_generation_or_record_histor
         .authoritative
         .shape;
 
-    replace_contour_data_with_history(&mut world, editor, entity, contour).unwrap();
+    replace_contour_data_with_history(&mut world, entity, contour).unwrap();
 
     let roi = world.get::<&Roi>(entity).unwrap();
     assert_eq!(roi.dirty_state.authoritative.shape, generation_before);
     drop(roi);
-    let editor_state = world.get::<&EditorState>(editor).unwrap();
-    assert!(editor_state.roi_undo_stack.is_empty());
-    assert!(editor_state.roi_redo_stack.is_empty());
+    let history = world.get::<&Roi>(entity).unwrap().history.clone();
+    assert!(history.undo.is_empty());
+    assert!(history.redo.is_empty());
 }
 
 #[test]
@@ -2104,6 +2105,7 @@ fn test_new_contour_commit_after_undo_clears_redo_history() {
     let mut world = World::new();
     let editor = world.spawn((EditorState::default(),));
     let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(entity);
     let first = ContourData {
         active_plane_family: PlaneFamily::Axial,
         slices: vec![ContourSlice {
@@ -2119,17 +2121,16 @@ fn test_new_contour_commit_after_undo_clears_redo_history() {
         }],
     };
 
-    replace_contour_data_with_history(&mut world, editor, entity, first).unwrap();
+    replace_contour_data_with_history(&mut world, entity, first).unwrap();
     undo_roi_edit(&mut world, editor).unwrap();
-    replace_contour_data_with_history(&mut world, editor, entity, second.clone()).unwrap();
+    replace_contour_data_with_history(&mut world, entity, second.clone()).unwrap();
 
     let roi = world.get::<&Roi>(entity).unwrap();
     assert_eq!(roi.contour_data(), Some(&second));
     drop(roi);
-    let editor_state = world.get::<&EditorState>(editor).unwrap();
-    assert_eq!(editor_state.roi_undo_stack.len(), 1);
-    assert!(editor_state.roi_redo_stack.is_empty());
-    drop(editor_state);
+    let history = world.get::<&Roi>(entity).unwrap().history.clone();
+    assert_eq!(history.undo.len(), 1);
+    assert!(history.redo.is_empty());
     assert_eq!(
         redo_roi_edit(&mut world, editor),
         Err(RoiEditHistoryError::NoRedo)
@@ -3063,7 +3064,6 @@ fn test_liver_explicit_voxel_rebuild_frame_timing() {
 #[test]
 fn test_two_slice_commits_before_one_rebuild_keep_every_slice_in_voxel_cache() {
     let mut world = World::new();
-    let editor = world.spawn((EditorState::default(),));
     let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
     seed_current_voxel_cache_for_contour_roi(&mut world, entity);
     let plane_at = |z: f32| PlaneDefinition {
@@ -3100,37 +3100,19 @@ fn test_two_slice_commits_before_one_rebuild_keep_every_slice_in_voxel_cache() {
         active_plane_family: PlaneFamily::Axial,
         slices: vec![square_slice(0.0)],
     };
-    replace_contour_data_for_slice_with_history(
-        &mut world,
-        editor,
-        entity,
-        contour.clone(),
-        plane_at(0.0),
-    )
-    .unwrap();
+    replace_contour_data_for_slice_with_history(&mut world, entity, contour.clone(), plane_at(0.0))
+        .unwrap();
     process_contour_voxel_rebuild_jobs(&mut world);
     assert_eq!(occupied_per_layer(&world), vec![9, 0, 0, 0]);
 
     // Two commits land before the coordinator runs again, so the retained cache is two
     // generations behind and the slice-local rasterizer has no valid base to patch.
     contour.slices.push(square_slice(1.0));
-    replace_contour_data_for_slice_with_history(
-        &mut world,
-        editor,
-        entity,
-        contour.clone(),
-        plane_at(1.0),
-    )
-    .unwrap();
+    replace_contour_data_for_slice_with_history(&mut world, entity, contour.clone(), plane_at(1.0))
+        .unwrap();
     contour.slices.push(square_slice(2.0));
-    replace_contour_data_for_slice_with_history(
-        &mut world,
-        editor,
-        entity,
-        contour.clone(),
-        plane_at(2.0),
-    )
-    .unwrap();
+    replace_contour_data_for_slice_with_history(&mut world, entity, contour.clone(), plane_at(2.0))
+        .unwrap();
     process_contour_voxel_rebuild_jobs(&mut world);
 
     assert_eq!(
@@ -3257,4 +3239,116 @@ fn test_label_import_budget_is_enforced_and_normal_maps_pass() {
     // Check the budget with a large volume directly; allocating such a map would defeat the test.
     assert!(check_label_import_budget(512 * 512 * 300, 20).is_err());
     assert!(label_masks_for_import(&[1_u8; 64]).is_ok());
+}
+
+fn contour_shifted_by(world: &World, roi: hecs::Entity, shift: f32) -> ContourData {
+    let mut contour = world
+        .get::<&Roi>(roi)
+        .unwrap()
+        .contour_data()
+        .unwrap()
+        .clone();
+    contour.slices[0].loops[0].points[1].local_mm[0] += shift;
+    contour
+}
+
+fn first_loop_x(world: &World, roi: hecs::Entity) -> f32 {
+    world
+        .get::<&Roi>(roi)
+        .unwrap()
+        .contour_data()
+        .unwrap()
+        .slices[0]
+        .loops[0]
+        .points[1]
+        .local_mm[0]
+}
+
+#[test]
+fn test_each_roi_keeps_its_own_undo_history_and_undo_never_changes_the_active_roi() {
+    let mut world = World::new();
+    let editor = world.spawn((EditorState::default(),));
+    let first = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+    let second = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+    let (first_start, second_start) = (first_loop_x(&world, first), first_loop_x(&world, second));
+
+    let edit = contour_shifted_by(&world, first, 0.25);
+    replace_contour_data_with_history(&mut world, first, edit).unwrap();
+    let edit = contour_shifted_by(&world, second, 0.5);
+    replace_contour_data_with_history(&mut world, second, edit).unwrap();
+
+    // Undo acts on the active ROI only, and leaves it active.
+    world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(second);
+    assert!(can_undo_roi_edit(&world, editor));
+    assert_eq!(undo_roi_edit(&mut world, editor), Ok(second));
+    assert_eq!(first_loop_x(&world, second), second_start);
+    assert_eq!(first_loop_x(&world, first), first_start + 0.25);
+    assert_eq!(
+        world.get::<&EditorState>(editor).unwrap().active_roi,
+        Some(second)
+    );
+    assert!(
+        !can_undo_roi_edit(&world, editor),
+        "second has nothing left"
+    );
+    assert_eq!(
+        undo_roi_edit(&mut world, editor),
+        Err(RoiEditHistoryError::NoUndo)
+    );
+
+    // The first ROI's step is untouched and available once it is active.
+    world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(first);
+    assert!(can_undo_roi_edit(&world, editor));
+    assert_eq!(undo_roi_edit(&mut world, editor), Ok(first));
+    assert_eq!(first_loop_x(&world, first), first_start);
+    assert_eq!(
+        world.get::<&EditorState>(editor).unwrap().active_roi,
+        Some(first)
+    );
+
+    // Redo is per ROI as well.
+    assert!(can_redo_roi_edit(&world, editor));
+    assert_eq!(redo_roi_edit(&mut world, editor), Ok(first));
+    assert_eq!(first_loop_x(&world, first), first_start + 0.25);
+    assert_eq!(first_loop_x(&world, second), second_start);
+}
+
+#[test]
+fn test_undo_without_an_active_roi_is_reported_not_guessed() {
+    let mut world = World::new();
+    let editor = world.spawn((EditorState::default(),));
+    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+    let edit = contour_shifted_by(&world, entity, 0.25);
+    replace_contour_data_with_history(&mut world, entity, edit).unwrap();
+
+    assert!(!can_undo_roi_edit(&world, editor));
+    assert_eq!(
+        undo_roi_edit(&mut world, editor),
+        Err(RoiEditHistoryError::NoActiveRoi)
+    );
+    assert_eq!(world.get::<&Roi>(entity).unwrap().history.undo.len(), 1);
+}
+
+#[test]
+fn test_history_is_capped_per_roi_and_clearing_one_roi_leaves_the_other() {
+    let mut world = World::new();
+    let busy = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+    let quiet = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+    let edit = contour_shifted_by(&world, quiet, 1.0);
+    replace_contour_data_with_history(&mut world, quiet, edit).unwrap();
+
+    for _ in 0..(MAX_ROI_EDIT_HISTORY + 8) {
+        let edit = contour_shifted_by(&world, busy, 0.01);
+        replace_contour_data_with_history(&mut world, busy, edit).unwrap();
+    }
+
+    assert_eq!(
+        world.get::<&Roi>(busy).unwrap().history.undo.len(),
+        MAX_ROI_EDIT_HISTORY
+    );
+    assert_eq!(world.get::<&Roi>(quiet).unwrap().history.undo.len(), 1);
+
+    clear_roi_edit_history_for_roi(&mut world, busy);
+    assert!(world.get::<&Roi>(busy).unwrap().history.undo.is_empty());
+    assert_eq!(world.get::<&Roi>(quiet).unwrap().history.undo.len(), 1);
 }

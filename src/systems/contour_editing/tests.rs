@@ -691,8 +691,13 @@ fn test_move_selected_point_preview_defers_authoritative_commit_until_finalize()
     {
         let editor = world.get::<&EditorState>(entities.editor).unwrap();
         assert!(editor.contour_move_preview().is_some());
-        assert!(editor.roi_undo_stack.is_empty());
     }
+    assert!(world
+        .get::<&Roi>(roi_entity)
+        .unwrap()
+        .history
+        .undo
+        .is_empty());
 
     roi_runtime::process_contour_voxel_rebuild_jobs(&mut world);
     {
@@ -793,8 +798,8 @@ fn test_move_selected_point_preview_defers_authoritative_commit_until_finalize()
     {
         let editor = world.get::<&EditorState>(entities.editor).unwrap();
         assert!(editor.contour_move_preview().is_none());
-        assert_eq!(editor.roi_undo_stack.len(), 1);
     }
+    assert_eq!(roi.history.undo.len(), 1);
     drop(roi);
 
     roi_runtime::process_contour_voxel_rebuild_jobs(&mut world);

@@ -391,7 +391,6 @@ pub fn handle_contour_draw_click(
 
         roi::replace_contour_data_for_slice_with_history(
             world,
-            entities.editor,
             roi_entity,
             next_contour_data,
             committed_plane,
@@ -678,7 +677,6 @@ pub fn move_selected_point(
         update_selected_point_in_data(&selection, &mut contour_data, viewport, viewport_uv)?;
     roi::replace_contour_data_for_slice_with_history(
         world,
-        entities.editor,
         selection.roi_entity,
         contour_data,
         dirty_plane,
@@ -825,7 +823,6 @@ pub fn insert_point_into_selected_loop(
 
     roi::replace_contour_data_for_slice_with_history(
         world,
-        entities.editor,
         selection.roi_entity,
         contour_data,
         dirty_plane,
@@ -874,13 +871,8 @@ pub fn delete_selected_contour_element(
         clear_selection = true;
     }
 
-    roi::replace_contour_data_with_history(
-        world,
-        entities.editor,
-        selection.roi_entity,
-        contour_data,
-    )
-    .map_err(|_| ContourEditOperationError::ReplaceFailed)?;
+    roi::replace_contour_data_with_history(world, selection.roi_entity, contour_data)
+        .map_err(|_| ContourEditOperationError::ReplaceFailed)?;
 
     if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
         if clear_selection {
