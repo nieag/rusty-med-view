@@ -306,3 +306,65 @@ fn test_contour_geometry_aabb_tightens_in_plane_bounds() {
         Some(([2, 2, 1], [6, 6, 2]))
     );
 }
+
+#[test]
+fn test_full_and_slice_local_rasterizers_agree_for_every_plane_depth() {
+    use crate::convert::{
+        orthogonal_plane_from_volume_uv, rasterize_contour_preview_slices_to_voxel_data,
+    };
+
+    for dim_z in [4_u32, 5] {
+        let geometry = VoxelGeometry {
+            dimensions: [8, 8, dim_z],
+            spacing: [1.0; 3],
+            origin: [0.0; 3],
+            orientation: [0.0, 0.0, 0.0, 1.0],
+        };
+        let mut plane =
+            orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry).unwrap();
+        let square = ContourLoop {
+            points: [[-2.2, -2.2], [2.2, -2.2], [2.2, 2.2], [-2.2, 2.2]]
+                .into_iter()
+                .map(|local_mm| ContourPoint { local_mm })
+                .collect(),
+            is_closed: true,
+        };
+        let layers = |data: &VoxelData| -> Vec<usize> {
+            (0..dim_z as usize)
+                .map(|z| {
+                    data.raw_data[z * 64..(z + 1) * 64]
+                        .iter()
+                        .filter(|value| **value != 0)
+                        .count()
+                })
+                .collect()
+        };
+
+        // Centered, exactly between two layers (even axes), just off center, and outside.
+        let base_z = plane.origin_mm[2];
+        for offset in [0.0_f32, 0.3, -0.3, 20.0, -20.0] {
+            plane.origin_mm[2] = base_z + offset;
+            let contour = ContourData {
+                active_plane_family: PlaneFamily::Axial,
+                slices: vec![ContourSlice {
+                    plane,
+                    loops: vec![square.clone()],
+                }],
+            };
+            let full = rasterize_contours_to_voxel_data(&contour, geometry).unwrap();
+            let base = VoxelData {
+                geometry,
+                raw_data: vec![0; (8 * 8 * dim_z) as usize],
+            };
+            let local = rasterize_contour_preview_slices_to_voxel_data(&contour, &base).unwrap();
+
+            assert_eq!(
+                layers(&full),
+                layers(&local),
+                "dim_z {dim_z}, plane offset {offset}"
+            );
+            let filled = layers(&full).iter().filter(|count| **count > 0).count();
+            assert!(filled <= 1, "a slice must fill at most one voxel layer");
+        }
+    }
+}
