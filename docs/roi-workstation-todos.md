@@ -26,11 +26,11 @@ These drive the design.
 
 Exit: every item has a test that failed before the fix; no known silent data loss or reachable panic.
 
-- [ ] **0.1 Voxel cache drops contour slices [repro] (S, highest priority).** Two slice commits before one rebuild leave the voxel cache holding only the last slice, flagged current. In `process_contour_voxel_rebuild_for_entity`, never trim the contour data to the dirty slice unless a valid base cache exists; fall back to a full rebuild otherwise. Also stop `replace_contour_data_for_slice` from discarding earlier queued dirty regions (merge them).
-- [ ] **0.2 Full vs incremental rasterizer disagree [repro] (S).** A plane between two voxel layers (default cursor on an even-sized axis) fills 2 layers in the full path and 1 in the incremental path. Snap contour slice planes to voxel-layer centers when created, and make both paths use one depth rule.
-- [ ] **0.3 Annotation notes panic on non-ASCII (S).** `annotations.rs` slices `&ann.note[..61]` by bytes. Truncate on a char boundary.
-- [ ] **0.4 Wrong slice number in the viewport overlay (S).** Overlay uses `round(uv * dim)`; navigation uses `uv * (dim-1)`. Use `slice_index_from_cursor_uv` and one indexing convention.
-- [ ] **0.5 Label import can panic (S).** `VoxelGeometry::new` accepts spacing 1e-5 but `RoiGeometry::from_legacy_parts` rejects it as singular, and `Roi::new_voxel_with_cache` `expect`s the result. Return the error to the caller and show it in the status area.
+- [x] **0.1 Voxel cache drops contour slices [repro] (S, highest priority).** Two slice commits before one rebuild leave the voxel cache holding only the last slice, flagged current. In `process_contour_voxel_rebuild_for_entity`, never trim the contour data to the dirty slice unless a valid base cache exists; fall back to a full rebuild otherwise. Also stop `replace_contour_data_for_slice` from discarding earlier queued dirty regions (merge them).
+- [x] **0.2 Full vs incremental rasterizer disagree [repro] (S).** A plane between two voxel layers (default cursor on an even-sized axis) fills 2 layers in the full path and 1 in the incremental path. Snap contour slice planes to voxel-layer centers when created, and make both paths use one depth rule.
+- [x] **0.3 Annotation notes panic on non-ASCII (S).** `annotations.rs` slices `&ann.note[..61]` by bytes. Truncate on a char boundary.
+- [x] **0.4 Wrong slice number in the viewport overlay (S).** Overlay uses `round(uv * dim)`; navigation uses `uv * (dim-1)`. Use `slice_index_from_cursor_uv` and one indexing convention.
+- [x] **0.5 Label import can panic (S).** `VoxelGeometry::new` accepts spacing 1e-5 but `RoiGeometry::from_legacy_parts` rejects it as singular, and `Roi::new_voxel_with_cache` `expect`s the result. Return the error to the caller and show it in the status area.
 - [ ] **0.6 Guard tests for the switch (M).** On the liver sample: time to re-derive all slices in a new plane family (decides background job vs inline within the 100 ms / 200 ms budget), Dice across a contour to voxel to contour round trip, and exact restore of the original loops after a no-edit switch away and back.
 
 ## Phase 1: Orientation and geometry foundation
