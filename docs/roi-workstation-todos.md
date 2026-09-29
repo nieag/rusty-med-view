@@ -1,52 +1,65 @@
 # ROI Workstation TODOs
 
-Ordered backlog for the next direction. Complete top-to-bottom unless a measured regression changes the order.
+Ordered backlog. Complete top-to-bottom unless a measured regression changes the order. Every step leaves `cargo test`, `cargo clippy --all-targets --all-features -D warnings`, `cargo check --target wasm32-unknown-unknown`, and `cargo fmt --check` green, and lands as its own commit.
 
-## Now: foundation
+## Product constraints
 
-- [ ] Fix the sidebar overlay-cap message: derive it from the shared renderer cap of eight.
-- [ ] Add regression coverage: eight renderable voxel overlays are accepted; the ninth is explicitly rejected/truncated.
-- [ ] Write a short manual baseline script: load image, import label, create contour ROI, commit contour, inspect 2D/3D, verify current caches.
-- [ ] Decide annotation scope: migrate viewport annotation markers/labels and hit testing to native WGPU/input, or mark annotations provisional and remove them from stable-product claims.
+These drive the structure below.
 
-## Next: make the current ROI loop understandable
+- Each representation (voxel, contour, mesh) can be authoritative. Voxel authority is a read-only source, for example a deep-learning prediction. Users edit contours and meshes, not voxels.
+- Switching between representations must be smooth and automatic. No manual "promote" step, no visible geometry swap.
+- Exactly one contour plane family is primary and editable at a time. All other views are derived and stay consistent with it. The primary family follows the view the user edits in.
+- Oblique views are derived, per-slice views only. They never become the primary contour set.
+- Switching primary view without editing is lossless and instant. A switch is an undo step, never a history wipe.
 
-- [ ] Add one persistent active-ROI status area: name, authority, active tool, lock state, and derived-work state.
-- [ ] Show concise processing, ready, and actionable failure messages after ROI edits and authority changes.
-- [ ] Ensure tool activation, loop completion, cancel, and undo/redo have visible, consistent feedback.
-- [ ] Verify the full axial and oblique contour loop manually after the UI changes.
+## Done
 
-## Then: ROI catalog
+- [x] 1. Dead code: duplicate plane-compatibility check, test-only delegates, deprecated `SlicePlane::from_viewport`.
+- [x] 2. Docs: archive pruned to the three documents still cited (`docs-archive-full` tag holds the rest).
+- [x] 3. Inline test modules moved to sibling `tests.rs` files.
+- [x] 9. QA snapshot and sample bootstrap moved out of `app/mod.rs` into `app/qa/`.
 
-- [ ] Turn the layer list into an ROI catalog with reliable select, visibility, opacity, and basic facts.
-- [ ] Add rename.
-- [ ] Add lock/unlock with an explicit blocked-edit message.
-- [ ] Make the eight-overlay rendering limit visible in the catalog without hiding non-rendered ROIs.
+## Next
 
-## Then: authoring polish
+- [ ] **A. Guard tests** on the liver sample, before structural changes:
+  - time to re-derive all slices in a new plane family (decides background job vs. inline within the 100 ms preview / 200 ms hard budget);
+  - overlap (Dice) and time across a contour to voxel to contour round trip;
+  - exact restore of the original loops after a no-edit switch away and back.
+  - Run the six ignored milestone QA tests once as a baseline.
+- [ ] **B. Geometry migration.** One immutable IJK-to-world affine as the only ROI geometry type, per `docs/adr/`. Delete `VoxelGeometry` decomposition and `from_legacy_parts`. Reject invalid transforms at import instead of falling back to identity. Decide `f32` vs `f64` for world coordinates.
+- [ ] **C. Generic `Derived<T>` cache.** One type for value plus source revision plus geometry identity, replacing the hand-rolled voxel, contour-view, mesh, and preview cache logic. The previous family's derived contours stay cached until an edit invalidates them.
+- [ ] **D. `RoiBody` and automatic switching.**
+  - `enum RoiBody { Voxel, Contour, Mesh }` with per-authority edit state, preview, and history. Editing code takes the concrete type, so wrong-authority errors disappear.
+  - First edit gesture in a non-primary view makes that view's family primary. The clicked view's derived loops start the gesture immediately; the full re-derivation runs as a background job.
+  - Voxel and mesh ROIs become contour-primary on the first contour gesture; the voxel source stays as an immutable baseline.
+  - Conversions report loss (volume delta or Dice) so it is observable.
+  - Delete the family dropdown, "Make displayed view editable", `RequiresConversion`, the promotion error enums, and history clearing on switch.
+- [ ] **E. Split large files** by concern once D has shrunk them: `app/roi_runtime.rs` (coordinator, per-representation rebuild, import, view building) and `app/components.rs` (viewport, ROI state, editing).
+- [ ] **F. Scope pruning.**
+  - Remove voxel-to-authority promotion (`promote_current_voxel_cache_to_authority`, `VoxelAuthorityPromotionError`) if confirmed unneeded; voxel stays a derived export form.
+  - Decide what a contour tool does to a mesh-primary ROI (convert with loss, undoable, or refuse).
+  - Move the remaining `cfg(test)` wrappers in `roi_runtime.rs` into a test-support module.
 
-- [ ] Improve contour draw/edit affordances: hover target, active-tool indication, close-loop/cancel guidance, and shortcut hints.
-- [ ] Keep the existing contour, voxel, and mesh algorithms unchanged.
-- [ ] Exercise axial, coronal, sagittal, and oblique contour edits with undo/redo.
+## Carried over from the previous backlog
 
-## Then: useful output
+Product work, not yet scheduled relative to A to F:
 
-- [ ] Show selected ROI facts from its current voxel cache: voxel count and volume in mm³.
-- [ ] Export one selected ROI as a NIfTI labelmap using its owned reference geometry.
-- [ ] Refuse stale-cache export with a clear rebuild/wait message.
-- [ ] Reload the exported labelmap and verify geometry and occupied-voxel bounds.
+- Persistent active-ROI status area (name, authority, tool, lock state, derived-work state) and concise processing, ready, and failure messages.
+- ROI catalog: select, visibility, opacity, rename, lock/unlock, visible eight-overlay limit.
+- Contour authoring polish: hover target, close-loop and cancel guidance, shortcut hints.
+- Export a selected ROI as a NIfTI labelmap from its owned reference geometry; refuse stale-cache export; reload and verify.
+- Show selected ROI voxel count and volume in mm³.
+- Sidebar overlay-cap message derived from the shared renderer cap; regression test for eight accepted and a ninth rejected.
+- Decide annotation scope: native WGPU or provisional.
 
 ## Later, only with evidence
 
-- [ ] Profile representative large/multi-ROI workloads before optimizing further.
-- [ ] Consider GPU compute only if a measured conversion path misses its interaction budget.
-- [ ] Consider session persistence, registration/resampling, DICOM, or collaboration only after the author-to-export loop is useful.
+- Profile representative large and multi-ROI workloads before optimizing further.
+- GPU compute only if a measured conversion path misses its interaction budget.
+- Session persistence, registration/resampling, DICOM, or collaboration after the author-to-export loop is useful.
 
 ## Not tasks now
 
-- ECS rewrite.
-- Generic job framework.
-- Coordinate-system rewrite.
-- New contour algorithms. Meshing work is tracked separately in
-  `docs/mesh-authority-and-meshing-plan.md`.
+- A general ECS rewrite or generic job framework. Step D is a targeted change to how ROIs are typed and accessed.
+- New contour, voxel, or meshing algorithms. Steps A to F change how they are called, not what they compute. Meshing work is tracked in `docs/mesh-authority-and-meshing-plan.md`.
 - GPU compute migration without a measured bottleneck.
