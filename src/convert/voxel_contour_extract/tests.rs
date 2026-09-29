@@ -294,17 +294,17 @@ fn test_requested_slice_extraction_uses_requested_display_plane() {
     let mut raw_data = vec![0_u8; 64];
     raw_data[voxel_index([1, 1, 2], dimensions)] = 1;
     let voxel_data = VoxelData { geometry, raw_data };
-    let requested_plane = orthogonal_plane_from_volume_uv(
-        PlaneFamily::Axial,
-        [0.5, 0.5, 0.8],
-        VoxelGeometry {
-            dimensions: [7, 7, 7],
-            spacing: [0.5, 0.5, 1.0],
-            origin: [10.0, 20.0, 30.0],
-            orientation: [0.0, 0.0, 0.0, 1.0],
-        },
-    )
-    .unwrap();
+    let display_geometry = VoxelGeometry {
+        dimensions: [7, 7, 7],
+        spacing: [0.5, 0.5, 1.0],
+        origin: [10.0, 20.0, 30.0],
+        orientation: [0.0, 0.0, 0.0, 1.0],
+    };
+    // Display index 4 sits at z = 34 mm, which is the centre of the source volume's layer 2
+    // (30 mm + 2 * 2 mm), the layer holding the filled voxel.
+    let display_uv = crate::convert::voxel_index_to_volume_uv([3.0, 3.0, 4.0], [7, 7, 7]);
+    let requested_plane =
+        orthogonal_plane_from_volume_uv(PlaneFamily::Axial, display_uv, display_geometry).unwrap();
 
     let contour = extract_contour_slice_from_voxel_data(&voxel_data, requested_plane).unwrap();
 

@@ -295,19 +295,21 @@ impl AppState {
                                 ViewMode::Sagittal => 0,
                                 ViewMode::ThreeD | ViewMode::Oblique => 2,
                             };
+                            // Occupied bounds are inclusive voxel indices; use their outer cell
+                            // faces so a cursor on the first or last occupied slice is inside.
                             let roi_min = crate::convert::voxel_index_to_volume_uv(
                                 [
-                                    bounds[0][0] as f32,
-                                    bounds[0][1] as f32,
-                                    bounds[0][2] as f32,
+                                    bounds[0][0] as f32 - 0.5,
+                                    bounds[0][1] as f32 - 0.5,
+                                    bounds[0][2] as f32 - 0.5,
                                 ],
                                 dims,
                             );
                             let roi_max = crate::convert::voxel_index_to_volume_uv(
                                 [
-                                    bounds[1][0] as f32,
-                                    bounds[1][1] as f32,
-                                    bounds[1][2] as f32,
+                                    bounds[1][0] as f32 + 0.5,
+                                    bounds[1][1] as f32 + 0.5,
+                                    bounds[1][2] as f32 + 0.5,
                                 ],
                                 dims,
                             );

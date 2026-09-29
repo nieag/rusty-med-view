@@ -21,11 +21,9 @@ pub fn get_hu_at_mouse(world: &World, entities: &AppEntities) -> Option<f32> {
         if w == 0 || h == 0 || d == 0 {
             return None;
         }
-        let x = ((voxel_pos[0] * w as f32) as u32).min(w - 1);
-        let y = ((voxel_pos[1] * h as f32) as u32).min(h - 1);
-        let z = ((voxel_pos[2] * d as f32) as u32).min(d - 1);
+        let [x, y, z] = crate::convert::sample_index_from_volume_uv(voxel_pos, vol.dimensions);
 
-        let idx = (z * h * w + y * w + x) as usize;
+        let idx = (z as usize * h as usize + y as usize) * w as usize + x as usize;
         if idx < vol.intensities.len() {
             return Some(vol.intensities[idx]);
         }

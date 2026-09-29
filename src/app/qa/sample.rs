@@ -123,10 +123,11 @@ pub(crate) fn apply_image_label_mpr_basic_preset(
                 let Some(main_geometry) = roi_runtime::main_volume_geometry(world) else {
                     return false;
                 };
+                // Round to a voxel centre so the preset's slice planes do not sit on a layer boundary.
                 let center = [
-                    (bounds[0][0] + bounds[1][0]) as f32 * 0.5,
-                    (bounds[0][1] + bounds[1][1]) as f32 * 0.5,
-                    (bounds[0][2] + bounds[1][2]) as f32 * 0.5,
+                    ((bounds[0][0] + bounds[1][0]) as f32 * 0.5).round(),
+                    ((bounds[0][1] + bounds[1][1]) as f32 * 0.5).round(),
+                    ((bounds[0][2] + bounds[1][2]) as f32 * 0.5).round(),
                 ];
                 let roi_uv = crate::convert::voxel_index_to_volume_uv(
                     center,

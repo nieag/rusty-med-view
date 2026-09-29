@@ -48,13 +48,14 @@ fn test_volume_uv_voxel_index_roundtrip_handles_zero_and_one_dimensions() {
     let dimensions = [0, 1, 8];
     let uv = [0.7, 0.2, 0.5];
     let index = volume_uv_to_voxel_index(uv, dimensions);
+    // An empty axis has no cells; a one-voxel axis is a real cell spanning index [-0.5, 0.5].
     assert_eq!(index[0], 0.0);
-    assert_eq!(index[1], 0.0);
+    assert!((index[1] - -0.3).abs() < 1e-6);
     assert!((index[2] - 3.5).abs() < 1e-6);
 
     let uv_roundtrip = voxel_index_to_volume_uv(index, dimensions);
     assert_eq!(uv_roundtrip[0], 0.0);
-    assert_eq!(uv_roundtrip[1], 0.0);
+    assert!((uv_roundtrip[1] - 0.2).abs() < 1e-6);
     assert!((uv_roundtrip[2] - 0.5).abs() < 1e-6);
 }
 
@@ -90,24 +91,6 @@ fn test_identity_geometry_maps_origin_and_index_as_expected() {
 
     let roundtrip = world_mm_to_voxel_index(world, geometry);
     assert!(approx_eq(roundtrip, [2.0, 3.0, 4.0], 1e-6));
-}
-
-#[test]
-fn test_sample_index_from_volume_uv_preserves_floor_and_clamp_behavior() {
-    let sample = sample_index_from_volume_uv([1.2, -0.1, 0.999], [4, 4, 4]);
-    assert_eq!(sample, [3, 0, 3]);
-
-    let sample_with_zero_dim = sample_index_from_volume_uv([0.5, 0.5, 0.5], [0, 1, 2]);
-    assert_eq!(sample_with_zero_dim, [0, 0, 1]);
-}
-
-#[test]
-fn test_sample_index_uses_voxel_cell_boundaries() {
-    let dimensions = [5, 1, 1];
-    // IJK 0.51 lies inside voxel 1's cell: [0.5, 1.5).
-    let uv = voxel_index_to_volume_uv([0.51, 0.0, 0.0], dimensions);
-
-    assert_eq!(sample_index_from_volume_uv(uv, dimensions), [1, 0, 0]);
 }
 
 #[test]
@@ -177,7 +160,8 @@ fn test_orthogonal_plane_axes_match_radiological_mapping() {
     let cursor_uv = [0.25, 0.5, 0.75];
 
     let axial = orthogonal_plane_from_volume_uv(PlaneFamily::Axial, cursor_uv, geometry).unwrap();
-    assert_eq!(axial.origin_mm, [2.25, 4.5, 6.75]);
+    // Cell-centred: index = uv * dim - 0.5 on a 10-voxel grid.
+    assert_eq!(axial.origin_mm, [2.0, 4.5, 7.0]);
     assert!(approx_eq(axial.u_axis_mm, [-1.0, 0.0, 0.0], 1e-6));
     assert!(approx_eq(axial.v_axis_mm, [0.0, -1.0, 0.0], 1e-6));
     assert!(approx_eq(axial.normal_mm, [0.0, 0.0, 1.0], 1e-6));

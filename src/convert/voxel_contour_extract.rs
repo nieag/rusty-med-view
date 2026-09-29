@@ -285,11 +285,7 @@ fn family_axes(family: PlaneFamily) -> (usize, usize, usize) {
 }
 
 fn family_slice_cursor_uv(family: PlaneFamily, depth_index: u32, depth_len: u32) -> [f32; 3] {
-    let depth_uv = if depth_len <= 1 {
-        0.0
-    } else {
-        depth_index as f32 / (depth_len - 1) as f32
-    };
+    let depth_uv = crate::convert::slice_center_uv(depth_index as i32, depth_len);
     match family {
         PlaneFamily::Axial => [0.5, 0.5, depth_uv],
         PlaneFamily::Coronal => [0.5, depth_uv, 0.5],

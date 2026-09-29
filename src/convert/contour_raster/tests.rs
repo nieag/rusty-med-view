@@ -108,7 +108,8 @@ fn test_rasterize_skips_invalid_open_loop() {
 #[test]
 fn test_rasterize_multiple_loops_use_even_odd_fill() {
     let geometry = identity_geometry([7, 7, 1]);
-    let plane = orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.0], geometry)
+    // Depth UV 0.0 is the outer face of the volume; slice 0 is centred at UV 0.5 of one voxel.
+    let plane = orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry)
         .expect("axial plane should resolve");
     let contour = ContourData {
         active_plane_family: PlaneFamily::Axial,

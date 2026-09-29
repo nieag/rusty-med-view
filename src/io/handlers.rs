@@ -21,13 +21,14 @@ pub fn handle_volume_load(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     world: &mut World,
-    _entities: &AppEntities,
+    entities: &AppEntities,
     loaded: &LoadedVolume,
 ) -> [u32; 3] {
     log::info!("Volume loaded: {:?} dimensions", loaded.dimensions);
 
     let (new_texture, new_view, new_sampler, volume_data) =
         volume::create_texture_from_nifti(device, queue, loaded);
+    let volume_data_dimensions = volume_data.dimensions;
 
     // Update ONLY the main volume components in ECS
     if let Some((_, (vol, gpu_res))) = world
@@ -46,6 +47,11 @@ pub fn handle_volume_load(
         gpu_res.texture = new_texture;
         gpu_res.view = new_view;
         gpu_res.sampler = new_sampler;
+    }
+
+    // Start every slice plane on a voxel centre, not on a layer boundary.
+    if let Ok(mut cursor) = world.get::<&mut Transform>(entities.cursor) {
+        cursor.position = crate::convert::centered_cursor_uv(volume_data_dimensions);
     }
 
     // Reset user rotation when loading new volume

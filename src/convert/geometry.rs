@@ -1,4 +1,5 @@
 use crate::app::roi::VoxelGeometry;
+use crate::convert::coord_mapping::{volume_uv_to_voxel_index, voxel_index_to_volume_uv};
 use glam::{DMat3, DMat4, DVec3, DVec4, Mat3, Quat, Vec3};
 use thiserror::Error;
 
@@ -623,26 +624,6 @@ pub fn plane_local_mm_to_viewport_uv(
     volume_uv_to_viewport_uv(volume_uv, plane, geometry, mapping)
 }
 
-pub fn volume_uv_to_voxel_index(uv: [f32; 3], dimensions: [u32; 3]) -> [f32; 3] {
-    let mut index = [0.0; 3];
-    for axis in 0..3 {
-        if dimensions[axis] > 1 {
-            index[axis] = uv[axis] * (dimensions[axis] - 1) as f32;
-        }
-    }
-    index
-}
-
-pub fn voxel_index_to_volume_uv(index: [f32; 3], dimensions: [u32; 3]) -> [f32; 3] {
-    let mut uv = [0.0; 3];
-    for axis in 0..3 {
-        if dimensions[axis] > 1 {
-            uv[axis] = index[axis] / (dimensions[axis] - 1) as f32;
-        }
-    }
-    uv
-}
-
 pub fn voxel_index_to_world_mm(index: [f32; 3], geometry: VoxelGeometry) -> [f32; 3] {
     let orientation = normalized_orientation(geometry.orientation);
     let scaled = Vec3::new(
@@ -719,21 +700,6 @@ pub fn transform_index_with_affine(index: [f32; 3], affine: [[f32; 4]; 3]) -> [f
         affine[1][0] * index[0] + affine[1][1] * index[1] + affine[1][2] * index[2] + affine[1][3],
         affine[2][0] * index[0] + affine[2][1] * index[1] + affine[2][2] * index[2] + affine[2][3],
     ]
-}
-
-pub fn sample_index_from_volume_uv(uv: [f32; 3], dimensions: [u32; 3]) -> [u32; 3] {
-    let mut sample = [0; 3];
-    for axis in 0..3 {
-        let dim = dimensions[axis];
-        if dim == 0 {
-            continue;
-        }
-        // `volume_uv` maps voxel centres to IJK `[0, dim - 1]`. Labels occupy cells
-        // centered on those indices, so nearest-cell sampling changes at half-indices.
-        let scaled = (uv[axis] * (dim - 1) as f32 + 0.5).floor();
-        sample[axis] = scaled.clamp(0.0, (dim - 1) as f32) as u32;
-    }
-    sample
 }
 
 #[cfg(test)]

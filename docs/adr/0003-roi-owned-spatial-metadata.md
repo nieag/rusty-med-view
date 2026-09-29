@@ -20,6 +20,12 @@ The current runtime then stores a decomposed spacing, origin, and quaternion app
 - Derived caches record the geometry identity used to create them.
 - Invalid or singular spatial transforms are rejected at construction/import boundaries; they never become identity implicitly.
 
+## Normalized volume UV
+
+Normalized volume UV is cell-centred and edge-to-edge: `uv = (index + 0.5) / dimension`, where `index` is the continuous IJK coordinate with voxel centres at integers. UV 0 and 1 are the outer voxel faces, voxel `k` is centred at `(k + 0.5) / dimension`, and the voxel containing a UV is `floor(uv * dimension)`.
+
+This is the GPU texture-coordinate convention, so image sampling needs no correction, and it is resolution independent: a physical point keeps its UV when a volume is resampled to another resolution over the same field of view. Node-based UV (`index / (dimension - 1)`) is not used anywhere. All CPU conversions between index space and UV live in `src/convert/coord_mapping.rs`, and the overlay path in `src/shaders/shader.wgsl` mirrors the same arithmetic.
+
 ## Consequences
 
 Display alignment requires deliberate conversion through patient/world space, and renderers must not assume label texture coordinates are interchangeable with main volume texture coordinates.
