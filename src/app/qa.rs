@@ -1,3 +1,6 @@
+pub(crate) mod sample;
+mod snapshot;
+
 use serde::Serialize;
 use std::collections::{BTreeMap, VecDeque};
 
