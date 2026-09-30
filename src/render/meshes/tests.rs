@@ -3,7 +3,7 @@ use crate::components::{
     ContourData, MainVolumeTag, MeshCache, MeshFace, MeshVertex, RoiId, Transform, VolumeData,
     VoxelData, VoxelGeometry, WindowSettings,
 };
-use crate::convert::PlaneFamily;
+use crate::model::OrthogonalFamily;
 use crate::render::geometry::world_to_ndc;
 use crate::render::geometry::ViewProjection;
 use glam::Vec3;
@@ -359,7 +359,7 @@ fn test_prepare_mesh_render_data_preserves_unchanged_chunk_identity_and_vertices
         RoiId(4),
         "Contour".to_string(),
         ContourData {
-            active_plane_family: PlaneFamily::Axial,
+            active_plane_family: OrthogonalFamily::Axial,
             slices: Vec::new(),
         },
     );

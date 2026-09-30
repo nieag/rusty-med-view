@@ -1,6 +1,6 @@
 //! Contour data: closed loops on slice planes.
 
-use super::geometry::{PlaneDefinition, PlaneFamily};
+use super::geometry::{OrthogonalFamily, PlaneDefinition};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ContourPoint {
@@ -27,7 +27,7 @@ pub struct ContourSlice {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContourData {
-    pub active_plane_family: PlaneFamily,
+    pub active_plane_family: OrthogonalFamily,
     pub slices: Vec<ContourSlice>,
 }
 

@@ -1,5 +1,6 @@
 use super::*;
 use crate::convert::{orthogonal_plane_from_volume_uv, PlaneFamily};
+use crate::model::OrthogonalFamily;
 
 fn approx_eq(a: [f32; 2], b: [f32; 2], epsilon: f32) -> bool {
     (a[0] - b[0]).abs() <= epsilon && (a[1] - b[1]).abs() <= epsilon
@@ -142,7 +143,7 @@ fn test_prepare_contour_render_data_emits_vertices_for_matching_slice() {
         RoiId(1),
         "Contour".to_string(),
         ContourData {
-            active_plane_family: PlaneFamily::Axial,
+            active_plane_family: OrthogonalFamily::Axial,
             slices: vec![ContourSlice {
                 plane,
                 loops: vec![ContourLoop {
@@ -278,7 +279,7 @@ fn test_prepare_contour_render_data_uses_roi_geometry_when_main_volume_missing()
         RoiId(2),
         "Contour".to_string(),
         ContourData {
-            active_plane_family: PlaneFamily::Axial,
+            active_plane_family: OrthogonalFamily::Axial,
             slices: vec![ContourSlice {
                 plane,
                 loops: vec![ContourLoop {
@@ -391,12 +392,13 @@ fn test_voxel_primary_oblique_view_cache_emits_contour_vertices() {
     roi.upsert_contour_view_cache(
         ContourViewKey::from_plane(axial_plane),
         ContourData {
-            active_plane_family: PlaneFamily::Axial,
+            active_plane_family: OrthogonalFamily::Axial,
             slices: vec![ContourSlice {
                 plane: axial_plane,
                 loops: Vec::new(),
             }],
-        },
+        }
+        .slices,
         roi.dirty_state.authoritative,
         CacheViewState::Current,
     );
@@ -423,7 +425,8 @@ fn test_voxel_primary_oblique_view_cache_emits_contour_vertices() {
         .is_some_and(|cache| cache
             .views
             .iter()
-            .any(|view| view.key.family == PlaneFamily::Oblique && view.data.has_loops())));
+            .any(|view| view.key.family == PlaneFamily::Oblique
+                && view.data.iter().any(|slice| !slice.loops.is_empty()))));
     assert!(!data.vertices.is_empty());
     assert_eq!(data.batches.len(), 1);
 }

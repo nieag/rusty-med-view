@@ -1,9 +1,8 @@
 use crate::convert::{
     nearest_depth_layer, orthogonal_depth_axis, plane_local_mm_to_world_mm,
     voxel_index_to_world_mm, world_mm_to_plane_local_mm, world_mm_to_voxel_index, PlaneDefinition,
-    PlaneFamily,
 };
-use crate::model::{ContourData, VoxelData, VoxelGeometry};
+use crate::model::{ContourData, OrthogonalFamily, VoxelData, VoxelGeometry};
 use glam::Vec3;
 
 const EPSILON: f32 = 1e-6;
@@ -14,9 +13,8 @@ pub enum ContourRasterizationError {
     InvalidSlicePlane { slice_index: usize },
 }
 
-/// Returns max-exclusive voxel bounds affected by the supplied contour slices.
-/// Orthogonal slices map to their exact voxel slabs. Oblique slices remain a
-/// conservative full-volume invalidation until oblique rasterization is chunked.
+/// Returns max-exclusive voxel bounds affected by the supplied contour slices: each slice maps to
+/// its exact voxel layer.
 pub fn contour_slices_voxel_aabb(
     contour: &ContourData,
     target_geometry: VoxelGeometry,
@@ -24,16 +22,7 @@ pub fn contour_slices_voxel_aabb(
     if contour.slices.is_empty() || target_geometry.dimensions.contains(&0) {
         return None;
     }
-    if contour.active_plane_family == PlaneFamily::Oblique {
-        return Some(([0, 0, 0], target_geometry.dimensions));
-    }
-
-    let depth_axis = match contour.active_plane_family {
-        PlaneFamily::Axial => 2,
-        PlaneFamily::Coronal => 1,
-        PlaneFamily::Sagittal => 0,
-        PlaneFamily::Oblique => unreachable!(),
-    };
+    let depth_axis = orthogonal_depth_axis(contour.active_plane_family);
     let dimension = target_geometry.dimensions[depth_axis];
     let mut first_depth = dimension;
     let mut last_depth = 0;
@@ -61,16 +50,7 @@ pub fn contour_geometry_voxel_aabb(
     target_geometry: VoxelGeometry,
 ) -> Option<([u32; 3], [u32; 3])> {
     let slab = contour_slices_voxel_aabb(contour, target_geometry)?;
-    if contour.active_plane_family == PlaneFamily::Oblique {
-        return Some(slab);
-    }
-
-    let depth_axis = match contour.active_plane_family {
-        PlaneFamily::Axial => 2,
-        PlaneFamily::Coronal => 1,
-        PlaneFamily::Sagittal => 0,
-        PlaneFamily::Oblique => unreachable!(),
-    };
+    let depth_axis = orthogonal_depth_axis(contour.active_plane_family);
     let mut min = target_geometry.dimensions;
     let mut max = [0; 3];
     let mut found_point = false;
@@ -110,13 +90,12 @@ pub fn contour_geometry_voxel_aabb(
 
 struct RasterSlice {
     plane: PlaneDefinition,
-    origin: Vec3,
     normal: Vec3,
     slab_tolerance_mm: f32,
-    /// Orthogonal slices fill exactly one voxel layer: `(depth axis, layer index)`. The layer is
-    /// the nearest one, so a plane between two layers has a deterministic owner instead of
-    /// filling both. Oblique slices keep the slab-distance rule.
-    depth_layer: Option<(usize, i64)>,
+    /// A slice fills exactly one voxel layer: `(depth axis, layer index)`. The layer is the
+    /// nearest one, so a plane between two layers has a deterministic owner instead of filling
+    /// both.
+    depth_layer: (usize, i64),
     loops: Vec<Vec<[f32; 2]>>,
 }
 
@@ -180,15 +159,9 @@ fn rasterize_slices_in_bounds(
                 let mut filled = false;
 
                 for slice in slices {
-                    if let Some((axis, layer)) = slice.depth_layer {
-                        if [x, y, z][axis] as i64 != layer {
-                            continue;
-                        }
-                    } else {
-                        let signed_distance = (world_center - slice.origin).dot(slice.normal);
-                        if signed_distance.abs() > slice.slab_tolerance_mm {
-                            continue;
-                        }
+                    let (axis, layer) = slice.depth_layer;
+                    if [x, y, z][axis] as i64 != layer {
+                        continue;
                     }
 
                     let local = world_mm_to_plane_local_mm(world_center.to_array(), slice.plane);
@@ -218,17 +191,12 @@ pub fn rasterize_contour_preview_slices_to_voxel_data(
     if base.raw_data.len() != expected_len {
         return Err(ContourRasterizationError::InvalidTargetGeometry);
     }
-    if contour.active_plane_family == PlaneFamily::Oblique {
-        return rasterize_contours_to_voxel_data(contour, target_geometry);
-    }
     let slices = prepare_slices(contour, target_geometry)?;
     let mut raw_data = base.raw_data.clone();
     let dimensions = target_geometry.dimensions;
 
     for slice in slices {
-        let Some((depth_axis, layer)) = slice.depth_layer else {
-            continue;
-        };
+        let (depth_axis, layer) = slice.depth_layer;
         // A plane outside the volume owns no layer; the full rasterizer fills nothing for it.
         if layer < 0 || layer >= i64::from(dimensions[depth_axis]) {
             continue;
@@ -236,18 +204,16 @@ pub fn rasterize_contour_preview_slices_to_voxel_data(
         let depth = layer as u32;
 
         let (width, height) = match contour.active_plane_family {
-            PlaneFamily::Axial => (dimensions[0], dimensions[1]),
-            PlaneFamily::Coronal => (dimensions[0], dimensions[2]),
-            PlaneFamily::Sagittal => (dimensions[1], dimensions[2]),
-            PlaneFamily::Oblique => unreachable!(),
+            OrthogonalFamily::Axial => (dimensions[0], dimensions[1]),
+            OrthogonalFamily::Coronal => (dimensions[0], dimensions[2]),
+            OrthogonalFamily::Sagittal => (dimensions[1], dimensions[2]),
         };
         for v in 0..height {
             for u in 0..width {
                 let index = match contour.active_plane_family {
-                    PlaneFamily::Axial => [u, v, depth],
-                    PlaneFamily::Coronal => [u, depth, v],
-                    PlaneFamily::Sagittal => [depth, u, v],
-                    PlaneFamily::Oblique => unreachable!(),
+                    OrthogonalFamily::Axial => [u, v, depth],
+                    OrthogonalFamily::Coronal => [u, depth, v],
+                    OrthogonalFamily::Sagittal => [depth, u, v],
                 };
                 let linear = voxel_linear_index(index, dimensions);
                 raw_data[linear] = 0;
@@ -313,18 +279,15 @@ fn prepare_slices(
             continue;
         }
 
-        let depth_layer = match orthogonal_depth_axis(contour.active_plane_family) {
-            Some(axis) => Some((
-                axis,
-                nearest_depth_layer(slice.plane.origin_mm, axis, target_geometry)
-                    .ok_or(ContourRasterizationError::InvalidSlicePlane { slice_index })?,
-            )),
-            None => None,
-        };
+        let axis = orthogonal_depth_axis(contour.active_plane_family);
+        let depth_layer = (
+            axis,
+            nearest_depth_layer(slice.plane.origin_mm, axis, target_geometry)
+                .ok_or(ContourRasterizationError::InvalidSlicePlane { slice_index })?,
+        );
 
         slices.push(RasterSlice {
             plane: slice.plane,
-            origin,
             normal,
             slab_tolerance_mm: slice_slab_tolerance_mm(target_geometry, normal),
             depth_layer,

@@ -313,7 +313,9 @@ pub struct ContourCache {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContourViewCache {
     pub key: ContourViewKey,
-    pub data: ContourData,
+    /// The slices this derived view shows (one plane for each request), not an authoritative
+    /// contour set.
+    pub data: Vec<ContourSlice>,
     /// Authoritative revision this view was derived from.
     pub built_from: Revision,
     pub geometry_identity: GeometryIdentity,

@@ -1,13 +1,15 @@
 use super::*;
 use crate::app::components::{RoiId, VoxelGeometry};
 use crate::convert::PlaneFamily;
+use crate::model::ContourData;
+use crate::model::OrthogonalFamily;
 
 fn test_roi() -> Roi {
     Roi::new_contour(
         RoiId(1),
         "test".to_string(),
         ContourData {
-            active_plane_family: PlaneFamily::Axial,
+            active_plane_family: OrthogonalFamily::Axial,
             slices: Vec::new(),
         },
     )
@@ -38,7 +40,7 @@ fn test_voxel_cache_result_with_mismatched_reference_geometry_is_rejected() {
         "test".to_string(),
         reference_geometry,
         ContourData {
-            active_plane_family: PlaneFamily::Axial,
+            active_plane_family: OrthogonalFamily::Axial,
             slices: Vec::new(),
         },
     );
@@ -150,9 +152,10 @@ fn test_contour_view_result_is_stamped_with_roi_geometry_identity() {
     roi.install_current_contour_view_result(
         key.clone(),
         ContourData {
-            active_plane_family: PlaneFamily::Axial,
+            active_plane_family: OrthogonalFamily::Axial,
             slices: Vec::new(),
-        },
+        }
+        .slices,
         generation,
     )
     .unwrap();

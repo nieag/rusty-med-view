@@ -11,14 +11,15 @@ use crate::app::components::{
 };
 use crate::app::roi::authority::request_mesh_voxel_cache_rebuild;
 use crate::app::roi::history::record_authority_change;
-use crate::convert::{extract_contours_from_voxel_data, PlaneFamily, VoxelContourExtractionError};
+use crate::convert::{extract_contours_from_voxel_data, VoxelContourExtractionError};
+use crate::model::OrthogonalFamily;
 use hecs::World;
 
 /// What an editing tool needs the ROI to be authoritative in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditTarget {
     /// Contours of one orthogonal plane family.
-    Contour(PlaneFamily),
+    Contour(OrthogonalFamily),
     Mesh,
 }
 
@@ -34,8 +35,8 @@ pub struct PendingSwitch {
 pub struct ConversionReport {
     pub from: PrimaryRepresentation,
     pub to: PrimaryRepresentation,
-    pub from_family: Option<PlaneFamily>,
-    pub to_family: Option<PlaneFamily>,
+    pub from_family: Option<OrthogonalFamily>,
+    pub to_family: Option<OrthogonalFamily>,
     /// Whether the new form represents exactly the same shape (a switch between contour
     /// families, or voxel to contour). Conversions that resample a surface are not lossless.
     pub lossless: bool,
@@ -43,7 +44,7 @@ pub struct ConversionReport {
 
 impl ConversionReport {
     pub fn message(&self) -> String {
-        let form = |kind, family: Option<PlaneFamily>| match (kind, family) {
+        let form = |kind, family: Option<OrthogonalFamily>| match (kind, family) {
             (PrimaryRepresentation::Contour, Some(family)) => format!("{family:?} contours"),
             (PrimaryRepresentation::Contour, None) => "contours".to_string(),
             (PrimaryRepresentation::Voxel, _) => "voxels".to_string(),
@@ -77,7 +78,8 @@ pub enum Readiness {
 pub enum SwitchError {
     MissingRoi,
     Locked,
-    /// Oblique views are derived per-slice views and cannot be edited.
+    /// Oblique views are derived per-slice views and cannot be edited: there is no orthogonal
+    /// family to convert the ROI to.
     UnsupportedTarget,
     /// The voxel or mesh form the conversion starts from is missing or out of date.
     SourceUnavailable,
@@ -106,9 +108,6 @@ pub fn ensure_editable(
     roi_entity: hecs::Entity,
     target: EditTarget,
 ) -> Result<Readiness, SwitchError> {
-    if target == EditTarget::Contour(PlaneFamily::Oblique) {
-        return Err(SwitchError::UnsupportedTarget);
-    }
     let (locked, already, pending, source_revision) = {
         let roi = world
             .get::<&Roi>(roi_entity)
@@ -167,7 +166,7 @@ pub fn ensure_editable(
 fn set_family_of_empty_contour_roi(
     world: &mut World,
     roi_entity: hecs::Entity,
-    family: PlaneFamily,
+    family: OrthogonalFamily,
 ) -> bool {
     let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) else {
         return false;
@@ -271,7 +270,11 @@ fn request_source(
         }
         EditTarget::Mesh => {
             if !voxel_source_is_ready(world, roi_entity) {
-                return request_source(world, roi_entity, EditTarget::Contour(PlaneFamily::Axial));
+                return request_source(
+                    world,
+                    roi_entity,
+                    EditTarget::Contour(OrthogonalFamily::Axial),
+                );
             }
             let mut roi = world
                 .get::<&mut Roi>(roi_entity)
@@ -340,7 +343,7 @@ fn convert(
 pub(crate) fn convert_to_contour(
     world: &mut World,
     roi_entity: hecs::Entity,
-    family: PlaneFamily,
+    family: OrthogonalFamily,
 ) -> Result<(), SwitchError> {
     let (source_voxel, previous_mesh) = {
         let roi = world

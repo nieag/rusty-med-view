@@ -1,5 +1,5 @@
 use crate::app::components::{
-    CacheFreshness, CacheViewState, ContourCache, ContourData, ContourViewCache, ContourViewKey,
+    CacheFreshness, CacheViewState, ContourCache, ContourSlice, ContourViewCache, ContourViewKey,
     GpuVolumeResources, MeshCache, PreviewMeshCache, PreviewVoxelCache, Revision, Roi,
     RoiCacheKind, RoiDirtyState, RoiJobKind, VoxelCache, VoxelData, MAX_CONTOUR_VIEW_CACHE_ENTRIES,
 };
@@ -59,7 +59,7 @@ impl Roi {
     pub fn upsert_contour_view_cache(
         &mut self,
         key: ContourViewKey,
-        data: ContourData,
+        data: Vec<ContourSlice>,
         built_from: Revision,
         state: CacheViewState,
     ) {
@@ -106,10 +106,12 @@ impl Roi {
             .find(|view| view.key.logical_eq(key))
     }
 
-    pub fn contour_view_data_for_render(&self, key: &ContourViewKey) -> Option<&ContourData> {
+    /// The slices to draw for one view: the authoritative contours when the view is in the
+    /// authoritative family, else a current-enough derived view.
+    pub fn contour_view_data_for_render(&self, key: &ContourViewKey) -> Option<&[ContourSlice]> {
         if let Some(contour) = self.contour_data() {
             if contour.active_plane_family == key.family {
-                return Some(contour);
+                return Some(&contour.slices);
             }
         }
 
@@ -338,7 +340,7 @@ impl Roi {
     pub fn install_current_contour_view_result(
         &mut self,
         key: ContourViewKey,
-        data: ContourData,
+        data: Vec<ContourSlice>,
         built_from: Revision,
     ) -> Result<(), CacheInstallError> {
         self.install_contour_view_result(key, data, built_from, CacheViewState::Current)
@@ -347,7 +349,7 @@ impl Roi {
     pub fn install_contour_view_result(
         &mut self,
         key: ContourViewKey,
-        data: ContourData,
+        data: Vec<ContourSlice>,
         built_from: Revision,
         state: CacheViewState,
     ) -> Result<(), CacheInstallError> {

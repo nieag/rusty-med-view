@@ -38,6 +38,55 @@ pub enum PlaneFamily {
     Oblique,
 }
 
+/// A plane family that can hold authoritative contours: the three axis-aligned ones.
+///
+/// Oblique planes are derived per-slice views only (they never become an ROI's primary contour
+/// set), so the type for authoritative data simply cannot name them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OrthogonalFamily {
+    Axial,
+    Coronal,
+    Sagittal,
+}
+
+impl OrthogonalFamily {
+    pub const ALL: [OrthogonalFamily; 3] = [Self::Axial, Self::Coronal, Self::Sagittal];
+}
+
+impl From<OrthogonalFamily> for PlaneFamily {
+    fn from(family: OrthogonalFamily) -> Self {
+        match family {
+            OrthogonalFamily::Axial => PlaneFamily::Axial,
+            OrthogonalFamily::Coronal => PlaneFamily::Coronal,
+            OrthogonalFamily::Sagittal => PlaneFamily::Sagittal,
+        }
+    }
+}
+
+impl PlaneFamily {
+    /// The orthogonal family, or `None` for an oblique plane.
+    pub const fn orthogonal(self) -> Option<OrthogonalFamily> {
+        match self {
+            PlaneFamily::Axial => Some(OrthogonalFamily::Axial),
+            PlaneFamily::Coronal => Some(OrthogonalFamily::Coronal),
+            PlaneFamily::Sagittal => Some(OrthogonalFamily::Sagittal),
+            PlaneFamily::Oblique => None,
+        }
+    }
+}
+
+impl PartialEq<PlaneFamily> for OrthogonalFamily {
+    fn eq(&self, other: &PlaneFamily) -> bool {
+        PlaneFamily::from(*self) == *other
+    }
+}
+
+impl PartialEq<OrthogonalFamily> for PlaneFamily {
+    fn eq(&self, other: &OrthogonalFamily) -> bool {
+        *self == PlaneFamily::from(*other)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlaneDefinition {
     pub family: PlaneFamily,

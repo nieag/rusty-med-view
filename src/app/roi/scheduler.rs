@@ -169,7 +169,7 @@ fn merge_dirty_regions(left: RoiDirtyRegion, right: RoiDirtyRegion) -> RoiDirtyR
 mod tests {
     use super::*;
     use crate::app::components::{ContourData, RoiId};
-    use crate::convert::PlaneFamily;
+    use crate::model::OrthogonalFamily;
 
     #[test]
     fn test_starting_queued_work_records_queue_delay() {
@@ -177,7 +177,7 @@ mod tests {
             RoiId(1),
             "test".to_string(),
             ContourData {
-                active_plane_family: PlaneFamily::Axial,
+                active_plane_family: OrthogonalFamily::Axial,
                 slices: Vec::new(),
             },
         );

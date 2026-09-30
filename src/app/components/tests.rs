@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::OrthogonalFamily;
 
 fn test_plane_definition(family: PlaneFamily) -> PlaneDefinition {
     PlaneDefinition {
@@ -78,7 +79,7 @@ fn test_contour_view_key_from_plane_excludes_viewport_identity() {
 #[test]
 fn test_contour_view_key_lookup_uses_slice_key_not_exact_plane_float() {
     let contour = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: Vec::new(),
     };
     let mut roi = Roi::new_contour(RoiId(12), "C".to_string(), contour.clone());
@@ -86,7 +87,7 @@ fn test_contour_view_key_lookup_uses_slice_key_not_exact_plane_float() {
     let key_a = ContourViewKey::from_plane(plane);
     roi.upsert_contour_view_cache(
         key_a.clone(),
-        contour,
+        contour.slices,
         roi.dirty_state.authoritative,
         CacheViewState::Current,
     );
@@ -100,7 +101,7 @@ fn test_contour_view_key_lookup_uses_slice_key_not_exact_plane_float() {
 #[test]
 fn test_oblique_slice_key_distinguishes_same_origin_different_normal() {
     let contour = ContourData {
-        active_plane_family: PlaneFamily::Oblique,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: Vec::new(),
     };
     let mut roi = Roi::new_contour(RoiId(13), "Oblique".to_string(), contour.clone());
@@ -123,8 +124,8 @@ fn test_oblique_slice_key_distinguishes_same_origin_different_normal() {
     assert!(!key_a.logical_eq(&key_b));
 
     let gen = roi.dirty_state.authoritative;
-    roi.upsert_contour_view_cache(key_a, contour.clone(), gen, CacheViewState::Current);
-    roi.upsert_contour_view_cache(key_b.clone(), contour, gen, CacheViewState::Current);
+    roi.upsert_contour_view_cache(key_a, contour.slices.clone(), gen, CacheViewState::Current);
+    roi.upsert_contour_view_cache(key_b.clone(), contour.slices, gen, CacheViewState::Current);
     let cache = roi.contour_cache().unwrap();
     assert_eq!(cache.views.len(), 2);
     assert!(roi.contour_view_cache(&key_b).is_some());
@@ -133,14 +134,14 @@ fn test_oblique_slice_key_distinguishes_same_origin_different_normal() {
 #[test]
 fn test_mark_contour_authoritative_changed_marks_existing_derived_views_dirty() {
     let contour = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: Vec::new(),
     };
     let mut roi = Roi::new_contour(RoiId(11), "C".to_string(), contour.clone());
     let plane = test_plane_definition(PlaneFamily::Coronal);
     roi.upsert_contour_view_cache(
         ContourViewKey::from_plane(plane),
-        contour,
+        contour.slices,
         roi.dirty_state.authoritative,
         CacheViewState::Current,
     );
@@ -351,7 +352,7 @@ fn test_mark_contour_authoritative_changed_invalidates_only_derived_by_default()
         RoiId(16),
         "CTV".to_string(),
         ContourData {
-            active_plane_family: PlaneFamily::Axial,
+            active_plane_family: OrthogonalFamily::Axial,
             slices: Vec::new(),
         },
     );
@@ -456,7 +457,7 @@ fn test_preview_revision_is_monotonic_and_explicitly_ends() {
         RoiId(21),
         "Preview".to_string(),
         ContourData {
-            active_plane_family: PlaneFamily::Axial,
+            active_plane_family: OrthogonalFamily::Axial,
             slices: Vec::new(),
         },
     );
@@ -472,7 +473,7 @@ fn test_preview_revision_is_monotonic_and_explicitly_ends() {
 #[test]
 fn test_contour_view_cache_is_bounded() {
     let contour = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: Vec::new(),
     };
     let mut roi = Roi::new_contour(RoiId(22), "Bounded".to_string(), contour.clone());
@@ -481,7 +482,7 @@ fn test_contour_view_cache_is_bounded() {
         plane.origin_mm[1] = index as f32;
         roi.upsert_contour_view_cache(
             ContourViewKey::from_plane(plane),
-            contour.clone(),
+            contour.slices.clone(),
             Revision::from_shape(1),
             CacheViewState::Current,
         );
@@ -546,10 +547,10 @@ fn test_voxel_geometry_is_preserved_on_constructor() {
 #[test]
 fn test_contour_data_preserves_active_plane_family() {
     let contour = ContourData {
-        active_plane_family: PlaneFamily::Oblique,
+        active_plane_family: OrthogonalFamily::Coronal,
         slices: Vec::new(),
     };
-    assert_eq!(contour.active_plane_family, PlaneFamily::Oblique);
+    assert_eq!(contour.active_plane_family, PlaneFamily::Coronal);
     assert!(contour.is_empty());
     assert!(!contour.has_loops());
 }
@@ -614,7 +615,7 @@ fn test_contour_loop_requires_three_points_when_closed() {
 #[test]
 fn test_new_contour_roi_initializes_contour_primary_state() {
     let contour_data = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: vec![ContourSlice {
             plane: test_plane_definition(PlaneFamily::Axial),
             loops: vec![ContourLoop {
@@ -732,7 +733,7 @@ fn test_mesh_accessor_rejects_non_mesh_rois() {
         RoiId(23),
         "Contour".to_string(),
         ContourData {
-            active_plane_family: PlaneFamily::Axial,
+            active_plane_family: OrthogonalFamily::Axial,
             slices: Vec::new(),
         },
     );
@@ -934,17 +935,17 @@ fn test_contour_view_install_rejects_a_result_from_another_form() {
     );
     let key = ContourViewKey::from_plane(test_plane_definition(PlaneFamily::Coronal));
     let contour = ContourData {
-        active_plane_family: PlaneFamily::Coronal,
+        active_plane_family: OrthogonalFamily::Coronal,
         slices: Vec::new(),
     };
     let stale_form = roi.dirty_state.authoritative;
     roi.dirty_state.authoritative = stale_form.next_form();
 
     assert!(matches!(
-        roi.install_current_contour_view_result(key.clone(), contour.clone(), stale_form),
+        roi.install_current_contour_view_result(key.clone(), contour.slices.clone(), stale_form),
         Err(crate::app::roi::CacheInstallError::StaleGeneration { .. })
     ));
     assert!(roi
-        .install_current_contour_view_result(key, contour, roi.dirty_state.authoritative)
+        .install_current_contour_view_result(key, contour.slices, roi.dirty_state.authoritative)
         .is_ok());
 }

@@ -51,7 +51,7 @@ pub fn resolve_active_contour_edit_viewport(
     let viewport = resolve_active_edit_view(world, entities)?;
     if viewport.plane.family != contour_data.active_plane_family {
         return Err(ContourEditMappingError::PlaneFamilyMismatch {
-            contour_family: contour_data.active_plane_family,
+            contour_family: contour_data.active_plane_family.into(),
             viewport_family: viewport.plane.family,
         });
     }
@@ -217,10 +217,14 @@ fn prepare_contour_edit(
     entities: &AppEntities,
     roi_entity: hecs::Entity,
 ) -> Result<(), ContourPrepareError> {
-    let family = resolve_active_edit_view(world, entities)
+    let view_family = resolve_active_edit_view(world, entities)
         .map_err(ContourPrepareError::Mapping)?
         .plane
         .family;
+    // Oblique views are derived per-slice views; only the orthogonal families are editable.
+    let family = view_family
+        .orthogonal()
+        .ok_or(ContourPrepareError::Switch(SwitchError::UnsupportedTarget))?;
     match roi::ensure_editable(world, roi_entity, EditTarget::Contour(family))
         .map_err(ContourPrepareError::Switch)?
     {

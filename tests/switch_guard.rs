@@ -7,12 +7,48 @@
 //!
 //! They take about a second in release and much longer in debug, so debug builds ignore them.
 //! Run with `cargo test --release --test switch_guard` (CI does).
-use rusty_med_view::app::roi::{ContourData, VoxelData, VoxelGeometry};
-use rusty_med_view::convert::{
-    extract_contours_from_voxel_data, rasterize_contours_to_voxel_data, PlaneFamily,
-};
+use rusty_med_view::convert::{extract_contours_from_voxel_data, rasterize_contours_to_voxel_data};
+use rusty_med_view::model::{ContourData, OrthogonalFamily, VoxelData, VoxelGeometry};
 use rusty_med_view::nifti_loader::load_label_from_bytes;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
+
+/// These tests assert timings, so they must not compete for CPU with each other: cargo runs the
+/// tests of one file in parallel, and a timing measured under that contention means nothing.
+static SERIAL: Mutex<()> = Mutex::new(());
+
+fn serial() -> MutexGuard<'static, ()> {
+    SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Runs `work` a few times and returns the fastest time in milliseconds with its last result.
+/// The minimum measures the code; a single run also measures whatever else the machine is doing.
+fn best_of<T>(runs: usize, mut work: impl FnMut() -> T) -> (f64, T) {
+    let mut best = f64::INFINITY;
+    let mut result = None;
+    for _ in 0..runs {
+        let started = Instant::now();
+        let value = work();
+        best = best.min(started.elapsed().as_secs_f64() * 1000.0);
+        result = Some(value);
+    }
+    (best, result.expect("at least one run"))
+}
+
+/// Timing runs per measurement.
+const TIMING_RUNS: usize = 3;
+
+// Budgets are about five times the measurement on an idle machine (extract 30 to 100 ms, raster
+// 170 to 215 ms, deform base 6 ms and update up to 60 mm about 100 ms). They exist to catch an
+// order-of-magnitude regression, and must not flake when the machine is busy: the rasterizer and
+// the mesh code use several threads, so a loaded machine is 3 to 4 times slower. The numbers the
+// tests print are the record to compare by hand.
+const EXTRACT_BUDGET_MS: f64 = 500.0;
+const RASTER_BUDGET_MS: f64 = 1_500.0;
+const DEFORM_BASE_BUDGET_MS: f64 = 1_000.0;
+const DEFORM_UPDATE_BUDGET_MS: f64 = 1_000.0;
 
 fn liver_label() -> VoxelData {
     let bytes =
@@ -40,20 +76,21 @@ fn dice(a: &VoxelData, b: &VoxelData) -> f64 {
 }
 
 /// One primary-view switch as the app performs it today.
-fn switch_family(from: &ContourData, geometry: VoxelGeometry, to: PlaneFamily) -> ContourData {
+fn switch_family(from: &ContourData, geometry: VoxelGeometry, to: OrthogonalFamily) -> ContourData {
     let voxels = rasterize_contours_to_voxel_data(from, geometry).expect("raster");
     extract_contours_from_voxel_data(&voxels, to).expect("extract")
 }
 
-const FAMILIES: [PlaneFamily; 3] = [
-    PlaneFamily::Axial,
-    PlaneFamily::Coronal,
-    PlaneFamily::Sagittal,
+const FAMILIES: [OrthogonalFamily; 3] = [
+    OrthogonalFamily::Axial,
+    OrthogonalFamily::Coronal,
+    OrthogonalFamily::Sagittal,
 ];
 
 #[test]
 #[cfg_attr(debug_assertions, ignore = "slow in debug builds; run with --release")]
 fn test_deriving_contours_in_any_family_preserves_the_mask_exactly() {
+    let _serial = serial();
     let source = liver_label();
     for family in FAMILIES {
         let contours = extract_contours_from_voxel_data(&source, family).unwrap();
@@ -71,16 +108,17 @@ fn test_deriving_contours_in_any_family_preserves_the_mask_exactly() {
 #[test]
 #[cfg_attr(debug_assertions, ignore = "slow in debug builds; run with --release")]
 fn test_switching_family_and_back_without_edits_restores_the_original_contours() {
+    let _serial = serial();
     let source = liver_label();
     let geometry = source.geometry;
-    let axial = extract_contours_from_voxel_data(&source, PlaneFamily::Axial).unwrap();
+    let axial = extract_contours_from_voxel_data(&source, OrthogonalFamily::Axial).unwrap();
 
-    let coronal = switch_family(&axial, geometry, PlaneFamily::Coronal);
-    let back = switch_family(&coronal, geometry, PlaneFamily::Axial);
+    let coronal = switch_family(&axial, geometry, OrthogonalFamily::Coronal);
+    let back = switch_family(&coronal, geometry, OrthogonalFamily::Axial);
     assert_eq!(back, axial, "one switch away and back must be lossless");
 
-    let sagittal = switch_family(&back, geometry, PlaneFamily::Sagittal);
-    let back_again = switch_family(&sagittal, geometry, PlaneFamily::Axial);
+    let sagittal = switch_family(&back, geometry, OrthogonalFamily::Sagittal);
+    let back_again = switch_family(&sagittal, geometry, OrthogonalFamily::Axial);
     assert_eq!(back_again, axial, "three switches must not drift");
 }
 
@@ -94,20 +132,26 @@ fn test_switching_family_and_back_without_edits_restores_the_original_contours()
 #[test]
 #[cfg_attr(debug_assertions, ignore = "slow in debug builds; run with --release")]
 fn test_switch_timing_budget() {
+    let _serial = serial();
     let source = liver_label();
     for family in FAMILIES {
-        let started = Instant::now();
-        let contours = extract_contours_from_voxel_data(&source, family).unwrap();
-        let extract_ms = started.elapsed().as_secs_f64() * 1000.0;
-
-        let started = Instant::now();
-        let _ = rasterize_contours_to_voxel_data(&contours, source.geometry).unwrap();
-        let raster_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let (extract_ms, contours) = best_of(TIMING_RUNS, || {
+            extract_contours_from_voxel_data(&source, family).unwrap()
+        });
+        let (raster_ms, _) = best_of(TIMING_RUNS, || {
+            rasterize_contours_to_voxel_data(&contours, source.geometry).unwrap()
+        });
 
         println!("{family:?}: extract {extract_ms:.1} ms, raster {raster_ms:.1} ms");
         if !cfg!(debug_assertions) {
-            assert!(extract_ms < 100.0, "{family:?} extract {extract_ms:.1} ms");
-            assert!(raster_ms < 600.0, "{family:?} raster {raster_ms:.1} ms");
+            assert!(
+                extract_ms < EXTRACT_BUDGET_MS,
+                "{family:?} extract {extract_ms:.1} ms"
+            );
+            assert!(
+                raster_ms < RASTER_BUDGET_MS,
+                "{family:?} raster {raster_ms:.1} ms"
+            );
         }
     }
 }
@@ -117,6 +161,7 @@ fn test_switch_timing_budget() {
 #[test]
 #[cfg_attr(debug_assertions, ignore = "slow in debug builds; run with --release")]
 fn test_mesh_deform_update_is_fast_and_keeps_the_liver_valid() {
+    let _serial = serial();
     use rusty_med_view::convert::{
         deform_mesh_surface_brush_limited, extract_mesh_from_voxel_data,
         validate_mesh_for_voxelization, MeshDeformBase,
@@ -147,17 +192,18 @@ fn test_mesh_deform_update_is_fast_and_keeps_the_liver_valid() {
     let mut worst_ms = 0.0_f64;
     let mut last = (mesh.clone(), 1.0);
     for depth in [5.0_f32, 20.0, 60.0, 200.0] {
-        let started = Instant::now();
-        last = deform_mesh_surface_brush_limited(
-            &base,
-            &mesh,
-            face.vertex_indices,
-            anchor,
-            [0.0, 0.0, -depth],
-            12.0,
-            1.0,
-        );
-        let ms = started.elapsed().as_secs_f64() * 1000.0;
+        let (ms, result) = best_of(TIMING_RUNS, || {
+            deform_mesh_surface_brush_limited(
+                &base,
+                &mesh,
+                face.vertex_indices,
+                anchor,
+                [0.0, 0.0, -depth],
+                12.0,
+                1.0,
+            )
+        });
+        last = result;
         println!(
             "push {depth} mm (top z {top:.1}): fraction {:.3}, {ms:.1} ms",
             last.1
@@ -170,8 +216,14 @@ fn test_mesh_deform_update_is_fast_and_keeps_the_liver_valid() {
     println!("base build {base_ms:.1} ms, worst update up to 60 mm {worst_ms:.1} ms");
     validate_mesh_for_voxelization(&last.0).expect("the limited push keeps the liver valid");
     if !cfg!(debug_assertions) {
-        assert!(base_ms < 400.0, "base build {base_ms:.1} ms");
-        assert!(worst_ms < 250.0, "worst deform update {worst_ms:.1} ms");
+        assert!(
+            base_ms < DEFORM_BASE_BUDGET_MS,
+            "base build {base_ms:.1} ms"
+        );
+        assert!(
+            worst_ms < DEFORM_UPDATE_BUDGET_MS,
+            "worst deform update {worst_ms:.1} ms"
+        );
     }
 }
 
@@ -180,6 +232,7 @@ fn test_mesh_deform_update_is_fast_and_keeps_the_liver_valid() {
 #[test]
 #[cfg_attr(debug_assertions, ignore = "slow in debug builds; run with --release")]
 fn test_liver_dirty_mesh_rebuild_matches_clean_full_rebuild() {
+    let _serial = serial();
     use rusty_med_view::convert::{
         ChunkedMeshData, IncrementalChunkedMeshRebuild, DEFAULT_MESH_CHUNK_SIZE,
     };

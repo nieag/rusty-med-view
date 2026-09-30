@@ -26,7 +26,8 @@ directions; untangling that is backlog item 2b.9 and 2b.7.
 
 ```text
 src/model/         Pure data shared by every layer: VoxelGeometry, VoxelData, PlaneFamily and
-                   PlaneDefinition, contour and mesh data, VolumeData, LoadedLabel, ViewMode.
+                   PlaneDefinition, OrthogonalFamily (the families that can hold authoritative contours), contour
+                   and mesh data, VolumeData, LoadedLabel, ViewMode.
                    Imports nothing from the crate.
 src/app/handlers.rs
                    Loading a volume or labelmap into the scene, and status messages

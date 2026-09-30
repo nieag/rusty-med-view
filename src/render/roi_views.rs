@@ -1,5 +1,5 @@
 use crate::app::components::{
-    CacheViewState, ContourBody, ContourData, LayerSettings, MeshBody, MeshData, Roi, RoiBody,
+    CacheViewState, ContourBody, ContourSlice, LayerSettings, MeshBody, MeshData, Roi, RoiBody,
     RoiCacheKind, MAX_VOXEL_OVERLAY_SLOTS,
 };
 use hecs::{Entity, World};
@@ -217,8 +217,8 @@ fn voxel_non_renderable_reason(roi: &Roi) -> &'static str {
     "voxel_not_renderable"
 }
 
-fn has_contour_loops(contour: &ContourData) -> bool {
-    contour.has_loops()
+fn has_contour_loops(slices: &[ContourSlice]) -> bool {
+    slices.iter().any(|slice| !slice.loops.is_empty())
 }
 
 fn has_mesh_geometry(mesh: &MeshData) -> bool {
@@ -306,9 +306,9 @@ fn collect_contour_and_mesh_views(
     }
 }
 
-fn contour_data_for_adapter(roi: &Roi) -> Option<&ContourData> {
+fn contour_data_for_adapter(roi: &Roi) -> Option<&[ContourSlice]> {
     match &roi.body {
-        RoiBody::Contour(ContourBody { data: contour, .. }) => Some(contour),
+        RoiBody::Contour(ContourBody { data: contour, .. }) => Some(&contour.slices),
         RoiBody::Voxel(_) | RoiBody::Mesh(_) => roi
             .contour_cache()?
             .views
@@ -319,7 +319,7 @@ fn contour_data_for_adapter(roi: &Roi) -> Option<&ContourData> {
                     CacheViewState::Blocked { .. } | CacheViewState::Unsupported { .. }
                 ) && has_contour_loops(&view.data)
             })
-            .map(|view| &view.data),
+            .map(|view| view.data.as_slice()),
     }
 }
 
@@ -393,7 +393,7 @@ pub fn contour_renderable_in_viewport(
         return false;
     };
 
-    contour_data.slices.iter().any(|slice| {
+    contour_data.iter().any(|slice| {
         crate::convert::planes_are_same_slice(displayed_plane, slice.plane, geometry)
             && !slice.loops.is_empty()
     })

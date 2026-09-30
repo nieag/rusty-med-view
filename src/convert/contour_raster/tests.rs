@@ -1,5 +1,6 @@
 use super::*;
 use crate::convert::{orthogonal_plane_from_volume_uv, PlaneFamily};
+use crate::model::OrthogonalFamily;
 use crate::model::{ContourLoop, ContourPoint, ContourSlice};
 
 fn index(dimensions: [u32; 3], x: u32, y: u32, z: u32) -> usize {
@@ -42,7 +43,7 @@ fn test_rasterize_simple_axial_square_fill() {
     let plane = orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry)
         .expect("axial plane should resolve");
     let contour = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: vec![ContourSlice {
             plane,
             loops: vec![square_loop(1.4)],
@@ -62,7 +63,7 @@ fn test_rasterize_simple_axial_square_fill() {
 fn test_rasterize_empty_contours_returns_zero_filled_voxel_data() {
     let geometry = identity_geometry([4, 3, 2]);
     let contour = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: Vec::new(),
     };
 
@@ -79,7 +80,7 @@ fn test_rasterize_skips_invalid_open_loop() {
     let plane = orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.0], geometry)
         .expect("axial plane should resolve");
     let contour = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: vec![ContourSlice {
             plane,
             loops: vec![ContourLoop {
@@ -113,7 +114,7 @@ fn test_rasterize_multiple_loops_use_even_odd_fill() {
     let plane = orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry)
         .expect("axial plane should resolve");
     let contour = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: vec![ContourSlice {
             plane,
             loops: vec![square_loop(2.4), square_loop(1.4)],
@@ -138,7 +139,7 @@ fn test_rasterize_preserves_target_geometry_in_result() {
     )
     .unwrap();
     let contour = ContourData {
-        active_plane_family: PlaneFamily::Sagittal,
+        active_plane_family: OrthogonalFamily::Sagittal,
         slices: Vec::new(),
     };
 
@@ -153,7 +154,7 @@ fn test_preview_slice_raster_preserves_unaffected_voxel_slices() {
         orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 1.0 / 3.0], geometry)
             .unwrap();
     let contour = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: vec![ContourSlice {
             plane,
             loops: vec![square_loop(1.25)],
@@ -176,10 +177,10 @@ fn test_preview_slice_raster_preserves_unaffected_voxel_slices() {
 fn test_preview_slice_raster_updates_coronal_and_sagittal_depth_axes() {
     let geometry = identity_geometry([5, 6, 7]);
     for (family, depth_axis, depth, cursor_uv) in [
-        (PlaneFamily::Coronal, 1, 2, [0.5, 2.0 / 5.0, 0.5]),
-        (PlaneFamily::Sagittal, 0, 3, [3.0 / 4.0, 0.5, 0.5]),
+        (OrthogonalFamily::Coronal, 1, 2, [0.5, 2.0 / 5.0, 0.5]),
+        (OrthogonalFamily::Sagittal, 0, 3, [3.0 / 4.0, 0.5, 0.5]),
     ] {
-        let plane = orthogonal_plane_from_volume_uv(family, cursor_uv, geometry).unwrap();
+        let plane = orthogonal_plane_from_volume_uv(family.into(), cursor_uv, geometry).unwrap();
         let contour = ContourData {
             active_plane_family: family,
             slices: vec![ContourSlice {
@@ -220,7 +221,7 @@ fn test_contour_slice_aabb_is_one_max_exclusive_voxel_slab() {
         orthogonal_plane_from_volume_uv(PlaneFamily::Coronal, [0.5, 3.0 / 6.0, 0.5], geometry)
             .unwrap();
     let contour = ContourData {
-        active_plane_family: PlaneFamily::Coronal,
+        active_plane_family: OrthogonalFamily::Coronal,
         slices: vec![ContourSlice {
             plane,
             loops: vec![square_loop(1.0)],
@@ -234,70 +235,13 @@ fn test_contour_slice_aabb_is_one_max_exclusive_voxel_slab() {
 }
 
 #[test]
-fn test_oblique_contour_aabb_conservatively_covers_volume() {
-    let geometry = identity_geometry([8, 7, 6]);
-    let mut plane =
-        orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry).unwrap();
-    plane.family = PlaneFamily::Oblique;
-    let contour = ContourData {
-        active_plane_family: PlaneFamily::Oblique,
-        slices: vec![ContourSlice {
-            plane,
-            loops: vec![square_loop(1.0)],
-        }],
-    };
-
-    assert_eq!(
-        contour_slices_voxel_aabb(&contour, geometry),
-        Some(([0, 0, 0], geometry.dimensions))
-    );
-}
-
-#[test]
-fn test_oblique_raster_bounds_match_full_volume_reference() {
-    let geometry = identity_geometry([24, 24, 24]);
-    let normal = Vec3::new(0.3, 0.4, 0.866_025_4).normalize();
-    let u_axis = Vec3::new(-0.8, 0.6, 0.0);
-    let v_axis = normal.cross(u_axis);
-    let plane = PlaneDefinition::new(
-        PlaneFamily::Oblique,
-        [12.0, 12.0, 12.0],
-        u_axis.to_array(),
-        v_axis.to_array(),
-    )
-    .unwrap();
-    let contour = ContourData {
-        active_plane_family: PlaneFamily::Oblique,
-        slices: vec![ContourSlice {
-            plane,
-            loops: vec![square_loop(3.5)],
-        }],
-    };
-    let slices = prepare_slices(&contour, geometry).unwrap();
-    let bounds = raster_bounds_for_slices(&slices, geometry);
-    let bounded = rasterize_contours_to_voxel_data(&contour, geometry).unwrap();
-    let full = rasterize_slices_in_bounds(
-        &slices,
-        geometry,
-        ([0; 3], geometry.dimensions),
-        vec![0; 24 * 24 * 24],
-    );
-
-    assert_eq!(bounded.raw_data, full);
-    assert!(
-        bounds.0 != [0; 3] || bounds.1 != geometry.dimensions,
-        "small oblique loop should not scan the whole grid"
-    );
-}
-
-#[test]
 fn test_contour_geometry_aabb_tightens_in_plane_bounds() {
     let geometry = identity_geometry([8, 8, 4]);
     let plane =
         orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 1.0 / 3.0], geometry)
             .unwrap();
     let contour = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: vec![ContourSlice {
             plane,
             loops: vec![square_loop(1.0)],
@@ -344,7 +288,7 @@ fn test_full_and_slice_local_rasterizers_agree_for_every_plane_depth() {
         for offset in [0.0_f32, 0.3, -0.3, 20.0, -20.0] {
             plane.origin_mm[2] = base_z + offset;
             let contour = ContourData {
-                active_plane_family: PlaneFamily::Axial,
+                active_plane_family: OrthogonalFamily::Axial,
                 slices: vec![ContourSlice {
                     plane,
                     loops: vec![square.clone()],

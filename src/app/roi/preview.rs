@@ -234,10 +234,11 @@ mod tests {
     use super::*;
     use crate::app::components::{MeshData, MeshFace, MeshVertex, RoiId};
     use crate::convert::PlaneFamily;
+    use crate::model::OrthogonalFamily;
 
     fn contour_data() -> ContourData {
         ContourData {
-            active_plane_family: PlaneFamily::Axial,
+            active_plane_family: OrthogonalFamily::Axial,
             slices: Vec::new(),
         }
     }

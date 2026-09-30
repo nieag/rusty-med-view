@@ -5,6 +5,7 @@ use crate::app::roi::preview::*;
 use crate::app::roi::requests::*;
 use crate::app::roi::switch::*;
 use crate::convert::{orthogonal_plane_from_volume_uv, world_mm_to_voxel_index};
+use crate::model::OrthogonalFamily;
 
 fn spawn_test_roi(world: &mut World) -> hecs::Entity {
     world.spawn((Roi::new_voxel_with_cache(
@@ -66,7 +67,7 @@ fn test_plane_definition(family: PlaneFamily) -> PlaneDefinition {
 
 fn spawn_test_contour_roi(
     world: &mut World,
-    family: PlaneFamily,
+    family: OrthogonalFamily,
     with_loops: bool,
 ) -> hecs::Entity {
     let geometry = VoxelGeometry::new(
@@ -78,7 +79,7 @@ fn spawn_test_contour_roi(
     .unwrap();
     let slices = if with_loops {
         vec![ContourSlice {
-            plane: test_plane_definition(family),
+            plane: test_plane_definition(family.into()),
             loops: vec![ContourLoop {
                 points: vec![
                     ContourPoint {
@@ -142,7 +143,7 @@ fn square_contour_data_for_main_volume(world: &World, half_extent: f32) -> Conto
     let plane = orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry)
         .expect("axial plane should resolve");
     ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: vec![ContourSlice {
             plane,
             loops: vec![ContourLoop {
@@ -287,7 +288,7 @@ fn test_voxel_roi_stats_use_nonzero_voxels_and_volume_spacing() {
 #[test]
 fn test_roi_voxel_stats_contour_primary_returns_none_before_rebuild() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, true);
     let stats = roi_voxel_stats(&world, entity);
     assert!(stats.is_none());
 }
@@ -296,7 +297,7 @@ fn test_roi_voxel_stats_contour_primary_returns_none_before_rebuild() {
 fn test_roi_voxel_stats_contour_primary_returns_derived_stats_after_rebuild() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     let replacement = square_contour_data_for_main_volume(&world, 1.4);
     replace_contour_data(&mut world, entity, replacement).unwrap();
     process_contour_voxel_rebuild_jobs(&mut world);
@@ -320,7 +321,7 @@ fn test_roi_voxel_stats_contour_primary_returns_derived_stats_after_rebuild() {
 #[test]
 fn test_mesh_viewport_sync_keeps_current_mesh_cache_current() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, true);
     seed_current_voxel_cache_for_contour_roi(&mut world, entity);
     world.spawn((Viewport {
         mode: ViewMode::ThreeD,
@@ -357,7 +358,7 @@ fn test_mesh_viewport_sync_keeps_current_mesh_cache_current() {
 #[test]
 fn test_advance_roi_work_reports_pending_queued_work() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     world
         .get::<&mut Roi>(entity)
         .unwrap()
@@ -373,7 +374,7 @@ fn test_advance_roi_work_reports_pending_queued_work() {
 #[test]
 fn test_advance_roi_work_rebuilds_contour_voxels_from_roi_reference_grid() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, true);
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
@@ -425,7 +426,7 @@ fn test_main_volume_geometry_is_none_for_the_placeholder_volume() {
 fn test_display_volume_change_does_not_retarget_contour_roi_geometry() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, true);
     let (identity_before, voxel_geometry_before) = {
         let roi = world.get::<&Roi>(entity).unwrap();
         (
@@ -470,7 +471,7 @@ fn test_visible_voxel_overlay_count_ignores_non_renderable_rois() {
     let mut world = World::new();
     let first = spawn_test_roi(&mut world);
     let second = spawn_test_roi(&mut world);
-    let contour = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let contour = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
 
     {
         let mut roi = world.get::<&mut Roi>(first).unwrap();
@@ -559,7 +560,7 @@ fn test_create_empty_contour_roi_creates_contour_primary_with_requested_plane_fa
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
     let editor = world.spawn((EditorState::default(),));
 
-    let entity = create_empty_contour_roi(&mut world, editor, PlaneFamily::Coronal).unwrap();
+    let entity = create_empty_contour_roi(&mut world, editor, OrthogonalFamily::Coronal).unwrap();
 
     let roi = world.get::<&Roi>(entity).unwrap();
     assert_eq!(roi.primary_representation(), PrimaryRepresentation::Contour);
@@ -580,7 +581,7 @@ fn test_create_empty_contour_roi_sets_active_roi_to_new_entity() {
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
     let editor = world.spawn((EditorState::default(),));
 
-    let entity = create_empty_contour_roi(&mut world, editor, PlaneFamily::Axial).unwrap();
+    let entity = create_empty_contour_roi(&mut world, editor, OrthogonalFamily::Axial).unwrap();
 
     let editor_state = world.get::<&EditorState>(editor).unwrap();
     assert_eq!(editor_state.active_roi, Some(entity));
@@ -863,7 +864,11 @@ fn test_cancel_mesh_edit_preview_preserves_authority() {
             .get::<&Roi>(entity)
             .unwrap()
             .contour_view_data_for_render(&key),
-        Some(&intersect_mesh_with_plane(&original, plane).unwrap())
+        Some(
+            intersect_mesh_with_plane(&original, plane)
+                .unwrap()
+                .as_slice()
+        )
     );
 }
 
@@ -1039,7 +1044,7 @@ fn test_mesh_authority_keeps_direct_plane_contour_after_voxel_rebuild() {
             let roi = world.get::<&Roi>(entity).unwrap();
             intersect_mesh_with_plane(roi.mesh_data().unwrap(), plane).unwrap()
         };
-        assert!(!expected.slices.is_empty());
+        assert!(!expected.is_empty());
         let before_rebuild = ensure_contour_view_cache(&mut world, entity, &key);
         assert_eq!(before_rebuild.state, RepresentationRequestState::Current);
         assert_eq!(
@@ -1123,7 +1128,7 @@ fn test_visible_inactive_mesh_roi_keeps_direct_contours_in_multiple_viewports() 
         .unwrap();
         let key = ContourViewKey::from_plane(plane);
         let expected = intersect_mesh_with_plane(&mesh, plane).unwrap();
-        assert!(!expected.slices.is_empty());
+        assert!(!expected.is_empty());
         let roi = world.get::<&Roi>(mesh_roi).unwrap();
         let cache = roi.contour_view_cache(&key).unwrap();
         assert_eq!(cache.state, CacheViewState::Current);
@@ -1224,7 +1229,7 @@ fn test_rotated_anisotropic_roi_keeps_direct_contours_through_mesh_resample() {
     let expected = planes.map(|plane| {
         let key = ContourViewKey::from_plane(plane);
         let direct = intersect_mesh_with_plane(&deformed, plane).unwrap();
-        assert!(direct.has_loops());
+        assert!(direct.iter().any(|slice| !slice.loops.is_empty()));
         assert_eq!(
             ensure_contour_view_cache(&mut world, entity, &key).state,
             RepresentationRequestState::Current
@@ -1271,7 +1276,7 @@ fn test_create_contour_roi_from_voxel_roi_keeps_source_unchanged() {
         voxel.clone()
     };
 
-    let _new = create_contour_roi_from_voxel_roi(&mut world, source, PlaneFamily::Axial)
+    let _new = create_contour_roi_from_voxel_roi(&mut world, source, OrthogonalFamily::Axial)
         .expect("extraction should create contour roi");
 
     let roi = world.get::<&Roi>(source).unwrap();
@@ -1287,7 +1292,7 @@ fn test_create_contour_roi_from_voxel_roi_returns_contour_primary_roi() {
     let mut world = World::new();
     let source = spawn_test_roi(&mut world);
 
-    let created = create_contour_roi_from_voxel_roi(&mut world, source, PlaneFamily::Axial)
+    let created = create_contour_roi_from_voxel_roi(&mut world, source, OrthogonalFamily::Axial)
         .expect("extraction should create contour roi");
 
     let roi = world.get::<&Roi>(created).unwrap();
@@ -1301,7 +1306,7 @@ fn test_create_contour_roi_from_voxel_roi_populates_extractable_contours() {
     let mut world = World::new();
     let source = spawn_sparse_voxel_roi(&mut world);
 
-    let created = create_contour_roi_from_voxel_roi(&mut world, source, PlaneFamily::Axial)
+    let created = create_contour_roi_from_voxel_roi(&mut world, source, OrthogonalFamily::Axial)
         .expect("extraction should create contour roi");
 
     let roi = world.get::<&Roi>(created).unwrap();
@@ -1326,7 +1331,7 @@ fn test_extracted_contour_roi_seeds_current_cpu_voxel_cache() {
     let mut world = World::new();
     let source = spawn_sparse_voxel_roi(&mut world);
 
-    let created = create_contour_roi_from_voxel_roi(&mut world, source, PlaneFamily::Axial)
+    let created = create_contour_roi_from_voxel_roi(&mut world, source, OrthogonalFamily::Axial)
         .expect("extraction should create contour roi");
 
     let roi = world.get::<&Roi>(created).unwrap();
@@ -1353,32 +1358,20 @@ fn test_mesh_authoritative_roi_reports_current_mesh_representation() {
 #[test]
 fn test_create_contour_roi_from_voxel_roi_rejects_non_voxel_source() {
     let mut world = World::new();
-    let source = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
-    let result = create_contour_roi_from_voxel_roi(&mut world, source, PlaneFamily::Axial);
+    let source = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
+    let result = create_contour_roi_from_voxel_roi(&mut world, source, OrthogonalFamily::Axial);
     assert_eq!(result, Err(VoxelContourCreationError::NotVoxelRoi));
 }
 
 #[test]
 fn test_create_contour_roi_from_voxel_roi_rejects_missing_source() {
     let mut world = World::new();
-    let result =
-        create_contour_roi_from_voxel_roi(&mut world, hecs::Entity::DANGLING, PlaneFamily::Axial);
-    assert_eq!(result, Err(VoxelContourCreationError::MissingRoi));
-}
-
-#[test]
-fn test_create_contour_roi_from_voxel_roi_surfaces_extraction_errors() {
-    let mut world = World::new();
-    let source = spawn_test_roi(&mut world);
-    let result = create_contour_roi_from_voxel_roi(&mut world, source, PlaneFamily::Oblique);
-    assert_eq!(
-        result,
-        Err(VoxelContourCreationError::ExtractionFailed(
-            VoxelContourExtractionError::UnsupportedPlaneFamily {
-                family: PlaneFamily::Oblique
-            }
-        ))
+    let result = create_contour_roi_from_voxel_roi(
+        &mut world,
+        hecs::Entity::DANGLING,
+        OrthogonalFamily::Axial,
     );
+    assert_eq!(result, Err(VoxelContourCreationError::MissingRoi));
 }
 
 #[test]
@@ -1432,7 +1425,7 @@ fn test_create_mesh_roi_from_voxel_roi_returns_mesh_primary_roi() {
 fn test_create_mesh_roi_from_voxel_roi_rejects_non_voxel_source() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let source = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let source = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
 
     let result = create_mesh_roi_from_voxel_roi(&mut world, source);
     assert_eq!(result, Err(VoxelMeshCreationError::NotVoxelRoi));
@@ -1548,7 +1541,7 @@ fn test_create_mesh_roi_from_voxel_roi_spawns_mesh_when_geometry_is_mismatched()
 #[test]
 fn test_create_mesh_roi_from_contour_roi_succeeds_with_current_voxel_cache() {
     let mut world = World::new();
-    let source = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let source = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     let source_voxel = VoxelData {
         geometry: VoxelGeometry::new(
             [4, 4, 4],
@@ -1584,7 +1577,7 @@ fn test_create_mesh_roi_from_contour_roi_succeeds_with_current_voxel_cache() {
 #[test]
 fn test_create_mesh_roi_from_contour_roi_requires_current_voxel_cache() {
     let mut world = World::new();
-    let source = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let source = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
 
     let result = create_mesh_roi_from_contour_roi(&mut world, source);
     assert_eq!(
@@ -1597,11 +1590,11 @@ fn test_create_mesh_roi_from_contour_roi_requires_current_voxel_cache() {
 fn test_extracted_contour_roi_supports_replace_contour_data_edit_path() {
     let mut world = World::new();
     let source = spawn_sparse_voxel_roi(&mut world);
-    let extracted = create_contour_roi_from_voxel_roi(&mut world, source, PlaneFamily::Axial)
+    let extracted = create_contour_roi_from_voxel_roi(&mut world, source, OrthogonalFamily::Axial)
         .expect("expected extracted contour roi");
 
     let replacement = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: vec![ContourSlice {
             plane: test_plane_definition(PlaneFamily::Axial),
             loops: vec![ContourLoop {
@@ -1631,11 +1624,11 @@ fn test_extracted_contour_roi_supports_replace_contour_data_edit_path() {
 fn test_extracted_contour_roi_edit_queues_rebuild_voxel_cache_job() {
     let mut world = World::new();
     let source = spawn_sparse_voxel_roi(&mut world);
-    let extracted = create_contour_roi_from_voxel_roi(&mut world, source, PlaneFamily::Axial)
+    let extracted = create_contour_roi_from_voxel_roi(&mut world, source, OrthogonalFamily::Axial)
         .expect("expected extracted contour roi");
 
     let replacement = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: vec![ContourSlice {
             plane: test_plane_definition(PlaneFamily::Axial),
             loops: vec![ContourLoop {
@@ -1666,7 +1659,7 @@ fn test_contour_commit_converges_voxel_and_mesh_through_work_coordinator() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
     let source = spawn_sparse_voxel_roi(&mut world);
-    let extracted = create_contour_roi_from_voxel_roi(&mut world, source, PlaneFamily::Axial)
+    let extracted = create_contour_roi_from_voxel_roi(&mut world, source, OrthogonalFamily::Axial)
         .expect("expected extracted contour roi");
 
     let replacement = square_contour_data_for_main_volume(&world, 1.2);
@@ -1699,7 +1692,7 @@ fn test_contour_commit_converges_voxel_and_mesh_through_work_coordinator() {
 #[test]
 fn test_set_active_contour_plane_family_updates_empty_contour_and_marks_derived_dirty() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         roi.dirty_state.authoritative_dirty = false;
@@ -1714,7 +1707,7 @@ fn test_set_active_contour_plane_family_updates_empty_contour_and_marks_derived_
     let result = ensure_editable(
         &mut world,
         entity,
-        EditTarget::Contour(PlaneFamily::Coronal),
+        EditTarget::Contour(OrthogonalFamily::Coronal),
     );
     assert_eq!(result, Ok(Readiness::Ready));
 
@@ -1731,7 +1724,7 @@ fn test_set_active_contour_plane_family_updates_empty_contour_and_marks_derived_
 #[test]
 fn test_ensure_editable_is_a_noop_when_the_family_is_unchanged() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Sagittal, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Sagittal, false);
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         roi.dirty_state.authoritative_dirty = false;
@@ -1746,7 +1739,7 @@ fn test_ensure_editable_is_a_noop_when_the_family_is_unchanged() {
     let result = ensure_editable(
         &mut world,
         entity,
-        EditTarget::Contour(PlaneFamily::Sagittal),
+        EditTarget::Contour(OrthogonalFamily::Sagittal),
     );
     assert_eq!(result, Ok(Readiness::Ready));
 
@@ -1763,7 +1756,7 @@ fn test_ensure_editable_is_a_noop_when_the_family_is_unchanged() {
 #[test]
 fn test_replace_contour_data_updates_authoritative_state_and_queues_voxel_rebuild() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         roi.dirty_state.authoritative_dirty = false;
@@ -1776,7 +1769,7 @@ fn test_replace_contour_data_updates_authoritative_state_and_queues_voxel_rebuil
     }
 
     let replacement = ContourData {
-        active_plane_family: PlaneFamily::Coronal,
+        active_plane_family: OrthogonalFamily::Coronal,
         slices: vec![ContourSlice {
             plane: test_plane_definition(PlaneFamily::Coronal),
             loops: vec![ContourLoop {
@@ -1824,7 +1817,7 @@ fn test_replace_contour_data_updates_authoritative_state_and_queues_voxel_rebuil
 fn test_contour_edit_history_undo_redo_restores_authority_and_requeues_rebuild() {
     let mut world = World::new();
     let editor = world.spawn((EditorState::default(),));
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(entity);
     let original = world
         .get::<&Roi>(entity)
@@ -1833,7 +1826,7 @@ fn test_contour_edit_history_undo_redo_restores_authority_and_requeues_rebuild()
         .unwrap()
         .clone();
     let replacement = ContourData {
-        active_plane_family: PlaneFamily::Coronal,
+        active_plane_family: OrthogonalFamily::Coronal,
         slices: vec![ContourSlice {
             plane: test_plane_definition(PlaneFamily::Coronal),
             loops: vec![ContourLoop {
@@ -1903,7 +1896,7 @@ fn test_contour_edit_history_undo_redo_restores_authority_and_requeues_rebuild()
 fn test_slice_local_contour_history_preserves_dirty_plane_for_undo_and_redo() {
     let mut world = World::new();
     let editor = world.spawn((EditorState::default(),));
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, true);
     world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(entity);
     let original = world
         .get::<&Roi>(entity)
@@ -1934,11 +1927,11 @@ fn test_slice_local_contour_history_preserves_dirty_plane_for_undo_and_redo() {
 fn test_new_contour_slice_history_uses_full_rebuild_for_safe_undo() {
     let mut world = World::new();
     let editor = world.spawn((EditorState::default(),));
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(entity);
     let plane = test_plane_definition(PlaneFamily::Axial);
     let replacement = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: vec![ContourSlice {
             plane,
             loops: Vec::new(),
@@ -1956,7 +1949,7 @@ fn test_new_contour_slice_history_uses_full_rebuild_for_safe_undo() {
 #[test]
 fn test_noop_contour_history_commit_does_not_advance_generation_or_record_history() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, true);
     let contour = world
         .get::<&Roi>(entity)
         .unwrap()
@@ -1984,17 +1977,17 @@ fn test_noop_contour_history_commit_does_not_advance_generation_or_record_histor
 fn test_new_contour_commit_after_undo_clears_redo_history() {
     let mut world = World::new();
     let editor = world.spawn((EditorState::default(),));
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(entity);
     let first = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: vec![ContourSlice {
             plane: test_plane_definition(PlaneFamily::Axial),
             loops: Vec::new(),
         }],
     };
     let second = ContourData {
-        active_plane_family: PlaneFamily::Coronal,
+        active_plane_family: OrthogonalFamily::Coronal,
         slices: vec![ContourSlice {
             plane: test_plane_definition(PlaneFamily::Coronal),
             loops: Vec::new(),
@@ -2026,7 +2019,7 @@ fn test_replace_contour_data_rejects_voxel_roi() {
         &mut world,
         entity,
         ContourData {
-            active_plane_family: PlaneFamily::Axial,
+            active_plane_family: OrthogonalFamily::Axial,
             slices: Vec::new(),
         },
     );
@@ -2042,7 +2035,7 @@ fn test_replace_contour_data_rejects_missing_roi() {
         &mut world,
         missing,
         ContourData {
-            active_plane_family: PlaneFamily::Axial,
+            active_plane_family: OrthogonalFamily::Axial,
             slices: Vec::new(),
         },
     );
@@ -2053,7 +2046,7 @@ fn test_replace_contour_data_rejects_missing_roi() {
 fn test_process_contour_voxel_rebuild_jobs_builds_current_voxel_cache_for_contour_roi() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     let replacement = square_contour_data_for_main_volume(&world, 1.4);
     replace_contour_data(&mut world, entity, replacement.clone()).unwrap();
     world
@@ -2078,7 +2071,7 @@ fn test_process_contour_voxel_rebuild_jobs_builds_current_voxel_cache_for_contou
 
 #[test]
 fn test_slice_commit_updates_retained_voxel_cache_for_coronal_and_sagittal_contours() {
-    for family in [PlaneFamily::Coronal, PlaneFamily::Sagittal] {
+    for family in [OrthogonalFamily::Coronal, OrthogonalFamily::Sagittal] {
         let mut world = World::new();
         spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
         let entity = spawn_test_contour_roi(&mut world, family, false);
@@ -2089,7 +2082,7 @@ fn test_slice_commit_updates_retained_voxel_cache_for_coronal_and_sagittal_conto
         }
 
         let geometry = main_volume_geometry(&world).unwrap();
-        let plane = orthogonal_plane_from_volume_uv(family, [0.5, 0.5, 0.5], geometry)
+        let plane = orthogonal_plane_from_volume_uv(family.into(), [0.5, 0.5, 0.5], geometry)
             .expect("orthogonal edit plane");
         let replacement = ContourData {
             active_plane_family: family,
@@ -2126,8 +2119,8 @@ fn test_slice_commit_updates_retained_voxel_cache_for_coronal_and_sagittal_conto
             "unrelated slab changed for {family:?}"
         );
         let depth_axis = match family {
-            PlaneFamily::Coronal => 1,
-            PlaneFamily::Sagittal => 0,
+            OrthogonalFamily::Coronal => 1,
+            OrthogonalFamily::Sagittal => 0,
             _ => unreachable!(),
         };
         let depth = world_mm_to_voxel_index(plane.origin_mm, geometry)[depth_axis].round() as u32;
@@ -2162,7 +2155,7 @@ fn test_slice_commit_updates_retained_voxel_cache_for_coronal_and_sagittal_conto
 #[test]
 fn test_process_contour_voxel_rebuild_jobs_uses_roi_reference_grid_without_main_volume() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, true);
     let contour_before = world
         .get::<&Roi>(entity)
         .unwrap()
@@ -2187,7 +2180,7 @@ fn test_process_contour_voxel_rebuild_jobs_uses_roi_reference_grid_without_main_
 fn test_process_contour_voxel_rebuild_jobs_discards_stale_generation_results() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     let replacement = square_contour_data_for_main_volume(&world, 1.2);
     replace_contour_data(&mut world, entity, replacement).unwrap();
 
@@ -2218,7 +2211,7 @@ fn test_process_contour_voxel_rebuild_jobs_discards_stale_generation_results() {
 fn test_process_contour_voxel_rebuild_jobs_clears_running_state_on_success() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     let replacement = square_contour_data_for_main_volume(&world, 1.0);
     replace_contour_data(&mut world, entity, replacement).unwrap();
 
@@ -2235,83 +2228,13 @@ fn test_process_contour_voxel_rebuild_jobs_clears_running_state_on_success() {
 }
 
 #[test]
-fn test_oblique_dirty_slice_rebuild_preserves_other_authoritative_planes() {
-    let mut world = World::new();
-    spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let make_slice = |z: f32| ContourSlice {
-        plane: PlaneDefinition {
-            family: PlaneFamily::Oblique,
-            origin_mm: [0.0, 0.0, z],
-            u_axis_mm: [1.0, 0.0, 0.0],
-            v_axis_mm: [0.0, 1.0, 0.0],
-            normal_mm: [0.0, 0.0, 1.0],
-        },
-        loops: vec![ContourLoop {
-            points: vec![
-                ContourPoint {
-                    local_mm: [0.5, 0.5],
-                },
-                ContourPoint {
-                    local_mm: [2.5, 0.5],
-                },
-                ContourPoint {
-                    local_mm: [2.5, 2.5],
-                },
-                ContourPoint {
-                    local_mm: [0.5, 2.5],
-                },
-            ],
-            is_closed: true,
-        }],
-    };
-    let first_slice = make_slice(1.0);
-    let first_key = ContourSliceKey::from_plane(first_slice.plane);
-    let geometry = VoxelGeometry::new(
-        [4, 4, 4],
-        [1.0, 1.0, 1.0],
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0, 1.0],
-    )
-    .unwrap();
-    let entity = world.spawn((Roi::new_contour_with_geometry(
-        RoiId(101),
-        "Oblique".to_string(),
-        geometry,
-        ContourData {
-            active_plane_family: PlaneFamily::Oblique,
-            slices: vec![first_slice, make_slice(2.0)],
-        },
-    ),));
-    seed_current_voxel_cache_for_contour_roi(&mut world, entity);
-    {
-        let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let source_generation = roi.dirty_state.authoritative.shape;
-        roi.enqueue_job(RoiJobRequest {
-            kind: RoiJobKind::RebuildVoxelCache,
-            source_generation,
-            preview_revision: None,
-            priority: RoiJobPriority::VisibleCommitted,
-            dirty_region: RoiDirtyRegion::ContourSlice(first_key),
-        });
-    }
-
-    process_contour_voxel_rebuild_jobs(&mut world);
-
-    let roi = world.get::<&Roi>(entity).unwrap();
-    let raw = &roi.voxel_cache().unwrap().data.raw_data;
-    let center_index = |z: usize| z * 16 + 5;
-    assert_ne!(raw[center_index(1)], 0);
-    assert_ne!(raw[center_index(2)], 0);
-}
-
-#[test]
 fn test_process_contour_voxel_rebuild_jobs_hard_raster_failure_does_not_requeue() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
 
     let invalid_contour = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: vec![ContourSlice {
             plane: PlaneDefinition {
                 family: PlaneFamily::Axial,
@@ -2349,7 +2272,7 @@ fn test_process_contour_voxel_rebuild_jobs_hard_raster_failure_does_not_requeue(
 #[test]
 fn test_request_contour_view_state_reports_active_family_editable() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     let key = ContourViewKey::from_plane(test_plane_definition(PlaneFamily::Axial));
 
     let status = request_contour_view_state(&world, entity, &key);
@@ -2387,13 +2310,12 @@ fn test_voxel_primary_roi_can_build_and_request_orthogonal_contour_view_cache() 
         .contour_view_cache(&key)
         .expect("expected derived contour view cache for voxel roi");
     assert_eq!(cache.state, CacheViewState::Current);
-    assert_eq!(cache.data.active_plane_family, PlaneFamily::Coronal);
 }
 
 #[test]
 fn test_ensure_contour_view_cache_builds_orthogonal_view_from_current_voxel_cache() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         let mut raw_data = vec![0_u8; 64];
@@ -2437,13 +2359,12 @@ fn test_ensure_contour_view_cache_builds_orthogonal_view_from_current_voxel_cach
         .expect("expected derived contour view cache");
     assert_eq!(cache.state, CacheViewState::Current);
     assert_eq!(cache.built_from, roi.dirty_state.authoritative);
-    assert_eq!(cache.data.active_plane_family, PlaneFamily::Coronal);
 }
 
 #[test]
 fn test_ensure_contour_view_cache_reuses_current_matching_generation_cache() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     seed_current_voxel_cache_for_contour_roi(&mut world, entity);
     let key = ContourViewKey::from_plane(test_plane_definition(PlaneFamily::Coronal));
     {
@@ -2452,7 +2373,7 @@ fn test_ensure_contour_view_cache_reuses_current_matching_generation_cache() {
         roi.upsert_contour_view_cache(
             key.clone(),
             ContourData {
-                active_plane_family: PlaneFamily::Coronal,
+                active_plane_family: OrthogonalFamily::Coronal,
                 slices: vec![ContourSlice {
                     plane: test_plane_definition(PlaneFamily::Coronal),
                     loops: vec![ContourLoop {
@@ -2470,7 +2391,8 @@ fn test_ensure_contour_view_cache_reuses_current_matching_generation_cache() {
                         is_closed: true,
                     }],
                 }],
-            },
+            }
+            .slices,
             generation,
             CacheViewState::Current,
         );
@@ -2482,12 +2404,9 @@ fn test_ensure_contour_view_cache_reuses_current_matching_generation_cache() {
     let roi = world.get::<&Roi>(entity).unwrap();
     let cache = roi.contour_view_cache(&key).unwrap();
     assert_eq!(cache.state, CacheViewState::Current);
-    assert_eq!(cache.data.slices.len(), 1);
-    assert_eq!(cache.data.slices[0].loops.len(), 1);
-    assert_eq!(
-        cache.data.slices[0].loops[0].points[0].local_mm,
-        [10.0, 10.0]
-    );
+    assert_eq!(cache.data.len(), 1);
+    assert_eq!(cache.data[0].loops.len(), 1);
+    assert_eq!(cache.data[0].loops[0].points[0].local_mm, [10.0, 10.0]);
 }
 
 #[test]
@@ -2515,15 +2434,15 @@ fn test_ensure_contour_view_cache_matches_extracted_slice_with_tolerance() {
     let roi = world.get::<&Roi>(entity).unwrap();
     let cache = roi.contour_view_cache(&key).unwrap();
     assert_eq!(cache.state, CacheViewState::Current);
-    assert_eq!(cache.data.slices.len(), 1);
-    assert_eq!(cache.data.slices[0].loops.len(), 1);
-    assert!(!cache.data.slices[0].loops[0].points.is_empty());
+    assert_eq!(cache.data.len(), 1);
+    assert_eq!(cache.data[0].loops.len(), 1);
+    assert!(!cache.data[0].loops[0].points.is_empty());
 }
 
 #[test]
 fn test_request_contour_view_state_reflects_voxel_stale_rebuilding_and_missing_states() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     let key = ContourViewKey::from_plane(test_plane_definition(PlaneFamily::Coronal));
 
     world
@@ -2542,9 +2461,13 @@ fn test_request_contour_view_state_reflects_voxel_stale_rebuilding_and_missing_s
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         let gen = roi.dirty_state.authoritative;
-        let mut derived_data = roi.contour_data().unwrap().clone();
-        derived_data.active_plane_family = PlaneFamily::Coronal;
-        roi.upsert_contour_view_cache(key.clone(), derived_data, gen, CacheViewState::Current);
+        let derived_data = roi.contour_data().unwrap().clone();
+        roi.upsert_contour_view_cache(
+            key.clone(),
+            derived_data.slices,
+            gen,
+            CacheViewState::Current,
+        );
         roi.dirty_state.voxel.dirty = true;
     }
 
@@ -2580,15 +2503,14 @@ fn test_request_contour_view_state_reflects_voxel_stale_rebuilding_and_missing_s
 #[test]
 fn test_request_contour_view_state_marks_generation_mismatch_stale() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     let key = ContourViewKey::from_plane(test_plane_definition(PlaneFamily::Coronal));
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let mut promoted_data = roi.contour_data().unwrap().clone();
-        promoted_data.active_plane_family = PlaneFamily::Coronal;
+        let promoted_data = roi.contour_data().unwrap().clone();
         roi.upsert_contour_view_cache(
             key.clone(),
-            promoted_data,
+            promoted_data.slices,
             Revision::from_shape(1),
             CacheViewState::Current,
         );
@@ -2606,7 +2528,7 @@ fn test_request_contour_view_state_marks_generation_mismatch_stale() {
 fn test_oblique_contour_view_builds_current_and_is_not_editable() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     seed_current_voxel_cache_for_contour_roi(&mut world, entity);
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
@@ -2636,7 +2558,12 @@ fn test_oblique_contour_view_builds_current_and_is_not_editable() {
     assert!(!status.editable);
 
     let roi = world.get::<&Roi>(entity).unwrap();
-    assert!(roi.contour_view_cache(&key).unwrap().data.has_loops());
+    assert!(roi
+        .contour_view_cache(&key)
+        .unwrap()
+        .data
+        .iter()
+        .any(|slice| !slice.loops.is_empty()));
 }
 
 #[test]
@@ -2662,20 +2589,24 @@ fn test_oblique_voxel_overlay_uses_same_cache_state_contract_as_orthogonal_views
 #[test]
 fn test_replace_contour_data_marks_existing_derived_contour_views_stale() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     let key = ContourViewKey::from_plane(test_plane_definition(PlaneFamily::Coronal));
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let mut derived_data = roi.contour_data().unwrap().clone();
-        derived_data.active_plane_family = PlaneFamily::Coronal;
+        let derived_data = roi.contour_data().unwrap().clone();
         let gen = roi.dirty_state.authoritative;
-        roi.upsert_contour_view_cache(key.clone(), derived_data, gen, CacheViewState::Current);
+        roi.upsert_contour_view_cache(
+            key.clone(),
+            derived_data.slices,
+            gen,
+            CacheViewState::Current,
+        );
     }
     replace_contour_data(
         &mut world,
         entity,
         ContourData {
-            active_plane_family: PlaneFamily::Axial,
+            active_plane_family: OrthogonalFamily::Axial,
             slices: Vec::new(),
         },
     )
@@ -2778,7 +2709,7 @@ fn test_liver_explicit_voxel_rebuild_frame_timing() {
 #[test]
 fn test_two_slice_commits_before_one_rebuild_keep_every_slice_in_voxel_cache() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, false);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
     seed_current_voxel_cache_for_contour_roi(&mut world, entity);
     let plane_at = |z: f32| PlaneDefinition {
         family: PlaneFamily::Axial,
@@ -2811,7 +2742,7 @@ fn test_two_slice_commits_before_one_rebuild_keep_every_slice_in_voxel_cache() {
     };
 
     let mut contour = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: vec![square_slice(0.0)],
     };
     replace_contour_data_for_slice_with_history(&mut world, entity, contour.clone(), plane_at(0.0))
@@ -2982,8 +2913,8 @@ fn first_loop_x(world: &World, roi: hecs::Entity) -> f32 {
 fn test_each_roi_keeps_its_own_undo_history_and_undo_never_changes_the_active_roi() {
     let mut world = World::new();
     let editor = world.spawn((EditorState::default(),));
-    let first = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
-    let second = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+    let first = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, true);
+    let second = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, true);
     let (first_start, second_start) = (first_loop_x(&world, first), first_loop_x(&world, second));
 
     let edit = contour_shifted_by(&world, first, 0.25);
@@ -3031,7 +2962,7 @@ fn test_each_roi_keeps_its_own_undo_history_and_undo_never_changes_the_active_ro
 fn test_undo_without_an_active_roi_is_reported_not_guessed() {
     let mut world = World::new();
     let editor = world.spawn((EditorState::default(),));
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, true);
     let edit = contour_shifted_by(&world, entity, 0.25);
     replace_contour_data_with_history(&mut world, entity, edit).unwrap();
 
@@ -3046,8 +2977,8 @@ fn test_undo_without_an_active_roi_is_reported_not_guessed() {
 #[test]
 fn test_history_is_capped_per_roi_and_one_rois_edits_leave_the_other_alone() {
     let mut world = World::new();
-    let busy = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
-    let quiet = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+    let busy = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, true);
+    let quiet = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, true);
     let edit = contour_shifted_by(&world, quiet, 1.0);
     replace_contour_data_with_history(&mut world, quiet, edit).unwrap();
 
@@ -3095,7 +3026,11 @@ fn test_ensure_editable_converts_a_voxel_roi_and_undo_restores_it() {
         .data
         .clone();
 
-    let readiness = ensure_editable(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial));
+    let readiness = ensure_editable(
+        &mut world,
+        entity,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    );
 
     let Ok(Readiness::Switched(report)) = readiness else {
         panic!("a voxel ROI converts inline, got {readiness:?}");
@@ -3119,9 +3054,13 @@ fn test_ensure_editable_converts_a_voxel_roi_and_undo_restores_it() {
 #[test]
 fn test_ensure_editable_is_ready_when_the_target_is_already_primary() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, PlaneFamily::Axial, true);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, true);
 
-    let readiness = ensure_editable(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial));
+    let readiness = ensure_editable(
+        &mut world,
+        entity,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    );
 
     assert_eq!(readiness, Ok(Readiness::Ready));
     assert!(world.get::<&Roi>(entity).unwrap().history.undo.is_empty());
@@ -3132,13 +3071,18 @@ fn test_ensure_editable_switches_contour_family_inline_when_voxels_are_current()
     let mut world = World::new();
     let entity = spawn_sparse_voxel_roi(&mut world);
     let editor = spawn_editor_for(&mut world, entity);
-    ensure_editable(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial)).unwrap();
+    ensure_editable(
+        &mut world,
+        entity,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    )
+    .unwrap();
     let axial = contour_of(&world, entity);
 
     let readiness = ensure_editable(
         &mut world,
         entity,
-        EditTarget::Contour(PlaneFamily::Coronal),
+        EditTarget::Contour(OrthogonalFamily::Coronal),
     );
 
     assert!(matches!(readiness, Ok(Readiness::Switched(report)) if report.lossless));
@@ -3158,7 +3102,12 @@ fn test_ensure_editable_switches_contour_family_inline_when_voxels_are_current()
 fn test_ensure_editable_waits_for_stale_voxels_then_completes() {
     let mut world = World::new();
     let entity = spawn_sparse_voxel_roi(&mut world);
-    ensure_editable(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial)).unwrap();
+    ensure_editable(
+        &mut world,
+        entity,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    )
+    .unwrap();
     let axial = contour_of(&world, entity);
     // An edit leaves the voxel cache stale until the background rebuild finishes.
     replace_contour_data_with_history(&mut world, entity, axial).ok();
@@ -3171,12 +3120,12 @@ fn test_ensure_editable_waits_for_stale_voxels_then_completes() {
     let first = ensure_editable(
         &mut world,
         entity,
-        EditTarget::Contour(PlaneFamily::Coronal),
+        EditTarget::Contour(OrthogonalFamily::Coronal),
     );
     let second = ensure_editable(
         &mut world,
         entity,
-        EditTarget::Contour(PlaneFamily::Coronal),
+        EditTarget::Contour(OrthogonalFamily::Coronal),
     );
 
     assert_eq!(first, Ok(Readiness::Pending));
@@ -3206,7 +3155,12 @@ fn test_ensure_editable_waits_for_stale_voxels_then_completes() {
 fn test_a_pending_switch_is_dropped_when_the_roi_is_edited_first() {
     let mut world = World::new();
     let entity = spawn_sparse_voxel_roi(&mut world);
-    ensure_editable(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial)).unwrap();
+    ensure_editable(
+        &mut world,
+        entity,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    )
+    .unwrap();
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         roi.mark_contour_authoritative_changed();
@@ -3215,7 +3169,7 @@ fn test_a_pending_switch_is_dropped_when_the_roi_is_edited_first() {
         ensure_editable(
             &mut world,
             entity,
-            EditTarget::Contour(PlaneFamily::Coronal)
+            EditTarget::Contour(OrthogonalFamily::Coronal)
         ),
         Ok(Readiness::Pending)
     );
@@ -3236,21 +3190,17 @@ fn test_a_pending_switch_is_dropped_when_the_roi_is_edited_first() {
 }
 
 #[test]
-fn test_ensure_editable_refuses_locked_rois_and_oblique_targets() {
+fn test_ensure_editable_refuses_locked_rois() {
     let mut world = World::new();
     let entity = spawn_sparse_voxel_roi(&mut world);
 
+    world.get::<&mut Roi>(entity).unwrap().metadata.is_locked = true;
     assert_eq!(
         ensure_editable(
             &mut world,
             entity,
-            EditTarget::Contour(PlaneFamily::Oblique)
+            EditTarget::Contour(OrthogonalFamily::Axial)
         ),
-        Err(SwitchError::UnsupportedTarget)
-    );
-    world.get::<&mut Roi>(entity).unwrap().metadata.is_locked = true;
-    assert_eq!(
-        ensure_editable(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial)),
         Err(SwitchError::Locked)
     );
     assert_eq!(
@@ -3271,7 +3221,11 @@ fn test_ensure_editable_converts_a_mesh_roi_to_contours_with_a_loss_report_and_u
     }
     let editor = spawn_editor_for(&mut world, entity);
 
-    let first = ensure_editable(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial));
+    let first = ensure_editable(
+        &mut world,
+        entity,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    );
     assert_eq!(first, Ok(Readiness::Pending));
     let mut report = None;
     for _ in 0..40 {
@@ -3410,7 +3364,11 @@ fn test_shape_survives_conversions_and_undo_across_every_representation() {
     settle(&mut world);
 
     // Voxel -> axial contours -> coronal contours: lossless, the raster equals the source.
-    convert_and_settle(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial));
+    convert_and_settle(
+        &mut world,
+        entity,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    );
     assert_eq!(
         dice_of(&settled_voxels(&world, entity), &original),
         1.0,
@@ -3419,7 +3377,7 @@ fn test_shape_survives_conversions_and_undo_across_every_representation() {
     convert_and_settle(
         &mut world,
         entity,
-        EditTarget::Contour(PlaneFamily::Coronal),
+        EditTarget::Contour(OrthogonalFamily::Coronal),
     );
     assert_eq!(
         dice_of(&settled_voxels(&world, entity), &original),
@@ -3492,7 +3450,11 @@ fn test_edit_updates_every_derived_view_and_undo_restores_the_shape() {
     ),));
     let editor = spawn_editor_for(&mut world, entity);
     settle(&mut world);
-    convert_and_settle(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial));
+    convert_and_settle(
+        &mut world,
+        entity,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    );
 
     // Edit: erase every loop of one axial slice (the slice through the small ball's centre).
     let mut edited = contour_of(&world, entity);
@@ -3533,7 +3495,7 @@ fn test_edit_updates_every_derived_view_and_undo_restores_the_shape() {
     let view = roi
         .contour_view_data_for_render(&coronal_key)
         .unwrap()
-        .clone();
+        .to_vec();
     drop(roi);
     let direct = crate::convert::extract_contour_slice_from_voxel_data(
         &VoxelData {
@@ -3563,7 +3525,7 @@ fn test_edit_updates_every_derived_view_and_undo_restores_the_shape() {
         .unwrap()
         .contour_view_data_for_render(&coronal_key)
         .unwrap()
-        .clone();
+        .to_vec();
     let direct_original = crate::convert::extract_contour_slice_from_voxel_data(
         &VoxelData {
             geometry,
@@ -3582,14 +3544,14 @@ fn test_edit_updates_every_derived_view_and_undo_restores_the_shape() {
 fn test_slice_local_rebuild_is_only_chosen_when_it_can_clear_the_old_slab() {
     let plane = test_plane_definition(PlaneFamily::Axial);
     let with_slice = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: vec![ContourSlice {
             plane,
             loops: Vec::new(),
         }],
     };
     let without_slice = ContourData {
-        active_plane_family: PlaneFamily::Axial,
+        active_plane_family: OrthogonalFamily::Axial,
         slices: Vec::new(),
     };
     let key = ContourSliceKey::from_plane(plane);
@@ -3663,7 +3625,7 @@ fn test_mesh_edit_then_contour_conversion_keeps_the_edited_shape_and_undo_restor
     convert_and_settle(
         &mut world,
         entity,
-        EditTarget::Contour(PlaneFamily::Coronal),
+        EditTarget::Contour(OrthogonalFamily::Coronal),
     );
     let dice_shifted = dice_of(&settled_voxels(&world, entity), &shifted);
     let dice_unshifted = dice_of(&settled_voxels(&world, entity), &original);

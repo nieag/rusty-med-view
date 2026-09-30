@@ -219,7 +219,7 @@ fn test_reproject_plane_local_mm_preserves_world_position_across_coplanar_frames
 }
 
 fn legacy_viewport_uv_to_volume_uv(
-    family: PlaneFamily,
+    family: OrthogonalFamily,
     viewport_uv: [f32; 2],
     depth: f32,
     geometry: VoxelGeometry,
@@ -255,8 +255,13 @@ fn test_viewport_uv_to_volume_uv_matches_legacy_axial_behavior() {
     };
     let viewport_uv = [0.2, 0.8];
     let volume_uv = viewport_uv_to_volume_uv(viewport_uv, plane, geometry, mapping).unwrap();
-    let legacy =
-        legacy_viewport_uv_to_volume_uv(PlaneFamily::Axial, viewport_uv, 0.3, geometry, mapping);
+    let legacy = legacy_viewport_uv_to_volume_uv(
+        OrthogonalFamily::Axial,
+        viewport_uv,
+        0.3,
+        geometry,
+        mapping,
+    );
     assert!(approx_eq(volume_uv, legacy, 1e-6));
 }
 
@@ -279,8 +284,13 @@ fn test_viewport_uv_to_volume_uv_matches_legacy_coronal_behavior() {
     };
     let viewport_uv = [0.1, 0.35];
     let volume_uv = viewport_uv_to_volume_uv(viewport_uv, plane, geometry, mapping).unwrap();
-    let legacy =
-        legacy_viewport_uv_to_volume_uv(PlaneFamily::Coronal, viewport_uv, 0.4, geometry, mapping);
+    let legacy = legacy_viewport_uv_to_volume_uv(
+        OrthogonalFamily::Coronal,
+        viewport_uv,
+        0.4,
+        geometry,
+        mapping,
+    );
     assert!(approx_eq(volume_uv, legacy, 1e-6));
 }
 
@@ -304,7 +314,7 @@ fn test_viewport_uv_to_volume_uv_matches_legacy_sagittal_behavior() {
     let viewport_uv = [0.85, 0.15];
     let volume_uv = viewport_uv_to_volume_uv(viewport_uv, plane, geometry, mapping).unwrap();
     let legacy = legacy_viewport_uv_to_volume_uv(
-        PlaneFamily::Sagittal,
+        OrthogonalFamily::Sagittal,
         viewport_uv,
         0.55,
         geometry,

@@ -300,7 +300,7 @@ fn append_roi_contour_vertices(
             roi.contour_data()
                 .is_some_and(|contour| contour.active_plane_family == displayed_plane.family)
         })
-        .map(|preview| &preview.contour_data);
+        .map(|preview| preview.contour_data.slices.as_slice());
     let contour_data = preview_contour_data.or_else(|| roi.contour_view_data_for_render(&view_key));
     let editable_view = is_active
         && roi
@@ -317,8 +317,8 @@ fn append_roi_contour_vertices(
         },
     };
 
-    if let Some(contour_data) = contour_data {
-        for (slice_idx, contour_slice) in contour_data.slices.iter().enumerate() {
+    if let Some(contour_slices) = contour_data {
+        for (slice_idx, contour_slice) in contour_slices.iter().enumerate() {
             if !crate::convert::planes_are_same_slice(
                 displayed_plane,
                 contour_slice.plane,

@@ -24,6 +24,8 @@ Work proceeds in chunks, foundation first. A chunk is a bounded set of plan item
 
 Phase 3 (editing features) starts after chunk D.
 
+Chunk A status: 2b.1 and 2b.2 done; the release guard tests now serialize and use generous budgets (they flaked on a loaded machine, see `tests/switch_guard.rs`).
+
 ## Product constraints
 
 These drive the design.
@@ -88,7 +90,7 @@ Exit: the layering is enforced by a test; the scene model is decided and applied
   - *Problem:* `convert` (pure geometry and conversion algorithms) imports its data types from `app::roi::model`, and `app::roi` calls `convert`, so the two form a cycle. `render` imports 29 items from `app::components` and 5 from `app::roi_runtime`; `util` and `io` import from `app` too. A pure algorithm cannot be reused or tested without the ECS types, and the cycle is why every layering fix so far touched many files.
   - *Approach:* move the pure types (`VoxelGeometry`, `VoxelData`, `MeshData`, `ContourData` and its parts, `PlaneFamily` and `PlaneDefinition`, slice keys) into one `model` module that imports nothing from the crate. The dependency order becomes model, convert, `app::roi`, runtime, systems, render, gui. Keep re-exports at the old paths for one commit so the move is mechanical.
   - *Done when:* a unit test scans `use crate::` lines and fails on any upward import (for example `model` importing `convert`, or `convert` importing `app`); documented in `docs/code-map.md`.
-- [ ] **2b.2 Orthogonal family type for authoritative contours (M).**
+- [x] **2b.2 Orthogonal family type for authoritative contours (M).** Done on branch `chunk/a-structure`: `OrthogonalFamily` (Axial, Coronal, Sagittal) types `ContourData::active_plane_family`, `EditTarget::Contour`, the extraction and rasterization entry points, and `create_empty_contour_roi`; derived per-slice views (including oblique ones) hold a plain `Vec<ContourSlice>` (`ContourViewCache::data`, `extract_contour_slice_from_voxel_data`, `intersect_mesh_with_plane`), and `contour_view_data_for_render` returns `&[ContourSlice]`. The oblique rasterization paths, the ten `unreachable!` calls, and five obsolete oblique-authority tests are deleted; the oblique check now happens once, where a viewport's plane becomes an editable family (`prepare_contour_edit`). Two `unreachable!` remain in `convert/` (a marching-cubes table digit, an axis index), unrelated to families. Original scope:
   - *Problem:* `ContourData::active_plane_family` is a `PlaneFamily`, which includes `Oblique`, although only orthogonal families can be edited. Ten `unreachable!` calls (`contour_raster.rs`, `voxel_contour_extract.rs`, `geometry.rs`) and several `if family == Oblique` guards exist to cope. An oblique authoritative contour set is a state the design forbids but the type allows.
   - *Approach:* an `OrthogonalFamily { Axial, Coronal, Sagittal }` for authoritative contour data and the conversions that need an axis; `PlaneFamily` (with Oblique) stays only for derived per-slice view keys. The `unreachable!` sites and the guards disappear because the match is exhaustive.
   - *Done when:* no `unreachable!` in `convert/`; `ensure_editable` no longer needs the `UnsupportedTarget` case for Oblique because `EditTarget::Contour` takes an `OrthogonalFamily`.

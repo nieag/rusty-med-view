@@ -2,7 +2,7 @@ use crate::convert::coord_mapping::{volume_uv_to_voxel_index, voxel_index_to_vol
 use crate::model::VoxelGeometry;
 use glam::{DVec3, Quat, Vec3};
 
-pub use crate::model::{GeometryIdentity, PlaneDefinition, PlaneFamily};
+pub use crate::model::{GeometryIdentity, OrthogonalFamily, PlaneDefinition, PlaneFamily};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewportMapping {
@@ -100,13 +100,12 @@ pub fn oblique_plane_from_view_rotation(
     )
 }
 
-/// Voxel-grid depth axis of an orthogonal plane family; `None` for oblique planes.
-pub(crate) fn orthogonal_depth_axis(family: PlaneFamily) -> Option<usize> {
+/// Voxel-grid depth axis of an orthogonal plane family.
+pub(crate) const fn orthogonal_depth_axis(family: OrthogonalFamily) -> usize {
     match family {
-        PlaneFamily::Axial => Some(2),
-        PlaneFamily::Coronal => Some(1),
-        PlaneFamily::Sagittal => Some(0),
-        PlaneFamily::Oblique => None,
+        OrthogonalFamily::Axial => 2,
+        OrthogonalFamily::Coronal => 1,
+        OrthogonalFamily::Sagittal => 0,
     }
 }
 
@@ -147,7 +146,8 @@ pub fn planes_are_same_slice(
     if first_normal.dot(second_normal).abs() < PLANE_NORMAL_ALIGNMENT_COS {
         return false;
     }
-    if let Some(axis) = orthogonal_depth_axis(first.family) {
+    if let Some(family) = first.family.orthogonal() {
+        let axis = orthogonal_depth_axis(family);
         return match (
             nearest_depth_layer(first.origin_mm, axis, geometry),
             nearest_depth_layer(second.origin_mm, axis, geometry),
@@ -185,23 +185,11 @@ pub fn reproject_plane_local_mm(
     world_mm_to_plane_local_mm(world, target_plane)
 }
 
-fn orthogonal_family(plane: PlaneDefinition) -> Option<PlaneFamily> {
-    match plane.family {
-        PlaneFamily::Axial | PlaneFamily::Coronal | PlaneFamily::Sagittal => Some(plane.family),
-        PlaneFamily::Oblique => None,
-    }
+fn orthogonal_family(plane: PlaneDefinition) -> Option<OrthogonalFamily> {
+    plane.family.orthogonal()
 }
 
-fn family_depth_axis(family: PlaneFamily) -> usize {
-    match family {
-        PlaneFamily::Axial => 2,
-        PlaneFamily::Coronal => 1,
-        PlaneFamily::Sagittal => 0,
-        PlaneFamily::Oblique => unreachable!("oblique family has no fixed depth axis"),
-    }
-}
-
-fn plane_slice_aspect(family: PlaneFamily, geometry: VoxelGeometry) -> Option<f32> {
+fn plane_slice_aspect(family: OrthogonalFamily, geometry: VoxelGeometry) -> Option<f32> {
     let extents = [
         geometry.dimensions[0] as f32 * geometry.spacing()[0],
         geometry.dimensions[1] as f32 * geometry.spacing()[1],
@@ -209,10 +197,9 @@ fn plane_slice_aspect(family: PlaneFamily, geometry: VoxelGeometry) -> Option<f3
     ];
 
     let (u, v) = match family {
-        PlaneFamily::Axial => (extents[0], extents[1]),
-        PlaneFamily::Coronal => (extents[0], extents[2]),
-        PlaneFamily::Sagittal => (extents[1], extents[2]),
-        PlaneFamily::Oblique => return None,
+        OrthogonalFamily::Axial => (extents[0], extents[1]),
+        OrthogonalFamily::Coronal => (extents[0], extents[2]),
+        OrthogonalFamily::Sagittal => (extents[1], extents[2]),
     };
 
     if !u.is_finite() || !v.is_finite() || v.abs() <= 1e-6 {
@@ -275,24 +262,22 @@ pub fn oblique_volume_uv_basis_and_lengths(
 }
 
 fn screen_uv_to_volume_uv_for_family(
-    family: PlaneFamily,
+    family: OrthogonalFamily,
     screen_uv: [f32; 2],
     depth: f32,
 ) -> [f32; 3] {
     match family {
-        PlaneFamily::Axial => [1.0 - screen_uv[0], 1.0 - screen_uv[1], depth],
-        PlaneFamily::Coronal => [1.0 - screen_uv[0], depth, 1.0 - screen_uv[1]],
-        PlaneFamily::Sagittal => [depth, 1.0 - screen_uv[0], 1.0 - screen_uv[1]],
-        PlaneFamily::Oblique => unreachable!("oblique family requires different mapping"),
+        OrthogonalFamily::Axial => [1.0 - screen_uv[0], 1.0 - screen_uv[1], depth],
+        OrthogonalFamily::Coronal => [1.0 - screen_uv[0], depth, 1.0 - screen_uv[1]],
+        OrthogonalFamily::Sagittal => [depth, 1.0 - screen_uv[0], 1.0 - screen_uv[1]],
     }
 }
 
-fn volume_uv_to_screen_uv_for_family(family: PlaneFamily, volume_uv: [f32; 3]) -> [f32; 2] {
+fn volume_uv_to_screen_uv_for_family(family: OrthogonalFamily, volume_uv: [f32; 3]) -> [f32; 2] {
     match family {
-        PlaneFamily::Axial => [1.0 - volume_uv[0], 1.0 - volume_uv[1]],
-        PlaneFamily::Coronal => [1.0 - volume_uv[0], 1.0 - volume_uv[2]],
-        PlaneFamily::Sagittal => [1.0 - volume_uv[1], 1.0 - volume_uv[2]],
-        PlaneFamily::Oblique => unreachable!("oblique family requires different mapping"),
+        OrthogonalFamily::Axial => [1.0 - volume_uv[0], 1.0 - volume_uv[1]],
+        OrthogonalFamily::Coronal => [1.0 - volume_uv[0], 1.0 - volume_uv[2]],
+        OrthogonalFamily::Sagittal => [1.0 - volume_uv[1], 1.0 - volume_uv[2]],
     }
 }
 
@@ -316,7 +301,7 @@ pub fn viewport_uv_to_volume_uv(
                 (viewport_uv[1] - mapping.pivot[1]) / zoom + mapping.pivot[1] + mapping.pan[1],
             ];
 
-            let depth_axis = family_depth_axis(family);
+            let depth_axis = orthogonal_depth_axis(family);
             let depth = world_mm_to_volume_uv(plane.origin_mm, geometry)[depth_axis];
             Some(screen_uv_to_volume_uv_for_family(family, screen_uv, depth))
         }

@@ -4,6 +4,8 @@ use crate::app::components::{
     MeshVertex, RoiId, VoxelGeometry,
 };
 use crate::convert::PlaneFamily;
+use crate::model::ContourData;
+use crate::model::OrthogonalFamily;
 
 fn test_geometry() -> VoxelGeometry {
     VoxelGeometry::new(
@@ -83,7 +85,7 @@ fn spawn_contour_with_loops(world: &mut World, id: u64) -> Entity {
             RoiId(id),
             format!("contour-{id}"),
             ContourData {
-                active_plane_family: PlaneFamily::Axial,
+                active_plane_family: OrthogonalFamily::Axial,
                 slices: vec![ContourSlice {
                     plane: crate::convert::orthogonal_plane_from_volume_uv(
                         PlaneFamily::Axial,

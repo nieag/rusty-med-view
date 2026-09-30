@@ -1,28 +1,31 @@
 use crate::convert::{
     orthogonal_plane_from_volume_uv, plane_local_mm_to_world_mm, voxel_index_to_world_mm,
-    world_mm_to_plane_local_mm, world_mm_to_voxel_index, PlaneDefinition, PlaneFamily,
+    world_mm_to_plane_local_mm, world_mm_to_voxel_index, PlaneDefinition,
 };
-use crate::model::{ContourData, ContourLoop, ContourPoint, ContourSlice, VoxelData};
+use crate::model::{
+    ContourData, ContourLoop, ContourPoint, ContourSlice, OrthogonalFamily, VoxelData,
+};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoxelContourExtractionError {
-    UnsupportedPlaneFamily { family: PlaneFamily },
     UnsupportedPlaneGeometry,
 }
 
+/// The contours of one plane through the voxel data, for a derived view: orthogonal planes read
+/// their voxel slab, oblique planes are sampled. The result is a list of slices (empty when the
+/// plane misses the volume), not an authoritative contour set.
 pub fn extract_contour_slice_from_voxel_data(
     voxel_data: &VoxelData,
     requested_plane: PlaneDefinition,
-) -> Result<ContourData, VoxelContourExtractionError> {
-    let family = requested_plane.family;
-    if family == PlaneFamily::Oblique {
+) -> Result<Vec<ContourSlice>, VoxelContourExtractionError> {
+    let Some(family) = requested_plane.family.orthogonal() else {
         return extract_oblique_contour_slice(voxel_data, requested_plane);
-    }
+    };
 
     let geometry = voxel_data.geometry;
     let (depth_axis, _, _) = family_axes(family);
-    let reference_plane = orthogonal_plane_from_volume_uv(family, [0.5; 3], geometry)
+    let reference_plane = orthogonal_plane_from_volume_uv(family.into(), [0.5; 3], geometry)
         .ok_or(VoxelContourExtractionError::UnsupportedPlaneGeometry)?;
     let requested_normal = normalized(requested_plane.normal_mm)
         .ok_or(VoxelContourExtractionError::UnsupportedPlaneGeometry)?;
@@ -49,16 +52,13 @@ pub fn extract_contour_slice_from_voxel_data(
         }
     }
 
-    Ok(ContourData {
-        active_plane_family: family,
-        slices,
-    })
+    Ok(slices)
 }
 
 fn extract_oblique_contour_slice(
     voxel_data: &VoxelData,
     requested_plane: PlaneDefinition,
-) -> Result<ContourData, VoxelContourExtractionError> {
+) -> Result<Vec<ContourSlice>, VoxelContourExtractionError> {
     const MAX_PLANE_SAMPLES_PER_AXIS: u32 = 2048;
 
     let geometry = voxel_data.geometry;
@@ -96,10 +96,7 @@ fn extract_oblique_contour_slice(
     }
 
     if min_distance > 0.0 || max_distance < 0.0 {
-        return Ok(ContourData {
-            active_plane_family: PlaneFamily::Oblique,
-            slices: Vec::new(),
-        });
+        return Ok(Vec::new());
     }
 
     let base_step = geometry
@@ -180,23 +177,17 @@ fn extract_oblique_contour_slice(
         }
     }
 
-    Ok(ContourData {
-        active_plane_family: PlaneFamily::Oblique,
-        slices: vec![ContourSlice {
-            plane: requested_plane,
-            loops,
-        }],
-    })
+    Ok(vec![ContourSlice {
+        plane: requested_plane,
+        loops,
+    }])
 }
 
+/// Every slice of one orthogonal family that holds voxels, as an authoritative contour set.
 pub fn extract_contours_from_voxel_data(
     voxel_data: &VoxelData,
-    family: PlaneFamily,
+    family: OrthogonalFamily,
 ) -> Result<ContourData, VoxelContourExtractionError> {
-    if family == PlaneFamily::Oblique {
-        return Err(VoxelContourExtractionError::UnsupportedPlaneFamily { family });
-    }
-
     let geometry = voxel_data.geometry;
     let (depth_axis, _, _) = family_axes(family);
     let dimensions = geometry.dimensions;
@@ -205,11 +196,11 @@ pub fn extract_contours_from_voxel_data(
 
     for depth_index in 0..depth_len {
         let plane = orthogonal_plane_from_volume_uv(
-            family,
+            family.into(),
             family_slice_cursor_uv(family, depth_index, depth_len),
             geometry,
         )
-        .expect("orthogonal plane should be resolvable from valid geometry");
+        .ok_or(VoxelContourExtractionError::UnsupportedPlaneGeometry)?;
 
         if let Some(slice) = extract_slice_at_depth(voxel_data, family, depth_index, plane) {
             slices.push(slice);
@@ -230,7 +221,7 @@ fn normalized(v: [f32; 3]) -> Option<glam::Vec3> {
 
 fn extract_slice_at_depth(
     voxel_data: &VoxelData,
-    family: PlaneFamily,
+    family: OrthogonalFamily,
     depth_index: u32,
     output_plane: PlaneDefinition,
 ) -> Option<ContourSlice> {
@@ -275,40 +266,41 @@ fn extract_slice_at_depth(
     })
 }
 
-fn family_axes(family: PlaneFamily) -> (usize, usize, usize) {
+fn family_axes(family: OrthogonalFamily) -> (usize, usize, usize) {
     match family {
-        PlaneFamily::Axial => (2, 0, 1),
-        PlaneFamily::Coronal => (1, 0, 2),
-        PlaneFamily::Sagittal => (0, 1, 2),
-        PlaneFamily::Oblique => unreachable!("oblique family has no orthogonal axes"),
+        OrthogonalFamily::Axial => (2, 0, 1),
+        OrthogonalFamily::Coronal => (1, 0, 2),
+        OrthogonalFamily::Sagittal => (0, 1, 2),
     }
 }
 
-fn family_slice_cursor_uv(family: PlaneFamily, depth_index: u32, depth_len: u32) -> [f32; 3] {
+fn family_slice_cursor_uv(family: OrthogonalFamily, depth_index: u32, depth_len: u32) -> [f32; 3] {
     let depth_uv = crate::convert::slice_center_uv(depth_index as i32, depth_len);
     match family {
-        PlaneFamily::Axial => [0.5, 0.5, depth_uv],
-        PlaneFamily::Coronal => [0.5, depth_uv, 0.5],
-        PlaneFamily::Sagittal => [depth_uv, 0.5, 0.5],
-        PlaneFamily::Oblique => unreachable!("oblique family has no orthogonal cursor mapping"),
+        OrthogonalFamily::Axial => [0.5, 0.5, depth_uv],
+        OrthogonalFamily::Coronal => [0.5, depth_uv, 0.5],
+        OrthogonalFamily::Sagittal => [depth_uv, 0.5, 0.5],
     }
 }
 
 fn orthogonal_vertex_to_voxel_index(
-    family: PlaneFamily,
+    family: OrthogonalFamily,
     grid_x: f32,
     grid_y: f32,
     depth_index: u32,
 ) -> [f32; 3] {
     match family {
-        PlaneFamily::Axial => [grid_x - 0.5, grid_y - 0.5, depth_index as f32],
-        PlaneFamily::Coronal => [grid_x - 0.5, depth_index as f32, grid_y - 0.5],
-        PlaneFamily::Sagittal => [depth_index as f32, grid_x - 0.5, grid_y - 0.5],
-        PlaneFamily::Oblique => unreachable!("oblique family has no orthogonal vertex mapping"),
+        OrthogonalFamily::Axial => [grid_x - 0.5, grid_y - 0.5, depth_index as f32],
+        OrthogonalFamily::Coronal => [grid_x - 0.5, depth_index as f32, grid_y - 0.5],
+        OrthogonalFamily::Sagittal => [depth_index as f32, grid_x - 0.5, grid_y - 0.5],
     }
 }
 
-fn orthogonal_mask(voxel_data: &VoxelData, family: PlaneFamily, depth_index: u32) -> Vec<bool> {
+fn orthogonal_mask(
+    voxel_data: &VoxelData,
+    family: OrthogonalFamily,
+    depth_index: u32,
+) -> Vec<bool> {
     let dimensions = voxel_data.geometry.dimensions;
     let (_, u_axis, v_axis) = family_axes(family);
     let width = dimensions[u_axis];
@@ -326,16 +318,15 @@ fn orthogonal_mask(voxel_data: &VoxelData, family: PlaneFamily, depth_index: u32
 }
 
 fn voxel_index_from_family_coords(
-    family: PlaneFamily,
+    family: OrthogonalFamily,
     u: u32,
     v: u32,
     depth_index: u32,
 ) -> [u32; 3] {
     match family {
-        PlaneFamily::Axial => [u, v, depth_index],
-        PlaneFamily::Coronal => [u, depth_index, v],
-        PlaneFamily::Sagittal => [depth_index, u, v],
-        PlaneFamily::Oblique => unreachable!("oblique family has no orthogonal index mapping"),
+        OrthogonalFamily::Axial => [u, v, depth_index],
+        OrthogonalFamily::Coronal => [u, depth_index, v],
+        OrthogonalFamily::Sagittal => [depth_index, u, v],
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::components::*;
-use crate::convert::PlaneFamily;
+use crate::model::OrthogonalFamily;
 use crate::AppEvent;
 use hecs::World;
 use winit::event_loop::EventLoopProxy;
@@ -182,7 +182,7 @@ pub fn draw_sidebar(
         let mut new_active_roi = active_roi;
 
         if ui.small_button("New contour ROI").clicked() {
-            match roi_runtime::create_empty_contour_roi(world, entities.editor, PlaneFamily::Axial)
+            match roi_runtime::create_empty_contour_roi(world, entities.editor, OrthogonalFamily::Axial)
             {
                 Ok(entity) => {
                     new_active_roi = Some(entity);

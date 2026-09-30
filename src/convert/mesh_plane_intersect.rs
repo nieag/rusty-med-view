@@ -1,5 +1,5 @@
 use crate::convert::{world_mm_to_plane_local_mm, PlaneDefinition};
-use crate::model::{ContourData, ContourLoop, ContourPoint, ContourSlice, MeshData};
+use crate::model::{ContourLoop, ContourPoint, ContourSlice, MeshData};
 use glam::Vec3;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -16,7 +16,7 @@ pub enum MeshPlaneIntersectionError {
 pub fn intersect_mesh_with_plane(
     mesh: &MeshData,
     plane: PlaneDefinition,
-) -> Result<ContourData, MeshPlaneIntersectionError> {
+) -> Result<Vec<ContourSlice>, MeshPlaneIntersectionError> {
     let normal = Vec3::from_array(plane.normal_mm);
     if !normal.is_finite() || normal.length_squared() <= 1e-12 {
         return Err(MeshPlaneIntersectionError::InvalidPlane);
@@ -77,13 +77,10 @@ pub fn intersect_mesh_with_plane(
     }
 
     let loops = chain_segments(segments, &points_by_key);
-    Ok(ContourData {
-        active_plane_family: plane.family,
-        slices: if loops.is_empty() {
-            Vec::new()
-        } else {
-            vec![ContourSlice { plane, loops }]
-        },
+    Ok(if loops.is_empty() {
+        Vec::new()
+    } else {
+        vec![ContourSlice { plane, loops }]
     })
 }
 
@@ -206,13 +203,13 @@ mod tests {
 
         let contour = intersect_mesh_with_plane(&mesh, plane).unwrap();
 
-        assert_eq!(contour.slices.len(), 1);
-        assert_eq!(contour.slices[0].loops.len(), 1);
-        assert!(contour.slices[0].loops[0].is_valid_closed_loop());
+        assert_eq!(contour.len(), 1);
+        assert_eq!(contour[0].loops.len(), 1);
+        assert!(contour[0].loops[0].is_valid_closed_loop());
     }
 
     #[test]
-    fn test_plane_missing_mesh_returns_empty_contour_data() {
+    fn test_plane_missing_mesh_returns_no_slices() {
         let geometry =
             VoxelGeometry::new([2, 2, 2], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
         let mesh = extract_mesh_from_voxel_data(&VoxelData {
@@ -226,6 +223,6 @@ mod tests {
 
         let contour = intersect_mesh_with_plane(&mesh, plane).unwrap();
 
-        assert!(contour.slices.is_empty());
+        assert!(contour.is_empty());
     }
 }

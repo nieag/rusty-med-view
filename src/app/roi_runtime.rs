@@ -19,6 +19,7 @@ use crate::convert::{
 };
 #[cfg(test)]
 use crate::convert::{extract_contours_from_voxel_data, extract_mesh_from_voxel_data};
+use crate::model::OrthogonalFamily;
 use crate::render::roi_views::{RenderRepresentationRequest, RoiRenderViews};
 use hecs::World;
 use web_time::{Duration, Instant};
@@ -300,7 +301,7 @@ pub fn can_enable_roi_visibility(world: &World, roi_entity: hecs::Entity) -> boo
 fn build_contour_view_data_for_plane(
     voxel_data: &VoxelData,
     view_key: &ContourViewKey,
-) -> Result<ContourData, VoxelContourExtractionError> {
+) -> Result<Vec<ContourSlice>, VoxelContourExtractionError> {
     extract_contour_slice_from_voxel_data(voxel_data, view_key.plane)
 }
 
@@ -439,17 +440,11 @@ pub(crate) fn ensure_contour_view_cache(
                 Err(_) => RepresentationRequestStatus::stale("contour_view_result_superseded"),
             }
         }
-        Err(
-            VoxelContourExtractionError::UnsupportedPlaneFamily { .. }
-            | VoxelContourExtractionError::UnsupportedPlaneGeometry,
-        ) => {
+        Err(VoxelContourExtractionError::UnsupportedPlaneGeometry) => {
             let built_from = roi.dirty_state.authoritative;
             let _ = roi.install_contour_view_result(
                 view_key.clone(),
-                ContourData {
-                    active_plane_family: view_key.family,
-                    slices: Vec::new(),
-                },
+                Vec::new(),
                 built_from,
                 CacheViewState::Unsupported {
                     reason: "derived_contour_view_geometry_unsupported".to_string(),
@@ -677,7 +672,7 @@ fn spawn_label_rois(
 pub fn create_empty_contour_roi(
     world: &mut World,
     editor_entity: hecs::Entity,
-    active_plane_family: PlaneFamily,
+    active_plane_family: OrthogonalFamily,
 ) -> Result<hecs::Entity, String> {
     if world.get::<&EditorState>(editor_entity).is_err() {
         return Err("Missing editor state; contour ROI was not created.".to_string());
@@ -784,7 +779,7 @@ pub fn begin_mesh_translation_preview(
 pub fn create_contour_roi_from_voxel_roi(
     world: &mut World,
     source_roi: hecs::Entity,
-    family: PlaneFamily,
+    family: OrthogonalFamily,
 ) -> Result<hecs::Entity, VoxelContourCreationError> {
     let source_voxel = {
         let roi = world
@@ -807,7 +802,10 @@ pub fn create_contour_roi_from_voxel_roi(
         .ok()
         .map(|roi| roi.metadata.name.clone())
         .unwrap_or_else(|| "Voxel ROI".to_string());
-    let new_name = format!("{source_name} ({} Contour)", plane_family_label(family));
+    let new_name = format!(
+        "{source_name} ({} Contour)",
+        plane_family_label(family.into())
+    );
     let reference_geometry = source_voxel.geometry;
 
     let entity = world.spawn((

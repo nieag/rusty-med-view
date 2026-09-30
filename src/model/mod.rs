@@ -12,7 +12,8 @@ pub mod volume;
 
 pub use contour::{ContourData, ContourLoop, ContourPoint, ContourSlice};
 pub use geometry::{
-    GeometryIdentity, PlaneDefinition, PlaneFamily, VoxelData, VoxelGeometry, VoxelGeometryError,
+    GeometryIdentity, OrthogonalFamily, PlaneDefinition, PlaneFamily, VoxelData, VoxelGeometry,
+    VoxelGeometryError,
 };
 pub use mesh::{MeshData, MeshFace, MeshVertex};
 pub use view::ViewMode;

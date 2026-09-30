@@ -125,6 +125,7 @@ mod tests {
     use crate::convert::{
         orthogonal_plane_from_volume_uv, rasterize_contours_to_voxel_data, PlaneFamily,
     };
+    use crate::model::OrthogonalFamily;
     use crate::model::{ContourData, VoxelGeometry};
 
     fn square(min: [f32; 2], max: [f32; 2]) -> ContourLoop {
@@ -186,7 +187,7 @@ mod tests {
         let merged =
             union_contour_slice_with_loop(&slice, &square([4.0, -1.0], [5.0, 1.0])).expect("union");
         let contour = ContourData {
-            active_plane_family: PlaneFamily::Axial,
+            active_plane_family: OrthogonalFamily::Axial,
             slices: vec![merged],
         };
 

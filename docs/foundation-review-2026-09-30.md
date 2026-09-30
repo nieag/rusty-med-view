@@ -47,7 +47,7 @@ deletion, so the bug was not reachable from the interface; it was a trap in the 
 now in `authority.rs` (`dirty_region_for_slice_edit` for commits, `dirty_region_for_slice_swap`
 for undo and redo).
 
-**R2 The `convert` layer and `app::roi` import each other. Plan: 2b.1.**
+**R2 The `convert` layer and `app::roi` import each other. Plan: 2b.1. Fixed in chunk A (the upper layers still cycle; 2b.7 and 2b.9).**
 Pure geometry and conversion code imports its data types (`MeshData`, `ContourData`,
 `VoxelData`, `VoxelGeometry`) from `app::roi::model`, and `app::roi` calls `convert`. `render`
 takes 29 imports from `app::components` and 5 from `app::roi_runtime`; `util` and `io` also
@@ -56,7 +56,7 @@ layering fixes touch many files. Fix: one dependency-free `model` module, then t
 convert, `app::roi`, runtime, systems, render, gui, enforced by a test that scans `use crate::`
 lines.
 
-**R3 `PlaneFamily::Oblique` makes authoritative contour data partial. Plan: 2b.2.**
+**R3 `PlaneFamily::Oblique` makes authoritative contour data partial. Plan: 2b.2. Fixed in chunk A.**
 `ContourData::active_plane_family` can name Oblique although only orthogonal families are
 editable. Ten `unreachable!` calls (`contour_raster.rs`, `voxel_contour_extract.rs`,
 `geometry.rs`) and several `if family == Oblique` guards cope with a state the design forbids.
