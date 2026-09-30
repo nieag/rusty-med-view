@@ -1,6 +1,6 @@
 # Scene Entity Model
 
-Status: Proposed. Implements backlog items 2b.9 and 3.6 and prepares 3.7. Review before code.
+Status: Accepted (2026-09-30), with the open questions answered below. Implements backlog items 2b.9 and 3.6 and prepares 3.7.
 
 ## Context
 
@@ -49,10 +49,10 @@ The renderer projects anchors into each view, so a marker shows in every view wh
 
 Because several people view a case:
 
-- `Provenance { author, created_at }` is on every annotation, measurement, and comment. The author is a display name for now; there are no accounts (open question 1).
+- `Provenance { author, created_at }` is on every annotation, measurement, and comment. The author is a display name for now; there are no accounts (decision 1).
 - **Comments are append-only.** Posting creates a new comment entity with its own `Id`. Editing creates a new comment with `Replaces(old Id)`; retracting creates a tombstone that replaces it with no text. Nothing is changed in place, so two people's comments on the same thread merge by set union with no conflict, and the history of a discussion is kept.
 - Annotation fields (label, text, position) are last-writer-wins per annotation, with `Provenance` updated.
-- ROI bodies are **not** merged. A ROI is a whole shape with its own undo history; two people editing the same ROI is a conflict the tool reports instead of resolving (open question 3).
+- ROI bodies are **not** merged. A ROI is a whole shape with its own undo history; two people editing the same ROI is a conflict the tool reports instead of resolving (decision 3).
 
 ### 6. Undo
 
@@ -60,7 +60,7 @@ ROI edits keep their per-ROI history (ADR 0004). Annotation create, move, and de
 
 ### 7. A case as a file
 
-A saved case (backlog 3.7) is a versioned document of entity records keyed by `Id`, with the large payloads kept out of it: ROI bodies as binary parts (a voxel body as a labelmap, contours as a compact list, a mesh in binary), referenced by `Id` and a content hash. The image is referenced by name and hash, not embedded. Loading rebuilds entities from records; the layering test keeps the format code in a layer that depends only on `model`. How a case travels between people (a file they exchange, or a server) is open (question 2) and does not change the model above, only where the file is stored.
+A saved case (backlog 3.7) is a versioned document of entity records keyed by `Id`, with the large payloads kept out of it: ROI bodies as binary parts (a voxel body as a labelmap, contours as a compact list, a mesh in binary), referenced by `Id` and a content hash. The image is referenced by name and hash, not embedded. Loading rebuilds entities from records; the layering test keeps the format code in a layer that depends only on `model`. How a case travels between people (a file they exchange, or a server) is open (decision 2) and does not change the model above, only where the file is stored.
 
 ## Staging
 
@@ -71,7 +71,7 @@ Each stage is a commit series on chunk B's branch and leaves the lifecycle tests
 3. **Annotations as entities** with `Anchor` in world millimetres and `Provenance`; migrate `AnnotationState` and the marker path; remove the 64-primitive cap by batching.
 4. **The file split** (backlog 2b.7): `roi_runtime.rs` and `components.rs` by concern, following the boundaries stage 1 and 2 expose.
 
-Stages 1 and 2 do not depend on the open questions. Stage 3 needs question 1 answered before `Provenance` is final.
+Nothing in the staging waits on the open questions any more.
 
 ## Consequences
 
@@ -81,11 +81,11 @@ Stages 1 and 2 do not depend on the open questions. Stage 3 needs question 1 ans
 - The anchor change touches the annotation renderer and the overlay shader path once.
 - Measurements and points of interest are new features (3.6); this ADR only fixes their shape.
 
-## Open questions
+## Decisions on the open questions (owner, 2026-09-30)
 
-1. **Identity.** An author is a display name today. Is that enough (a person types a name and is trusted), or does a review need accounts? Accounts imply a server.
-2. **Transport.** Do people exchange case files, or open a case from a server? A server adds storage, access control, and live updates; a file needs only the format above.
-3. **Two people edit the same ROI.** The proposal is to report the conflict (by version) and let the person pick a version, not to merge shapes. Acceptable?
+1. **Identity: a mocked display name for now.** There are no accounts and no server yet. The author is a display name held in the scene (`scene.user`), defaulting to a placeholder such as "Reviewer", editable in the interface. `Provenance.author` stores that string, so the model does not change when real identities arrive.
+2. **Transport: no server for now.** Cases will open from a server down the line. Until then a case is a local file in the format of section 7. The format keeps every record addressable by `Id` and every large payload a separate part, so a server can later serve or store the same records without a redesign.
+3. **Two people editing the same ROI:** the tool reports the conflict by version and lets the person pick a version; it does not merge shapes.
 
 ## Not decided here
 

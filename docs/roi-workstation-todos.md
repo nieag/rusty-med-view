@@ -17,7 +17,7 @@ Work proceeds in chunks, foundation first. A chunk is a bounded set of plan item
 | Chunk | Plan items | Needs from the owner first |
 | --- | --- | --- |
 | A Structure | 2b.1 layering (done), 2b.2 orthogonal family type | nothing |
-| B Scene model | ADR 0005, 2b.9 (singletons to fields, `Roi` into components, annotations as entities), 2b.7 file split | answered: comments follow a 3D point; cases are reviewed by several people. Still open: how a case and its comments travel between people (file or server) |
+| B Scene model | ADR 0005, 2b.9 (singletons to fields, `Roi` into components, annotations as entities), 2b.7 file split | nothing (decided: comments follow a 3D point; several reviewers; mocked author name; local files now, a server later; ROI conflicts are reported) |
 | C Completeness | 2b.3 derived forms for all visible ROIs, 2b.4 one viewport mapping, 2b.5 GPU error handling, 2b.6 nothing stale, 2b.6b incremental mesh rebuild | nothing (decided) |
 | D Scale | 2b.10 (cropped ROIs, display beyond 8 slots, layer list, work budget), 4.5 memory | nothing: a synthetic many-label case is generated from the liver sample |
 | E Docs | 2b.8, folded into each chunk as it lands, final check here | nothing |
