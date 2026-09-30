@@ -60,7 +60,7 @@ Exit: the sidebar has no promotion controls; switching primary view keeps undo h
 
 ## Phase 2b: Foundation hardening (before Phase 3)
 
-Added after the 2026-09-30 review of the finished Phase 2 code. Decision (2026-09-30): the drawing tools (Phase 3) wait until the foundation is correct in behaviour and in structure. The review chained import, conversion, edit, and undo on one ROI (`roi_runtime/tests.rs`, "ROI lifecycle") and found the model sound; one real bug was fixed on the way (4cdf8ff, see Done). What remains is layering, completeness, and robustness.
+Added after the 2026-09-30 review of the finished Phase 2 code; the evidence and reasoning are in [foundation-review-2026-09-30.md](foundation-review-2026-09-30.md). Decision (2026-09-30): the drawing tools (Phase 3) wait until the foundation is correct in behaviour and in structure. The review chained import, conversion, edit, and undo on one ROI (`roi_runtime/tests.rs`, "ROI lifecycle") and found the model sound; one real bug was fixed on the way (4cdf8ff, see Done). What remains is layering, completeness, and robustness.
 
 Exit: the layering is enforced by a test; the scene model is decided and applied (2b.9); a 150-ROI case fits in memory (2b.10); no unrepresentable-state panics (`unreachable!`) in the conversion code; every visible ROI shows all its derived forms; no GPU error can panic the app; the docs describe the code as it is; the lifecycle tests still pass.
 
