@@ -281,7 +281,7 @@ pub(super) fn process_contour_voxel_rebuild_for_entity(
     let target_geometry = world
         .get::<&Roi>(roi_entity)
         .ok()
-        .and_then(|roi| roi.voxel_cache().map(|cache| cache.data.geometry));
+        .map(|roi| roi.reference_geometry());
     let Some(target_geometry) = target_geometry else {
         log::warn!(
             "Skipping contour voxel rebuild for ROI {:?}: missing ROI reference grid",

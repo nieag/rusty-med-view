@@ -381,3 +381,40 @@ test("qa-6 every visible ROI shows its derived mesh and contours", async ({ page
   expect(render.mesh_batch_count).toBeGreaterThan(0);
   expect(render.contour_batch_count).toBeGreaterThan(0);
 });
+
+test("qa-7 a 150-label case imports within the memory ceiling and stays responsive", async ({ page }) => {
+  test.setTimeout(120000);
+  const started = Date.now();
+  await page.goto(`${BASE_URL}/?qa=1&sample=liver_0&preset=image_label_mpr_basic&labels=150`, {
+    waitUntil: "domcontentloaded",
+  });
+  await page.waitForFunction(() => typeof window.__viewerQa === "object");
+  await page.waitForFunction(() => window.__viewerQa.state()?.qa?.ready === true, null, {
+    timeout: 90000,
+  });
+  const importSeconds = (Date.now() - started) / 1000;
+  await page.waitForTimeout(3000);
+
+  const { rois, qaError } = await page.evaluate(() => ({
+    rois: window.__viewerQa.state().rois,
+    qaError: window.__viewerQa.lastError(),
+  }));
+  expect(qaError).toBeNull();
+  expect(rois.length).toBe(150);
+  // Only the first few ROIs start visible.
+  expect(rois.filter((roi) => roi.visible).length).toBeLessThanOrEqual(8);
+  const totalBytes = rois.reduce((sum, roi) => sum + roi.approx_bytes, 0);
+  console.log(`150 labels: ${(totalBytes / 1e6).toFixed(0)} MB estimated, ready after ${importSeconds.toFixed(1)} s`);
+  // Estimated ROI memory, counting the GPU mirror of each voxel box once more.
+  expect(totalBytes * 1.5).toBeLessThan(400 * 1024 * 1024);
+
+  // The viewer keeps drawing while 150 ROIs exist.
+  const frames = () => page.evaluate(() => window.__viewerQa.state().render.frame_counter);
+  const before = await frames();
+  await page.mouse.move(400, 300);
+  for (let i = 0; i < 10; i++) {
+    await page.mouse.wheel(0, i % 2 ? 120 : -120);
+    await page.waitForTimeout(100);
+  }
+  expect((await frames()) - before).toBeGreaterThanOrEqual(5);
+});

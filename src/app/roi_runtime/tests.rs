@@ -484,7 +484,6 @@ fn test_visible_voxel_overlay_count_ignores_non_renderable_rois() {
 
     assert_eq!(visible_voxel_overlay_count(&world), 0);
     assert!(renderable_voxel_overlay_rois(&world, Some(contour)).is_empty());
-    assert!(can_enable_roi_visibility(&world, contour));
 }
 
 #[test]
@@ -1270,83 +1269,6 @@ fn test_rotated_anisotropic_roi_keeps_direct_contours_through_mesh_resample() {
 }
 
 #[test]
-fn test_create_contour_roi_from_voxel_roi_keeps_source_unchanged() {
-    let mut world = World::new();
-    let source = spawn_test_roi(&mut world);
-    let source_before = {
-        let roi = world.get::<&Roi>(source).unwrap();
-        let RoiBody::Voxel(VoxelBody { data: voxel }) = &roi.body else {
-            panic!("expected voxel roi");
-        };
-        voxel.clone()
-    };
-
-    let _new = create_contour_roi_from_voxel_roi(&mut world, source, OrthogonalFamily::Axial)
-        .expect("extraction should create contour roi");
-
-    let roi = world.get::<&Roi>(source).unwrap();
-    let RoiBody::Voxel(VoxelBody { data: voxel_after }) = &roi.body else {
-        panic!("source should remain voxel authoritative");
-    };
-    assert_eq!(*voxel_after, source_before);
-    assert_eq!(roi.primary_representation(), PrimaryRepresentation::Voxel);
-}
-
-#[test]
-fn test_create_contour_roi_from_voxel_roi_returns_contour_primary_roi() {
-    let mut world = World::new();
-    let source = spawn_test_roi(&mut world);
-
-    let created = create_contour_roi_from_voxel_roi(&mut world, source, OrthogonalFamily::Axial)
-        .expect("extraction should create contour roi");
-
-    let roi = world.get::<&Roi>(created).unwrap();
-    let metadata = world.get::<&RoiMetadata>(created).unwrap();
-    assert_eq!(roi.primary_representation(), PrimaryRepresentation::Contour);
-    assert!(matches!(roi.body, RoiBody::Contour(_)));
-    assert_eq!(metadata.name, "Test (Axial Contour)");
-}
-
-#[test]
-fn test_create_contour_roi_from_voxel_roi_populates_extractable_contours() {
-    let mut world = World::new();
-    let source = spawn_sparse_voxel_roi(&mut world);
-
-    let created = create_contour_roi_from_voxel_roi(&mut world, source, OrthogonalFamily::Axial)
-        .expect("extraction should create contour roi");
-
-    let roi = world.get::<&Roi>(created).unwrap();
-    let contour_data = roi.contour_data().expect("expected contour data");
-    assert_eq!(contour_data.active_plane_family, PlaneFamily::Axial);
-    assert!(contour_data.has_loops());
-    let seeded_geometry = roi
-        .voxel_cache()
-        .expect("expected source geometry cache on extracted contour roi")
-        .data
-        .geometry;
-    let source_geometry = world
-        .get::<&Roi>(source)
-        .ok()
-        .and_then(|source_roi| source_roi.voxel_cache().map(|cache| cache.data.geometry))
-        .expect("expected source geometry");
-    assert_eq!(seeded_geometry, source_geometry);
-}
-
-#[test]
-fn test_extracted_contour_roi_seeds_current_cpu_voxel_cache() {
-    let mut world = World::new();
-    let source = spawn_sparse_voxel_roi(&mut world);
-
-    let created = create_contour_roi_from_voxel_roi(&mut world, source, OrthogonalFamily::Axial)
-        .expect("extraction should create contour roi");
-
-    let roi = world.get::<&Roi>(created).unwrap();
-    assert!(roi.is_cache_current(RoiCacheKind::Voxel));
-    assert!(roi.voxel_gpu_cache().is_none());
-    assert_eq!(roi.queued_job_kind(), None);
-}
-
-#[test]
 fn test_mesh_authoritative_roi_reports_current_mesh_representation() {
     let mut world = World::new();
     let entity = world.spawn(Roi::new_mesh(
@@ -1362,242 +1284,14 @@ fn test_mesh_authoritative_roi_reports_current_mesh_representation() {
 }
 
 #[test]
-fn test_create_contour_roi_from_voxel_roi_rejects_non_voxel_source() {
-    let mut world = World::new();
-    let source = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
-    let result = create_contour_roi_from_voxel_roi(&mut world, source, OrthogonalFamily::Axial);
-    assert_eq!(result, Err(VoxelContourCreationError::NotVoxelRoi));
-}
-
-#[test]
-fn test_create_contour_roi_from_voxel_roi_rejects_missing_source() {
-    let mut world = World::new();
-    let result = create_contour_roi_from_voxel_roi(
-        &mut world,
-        hecs::Entity::DANGLING,
-        OrthogonalFamily::Axial,
-    );
-    assert_eq!(result, Err(VoxelContourCreationError::MissingRoi));
-}
-
-#[test]
-fn test_create_mesh_roi_from_voxel_roi_keeps_source_unchanged() {
-    let mut world = World::new();
-    spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let source = spawn_sparse_voxel_roi(&mut world);
-    let before = {
-        let roi = world.get::<&Roi>(source).unwrap();
-        match &roi.body {
-            RoiBody::Voxel(VoxelBody { data: voxel }) => voxel.clone(),
-            RoiBody::Contour(_) | RoiBody::Mesh(_) => {
-                panic!("source must remain voxel-primary")
-            }
-        }
-    };
-
-    let _mesh = create_mesh_roi_from_voxel_roi(&mut world, source)
-        .expect("mesh ROI creation should succeed for voxel source");
-
-    let after = {
-        let roi = world.get::<&Roi>(source).unwrap();
-        match &roi.body {
-            RoiBody::Voxel(VoxelBody { data: voxel }) => voxel.clone(),
-            RoiBody::Contour(_) | RoiBody::Mesh(_) => {
-                panic!("source must remain voxel-primary")
-            }
-        }
-    };
-    assert_eq!(before, after);
-}
-
-#[test]
-fn test_create_mesh_roi_from_voxel_roi_returns_mesh_primary_roi() {
-    let mut world = World::new();
-    spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let source = spawn_sparse_voxel_roi(&mut world);
-
-    let created = create_mesh_roi_from_voxel_roi(&mut world, source)
-        .expect("mesh ROI creation should succeed for voxel source");
-    let roi = world
-        .get::<&Roi>(created)
-        .expect("created ROI should exist");
-
-    assert_eq!(roi.primary_representation(), PrimaryRepresentation::Mesh);
-    assert!(roi.mesh_data().is_some());
-    assert!(roi.voxel_cache().is_some());
-}
-
-#[test]
-fn test_create_mesh_roi_from_voxel_roi_rejects_non_voxel_source() {
-    let mut world = World::new();
-    spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let source = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
-
-    let result = create_mesh_roi_from_voxel_roi(&mut world, source);
-    assert_eq!(result, Err(VoxelMeshCreationError::NotVoxelRoi));
-}
-
-#[test]
-fn test_create_mesh_roi_from_voxel_roi_uses_source_grid_without_main_volume() {
-    let mut world = World::new();
-    let source = spawn_sparse_voxel_roi(&mut world);
-    let result = create_mesh_roi_from_voxel_roi(&mut world, source).unwrap();
-    let roi = world.get::<&Roi>(result).unwrap();
-    assert_eq!(roi.reference_geometry().dimensions(), [4, 4, 4]);
-}
-
-#[test]
-fn test_voxel_data_for_display_surface_extraction_returns_authoritative_when_geometry_matches() {
-    let mut world = World::new();
-    spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let source = spawn_sparse_voxel_roi(&mut world);
-    let source_voxel = world
-        .get::<&Roi>(source)
-        .ok()
-        .and_then(|roi| roi.voxel_cache().map(|cache| cache.data.clone()))
-        .expect("source voxel");
-
-    let display_voxel =
-        voxel_data_for_display_surface_extraction(&world, source).expect("display source");
-    assert_eq!(display_voxel, source_voxel);
-}
-
-#[test]
-fn test_voxel_data_for_display_surface_extraction_accepts_mismatched_geometry() {
-    let mut world = World::new();
-    spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let source = world.spawn(Roi::new_voxel_with_cache(
-        RoiId(42),
-        "Mismatched".to_string(),
-        VoxelGeometry::new(
-            [4, 4, 4],
-            [2.0, 2.0, 2.0],
-            [0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        )
-        .unwrap(),
-        {
-            let mut raw = vec![0_u8; 64];
-            raw[21] = 1;
-            raw
-        },
-        None,
-    ));
-
-    let result = voxel_data_for_display_surface_extraction(&world, source);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn test_create_mesh_roi_from_voxel_roi_accepts_mismatched_geometry() {
-    let mut world = World::new();
-    spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let source = world.spawn(Roi::new_voxel_with_cache(
-        RoiId(43),
-        "Mismatched".to_string(),
-        VoxelGeometry::new(
-            [4, 4, 4],
-            [2.0, 2.0, 2.0],
-            [0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        )
-        .unwrap(),
-        {
-            let mut raw = vec![0_u8; 64];
-            raw[21] = 1;
-            raw
-        },
-        None,
-    ));
-
-    let result = create_mesh_roi_from_voxel_roi(&mut world, source);
-    assert!(result.is_ok());
-}
-
-#[test]
-fn test_create_mesh_roi_from_voxel_roi_spawns_mesh_when_geometry_is_mismatched() {
-    let mut world = World::new();
-    spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let source = world.spawn(Roi::new_voxel_with_cache(
-        RoiId(44),
-        "Mismatched".to_string(),
-        VoxelGeometry::new(
-            [4, 4, 4],
-            [2.0, 2.0, 2.0],
-            [0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        )
-        .unwrap(),
-        {
-            let mut raw = vec![0_u8; 64];
-            raw[21] = 1;
-            raw
-        },
-        None,
-    ));
-
-    let roi_count_before = world.query::<&Roi>().iter().count();
-    let result = create_mesh_roi_from_voxel_roi(&mut world, source);
-    let roi_count_after = world.query::<&Roi>().iter().count();
-
-    assert!(result.is_ok());
-    assert!(roi_count_after > roi_count_before);
-}
-
-#[test]
-fn test_create_mesh_roi_from_contour_roi_succeeds_with_current_voxel_cache() {
-    let mut world = World::new();
-    let source = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
-    let source_voxel = VoxelData {
-        geometry: VoxelGeometry::new(
-            [4, 4, 4],
-            [1.0, 1.0, 1.0],
-            [0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        )
-        .unwrap(),
-        raw_data: {
-            let mut raw = vec![0_u8; 64];
-            raw[(2 * 4 + 1) * 4 + 1] = 1;
-            raw
-        },
-    };
-    {
-        let mut roi = world.get::<&mut Roi>(source).unwrap();
-        roi.session_caches.voxel = Some(VoxelCache {
-            data: source_voxel,
-            gpu_resources: None,
-        });
-        roi.dirty_state.voxel.dirty = false;
-        roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
-    }
-
-    let created = create_mesh_roi_from_contour_roi(&mut world, source)
-        .expect("contour source should succeed when current voxel cache exists");
-    let roi = world.get::<&Roi>(created).unwrap();
-    assert_eq!(roi.primary_representation(), PrimaryRepresentation::Mesh);
-    assert!(roi.mesh_data().is_some());
-    assert!(roi.voxel_cache().is_some());
-}
-
-#[test]
-fn test_create_mesh_roi_from_contour_roi_requires_current_voxel_cache() {
-    let mut world = World::new();
-    let source = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
-
-    let result = create_mesh_roi_from_contour_roi(&mut world, source);
-    assert_eq!(
-        result,
-        Err(ContourMeshCreationError::MissingCurrentVoxelCache)
-    );
-}
-
-#[test]
 fn test_extracted_contour_roi_supports_replace_contour_data_edit_path() {
     let mut world = World::new();
-    let source = spawn_sparse_voxel_roi(&mut world);
-    let extracted = create_contour_roi_from_voxel_roi(&mut world, source, OrthogonalFamily::Axial)
-        .expect("expected extracted contour roi");
+    let extracted = spawn_sparse_voxel_roi(&mut world);
+    convert_and_settle(
+        &mut world,
+        extracted,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    );
 
     let replacement = ContourData {
         active_plane_family: OrthogonalFamily::Axial,
@@ -1629,9 +1323,12 @@ fn test_extracted_contour_roi_supports_replace_contour_data_edit_path() {
 #[test]
 fn test_extracted_contour_roi_edit_queues_rebuild_voxel_cache_job() {
     let mut world = World::new();
-    let source = spawn_sparse_voxel_roi(&mut world);
-    let extracted = create_contour_roi_from_voxel_roi(&mut world, source, OrthogonalFamily::Axial)
-        .expect("expected extracted contour roi");
+    let extracted = spawn_sparse_voxel_roi(&mut world);
+    convert_and_settle(
+        &mut world,
+        extracted,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    );
 
     let replacement = ContourData {
         active_plane_family: OrthogonalFamily::Axial,
@@ -1664,9 +1361,12 @@ fn test_extracted_contour_roi_edit_queues_rebuild_voxel_cache_job() {
 fn test_contour_commit_converges_voxel_and_mesh_through_work_coordinator() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let source = spawn_sparse_voxel_roi(&mut world);
-    let extracted = create_contour_roi_from_voxel_roi(&mut world, source, OrthogonalFamily::Axial)
-        .expect("expected extracted contour roi");
+    let extracted = spawn_sparse_voxel_roi(&mut world);
+    convert_and_settle(
+        &mut world,
+        extracted,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    );
 
     let replacement = square_contour_data_for_main_volume(&world, 1.2);
     replace_contour_data(&mut world, extracted, replacement.clone())
@@ -2778,8 +2478,8 @@ fn label_import_geometry() -> VoxelGeometry {
 }
 
 fn spawn_labels(world: &mut World, filename: &str, data: &[u8]) -> Vec<hecs::Entity> {
-    let masks = label_masks_for_import(data).expect("within the import budget");
-    spawn_label_rois(world, label_import_geometry(), filename, masks, |_| {
+    let masks = label_masks_for_import(data, [4, 4, 4]).expect("within the import budget");
+    spawn_label_rois(world, label_import_geometry(), filename, masks, |_, _| {
         Ok(None)
     })
     .unwrap()
@@ -2813,20 +2513,18 @@ fn test_multi_label_import_creates_one_roi_per_label_with_its_own_mask() {
         assert_eq!(roi.primary_representation(), PrimaryRepresentation::Voxel);
         assert!(roi.is_cache_current(RoiCacheKind::Voxel));
         assert_eq!(metadata.color, label_color(label));
-        let RoiBody::Voxel(VoxelBody { data: voxel }) = &roi.body else {
-            panic!("voxel authority");
+        let occupied = {
+            drop(roi);
+            occupied_in_label_grid(&world, *entity)
         };
-        let occupied: Vec<usize> = voxel
-            .raw_data
-            .iter()
-            .enumerate()
-            .filter(|(_, value)| **value != 0)
-            .map(|(index, _)| index)
-            .collect();
         assert_eq!(
             occupied, expected,
             "label {label} must hold only its own voxels"
         );
+        let roi = world.get::<&Roi>(*entity).unwrap();
+        let RoiBody::Voxel(VoxelBody { data: voxel }) = &roi.body else {
+            panic!("voxel authority");
+        };
         assert!(voxel
             .raw_data
             .iter()
@@ -2887,11 +2585,56 @@ fn test_label_import_hides_rois_beyond_the_overlay_cap() {
     assert_eq!(visible, expected);
 }
 
+/// The linear indices, in the 4x4x4 labelmap grid, of the voxels a label ROI holds.
+fn occupied_in_label_grid(world: &World, entity: hecs::Entity) -> Vec<usize> {
+    let roi = world.get::<&Roi>(entity).unwrap();
+    let RoiBody::Voxel(VoxelBody { data }) = &roi.body else {
+        panic!("voxel authority");
+    };
+    let grid = label_import_geometry();
+    let [width, height, _] = data.geometry.dimensions;
+    let mut occupied = Vec::new();
+    for (index, value) in data.raw_data.iter().enumerate() {
+        if *value != 0 {
+            let local = [
+                (index as u32 % width) as f32,
+                ((index as u32 / width) % height) as f32,
+                (index as u32 / (width * height)) as f32,
+            ];
+            let world_mm = crate::convert::voxel_index_to_world_mm(local, data.geometry);
+            let global = crate::convert::world_mm_to_voxel_index(world_mm, grid).map(f32::round);
+            occupied.push(((global[2] as usize * 4) + global[1] as usize) * 4 + global[0] as usize);
+        }
+    }
+    occupied
+}
+
 #[test]
-fn test_label_import_budget_is_enforced_and_normal_maps_pass() {
-    // Check the budget with a large volume directly; allocating such a map would defeat the test.
-    assert!(check_label_import_budget(512 * 512 * 300, 20).is_err());
-    assert!(label_masks_for_import(&[1_u8; 64]).is_ok());
+fn test_label_rois_are_cropped_to_their_bounds_and_keep_their_world_position() {
+    let mut world = World::new();
+    let mut data = vec![0_u8; 64];
+    data[5] = 1;
+    data[6] = 1;
+    data[40] = 2;
+
+    let entities = spawn_labels(&mut world, "liver.nii", &data);
+
+    // Label 1 is two neighbouring voxels; label 2 is one voxel. Nothing else is stored.
+    let sizes: Vec<usize> = entities
+        .iter()
+        .map(|entity| match &world.get::<&Roi>(*entity).unwrap().body {
+            RoiBody::Voxel(body) => body.data.raw_data.len(),
+            _ => unreachable!(),
+        })
+        .collect();
+    assert_eq!(sizes, vec![2, 1]);
+    assert_eq!(occupied_in_label_grid(&world, entities[0]), vec![5, 6]);
+    assert_eq!(occupied_in_label_grid(&world, entities[1]), vec![40]);
+}
+
+#[test]
+fn test_a_labelmap_with_the_wrong_size_is_rejected() {
+    assert!(label_masks_for_import(&[1_u8; 10], [4, 4, 4]).is_err());
 }
 
 fn contour_shifted_by(world: &World, roi: hecs::Entity, shift: f32) -> ContourData {
@@ -3880,4 +3623,49 @@ fn test_an_idle_active_mesh_roi_rebuilds_its_voxels_after_an_edit_before_anyone_
         ),
         Ok(Readiness::Switched(_))
     ));
+}
+
+#[test]
+fn test_a_cropped_label_roi_switches_to_contours_on_the_whole_grid_and_undo_restores_the_box() {
+    let mut world = World::new();
+    let mut editor = EditorState::default();
+    let mut data = vec![0_u8; 64];
+    data[(4 + 1) * 4 + 1] = 1;
+    data[(4 + 1) * 4 + 2] = 1;
+    let entity = spawn_labels(&mut world, "crop.nii", &data)[0];
+    editor.active_roi = Some(entity);
+    let reference = world.get::<&Roi>(entity).unwrap().reference_geometry();
+    assert_eq!(reference.dimensions(), [4, 4, 4]);
+
+    convert_and_settle(
+        &mut world,
+        entity,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    );
+
+    {
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert!(matches!(roi.body, RoiBody::Contour(_)));
+        let voxels = &roi.voxel_cache().unwrap().data;
+        assert_eq!(
+            voxels.geometry.identity(),
+            reference.identity(),
+            "edits can land anywhere, so the voxels now cover the whole reference grid"
+        );
+        assert_eq!(voxels.raw_data.len(), 64);
+        assert_eq!(voxels.raw_data, data.clone());
+    }
+
+    undo_roi_edit(&mut world, &mut editor).unwrap();
+    settle(&mut world);
+    let roi = world.get::<&Roi>(entity).unwrap();
+    let RoiBody::Voxel(VoxelBody { data: restored }) = &roi.body else {
+        panic!("undo restores the voxel body");
+    };
+    assert_eq!(
+        restored.raw_data.len(),
+        2,
+        "the stored box, not the whole grid"
+    );
+    assert_eq!(roi.reference_geometry().identity(), reference.identity());
 }

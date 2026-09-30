@@ -2,8 +2,7 @@ use crate::app::components::*;
 pub use crate::app::roi::authority::{ContourMutationError, MeshMutationError};
 pub use crate::app::roi::history::RoiEditHistoryError;
 use crate::app::roi::label_import::{
-    check_label_import_budget, label_color, label_roi_name, present_label_ids, split_labelmap,
-    LabelMask,
+    label_color, label_roi_name, present_label_ids, split_labelmap, LabelMask,
 };
 use crate::app::roi::model::is_roi_visible;
 pub use crate::app::roi::requests::{
@@ -18,8 +17,6 @@ use crate::convert::{
     rasterize_contours_to_voxel_data, IncrementalChunkedMeshRebuild, IncrementalMeshVoxelization,
     PlaneFamily, VoxelContourExtractionError, VoxelMeshExtractionError, DEFAULT_MESH_CHUNK_SIZE,
 };
-#[cfg(test)]
-use crate::convert::{extract_contours_from_voxel_data, extract_mesh_from_voxel_data};
 use crate::model::OrthogonalFamily;
 use crate::render::roi_views::{RenderRepresentationRequest, RoiRenderViews};
 use hecs::World;
@@ -44,51 +41,8 @@ pub struct VoxelRoiStats {
     pub volume_mm3: f32,
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VoxelContourCreationError {
-    MissingRoi,
-    NotVoxelRoi,
-    ExtractionFailed(VoxelContourExtractionError),
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VoxelMeshCreationError {
-    MissingRoi,
-    NotVoxelRoi,
-    EmptyMeshFromNonEmptySource,
-    ExtractionFailed(VoxelMeshExtractionError),
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContourMeshCreationError {
-    MissingRoi,
-    NotContourRoi,
-    MissingCurrentVoxelCache,
-    ExtractionFailed(VoxelMeshExtractionError),
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DisplayVoxelSourceError {
-    MissingRoi,
-    NotVoxelRoi,
-}
-
 pub const MAX_SIMULTANEOUS_ROI_OVERLAYS: usize =
     crate::render::roi_views::DEFAULT_MAX_VOXEL_OVERLAYS;
-
-#[cfg(test)]
-fn plane_family_label(family: PlaneFamily) -> &'static str {
-    match family {
-        PlaneFamily::Axial => "Axial",
-        PlaneFamily::Coronal => "Coronal",
-        PlaneFamily::Sagittal => "Sagittal",
-        PlaneFamily::Oblique => "Oblique",
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RenderableVoxelOverlay {

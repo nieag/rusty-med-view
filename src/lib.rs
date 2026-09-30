@@ -35,7 +35,7 @@ thread_local! {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn qa_param_value(search: &str, key: &str) -> Option<String> {
+pub(crate) fn qa_param_value(search: &str, key: &str) -> Option<String> {
     let trimmed = search.strip_prefix('?').unwrap_or(search);
     trimmed.split('&').find_map(|pair| {
         let mut it = pair.splitn(2, '=');

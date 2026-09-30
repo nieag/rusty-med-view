@@ -154,22 +154,21 @@ pub fn draw_sidebar(
 
     // --- Layer Control ---
     ui.collapsing("📚 Layers", |ui| {
-        let mut layers: Vec<(
-            hecs::Entity,
-            String,
-            bool,
-            f32,
-            Option<roi_runtime::VoxelRoiStats>,
-        )> = Vec::new();
-        for (e, (metadata, settings)) in world.query::<(&RoiMetadata, &LayerSettings)>().iter() {
-            layers.push((
-                e,
-                metadata.name.clone(),
-                metadata.is_visible,
-                settings.opacity,
-                roi_runtime::roi_voxel_stats(world, e),
-            ));
-        }
+        // One compact row per ROI, sorted by id. Stats and sliders are drawn for the active ROI
+        // only, so the cost of the panel does not grow with the number of ROIs.
+        let mut layers: Vec<(u64, hecs::Entity, String, bool)> = world
+            .query::<&RoiMetadata>()
+            .iter()
+            .map(|(entity, metadata)| {
+                (
+                    metadata.roi_id.0,
+                    entity,
+                    metadata.name.clone(),
+                    metadata.is_visible,
+                )
+            })
+            .collect();
+        layers.sort_unstable_by_key(|layer| layer.0);
 
         let active_roi = { let e = &session.editor; e.active_roi };
         let mut new_active_roi = active_roi;
@@ -264,52 +263,77 @@ pub fn draw_sidebar(
             });
         }
 
-        for (entity, name, mut visible, mut opacity, stats) in layers {
-            ui.group(|ui| {
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut new_active_roi, Some(entity), "");
-                    if ui.checkbox(&mut visible, "").changed() {
-                        let allow_visibility = if visible {
-                            roi_runtime::can_enable_roi_visibility(world, entity)
-                        } else {
-                            true
-                        };
-
-                        if allow_visibility {
+        let total_layers = layers.len();
+        ui.horizontal(|ui| {
+            ui.label("🔍");
+            ui.add(
+                egui::TextEdit::singleline(&mut session.gui.layer_filter)
+                    .hint_text("Filter ROIs")
+                    .desired_width(110.0),
+            );
+            if !session.gui.layer_filter.is_empty() && ui.small_button("✖").clicked() {
+                session.gui.layer_filter.clear();
+            }
+        });
+        let filter = session.gui.layer_filter.to_lowercase();
+        layers.retain(|(_, _, name, _)| filter.is_empty() || name.to_lowercase().contains(&filter));
+        ui.horizontal(|ui| {
+            ui.label(format!("{} of {total_layers}", layers.len()));
+            for (label, show) in [("Show", true), ("Hide", false)] {
+                if ui
+                    .small_button(label)
+                    .on_hover_text(format!("{label} every ROI in this list"))
+                    .clicked()
+                {
+                    for (_, entity, _, _) in &layers {
+                        if let Ok(mut metadata) = world.get::<&mut RoiMetadata>(*entity) {
+                            metadata.is_visible = show;
+                        }
+                    }
+                    let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
+                }
+            }
+        });
+        let row_height = ui.spacing().interact_size.y;
+        egui::ScrollArea::vertical()
+            .max_height(260.0)
+            .auto_shrink([false, true])
+            .show_rows(ui, row_height, layers.len(), |ui, range| {
+                for (_, entity, name, mut visible) in layers[range].iter().cloned() {
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut new_active_roi, Some(entity), "");
+                        if ui.checkbox(&mut visible, "").changed() {
                             if let Ok(mut metadata) = world.get::<&mut RoiMetadata>(entity) {
                                 metadata.is_visible = visible;
                             }
                             let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
-                        } else {
-                            visible = false;
-                            if let Ok(mut metadata) = world.get::<&mut RoiMetadata>(entity) {
-                                metadata.is_visible = false;
-                            }
-                            handlers::set_status_message(
-                                session,
-                                "Only two ROI overlays can be visible at once in the current renderer."
-                                    .to_string(),
-                            );
                         }
-                    }
-                    ui.label(name);
-                });
-                if let Some(stats) = stats {
-                    ui.label(format!(
-                        "{} voxels, {:.2} mm^3",
-                        stats.occupied_voxels, stats.volume_mm3
-                    ));
-                }
-                if visible
-                    && ui
-                        .add(egui::Slider::new(&mut opacity, 0.0..=1.0).text("Opacity"))
-                        .changed()
-                {
-                    if let Ok(mut set) = world.get::<&mut LayerSettings>(entity) {
-                        set.opacity = opacity;
-                    }
+                        ui.label(name);
+                    });
                 }
             });
+
+        if let Some(entity) = new_active_roi {
+            ui.separator();
+            if let Some(stats) = roi_runtime::roi_voxel_stats(world, entity) {
+                ui.label(format!(
+                    "{} voxels, {:.2} mm^3",
+                    stats.occupied_voxels, stats.volume_mm3
+                ));
+            }
+            let is_visible = crate::app::roi::is_roi_visible(world, entity);
+            let mut opacity = world
+                .get::<&LayerSettings>(entity)
+                .map_or(0.5, |settings| settings.opacity);
+            if is_visible
+                && ui
+                    .add(egui::Slider::new(&mut opacity, 0.0..=1.0).text("Opacity"))
+                    .changed()
+            {
+                if let Ok(mut set) = world.get::<&mut LayerSettings>(entity) {
+                    set.opacity = opacity;
+                }
+            }
 
             let show_contour_point_controls = Some(entity) == new_active_roi
                 && world.get::<&Roi>(entity).is_ok_and(|roi| {
