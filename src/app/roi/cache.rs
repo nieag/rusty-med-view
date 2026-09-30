@@ -107,7 +107,7 @@ impl Roi {
     }
 
     /// The slices to draw for one view: the authoritative contours when the view is in the
-    /// authoritative family, else a current-enough derived view.
+    /// authoritative family, else a derived view that matches the current revision.
     pub fn contour_view_data_for_render(&self, key: &ContourViewKey) -> Option<&[ContourSlice]> {
         if let Some(contour) = self.contour_data() {
             if contour.active_plane_family == key.family {
@@ -115,24 +115,15 @@ impl Roi {
             }
         }
 
+        // Nothing stale is ever drawn: a derived view is used only when it was built from the
+        // ROI's current revision, or when it is the preview of the edit in progress.
         let view = self.contour_view_cache(key)?;
-        let mesh_view_usable = match view.state {
-            CacheViewState::Current => true,
+        let usable = match view.state {
+            CacheViewState::Current => view.built_from == self.dirty_state.authoritative,
             CacheViewState::Preview { .. } => self.preview_state.active,
             _ => false,
         };
-        if self.mesh_data().is_some()
-            && (view.built_from != self.dirty_state.authoritative || !mesh_view_usable)
-        {
-            return None;
-        }
-        if matches!(
-            view.state,
-            CacheViewState::Blocked { .. } | CacheViewState::Unsupported { .. }
-        ) {
-            return None;
-        }
-        Some(&view.data)
+        usable.then_some(view.data.as_slice())
     }
 
     pub fn mark_all_contour_view_caches_stale(&mut self) {
