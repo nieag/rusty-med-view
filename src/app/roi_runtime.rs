@@ -5,6 +5,7 @@ use crate::app::roi::label_import::{
     check_label_import_budget, label_color, label_roi_name, present_label_ids, split_labelmap,
     LabelMask,
 };
+use crate::app::roi::model::is_roi_visible;
 pub use crate::app::roi::requests::{
     ContourRepresentationStatus, RepresentationRequestState, RepresentationRequestStatus,
     RoiCacheStatus,
@@ -242,7 +243,7 @@ pub fn recreate_scene_bind_groups(
 
     for overlay in &overlay_entities {
         if let Ok(roi) = world.get::<&Roi>(overlay.entity) {
-            if let Some(res) = roi.renderable_voxel_cache() {
+            if let Some(res) = roi.renderable_voxel_cache(is_roi_visible(world, overlay.entity)) {
                 overlay_views.push(res.view.clone());
             }
         }
@@ -307,10 +308,11 @@ pub fn visible_voxel_overlay_count(world: &World) -> usize {
 
 pub fn can_enable_roi_visibility(world: &World, roi_entity: hecs::Entity) -> bool {
     if let Ok(roi) = world.get::<&Roi>(roi_entity) {
-        if roi.metadata.is_visible {
+        if is_roi_visible(world, roi_entity) {
             return true;
         }
-        if roi.renderable_voxel_cache().is_none() {
+        // Not shown now: would showing it use an overlay slot?
+        if roi.renderable_voxel_cache(true).is_none() {
             return true;
         }
     }
@@ -478,12 +480,14 @@ pub(crate) fn ensure_contour_view_cache(
 pub(crate) fn sync_roi_contour_view_caches_for_viewports(world: &mut World, focus: &ViewFocus) {
     let active_roi = focus.active_roi;
     let mut roi_entities = active_roi.into_iter().collect::<Vec<_>>();
-    roi_entities.extend(world.query::<&Roi>().iter().filter_map(|(entity, roi)| {
-        (Some(entity) != active_roi
-            && roi.metadata.is_visible
-            && matches!(roi.body, RoiBody::Mesh(_)))
-        .then_some(entity)
-    }));
+    roi_entities.extend(world.query::<(&Roi, &RoiMetadata)>().iter().filter_map(
+        |(entity, (roi, metadata))| {
+            (Some(entity) != active_roi
+                && metadata.is_visible
+                && matches!(roi.body, RoiBody::Mesh(_)))
+            .then_some(entity)
+        },
+    ));
     let main_geometry = main_volume_geometry(world);
 
     let cursor_uv = focus.cursor_uv;
@@ -662,18 +666,22 @@ fn spawn_label_rois(
     for (index, mask) in masks.into_iter().enumerate() {
         let gpu_resources = gpu_for_mask(&mask.data)?;
         let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
-        let mut roi = Roi::new_voxel_with_cache(
+        let (roi, mut metadata) = Roi::new_voxel_with_cache(
             RoiId(next_roi_id),
             label_roi_name(filename, mask.label, label_count),
             geometry,
             mask.data,
             gpu_resources,
         );
-        roi.metadata.is_visible = already_visible + index < MAX_SIMULTANEOUS_ROI_OVERLAYS;
+        metadata.is_visible = already_visible + index < MAX_SIMULTANEOUS_ROI_OVERLAYS;
         if mask.label != 0 {
-            roi.metadata.color = label_color(mask.label);
+            metadata.color = label_color(mask.label);
         }
-        entities.push(world.spawn((roi, LayerSettings { opacity: 0.5 }, RoiTag)));
+        entities.push(crate::app::roi::spawn_roi_layer(
+            world,
+            (roi, metadata),
+            0.5,
+        ));
     }
     Ok(entities)
 }
@@ -698,7 +706,8 @@ pub fn create_empty_contour_roi(
 
     let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
     let roi_name = format!("Contour ROI {}", next_roi_id);
-    let entity = world.spawn((
+    let entity = crate::app::roi::spawn_roi_layer(
+        world,
         Roi::new_contour_with_geometry(
             RoiId(next_roi_id),
             roi_name,
@@ -708,9 +717,8 @@ pub fn create_empty_contour_roi(
                 slices: Vec::new(),
             },
         ),
-        LayerSettings { opacity: 0.5 },
-        RoiTag,
-    ));
+        0.5,
+    );
 
     if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
         // The empty cache is valid for the initial empty contour authority. Its generation lets
@@ -802,9 +810,9 @@ pub fn create_contour_roi_from_voxel_roi(
 
     let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
     let source_name = world
-        .get::<&Roi>(source_roi)
+        .get::<&RoiMetadata>(source_roi)
         .ok()
-        .map(|roi| roi.metadata.name.clone())
+        .map(|metadata| metadata.name.clone())
         .unwrap_or_else(|| "Voxel ROI".to_string());
     let new_name = format!(
         "{source_name} ({} Contour)",
@@ -812,11 +820,11 @@ pub fn create_contour_roi_from_voxel_roi(
     );
     let reference_geometry = source_voxel.geometry;
 
-    let entity = world.spawn((
+    let entity = crate::app::roi::spawn_roi_layer(
+        world,
         Roi::new_contour_with_geometry(RoiId(next_roi_id), new_name, reference_geometry, extracted),
-        LayerSettings { opacity: 0.5 },
-        RoiTag,
-    ));
+        0.5,
+    );
     if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
         // Preserve source voxel geometry as the initial contour reference frame.
         // This keeps extracted contour projection/edit mapping aligned before any
@@ -853,20 +861,20 @@ pub fn create_mesh_roi_from_voxel_roi(
 
     let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
     let source_name = world
-        .get::<&Roi>(source_roi)
+        .get::<&RoiMetadata>(source_roi)
         .ok()
-        .map(|roi| roi.metadata.name.clone())
+        .map(|metadata| metadata.name.clone())
         .unwrap_or_else(|| "Voxel ROI".to_string());
-    let entity = world.spawn((
+    let entity = crate::app::roi::spawn_roi_layer(
+        world,
         Roi::new_mesh_with_geometry(
             RoiId(next_roi_id),
             format!("{source_name} (Mesh)"),
             source_voxel.geometry,
             extracted,
         ),
-        LayerSettings { opacity: 0.5 },
-        RoiTag,
-    ));
+        0.5,
+    );
     if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
         // Preserve source voxel geometry as extraction/provenance context.
         // Rendering projects mesh world-mm vertices through main display volume geometry.
@@ -924,20 +932,20 @@ pub fn create_mesh_roi_from_contour_roi(
 
     let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
     let source_name = world
-        .get::<&Roi>(source_roi)
+        .get::<&RoiMetadata>(source_roi)
         .ok()
-        .map(|roi| roi.metadata.name.clone())
+        .map(|metadata| metadata.name.clone())
         .unwrap_or_else(|| "Contour ROI".to_string());
-    let entity = world.spawn((
+    let entity = crate::app::roi::spawn_roi_layer(
+        world,
         Roi::new_mesh_with_geometry(
             RoiId(next_roi_id),
             format!("{source_name} (Mesh)"),
             source_voxel.geometry,
             extracted,
         ),
-        LayerSettings { opacity: 0.5 },
-        RoiTag,
-    ));
+        0.5,
+    );
     if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
         // Preserve contour-derived voxel geometry as extraction/provenance context.
         // Rendering projects mesh world-mm vertices through main display volume geometry.

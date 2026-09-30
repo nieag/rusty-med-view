@@ -61,7 +61,7 @@ fn spawn_mesh_edit_world() -> (World, Session, hecs::Entity) {
             },
         ],
     };
-    let roi_entity = world.spawn((Roi::new_mesh(RoiId(1), "Mesh".to_string(), mesh),));
+    let roi_entity = world.spawn(Roi::new_mesh(RoiId(1), "Mesh".to_string(), mesh));
     let mut session = Session::new(800, 600);
     session.editor = EditorState {
         active_roi: Some(roi_entity),

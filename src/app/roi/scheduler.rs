@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_starting_queued_work_records_queue_delay() {
-        let mut roi = Roi::new_contour(
+        let (mut roi, _) = Roi::new_contour(
             RoiId(1),
             "test".to_string(),
             ContourData {

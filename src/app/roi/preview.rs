@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn test_a_contour_roi_holds_only_a_contour_preview() {
-        let mut roi = Roi::new_contour(RoiId(1), "test".to_string(), contour_data());
+        let (mut roi, _) = Roi::new_contour(RoiId(1), "test".to_string(), contour_data());
         let RoiBody::Contour(body) = &mut roi.body else {
             unreachable!()
         };
@@ -253,8 +253,8 @@ mod tests {
     #[test]
     fn test_previews_belong_to_their_own_roi() {
         let mut world = World::new();
-        let first = world.spawn((Roi::new_contour(RoiId(1), "a".into(), contour_data()),));
-        let second = world.spawn((Roi::new_contour(RoiId(2), "b".into(), contour_data()),));
+        let first = world.spawn(Roi::new_contour(RoiId(1), "a".into(), contour_data()));
+        let second = world.spawn(Roi::new_contour(RoiId(2), "b".into(), contour_data()));
         let plane = crate::convert::PlaneDefinition {
             family: PlaneFamily::Axial,
             origin_mm: [0.0; 3],
@@ -282,8 +282,8 @@ mod tests {
     #[test]
     fn test_changing_the_active_roi_ends_the_previous_rois_preview_only() {
         let mut world = World::new();
-        let previous = world.spawn((Roi::new_contour(RoiId(1), "a".into(), contour_data()),));
-        let next = world.spawn((Roi::new_contour(RoiId(2), "b".into(), contour_data()),));
+        let previous = world.spawn(Roi::new_contour(RoiId(1), "a".into(), contour_data()));
+        let next = world.spawn(Roi::new_contour(RoiId(2), "b".into(), contour_data()));
         let mut editor = EditorState {
             active_roi: Some(previous),
             ..EditorState::default()
@@ -313,11 +313,11 @@ mod tests {
     #[test]
     fn test_cancel_roi_edit_preview_clears_the_active_rois_preview_and_session() {
         let mut world = World::new();
-        let roi_entity = world.spawn((Roi::new_contour(
+        let roi_entity = world.spawn(Roi::new_contour(
             RoiId(1),
             "test".to_string(),
             contour_data(),
-        ),));
+        ));
         world.get::<&mut Roi>(roi_entity).unwrap().begin_preview();
         let mut roi = world.get::<&mut Roi>(roi_entity).unwrap();
         let RoiBody::Contour(body) = &mut roi.body else {
@@ -354,11 +354,11 @@ mod tests {
                 .map(|vertex_indices| MeshFace { vertex_indices })
                 .to_vec(),
         };
-        let roi_entity = world.spawn((Roi::new_mesh(
+        let roi_entity = world.spawn(Roi::new_mesh(
             RoiId(1),
             "test".to_string(),
             original.clone(),
-        ),));
+        ));
         let editor = EditorState {
             active_roi: Some(roi_entity),
             ..EditorState::default()

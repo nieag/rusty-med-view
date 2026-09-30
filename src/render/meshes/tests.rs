@@ -50,7 +50,7 @@ fn test_prepare_mesh_render_data_skips_non_3d_viewports() {
         },
         ViewportState::default(),
     ));
-    world.spawn((Roi::new_mesh(
+    world.spawn(Roi::new_mesh(
         RoiId(1),
         "Mesh".to_string(),
         MeshData {
@@ -69,7 +69,7 @@ fn test_prepare_mesh_render_data_skips_non_3d_viewports() {
                 vertex_indices: [0, 1, 2],
             }],
         },
-    ),));
+    ));
     let data = prepare_mesh_render_data(&world, &session, &HashMap::new());
     assert!(data.parts.is_empty());
     assert!(data.draws.is_empty());
@@ -105,7 +105,7 @@ fn test_prepare_mesh_render_data_uses_main_volume_geometry_for_projection() {
         },
     ));
     let world_vertex = [2.0, 2.0, 2.0];
-    world.spawn((Roi::new_mesh(
+    world.spawn(Roi::new_mesh(
         RoiId(2),
         "Mesh".to_string(),
         MeshData {
@@ -124,7 +124,7 @@ fn test_prepare_mesh_render_data_uses_main_volume_geometry_for_projection() {
                 vertex_indices: [0, 1, 2],
             }],
         },
-    ),));
+    ));
     let data = prepare_mesh_render_data(&world, &session, &HashMap::new());
     assert_eq!(data.draws.len(), 1);
     assert_eq!(data.parts.len(), 1);
@@ -216,7 +216,7 @@ fn test_prepare_mesh_render_data_emits_wgpu_handle_for_selected_mesh_vertex() {
         },
         ViewportState::default(),
     ));
-    let roi_entity = world.spawn((Roi::new_mesh(
+    let roi_entity = world.spawn(Roi::new_mesh(
         RoiId(22),
         "Selected mesh".to_string(),
         MeshData {
@@ -235,7 +235,7 @@ fn test_prepare_mesh_render_data_emits_wgpu_handle_for_selected_mesh_vertex() {
                 vertex_indices: [0, 1, 2],
             }],
         },
-    ),));
+    ));
     {
         let editor = &mut session.editor;
         editor.active_roi = Some(roi_entity);
@@ -276,7 +276,7 @@ fn test_prepare_mesh_render_data_skips_invalid_face_indices() {
         },
         ViewportState::default(),
     ));
-    world.spawn((Roi::new_mesh(
+    world.spawn(Roi::new_mesh(
         RoiId(3),
         "Mesh".to_string(),
         MeshData {
@@ -287,7 +287,7 @@ fn test_prepare_mesh_render_data_skips_invalid_face_indices() {
                 vertex_indices: [0, 1, 2],
             }],
         },
-    ),));
+    ));
     let data = prepare_mesh_render_data(&world, &session, &HashMap::new());
     assert!(data.parts.is_empty());
     assert!(data.draws.is_empty());
@@ -313,7 +313,7 @@ fn test_prepare_mesh_render_data_preserves_unchanged_chunk_identity_and_vertices
     voxel.raw_data[1] = 1;
     voxel.raw_data[20] = 1;
     let chunked = crate::convert::extract_chunked_mesh_from_voxel_data(&voxel, 16).unwrap();
-    let mut roi = Roi::new_contour(
+    let (mut roi, roi_meta) = Roi::new_contour(
         RoiId(4),
         "Contour".to_string(),
         ContourData {
@@ -333,7 +333,7 @@ fn test_prepare_mesh_render_data_preserves_unchanged_chunk_identity_and_vertices
     roi.dirty_state.mesh.dirty = false;
     roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
     roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
-    let roi_entity = world.spawn((roi,));
+    let roi_entity = crate::app::roi::spawn_roi_layer(&mut world, (roi, roi_meta), 1.0);
 
     let before = prepare_mesh_render_data(&world, &session, &HashMap::new());
     assert_eq!(before.parts.len(), 2);
@@ -384,7 +384,7 @@ fn test_camera_motion_changes_only_the_draw_uniform() {
         },
         ViewportState::default(),
     ));
-    world.spawn((Roi::new_mesh(
+    world.spawn(Roi::new_mesh(
         RoiId(5),
         "Mesh".to_string(),
         MeshData {
@@ -403,7 +403,7 @@ fn test_camera_motion_changes_only_the_draw_uniform() {
                 vertex_indices: [0, 1, 2],
             }],
         },
-    ),));
+    ));
     let first = prepare_mesh_render_data(&world, &session, &HashMap::new());
     let known = first
         .parts

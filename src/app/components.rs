@@ -601,7 +601,6 @@ pub struct RoiJobState {
 }
 
 pub struct Roi {
-    pub metadata: RoiMetadata,
     /// Immutable reference grid for conversions involving this ROI.
     ///
     pub reference_geometry: VoxelGeometry,
@@ -636,7 +635,7 @@ impl Roi {
         geometry: VoxelGeometry,
         raw_data: Vec<u8>,
         gpu_resources: GpuVolumeResources,
-    ) -> Self {
+    ) -> (Self, RoiMetadata) {
         Self::new_voxel_with_cache(roi_id, name, geometry, raw_data, Some(gpu_resources))
     }
 
@@ -646,17 +645,10 @@ impl Roi {
         geometry: VoxelGeometry,
         raw_data: Vec<u8>,
         gpu_resources: Option<GpuVolumeResources>,
-    ) -> Self {
+    ) -> (Self, RoiMetadata) {
         let voxel_data = VoxelData { geometry, raw_data };
         let reference_geometry = voxel_data.geometry;
-        Self {
-            metadata: RoiMetadata {
-                roi_id,
-                name,
-                is_visible: true,
-                is_locked: false,
-                color: [1.0, 0.2, 0.2, 1.0],
-            },
+        let roi = Self {
             reference_geometry,
             body: RoiBody::Voxel(VoxelBody {
                 data: voxel_data.clone(),
@@ -684,11 +676,16 @@ impl Roi {
             preview_state: RoiPreviewState::default(),
             history: RoiHistory::default(),
             validated_mesh_generation: None,
-        }
+        };
+        (roi, RoiMetadata::new(roi_id, name))
     }
 
     #[cfg(test)]
-    pub fn new_contour(roi_id: RoiId, name: String, contour_data: ContourData) -> Self {
+    pub fn new_contour(
+        roi_id: RoiId,
+        name: String,
+        contour_data: ContourData,
+    ) -> (Self, RoiMetadata) {
         Self::new_contour_with_geometry(roi_id, name, unit_test_roi_geometry(), contour_data)
     }
 
@@ -697,15 +694,8 @@ impl Roi {
         name: String,
         reference_geometry: VoxelGeometry,
         contour_data: ContourData,
-    ) -> Self {
-        Self {
-            metadata: RoiMetadata {
-                roi_id,
-                name,
-                is_visible: true,
-                is_locked: false,
-                color: [1.0, 0.2, 0.2, 1.0],
-            },
+    ) -> (Self, RoiMetadata) {
+        let roi = Self {
             reference_geometry,
             body: RoiBody::Contour(ContourBody::new(contour_data)),
             session_caches: RoiSessionCaches {
@@ -727,11 +717,12 @@ impl Roi {
             preview_state: RoiPreviewState::default(),
             history: RoiHistory::default(),
             validated_mesh_generation: None,
-        }
+        };
+        (roi, RoiMetadata::new(roi_id, name))
     }
 
     #[cfg(test)]
-    pub fn new_mesh(roi_id: RoiId, name: String, mesh_data: MeshData) -> Self {
+    pub fn new_mesh(roi_id: RoiId, name: String, mesh_data: MeshData) -> (Self, RoiMetadata) {
         Self::new_mesh_with_geometry(roi_id, name, unit_test_roi_geometry(), mesh_data)
     }
 
@@ -740,15 +731,8 @@ impl Roi {
         name: String,
         reference_geometry: VoxelGeometry,
         mesh_data: MeshData,
-    ) -> Self {
-        Self {
-            metadata: RoiMetadata {
-                roi_id,
-                name,
-                is_visible: true,
-                is_locked: false,
-                color: [1.0, 0.2, 0.2, 1.0],
-            },
+    ) -> (Self, RoiMetadata) {
+        let roi = Self {
             reference_geometry,
             body: RoiBody::Mesh(MeshBody::new(mesh_data)),
             session_caches: RoiSessionCaches {
@@ -770,7 +754,8 @@ impl Roi {
             preview_state: RoiPreviewState::default(),
             history: RoiHistory::default(),
             validated_mesh_generation: None,
-        }
+        };
+        (roi, RoiMetadata::new(roi_id, name))
     }
 
     pub fn contour_data(&self) -> Option<&ContourData> {

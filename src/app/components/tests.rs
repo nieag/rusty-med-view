@@ -82,7 +82,7 @@ fn test_contour_view_key_lookup_uses_slice_key_not_exact_plane_float() {
         active_plane_family: OrthogonalFamily::Axial,
         slices: Vec::new(),
     };
-    let mut roi = Roi::new_contour(RoiId(12), "C".to_string(), contour.clone());
+    let (mut roi, _) = Roi::new_contour(RoiId(12), "C".to_string(), contour.clone());
     let plane = test_plane_definition(PlaneFamily::Coronal);
     let key_a = ContourViewKey::from_plane(plane);
     roi.upsert_contour_view_cache(
@@ -104,7 +104,7 @@ fn test_oblique_slice_key_distinguishes_same_origin_different_normal() {
         active_plane_family: OrthogonalFamily::Axial,
         slices: Vec::new(),
     };
-    let mut roi = Roi::new_contour(RoiId(13), "Oblique".to_string(), contour.clone());
+    let (mut roi, _) = Roi::new_contour(RoiId(13), "Oblique".to_string(), contour.clone());
     let plane_a = PlaneDefinition {
         family: PlaneFamily::Oblique,
         origin_mm: [12.0, -3.0, 7.0],
@@ -137,7 +137,7 @@ fn test_mark_contour_authoritative_changed_marks_existing_derived_views_dirty() 
         active_plane_family: OrthogonalFamily::Axial,
         slices: Vec::new(),
     };
-    let mut roi = Roi::new_contour(RoiId(11), "C".to_string(), contour.clone());
+    let (mut roi, _) = Roi::new_contour(RoiId(11), "C".to_string(), contour.clone());
     let plane = test_plane_definition(PlaneFamily::Coronal);
     roi.upsert_contour_view_cache(
         ContourViewKey::from_plane(plane),
@@ -158,7 +158,7 @@ fn test_mark_contour_authoritative_changed_marks_existing_derived_views_dirty() 
 
 #[test]
 fn test_new_voxel_roi_initializes_voxel_primary_state() {
-    let roi = Roi::new_voxel_with_cache(
+    let (roi, metadata) = Roi::new_voxel_with_cache(
         RoiId(7),
         "Liver".to_string(),
         VoxelGeometry::new(
@@ -172,8 +172,8 @@ fn test_new_voxel_roi_initializes_voxel_primary_state() {
         None,
     );
 
-    assert_eq!(roi.metadata.roi_id, RoiId(7));
-    assert_eq!(roi.metadata.name, "Liver");
+    assert_eq!(metadata.roi_id, RoiId(7));
+    assert_eq!(metadata.name, "Liver");
     assert_eq!(roi.primary_representation(), PrimaryRepresentation::Voxel);
     assert_eq!(roi.reference_geometry().dimensions(), [16, 16, 8]);
     let RoiBody::Voxel(VoxelBody {
@@ -193,7 +193,7 @@ fn test_new_voxel_roi_initializes_voxel_primary_state() {
     assert!(roi.session_caches.mesh.is_none());
     assert!(!roi.is_cache_dirty(RoiCacheKind::Voxel));
     assert!(roi.is_cache_current(RoiCacheKind::Voxel));
-    assert!(roi.renderable_voxel_cache().is_none());
+    assert!(roi.renderable_voxel_cache(true).is_none());
 }
 
 #[test]
@@ -216,7 +216,7 @@ fn test_roi_dirty_state_defaults_match_clean_voxel_baseline() {
 
 #[test]
 fn test_new_voxel_roi_without_gpu_still_has_current_cpu_voxel_cache() {
-    let roi = Roi::new_voxel_with_cache(
+    let (roi, _) = Roi::new_voxel_with_cache(
         RoiId(8),
         "Kidney".to_string(),
         VoxelGeometry::new(
@@ -246,7 +246,7 @@ fn test_new_voxel_roi_copies_body_into_session_voxel_cache() {
     )
     .unwrap();
     let raw_data = vec![0, 1, 0, 1, 1, 0, 1, 0];
-    let roi = Roi::new_voxel_with_cache(
+    let (roi, _) = Roi::new_voxel_with_cache(
         RoiId(77),
         "Cache Copy".to_string(),
         geometry,
@@ -269,7 +269,7 @@ fn test_new_voxel_roi_copies_body_into_session_voxel_cache() {
 
 #[test]
 fn test_renderable_voxel_cache_requires_gpu_resources_even_when_cache_current() {
-    let mut roi = Roi::new_voxel_with_cache(
+    let (roi, mut metadata) = Roi::new_voxel_with_cache(
         RoiId(88),
         "No GPU".to_string(),
         VoxelGeometry::new(
@@ -283,15 +283,15 @@ fn test_renderable_voxel_cache_requires_gpu_resources_even_when_cache_current() 
         None,
     );
 
-    roi.metadata.is_visible = true;
+    metadata.is_visible = true;
     assert!(roi.is_cache_current(RoiCacheKind::Voxel));
     assert!(roi.voxel_gpu_cache().is_none());
-    assert!(roi.renderable_voxel_cache().is_none());
+    assert!(roi.renderable_voxel_cache(metadata.is_visible).is_none());
 }
 
 #[test]
 fn test_cache_current_requires_matching_generation_and_clean_state() {
-    let mut roi = Roi::new_voxel_with_cache(
+    let (mut roi, _) = Roi::new_voxel_with_cache(
         RoiId(12),
         "Aorta".to_string(),
         VoxelGeometry::new(
@@ -315,7 +315,7 @@ fn test_cache_current_requires_matching_generation_and_clean_state() {
 
 #[test]
 fn test_mark_authoritative_changed_invalidates_all_derived_caches() {
-    let mut roi = Roi::new_voxel_with_cache(
+    let (mut roi, _) = Roi::new_voxel_with_cache(
         RoiId(9),
         "Spleen".to_string(),
         VoxelGeometry::new(
@@ -348,7 +348,7 @@ fn test_mark_authoritative_changed_invalidates_all_derived_caches() {
 
 #[test]
 fn test_mark_contour_authoritative_changed_invalidates_only_derived_by_default() {
-    let mut roi = Roi::new_contour(
+    let (mut roi, _) = Roi::new_contour(
         RoiId(16),
         "CTV".to_string(),
         ContourData {
@@ -375,7 +375,7 @@ fn test_mark_contour_authoritative_changed_invalidates_only_derived_by_default()
 
 #[test]
 fn test_enqueue_rebuild_preserves_multiple_representation_jobs() {
-    let mut roi = Roi::new_voxel_with_cache(
+    let (mut roi, _) = Roi::new_voxel_with_cache(
         RoiId(10),
         "Pancreas".to_string(),
         VoxelGeometry::new(
@@ -408,7 +408,7 @@ fn test_enqueue_rebuild_preserves_multiple_representation_jobs() {
 
 #[test]
 fn test_interactive_job_priority_and_preview_supersession() {
-    let mut roi = Roi::new_voxel_with_cache(
+    let (mut roi, _) = Roi::new_voxel_with_cache(
         RoiId(20),
         "Priority".to_string(),
         VoxelGeometry::new([8, 8, 8], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap(),
@@ -453,7 +453,7 @@ fn test_interactive_job_priority_and_preview_supersession() {
 
 #[test]
 fn test_preview_revision_is_monotonic_and_explicitly_ends() {
-    let mut roi = Roi::new_contour(
+    let (mut roi, _) = Roi::new_contour(
         RoiId(21),
         "Preview".to_string(),
         ContourData {
@@ -476,7 +476,7 @@ fn test_contour_view_cache_is_bounded() {
         active_plane_family: OrthogonalFamily::Axial,
         slices: Vec::new(),
     };
-    let mut roi = Roi::new_contour(RoiId(22), "Bounded".to_string(), contour.clone());
+    let (mut roi, _) = Roi::new_contour(RoiId(22), "Bounded".to_string(), contour.clone());
     for index in 0..=MAX_CONTOUR_VIEW_CACHE_ENTRIES {
         let mut plane = test_plane_definition(PlaneFamily::Coronal);
         plane.origin_mm[1] = index as f32;
@@ -495,7 +495,7 @@ fn test_contour_view_cache_is_bounded() {
 
 #[test]
 fn test_finish_cache_rebuild_marks_cache_current_and_clears_job() {
-    let mut roi = Roi::new_voxel_with_cache(
+    let (mut roi, _) = Roi::new_voxel_with_cache(
         RoiId(11),
         "Heart".to_string(),
         VoxelGeometry::new(
@@ -530,7 +530,7 @@ fn test_voxel_geometry_is_preserved_on_constructor() {
     )
     .unwrap();
 
-    let roi = Roi::new_voxel_with_cache(
+    let (roi, _) = Roi::new_voxel_with_cache(
         RoiId(13),
         "Gallbladder".to_string(),
         geometry,
@@ -642,15 +642,15 @@ fn test_new_contour_roi_initializes_contour_primary_state() {
     )
     .unwrap();
     let expected_identity = reference_geometry.identity();
-    let roi = Roi::new_contour_with_geometry(
+    let (roi, metadata) = Roi::new_contour_with_geometry(
         RoiId(14),
         "GTV".to_string(),
         reference_geometry,
         contour_data.clone(),
     );
 
-    assert_eq!(roi.metadata.roi_id, RoiId(14));
-    assert_eq!(roi.metadata.name, "GTV");
+    assert_eq!(metadata.roi_id, RoiId(14));
+    assert_eq!(metadata.name, "GTV");
     assert_eq!(roi.primary_representation(), PrimaryRepresentation::Contour);
     assert_eq!(roi.reference_geometry().identity(), expected_identity);
     assert!(matches!(roi.body, RoiBody::Contour(_)));
@@ -664,7 +664,7 @@ fn test_new_contour_roi_initializes_contour_primary_state() {
 
 #[test]
 fn test_contour_accessor_rejects_voxel_roi() {
-    let voxel_roi = Roi::new_voxel_with_cache(
+    let (voxel_roi, _) = Roi::new_voxel_with_cache(
         RoiId(15),
         "Body".to_string(),
         VoxelGeometry::new(
@@ -699,10 +699,10 @@ fn test_new_mesh_roi_initializes_mesh_primary_state() {
             vertex_indices: [0, 1, 2],
         }],
     };
-    let roi = Roi::new_mesh(RoiId(21), "Surface".to_string(), mesh_data.clone());
+    let (roi, metadata) = Roi::new_mesh(RoiId(21), "Surface".to_string(), mesh_data.clone());
 
-    assert_eq!(roi.metadata.roi_id, RoiId(21));
-    assert_eq!(roi.metadata.name, "Surface");
+    assert_eq!(metadata.roi_id, RoiId(21));
+    assert_eq!(metadata.name, "Surface");
     assert_eq!(roi.primary_representation(), PrimaryRepresentation::Mesh);
     assert!(matches!(roi.body, RoiBody::Mesh(_)));
     assert_eq!(roi.mesh_data(), Some(&mesh_data));
@@ -716,7 +716,7 @@ fn test_new_mesh_roi_initializes_mesh_primary_state() {
 
 #[test]
 fn test_mesh_accessor_rejects_non_mesh_rois() {
-    let voxel_roi = Roi::new_voxel_with_cache(
+    let (voxel_roi, _) = Roi::new_voxel_with_cache(
         RoiId(22),
         "Voxel".to_string(),
         VoxelGeometry::new(
@@ -729,7 +729,7 @@ fn test_mesh_accessor_rejects_non_mesh_rois() {
         vec![0; 4 * 4 * 4],
         None,
     );
-    let contour_roi = Roi::new_contour(
+    let (contour_roi, _) = Roi::new_contour(
         RoiId(23),
         "Contour".to_string(),
         ContourData {
@@ -760,7 +760,7 @@ fn test_mark_mesh_authoritative_changed_invalidates_voxel_and_contour_without_me
             vertex_indices: [0, 1, 2],
         }],
     };
-    let mut roi = Roi::new_mesh(RoiId(24), "Mesh".to_string(), mesh_data);
+    let (mut roi, _) = Roi::new_mesh(RoiId(24), "Mesh".to_string(), mesh_data);
 
     roi.dirty_state.voxel.dirty = false;
     roi.dirty_state.contour.dirty = false;
@@ -798,7 +798,7 @@ fn test_mark_mesh_authoritative_changed_invalidates_mesh_cache_when_present() {
             vertex_indices: [0, 1, 2],
         }],
     };
-    let mut roi = Roi::new_mesh(RoiId(25), "Mesh Cached".to_string(), mesh_data.clone());
+    let (mut roi, _) = Roi::new_mesh(RoiId(25), "Mesh Cached".to_string(), mesh_data.clone());
     roi.session_caches.mesh = Some(MeshCache {
         data: mesh_data,
         chunks: None,
@@ -836,7 +836,7 @@ fn test_finish_mesh_cache_rebuild_marks_mesh_cache_current_to_authoritative_gene
             vertex_indices: [0, 1, 2],
         }],
     };
-    let mut roi = Roi::new_mesh(RoiId(26), "Mesh Rebuild".to_string(), mesh_data.clone());
+    let (mut roi, _) = Roi::new_mesh(RoiId(26), "Mesh Rebuild".to_string(), mesh_data.clone());
     roi.session_caches.mesh = Some(MeshCache {
         data: mesh_data,
         chunks: None,
@@ -896,7 +896,7 @@ fn test_cache_freshness_follows_the_shape_and_only_contour_views_follow_the_form
 
 #[test]
 fn test_form_change_keeps_voxel_and_mesh_caches_current_but_not_contour_views() {
-    let mut roi = Roi::new_voxel_with_cache(
+    let (mut roi, _) = Roi::new_voxel_with_cache(
         RoiId(9),
         "Form".to_string(),
         VoxelGeometry::new([4, 4, 4], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap(),
@@ -926,7 +926,7 @@ fn test_form_change_keeps_voxel_and_mesh_caches_current_but_not_contour_views() 
 
 #[test]
 fn test_contour_view_install_rejects_a_result_from_another_form() {
-    let mut roi = Roi::new_voxel_with_cache(
+    let (mut roi, _) = Roi::new_voxel_with_cache(
         RoiId(10),
         "Views".to_string(),
         VoxelGeometry::new([4, 4, 4], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap(),

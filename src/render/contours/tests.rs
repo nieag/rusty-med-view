@@ -123,7 +123,7 @@ fn test_prepare_contour_render_data_emits_vertices_for_matching_slice() {
     .unwrap();
     let plane =
         orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry).unwrap();
-    let mut roi = Roi::new_contour(
+    let (mut roi, roi_meta) = Roi::new_contour(
         RoiId(1),
         "Contour".to_string(),
         ContourData {
@@ -160,7 +160,7 @@ fn test_prepare_contour_render_data_emits_vertices_for_matching_slice() {
         },
         gpu_resources: None,
     });
-    let roi_entity = world.spawn((roi, LayerSettings { opacity: 1.0 }, RoiTag));
+    let roi_entity = crate::app::roi::spawn_roi_layer(&mut world, (roi, roi_meta), 1.0);
     session.editor.active_roi = Some(roi_entity);
 
     let data = prepare_contour_render_data(&world, &session);
@@ -174,9 +174,10 @@ fn test_prepare_contour_render_data_emits_vertices_for_matching_slice() {
         .contour_data()
         .unwrap()
         .clone();
-    let mut second_roi = Roi::new_contour(RoiId(2), "Second contour".to_string(), second_contour);
-    second_roi.metadata.color = [0.1, 0.7, 0.2, 0.8];
-    world.spawn((second_roi, LayerSettings { opacity: 0.5 }, RoiTag));
+    let (second_roi, mut second_roi_meta) =
+        Roi::new_contour(RoiId(2), "Second contour".to_string(), second_contour);
+    second_roi_meta.color = [0.1, 0.7, 0.2, 0.8];
+    crate::app::roi::spawn_roi_layer(&mut world, (second_roi, second_roi_meta), 0.5);
     {
         let editor_state = &mut session.editor;
         editor_state.active_roi = None;
@@ -197,9 +198,8 @@ fn test_prepare_contour_render_data_emits_vertices_for_matching_slice() {
     assert_eq!(second_roi_vertex_count, 18);
 
     world
-        .get::<&mut Roi>(roi_entity)
+        .get::<&mut RoiMetadata>(roi_entity)
         .unwrap()
-        .metadata
         .is_visible = false;
     let hidden_data = prepare_contour_render_data(&world, &session);
     assert!(!hidden_data.vertices.is_empty());
@@ -241,7 +241,7 @@ fn test_prepare_contour_render_data_uses_roi_geometry_when_main_volume_missing()
     .unwrap();
     let plane =
         orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry).unwrap();
-    let mut roi = Roi::new_contour(
+    let (mut roi, roi_meta) = Roi::new_contour(
         RoiId(2),
         "Contour".to_string(),
         ContourData {
@@ -272,7 +272,7 @@ fn test_prepare_contour_render_data_uses_roi_geometry_when_main_volume_missing()
         },
         gpu_resources: None,
     });
-    let roi_entity = world.spawn((roi, LayerSettings { opacity: 1.0 }, RoiTag));
+    let roi_entity = crate::app::roi::spawn_roi_layer(&mut world, (roi, roi_meta), 1.0);
     session.editor.active_roi = Some(roi_entity);
 
     let data = prepare_contour_render_data(&world, &session);
@@ -327,7 +327,7 @@ fn test_voxel_primary_oblique_view_cache_emits_contour_vertices() {
             }
         }
     }
-    let mut roi = Roi::new_voxel_with_cache(
+    let (mut roi, roi_meta) = Roi::new_voxel_with_cache(
         RoiId(77),
         "Oblique cube".to_string(),
         geometry,
@@ -349,7 +349,7 @@ fn test_voxel_primary_oblique_view_cache_emits_contour_vertices() {
         roi.dirty_state.authoritative,
         CacheViewState::Current,
     );
-    let roi_entity = world.spawn((roi, LayerSettings { opacity: 0.5 }, RoiTag));
+    let roi_entity = crate::app::roi::spawn_roi_layer(&mut world, (roi, roi_meta), 0.5);
     session.editor.active_roi = Some(roi_entity);
 
     crate::app::roi_runtime::sync_roi_contour_view_caches_for_viewports(

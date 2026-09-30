@@ -116,8 +116,10 @@ pub(crate) fn apply_image_label_mpr_basic_preset(
         let editor = &mut session.editor;
         editor.active_roi = Some(active_roi);
     }
-    if let Ok(mut roi) = world.get::<&mut Roi>(active_roi) {
-        roi.metadata.is_visible = true;
+    if let Ok(mut metadata) = world.get::<&mut RoiMetadata>(active_roi) {
+        metadata.is_visible = true;
+    }
+    if let Ok(roi) = world.get::<&mut Roi>(active_roi) {
         if let Some(cache) = roi.voxel_cache() {
             if let Some(bounds) =
                 non_empty_voxel_bounds(&cache.data.raw_data, cache.data.geometry.dimensions)

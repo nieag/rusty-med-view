@@ -62,14 +62,14 @@ fn spawn_test_entities(
 }
 
 fn spawn_test_contour_roi(world: &mut World, family: OrthogonalFamily) -> hecs::Entity {
-    world.spawn((Roi::new_contour(
+    world.spawn(Roi::new_contour(
         crate::components::RoiId(100),
         "Contour".to_string(),
         ContourData {
             active_plane_family: family,
             slices: Vec::new(),
         },
-    ),))
+    ))
 }
 
 fn spawn_test_contour_roi_with_loop(world: &mut World, family: OrthogonalFamily) -> hecs::Entity {
@@ -81,7 +81,7 @@ fn spawn_test_contour_roi_with_loop(world: &mut World, family: OrthogonalFamily)
     )
     .unwrap();
     let plane = orthogonal_plane_from_volume_uv(family.into(), [0.4, 0.55, 0.2], geometry).unwrap();
-    let entity = world.spawn((Roi::new_contour_with_geometry(
+    let entity = world.spawn(Roi::new_contour_with_geometry(
         crate::components::RoiId(101),
         "ContourWithLoop".to_string(),
         VoxelGeometry::new(
@@ -114,7 +114,7 @@ fn spawn_test_contour_roi_with_loop(world: &mut World, family: OrthogonalFamily)
                 }],
             }],
         },
-    ),));
+    ));
     world.get::<&mut Roi>(entity).unwrap().session_caches.voxel = Some(VoxelCache {
         data: VoxelData {
             geometry,
@@ -487,7 +487,7 @@ fn test_nearest_point_hit_respects_threshold() {
 fn test_contour_selection_converts_a_voxel_roi_to_contours_of_the_viewport_family() {
     let mut world = World::new();
     let mut session = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
-    let voxel_roi = world.spawn((Roi::new_voxel_with_cache(
+    let voxel_roi = world.spawn(Roi::new_voxel_with_cache(
         crate::components::RoiId(1),
         "Voxel".to_string(),
         VoxelGeometry::new(
@@ -499,7 +499,7 @@ fn test_contour_selection_converts_a_voxel_roi_to_contours_of_the_viewport_famil
         .unwrap(),
         vec![0; 512],
         None,
-    ),));
+    ));
     {
         let editor = &mut session.editor;
         editor.active_roi = Some(voxel_roi);
@@ -887,7 +887,7 @@ fn test_delete_below_valid_size_removes_loop_and_clears_selection() {
     .unwrap();
     let plane =
         orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.4, 0.55, 0.2], geometry).unwrap();
-    let roi_entity = world.spawn((Roi::new_contour(
+    let roi_entity = world.spawn(Roi::new_contour(
         crate::components::RoiId(102),
         "TinyLoop".to_string(),
         ContourData {
@@ -910,7 +910,7 @@ fn test_delete_below_valid_size_removes_loop_and_clears_selection() {
                 }],
             }],
         },
-    ),));
+    ));
     {
         let editor = &mut session.editor;
         editor.active_roi = Some(roi_entity);

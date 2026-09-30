@@ -74,7 +74,7 @@ pub fn select_mesh_vertex(
     let roi = world
         .get::<&Roi>(roi_entity)
         .map_err(|_| MeshEditInteractionError::MissingActiveRoi)?;
-    if roi.metadata.is_locked {
+    if roi::is_roi_locked(world, roi_entity) {
         return Err(MeshEditInteractionError::ActiveRoiLocked);
     }
     let mesh = match &roi.body {
@@ -142,7 +142,7 @@ pub fn update_selected_mesh_deform_preview(
         let roi = world
             .get::<&Roi>(selection.roi_entity)
             .map_err(|_| MeshEditInteractionError::MissingActiveRoi)?;
-        if roi.metadata.is_locked {
+        if roi::is_roi_locked(world, selection.roi_entity) {
             return Err(MeshEditInteractionError::ActiveRoiLocked);
         }
         let mesh = roi

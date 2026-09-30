@@ -161,11 +161,11 @@ pub fn draw_sidebar(
             f32,
             Option<roi_runtime::VoxelRoiStats>,
         )> = Vec::new();
-        for (e, (roi, settings)) in world.query::<(&Roi, &LayerSettings)>().iter() {
+        for (e, (metadata, settings)) in world.query::<(&RoiMetadata, &LayerSettings)>().iter() {
             layers.push((
                 e,
-                roi.metadata.name.clone(),
-                roi.metadata.is_visible,
+                metadata.name.clone(),
+                metadata.is_visible,
                 settings.opacity,
                 roi_runtime::roi_voxel_stats(world, e),
             ));
@@ -276,14 +276,14 @@ pub fn draw_sidebar(
                         };
 
                         if allow_visibility {
-                            if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
-                                roi.metadata.is_visible = visible;
+                            if let Ok(mut metadata) = world.get::<&mut RoiMetadata>(entity) {
+                                metadata.is_visible = visible;
                             }
                             let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
                         } else {
                             visible = false;
-                            if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
-                                roi.metadata.is_visible = false;
+                            if let Ok(mut metadata) = world.get::<&mut RoiMetadata>(entity) {
+                                metadata.is_visible = false;
                             }
                             handlers::set_status_message(
                                 session,

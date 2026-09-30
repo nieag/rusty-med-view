@@ -8,7 +8,7 @@ use crate::convert::{orthogonal_plane_from_volume_uv, world_mm_to_voxel_index};
 use crate::model::OrthogonalFamily;
 
 fn spawn_test_roi(world: &mut World) -> hecs::Entity {
-    world.spawn((Roi::new_voxel_with_cache(
+    world.spawn(Roi::new_voxel_with_cache(
         RoiId(1),
         "Test".to_string(),
         VoxelGeometry::new(
@@ -20,13 +20,13 @@ fn spawn_test_roi(world: &mut World) -> hecs::Entity {
         .unwrap(),
         vec![1; 64],
         None,
-    ),))
+    ))
 }
 
 fn spawn_sparse_voxel_roi(world: &mut World) -> hecs::Entity {
     let mut raw = vec![0_u8; 64];
     raw[(2 * 4 + 1) * 4 + 1] = 1;
-    world.spawn((Roi::new_voxel_with_cache(
+    world.spawn(Roi::new_voxel_with_cache(
         RoiId(2),
         "Sparse".to_string(),
         VoxelGeometry::new(
@@ -38,7 +38,7 @@ fn spawn_sparse_voxel_roi(world: &mut World) -> hecs::Entity {
         .unwrap(),
         raw,
         None,
-    ),))
+    ))
 }
 
 fn spawn_main_volume(world: &mut World, spacing: [f32; 3], origin: [f32; 3]) {
@@ -99,7 +99,7 @@ fn spawn_test_contour_roi(
         Vec::new()
     };
 
-    let entity = world.spawn((Roi::new_contour_with_geometry(
+    let entity = world.spawn(Roi::new_contour_with_geometry(
         RoiId(100),
         "Contour".to_string(),
         geometry,
@@ -107,7 +107,7 @@ fn spawn_test_contour_roi(
             active_plane_family: family,
             slices,
         },
-    ),));
+    ));
     let mut roi = world.get::<&mut Roi>(entity).unwrap();
     roi.session_caches.voxel = Some(VoxelCache {
         data: VoxelData {
@@ -265,7 +265,7 @@ fn test_begin_and_complete_job_update_runtime_status() {
 fn test_voxel_roi_stats_use_nonzero_voxels_and_volume_spacing() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [0.5, 0.5, 2.0], [0.0, 0.0, 0.0]);
-    let entity = world.spawn((Roi::new_voxel_with_cache(
+    let entity = world.spawn(Roi::new_voxel_with_cache(
         RoiId(2),
         "Mask".to_string(),
         VoxelGeometry::new(
@@ -277,7 +277,7 @@ fn test_voxel_roi_stats_use_nonzero_voxels_and_volume_spacing() {
         .unwrap(),
         vec![0, 1, 2, 0, 0, 3, 4, 0],
         None,
-    ),));
+    ));
 
     let stats = roi_voxel_stats(&world, entity).unwrap();
 
@@ -470,16 +470,16 @@ fn test_visible_voxel_overlay_count_ignores_non_renderable_rois() {
     let contour = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
 
     {
-        let mut roi = world.get::<&mut Roi>(first).unwrap();
-        roi.metadata.is_visible = true;
+        let mut metadata = world.get::<&mut RoiMetadata>(first).unwrap();
+        metadata.is_visible = true;
     }
     {
-        let mut roi = world.get::<&mut Roi>(second).unwrap();
-        roi.metadata.is_visible = true;
+        let mut metadata = world.get::<&mut RoiMetadata>(second).unwrap();
+        metadata.is_visible = true;
     }
     {
-        let mut roi = world.get::<&mut Roi>(contour).unwrap();
-        roi.metadata.is_visible = true;
+        let mut metadata = world.get::<&mut RoiMetadata>(contour).unwrap();
+        metadata.is_visible = true;
     }
 
     assert_eq!(visible_voxel_overlay_count(&world), 0);
@@ -600,8 +600,8 @@ fn test_convert_to_mesh_preserves_roi_and_voxel_cache() {
         roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
     }
     let (roi_id, name) = {
-        let roi = world.get::<&Roi>(entity).unwrap();
-        (roi.metadata.roi_id, roi.metadata.name.clone())
+        let metadata = world.get::<&RoiMetadata>(entity).unwrap();
+        (metadata.roi_id, metadata.name.clone())
     };
     let roi_count_before = world.query::<&Roi>().iter().count();
 
@@ -609,8 +609,9 @@ fn test_convert_to_mesh_preserves_roi_and_voxel_cache() {
 
     assert_eq!(world.query::<&Roi>().iter().count(), roi_count_before);
     let roi = world.get::<&Roi>(entity).unwrap();
-    assert_eq!(roi.metadata.roi_id, roi_id);
-    assert_eq!(roi.metadata.name, name);
+    let metadata = world.get::<&RoiMetadata>(entity).unwrap();
+    assert_eq!(metadata.roi_id, roi_id);
+    assert_eq!(metadata.name, name);
     assert_eq!(roi.primary_representation(), PrimaryRepresentation::Mesh);
     assert_eq!(roi.mesh_data(), Some(&mesh));
     assert_eq!(roi.dirty_state.authoritative.shape, 2);
@@ -644,14 +645,14 @@ fn test_convert_to_mesh_rejects_a_stale_mesh_cache() {
 #[test]
 fn test_replace_mesh_data_leaves_voxel_cache_stale_until_explicitly_requested() {
     let mut world = World::new();
-    let entity = world.spawn((Roi::new_mesh(
+    let entity = world.spawn(Roi::new_mesh(
         RoiId(300),
         "Mesh".to_string(),
         MeshData {
             vertices: Vec::new(),
             faces: Vec::new(),
         },
-    ),));
+    ));
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         roi.dirty_state.authoritative_dirty = false;
@@ -690,11 +691,11 @@ fn test_replace_mesh_data_leaves_voxel_cache_stale_until_explicitly_requested() 
 #[test]
 fn test_mesh_rebuild_revalidates_after_authority_generation_changes() {
     let mut world = World::new();
-    let entity = world.spawn((Roi::new_mesh(
+    let entity = world.spawn(Roi::new_mesh(
         RoiId(301),
         "Mesh".to_string(),
         closed_tetra_mesh_data(),
-    ),));
+    ));
     crate::app::roi::request_mesh_voxel_cache_rebuild(&mut world, entity).unwrap();
     assert_eq!(
         world.get::<&Roi>(entity).unwrap().validated_mesh_generation,
@@ -729,11 +730,11 @@ fn test_replace_mesh_data_rejects_non_mesh_roi() {
 fn test_translate_mesh_data_changes_authority_without_eager_voxel_rebuild() {
     let mut world = World::new();
     let original = closed_tetra_mesh_data();
-    let entity = world.spawn((Roi::new_mesh(
+    let entity = world.spawn(Roi::new_mesh(
         RoiId(302),
         "Translated".to_string(),
         original.clone(),
-    ),));
+    ));
 
     translate_mesh_data(&mut world, entity, [1.0, -2.0, 0.5]).unwrap();
 
@@ -752,11 +753,11 @@ fn test_mesh_edit_preview_updates_direct_contour_view_before_commit() {
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
     let mut editor = EditorState::default();
     let original = closed_tetra_mesh_data();
-    let entity = world.spawn((Roi::new_mesh(
+    let entity = world.spawn(Roi::new_mesh(
         RoiId(303),
         "Preview".to_string(),
         original.clone(),
-    ),));
+    ));
     editor.active_roi = Some(entity);
     let geometry = main_volume_geometry(&world).unwrap();
     let plane =
@@ -829,11 +830,11 @@ fn test_cancel_mesh_edit_preview_preserves_authority() {
     let mut world = World::new();
     let mut editor = EditorState::default();
     let original = closed_tetra_mesh_data();
-    let entity = world.spawn((Roi::new_mesh(
+    let entity = world.spawn(Roi::new_mesh(
         RoiId(304),
         "Cancel".to_string(),
         original.clone(),
-    ),));
+    ));
     editor.active_roi = Some(entity);
     let geometry = VoxelGeometry::new([4; 3], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
     let plane =
@@ -1091,7 +1092,7 @@ fn test_visible_inactive_mesh_roi_keeps_direct_contours_in_multiple_viewports() 
         cursor_uv,
     };
     let mesh = closed_tetra_mesh_data();
-    let mesh_roi = world.spawn((Roi::new_mesh(RoiId(305), "Mesh".to_string(), mesh.clone()),));
+    let mesh_roi = world.spawn(Roi::new_mesh(RoiId(305), "Mesh".to_string(), mesh.clone()));
     let viewports = [
         (ViewMode::Axial, ViewportState::default()),
         (
@@ -1160,13 +1161,13 @@ fn test_rotated_anisotropic_roi_keeps_direct_contours_through_mesh_resample() {
             }
         }
     }
-    let entity = world.spawn((Roi::new_voxel_with_cache(
+    let entity = world.spawn(Roi::new_voxel_with_cache(
         RoiId(306),
         "Rotated".to_string(),
         geometry,
         raw_data,
         None,
-    ),));
+    ));
     let editor = EditorState {
         active_roi: Some(entity),
         ..EditorState::default()
@@ -1300,9 +1301,10 @@ fn test_create_contour_roi_from_voxel_roi_returns_contour_primary_roi() {
         .expect("extraction should create contour roi");
 
     let roi = world.get::<&Roi>(created).unwrap();
+    let metadata = world.get::<&RoiMetadata>(created).unwrap();
     assert_eq!(roi.primary_representation(), PrimaryRepresentation::Contour);
     assert!(matches!(roi.body, RoiBody::Contour(_)));
-    assert_eq!(roi.metadata.name, "Test (Axial Contour)");
+    assert_eq!(metadata.name, "Test (Axial Contour)");
 }
 
 #[test]
@@ -1347,11 +1349,11 @@ fn test_extracted_contour_roi_seeds_current_cpu_voxel_cache() {
 #[test]
 fn test_mesh_authoritative_roi_reports_current_mesh_representation() {
     let mut world = World::new();
-    let entity = world.spawn((Roi::new_mesh(
+    let entity = world.spawn(Roi::new_mesh(
         RoiId(1),
         "Mesh".to_string(),
         simple_mesh_data(),
-    ),));
+    ));
 
     let status = request_mesh_cache_state(&world, entity);
 
@@ -1464,7 +1466,7 @@ fn test_voxel_data_for_display_surface_extraction_returns_authoritative_when_geo
 fn test_voxel_data_for_display_surface_extraction_accepts_mismatched_geometry() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let source = world.spawn((Roi::new_voxel_with_cache(
+    let source = world.spawn(Roi::new_voxel_with_cache(
         RoiId(42),
         "Mismatched".to_string(),
         VoxelGeometry::new(
@@ -1480,7 +1482,7 @@ fn test_voxel_data_for_display_surface_extraction_accepts_mismatched_geometry() 
             raw
         },
         None,
-    ),));
+    ));
 
     let result = voxel_data_for_display_surface_extraction(&world, source);
     assert!(result.is_ok());
@@ -1490,7 +1492,7 @@ fn test_voxel_data_for_display_surface_extraction_accepts_mismatched_geometry() 
 fn test_create_mesh_roi_from_voxel_roi_accepts_mismatched_geometry() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let source = world.spawn((Roi::new_voxel_with_cache(
+    let source = world.spawn(Roi::new_voxel_with_cache(
         RoiId(43),
         "Mismatched".to_string(),
         VoxelGeometry::new(
@@ -1506,7 +1508,7 @@ fn test_create_mesh_roi_from_voxel_roi_accepts_mismatched_geometry() {
             raw
         },
         None,
-    ),));
+    ));
 
     let result = create_mesh_roi_from_voxel_roi(&mut world, source);
     assert!(result.is_ok());
@@ -1516,7 +1518,7 @@ fn test_create_mesh_roi_from_voxel_roi_accepts_mismatched_geometry() {
 fn test_create_mesh_roi_from_voxel_roi_spawns_mesh_when_geometry_is_mismatched() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let source = world.spawn((Roi::new_voxel_with_cache(
+    let source = world.spawn(Roi::new_voxel_with_cache(
         RoiId(44),
         "Mismatched".to_string(),
         VoxelGeometry::new(
@@ -1532,7 +1534,7 @@ fn test_create_mesh_roi_from_voxel_roi_spawns_mesh_when_geometry_is_mismatched()
             raw
         },
         None,
-    ),));
+    ));
 
     let roi_count_before = world.query::<&Roi>().iter().count();
     let result = create_mesh_roi_from_voxel_roi(&mut world, source);
@@ -2644,13 +2646,13 @@ fn test_liver_explicit_voxel_rebuild_frame_timing() {
     .unwrap()
     .merged_mesh();
     let mut world = World::new();
-    let entity = world.spawn((Roi::new_voxel_with_cache(
+    let entity = world.spawn(Roi::new_voxel_with_cache(
         RoiId(900),
         "Liver timing".to_string(),
         geometry,
         voxel_data.raw_data,
         None,
-    ),));
+    ));
     {
         let mut roi = world.get::<&mut Roi>(entity).unwrap();
         roi.session_caches.mesh = Some(MeshCache {
@@ -2796,20 +2798,21 @@ fn test_multi_label_import_creates_one_roi_per_label_with_its_own_mask() {
     assert_eq!(entities.len(), 2);
     let names: Vec<String> = entities
         .iter()
-        .map(|entity| world.get::<&Roi>(*entity).unwrap().metadata.name.clone())
+        .map(|entity| world.get::<&RoiMetadata>(*entity).unwrap().name.clone())
         .collect();
     assert_eq!(names, vec!["liver.nii [label 1]", "liver.nii [label 2]"]);
     let ids: Vec<u64> = entities
         .iter()
-        .map(|entity| world.get::<&Roi>(*entity).unwrap().metadata.roi_id.0)
+        .map(|entity| world.get::<&RoiMetadata>(*entity).unwrap().roi_id.0)
         .collect();
     assert_eq!(ids, vec![1, 2]);
 
     for (entity, (label, expected)) in entities.iter().zip([(1_u8, vec![5, 6]), (2, vec![40])]) {
         let roi = world.get::<&Roi>(*entity).unwrap();
+        let metadata = world.get::<&RoiMetadata>(*entity).unwrap();
         assert_eq!(roi.primary_representation(), PrimaryRepresentation::Voxel);
         assert!(roi.is_cache_current(RoiCacheKind::Voxel));
-        assert_eq!(roi.metadata.color, label_color(label));
+        assert_eq!(metadata.color, label_color(label));
         let RoiBody::Voxel(VoxelBody { data: voxel }) = &roi.body else {
             panic!("voxel authority");
         };
@@ -2840,9 +2843,9 @@ fn test_single_label_import_keeps_the_file_name_and_id() {
     let entities = spawn_labels(&mut world, "one.nii", &data);
 
     assert_eq!(entities.len(), 1);
-    let roi = world.get::<&Roi>(entities[0]).unwrap();
-    assert_eq!(roi.metadata.name, "one.nii");
-    assert_eq!(roi.metadata.color, label_color(5));
+    let metadata = world.get::<&RoiMetadata>(entities[0]).unwrap();
+    assert_eq!(metadata.name, "one.nii");
+    assert_eq!(metadata.color, label_color(5));
 }
 
 #[test]
@@ -2853,9 +2856,10 @@ fn test_labelmap_without_labels_imports_as_one_empty_roi() {
 
     assert_eq!(entities.len(), 1);
     let roi = world.get::<&Roi>(entities[0]).unwrap();
-    assert_eq!(roi.metadata.name, "empty.nii");
+    let metadata = world.get::<&RoiMetadata>(entities[0]).unwrap();
+    assert_eq!(metadata.name, "empty.nii");
     assert_eq!(
-        roi.metadata.color,
+        metadata.color,
         [1.0, 0.2, 0.2, 1.0],
         "keeps the default colour"
     );
@@ -2875,7 +2879,7 @@ fn test_label_import_hides_rois_beyond_the_overlay_cap() {
 
     let visible: Vec<bool> = entities
         .iter()
-        .map(|entity| world.get::<&Roi>(*entity).unwrap().metadata.is_visible)
+        .map(|entity| world.get::<&RoiMetadata>(*entity).unwrap().is_visible)
         .collect();
     let expected: Vec<bool> = (0..10)
         .map(|index| index < MAX_SIMULTANEOUS_ROI_OVERLAYS)
@@ -3192,7 +3196,7 @@ fn test_ensure_editable_refuses_locked_rois() {
     let mut world = World::new();
     let entity = spawn_sparse_voxel_roi(&mut world);
 
-    world.get::<&mut Roi>(entity).unwrap().metadata.is_locked = true;
+    world.get::<&mut RoiMetadata>(entity).unwrap().is_locked = true;
     assert_eq!(
         ensure_editable(
             &mut world,
@@ -3351,13 +3355,13 @@ fn test_shape_survives_conversions_and_undo_across_every_representation() {
     let (geometry, original) = lifecycle_blob();
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0; 3], [0.0; 3]);
-    let entity = world.spawn((Roi::new_voxel_with_cache(
+    let entity = world.spawn(Roi::new_voxel_with_cache(
         RoiId(1),
         "Blob".to_string(),
         geometry,
         original.clone(),
         None,
-    ),));
+    ));
     let mut editor = spawn_editor_for(entity);
     settle(&mut world);
 
@@ -3439,13 +3443,13 @@ fn test_edit_updates_every_derived_view_and_undo_restores_the_shape() {
     let (geometry, original) = lifecycle_blob();
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0; 3], [0.0; 3]);
-    let entity = world.spawn((Roi::new_voxel_with_cache(
+    let entity = world.spawn(Roi::new_voxel_with_cache(
         RoiId(1),
         "Blob".to_string(),
         geometry,
         original.clone(),
         None,
-    ),));
+    ));
     let mut editor = spawn_editor_for(entity);
     settle(&mut world);
     convert_and_settle(
@@ -3584,13 +3588,13 @@ fn test_mesh_edit_then_contour_conversion_keeps_the_edited_shape_and_undo_restor
     let (geometry, original) = lifecycle_blob();
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0; 3], [0.0; 3]);
-    let entity = world.spawn((Roi::new_voxel_with_cache(
+    let entity = world.spawn(Roi::new_voxel_with_cache(
         RoiId(1),
         "Blob".to_string(),
         geometry,
         original.clone(),
         None,
-    ),));
+    ));
     let mut editor = spawn_editor_for(entity);
     settle(&mut world);
     convert_and_settle(&mut world, entity, EditTarget::Mesh);

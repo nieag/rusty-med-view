@@ -7,6 +7,7 @@ use crate::app::roi::authority::{
     dirty_region_for_slice_swap, replace_contour_data, replace_contour_data_for_slice,
     replace_mesh_data, ContourMutationError, MeshMutationError,
 };
+use crate::app::roi::model::is_roi_locked;
 use crate::convert::PlaneDefinition;
 use hecs::World;
 
@@ -194,12 +195,12 @@ fn restore_roi_edit_snapshot(
     snapshot: RoiEditSnapshot,
     dirty_region: RoiDirtyRegion,
 ) -> Result<(), RoiEditHistoryError> {
+    if is_roi_locked(world, roi_entity) {
+        return Err(RoiEditHistoryError::Locked);
+    }
     let mut roi = world
         .get::<&mut Roi>(roi_entity)
         .map_err(|_| RoiEditHistoryError::MissingRoi)?;
-    if roi.metadata.is_locked {
-        return Err(RoiEditHistoryError::Locked);
-    }
     roi.job_state = RoiJobState::default();
     roi.end_preview();
     // A snapshot of a different authority is an authority change being reversed: the body is

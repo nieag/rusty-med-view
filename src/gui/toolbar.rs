@@ -78,7 +78,7 @@ fn set_editor_tool(
     let roi = world
         .get::<&Roi>(active_roi)
         .map_err(|_| "Active ROI is missing from the scene.".to_string())?;
-    if roi.metadata.is_locked {
+    if crate::app::roi::is_roi_locked(world, active_roi) {
         return Err("Active ROI is locked.".to_string());
     }
     drop(roi);

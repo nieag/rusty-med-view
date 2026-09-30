@@ -22,6 +22,46 @@ pub struct RoiMetadata {
     pub color: [f32; 4],
 }
 
+/// Spawns a ROI with the components every listed ROI carries.
+pub fn spawn_roi_layer(
+    world: &mut hecs::World,
+    (roi, metadata): (crate::app::components::Roi, RoiMetadata),
+    opacity: f32,
+) -> hecs::Entity {
+    world.spawn((
+        roi,
+        metadata,
+        crate::app::components::LayerSettings { opacity },
+        crate::app::components::RoiTag,
+    ))
+}
+
+/// Whether a ROI is shown; a ROI without metadata is not.
+pub fn is_roi_visible(world: &hecs::World, entity: hecs::Entity) -> bool {
+    world
+        .get::<&RoiMetadata>(entity)
+        .is_ok_and(|metadata| metadata.is_visible)
+}
+
+/// Whether a ROI is locked against edits.
+pub fn is_roi_locked(world: &hecs::World, entity: hecs::Entity) -> bool {
+    world
+        .get::<&RoiMetadata>(entity)
+        .is_ok_and(|metadata| metadata.is_locked)
+}
+
+impl RoiMetadata {
+    pub fn new(roi_id: RoiId, name: String) -> Self {
+        Self {
+            roi_id,
+            name,
+            is_visible: true,
+            is_locked: false,
+            color: [1.0, 0.2, 0.2, 1.0],
+        }
+    }
+}
+
 /// Preview of a contour point drag that has not been committed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContourMovePreview {

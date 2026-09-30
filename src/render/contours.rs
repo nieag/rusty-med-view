@@ -502,9 +502,7 @@ pub fn prepare_contour_render_data(world: &World, session: &Session) -> ContourR
         .collect();
     if let Some(active_roi) = active_roi {
         let needs_active_preview = !contour_entities.contains(&active_roi)
-            && world
-                .get::<&Roi>(active_roi)
-                .is_ok_and(|roi| roi.metadata.is_visible)
+            && crate::app::roi::is_roi_visible(world, active_roi)
             && (contour_draft.is_some()
                 || world
                     .get::<&Roi>(active_roi)
@@ -544,7 +542,9 @@ pub fn prepare_contour_render_data(world: &World, session: &Session) -> ContourR
                 continue;
             };
             // Outlines are opaque: layer opacity controls the voxel fill, not the contour.
-            let roi_color = roi.metadata.color;
+            let roi_color = world
+                .get::<&RoiMetadata>(*roi_entity)
+                .map_or([1.0; 4], |metadata| metadata.color);
             append_roi_contour_vertices(
                 &mut vertices,
                 *roi_entity,

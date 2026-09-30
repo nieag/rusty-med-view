@@ -270,7 +270,9 @@ pub fn prepare_mesh_render_data(
             continue;
         };
         let color = {
-            let color = roi.metadata.color;
+            let color = world
+                .get::<&crate::components::RoiMetadata>(mesh_view.entity)
+                .map_or([1.0; 4], |metadata| metadata.color);
             [color[0], color[1], color[2], color[3] * MESH_ALPHA_SCALE]
         };
         let mut parts: Vec<(MeshRenderPartKey, &MeshData)> = Vec::new();
@@ -327,7 +329,7 @@ pub fn prepare_mesh_render_data(
     if active_tool == crate::components::EditorTool::MeshDeform {
         if let Some(selection) = mesh_selection {
             if let Ok(roi) = world.get::<&Roi>(selection.roi_entity) {
-                if roi.metadata.is_visible {
+                if crate::app::roi::is_roi_visible(world, selection.roi_entity) {
                     let mesh = roi
                         .mesh_edit_preview()
                         .map(|preview| &preview.mesh_data)
