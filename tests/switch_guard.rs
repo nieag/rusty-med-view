@@ -49,6 +49,7 @@ const EXTRACT_BUDGET_MS: f64 = 500.0;
 const RASTER_BUDGET_MS: f64 = 1_500.0;
 const DEFORM_BASE_BUDGET_MS: f64 = 1_000.0;
 const DEFORM_UPDATE_BUDGET_MS: f64 = 1_000.0;
+const DIRTY_MESH_BUDGET_MS: f64 = 150.0;
 
 fn liver_label() -> VoxelData {
     let bytes =
@@ -289,6 +290,11 @@ fn test_liver_dirty_mesh_rebuild_matches_clean_full_rebuild() {
     let chunk_duration = chunk_started.elapsed();
     let rebuilt = work.into_result().unwrap();
     println!("liver dirty mesh rebuild: setup={setup_duration:?}, chunks={chunk_duration:?}");
+    // A local edit rebuilds a few chunks (about 7 ms idle; the full rebuild is about 800 ms).
+    assert!(
+        (setup_duration + chunk_duration).as_secs_f64() * 1000.0 < DIRTY_MESH_BUDGET_MS,
+        "a one-voxel edit must not rebuild the whole mesh"
+    );
     let clean = full_rebuild(&voxels);
     assert_eq!(
         canonical_triangle_bits(&rebuilt.merged_mesh()),

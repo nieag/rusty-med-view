@@ -46,8 +46,22 @@ pub enum SmoothMeshExtractionError {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SmoothMeshField {
+    /// Padded-grid index of this field's first sample; zero for a whole-volume field.
+    origin: [u32; 3],
+    /// Dimensions of the sampled block (the padded volume's for a whole-volume field).
     padded_dimensions: [u32; 3],
     values: Vec<f32>,
+}
+
+impl SmoothMeshField {
+    /// A field with no samples, for a rebuild that has nothing to extract.
+    pub fn empty() -> Self {
+        Self {
+            origin: [0; 3],
+            padded_dimensions: [0; 3],
+            values: Vec::new(),
+        }
+    }
 }
 
 pub fn extract_smooth_mesh_from_voxel_data(
@@ -87,8 +101,80 @@ pub fn build_smooth_mesh_field(
     let values = signed_distance_from_voxel_data(&padded)
         .map_err(SmoothMeshExtractionError::SignedDistance)?;
     Ok(SmoothMeshField {
+        origin: [0; 3],
         padded_dimensions: padded.geometry.dimensions,
         values,
+    })
+}
+
+/// The field of just the block of the padded grid from `min_inclusive` to `max_inclusive`
+/// (padded indices, where the volume occupies `1..=dimension` and everything else is empty).
+///
+/// Samples whose nearest opposite voxel lies inside the block equal the whole-volume field
+/// exactly, which covers every sample a marching-cubes cell that crosses the surface reads, as
+/// long as the block extends past the cells wanted by the largest surface-crossing distance.
+pub fn build_smooth_mesh_field_block(
+    voxel_data: &VoxelData,
+    min_inclusive: [u32; 3],
+    max_inclusive: [u32; 3],
+) -> Result<SmoothMeshField, SmoothMeshExtractionError> {
+    let dimensions = voxel_data.geometry.dimensions;
+    let expected = voxel_count(dimensions);
+    if voxel_data.raw_data.len() != expected {
+        return Err(SmoothMeshExtractionError::InvalidRawDataLength {
+            expected,
+            actual: voxel_data.raw_data.len(),
+        });
+    }
+    let block_dimensions: [u32; 3] =
+        std::array::from_fn(|axis| max_inclusive[axis] - min_inclusive[axis] + 1);
+    let mut raw_data = vec![0; voxel_count(block_dimensions)];
+    for z in 0..block_dimensions[2] {
+        for y in 0..block_dimensions[1] {
+            for x in 0..block_dimensions[0] {
+                let padded = [
+                    min_inclusive[0] + x,
+                    min_inclusive[1] + y,
+                    min_inclusive[2] + z,
+                ];
+                let inside_volume =
+                    (0..3).all(|axis| padded[axis] >= 1 && padded[axis] <= dimensions[axis]);
+                if inside_volume {
+                    raw_data[linear_index([x, y, z], block_dimensions)] = voxel_data.raw_data
+                        [linear_index(padded.map(|value| value - 1), dimensions)];
+                }
+            }
+        }
+    }
+    let mut geometry = voxel_data.geometry;
+    geometry.dimensions = block_dimensions;
+    let values = signed_distance_from_voxel_data(&VoxelData { geometry, raw_data })
+        .map_err(SmoothMeshExtractionError::SignedDistance)?;
+    Ok(SmoothMeshField {
+        origin: min_inclusive,
+        padded_dimensions: block_dimensions,
+        values,
+    })
+}
+
+/// The range of cells (padded indices) a chunk covering voxels `min..max` owns.
+pub fn smooth_mesh_cell_ranges(
+    dimensions: [u32; 3],
+    min_inclusive: [u32; 3],
+    max_exclusive: [u32; 3],
+) -> [std::ops::Range<u32>; 3] {
+    std::array::from_fn(|axis| {
+        let start = if min_inclusive[axis] == 0 {
+            0
+        } else {
+            min_inclusive[axis] + 1
+        };
+        let end = if max_exclusive[axis] >= dimensions[axis] {
+            dimensions[axis] + 1
+        } else {
+            max_exclusive[axis] + 1
+        };
+        start..end
     })
 }
 
@@ -117,30 +203,11 @@ pub fn extract_smooth_mesh_chunk_from_field(
         faces: Vec::new(),
     };
     let mut edge_vertices = HashMap::new();
-    let cell_ranges: [std::ops::Range<u32>; 3] = std::array::from_fn(|axis| {
-        let start = if min_inclusive[axis] == 0 {
-            0
-        } else {
-            min_inclusive[axis] + 1
-        };
-        let end = if max_exclusive[axis] >= dimensions[axis] {
-            dimensions[axis] + 1
-        } else {
-            max_exclusive[axis] + 1
-        };
-        start..end
-    });
+    let cell_ranges = smooth_mesh_cell_ranges(dimensions, min_inclusive, max_exclusive);
     for z in cell_ranges[2].clone() {
         for y in cell_ranges[1].clone() {
             for x in cell_ranges[0].clone() {
-                append_cell(
-                    &mut mesh,
-                    &mut edge_vertices,
-                    [x, y, z],
-                    field.padded_dimensions,
-                    &field.values,
-                    voxel_data,
-                );
+                append_cell(&mut mesh, &mut edge_vertices, [x, y, z], field, voxel_data);
             }
         }
     }
@@ -168,12 +235,14 @@ fn append_cell(
     mesh: &mut MeshData,
     edge_vertices: &mut HashMap<EdgeKey, u32>,
     cell: [u32; 3],
-    dimensions: [u32; 3],
-    field: &[f32],
+    field: &SmoothMeshField,
     original: &VoxelData,
 ) {
     let corner_indices = CORNERS.map(|offset| add(cell, offset));
-    let values = corner_indices.map(|index| field[linear_index(index, dimensions)]);
+    let values = corner_indices.map(|index| {
+        let local = std::array::from_fn(|axis| index[axis] - field.origin[axis]);
+        field.values[linear_index(local, field.padded_dimensions)]
+    });
     let mut case_index = 0usize;
     for (index, value) in values.iter().enumerate() {
         if *value <= 0.0 {

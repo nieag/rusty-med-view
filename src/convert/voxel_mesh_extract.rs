@@ -1,6 +1,7 @@
 use crate::convert::{
-    build_smooth_mesh_field, extract_smooth_mesh_chunk_from_field,
-    extract_smooth_mesh_from_voxel_data, SmoothMeshExtractionError, SmoothMeshField,
+    build_smooth_mesh_field, build_smooth_mesh_field_block, extract_smooth_mesh_chunk_from_field,
+    extract_smooth_mesh_from_voxel_data, smooth_mesh_cell_ranges, SmoothMeshExtractionError,
+    SmoothMeshField,
 };
 use crate::model::{MeshData, MeshFace, VoxelData};
 use std::{collections::HashMap, sync::Arc};
@@ -64,16 +65,99 @@ impl IncrementalChunkedMeshRebuild {
         })
     }
 
+    /// Rebuilds only the chunks a change inside `min_inclusive..max_exclusive` can alter and keeps
+    /// the others from `chunked`. The result is identical to a clean full rebuild.
+    ///
+    /// A cell that crosses the surface reads field values of at most the largest voxel spacing
+    /// (they are distances between adjacent voxels of opposite label), and such a value changes
+    /// only if a voxel within that distance changed. So the affected cells are the dirty box plus
+    /// that margin, and the field is computed only over those chunks plus the same margin again,
+    /// which is enough for every value that matters to equal the whole-volume value.
     pub fn begin_for_voxel_aabb(
         chunked: ChunkedMeshData,
         voxel_data: &VoxelData,
-        _min_inclusive: [u32; 3],
-        _max_exclusive: [u32; 3],
+        min_inclusive: [u32; 3],
+        max_exclusive: [u32; 3],
     ) -> Result<Self, VoxelMeshExtractionError> {
-        // The Euclidean SDF is global: a single changed seed can alter edge
-        // interpolation outside a fixed voxel halo. Rebuild all chunks until
-        // old/new field differences can identify the exact affected chunks.
-        Self::begin_full(voxel_data, chunked.chunk_size)
+        validate_voxel_data(voxel_data)?;
+        let dimensions = voxel_data.geometry.dimensions;
+        let chunk_size = chunked.chunk_size;
+        let empty_box = (0..3).any(|axis| max_exclusive[axis] <= min_inclusive[axis]);
+        if chunk_size == 0 || chunked.voxel_dimensions != dimensions || empty_box {
+            return Self::begin_full(voxel_data, chunk_size);
+        }
+
+        let spacing = voxel_data.geometry.spacing();
+        let largest = spacing.iter().copied().fold(0.0_f32, f32::max);
+        let smallest = spacing.iter().copied().fold(f32::INFINITY, f32::min);
+        if !(largest.is_finite() && smallest.is_finite() && smallest > 0.0) {
+            return Self::begin_full(voxel_data, chunk_size);
+        }
+        // Voxels within the largest spacing of the box, plus one for the cell corner.
+        let margin = (largest / smallest).ceil() as u32 + 1;
+
+        // Cells (padded indices) whose field values can change.
+        let dirty_cells: [std::ops::Range<u32>; 3] = std::array::from_fn(|axis| {
+            min_inclusive[axis].saturating_sub(margin)
+                ..(max_exclusive[axis] + margin + 1).min(dimensions[axis] + 1)
+        });
+        let counts = dimensions.map(|dimension| dimension.div_ceil(chunk_size));
+        let mut pending_keys = Vec::new();
+        let mut cells_min = [u32::MAX; 3];
+        let mut cells_max = [0u32; 3];
+        for z in 0..counts[2] {
+            for y in 0..counts[1] {
+                for x in 0..counts[0] {
+                    let key = MeshChunkKey { index: [x, y, z] };
+                    let min = key.index.map(|index| index.saturating_mul(chunk_size));
+                    let max = std::array::from_fn(|axis| {
+                        min[axis].saturating_add(chunk_size).min(dimensions[axis])
+                    });
+                    let cells = smooth_mesh_cell_ranges(dimensions, min, max);
+                    let touches = (0..3).all(|axis| {
+                        cells[axis].start < dirty_cells[axis].end
+                            && dirty_cells[axis].start < cells[axis].end
+                    });
+                    if touches {
+                        pending_keys.push(key);
+                        for axis in 0..3 {
+                            cells_min[axis] = cells_min[axis].min(cells[axis].start);
+                            cells_max[axis] = cells_max[axis].max(cells[axis].end);
+                        }
+                    }
+                }
+            }
+        }
+        if pending_keys.is_empty() {
+            return Ok(Self {
+                result: chunked,
+                smooth_field: SmoothMeshField::empty(),
+                pending_keys,
+                next_key: 0,
+            });
+        }
+
+        // Corners of the wanted cells are padded indices `start..=end`; add the margin around.
+        let block_min = std::array::from_fn(|axis| cells_min[axis].saturating_sub(margin));
+        let block_max =
+            std::array::from_fn(|axis| (cells_max[axis] + margin).min(dimensions[axis] + 1));
+        let smooth_field = build_smooth_mesh_field_block(voxel_data, block_min, block_max)
+            .map_err(VoxelMeshExtractionError::SmoothMesh)?;
+        let kept = chunked
+            .chunks
+            .into_iter()
+            .filter(|chunk| !pending_keys.contains(&chunk.key))
+            .collect();
+        Ok(Self {
+            result: ChunkedMeshData {
+                chunk_size,
+                voxel_dimensions: dimensions,
+                chunks: kept,
+            },
+            smooth_field,
+            pending_keys,
+            next_key: 0,
+        })
     }
 
     pub fn step(&mut self, voxel_data: &VoxelData) -> Result<bool, VoxelMeshExtractionError> {
