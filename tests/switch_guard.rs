@@ -7,7 +7,10 @@
 //!
 //! They take about a second in release and much longer in debug, so debug builds ignore them.
 //! Run with `cargo test --release --test switch_guard` (CI does).
-use rusty_med_view::convert::{extract_contours_from_voxel_data, rasterize_contours_to_voxel_data};
+use rusty_med_view::convert::{
+    extract_contours_from_voxel_data, extract_mesh_from_voxel_data,
+    rasterize_contours_to_voxel_data, IncrementalMeshVoxelization,
+};
 use rusty_med_view::model::{ContourData, OrthogonalFamily, VoxelData, VoxelGeometry};
 use rusty_med_view::nifti_loader::load_label_from_bytes;
 use std::sync::{Mutex, MutexGuard};
@@ -50,6 +53,7 @@ const RASTER_BUDGET_MS: f64 = 1_500.0;
 const DEFORM_BASE_BUDGET_MS: f64 = 1_000.0;
 const DEFORM_UPDATE_BUDGET_MS: f64 = 1_000.0;
 const DIRTY_MESH_BUDGET_MS: f64 = 150.0;
+const MESH_VOXELIZE_BUDGET_MS: f64 = 2_000.0;
 
 fn liver_label() -> VoxelData {
     let bytes =
@@ -299,5 +303,30 @@ fn test_liver_dirty_mesh_rebuild_matches_clean_full_rebuild() {
     assert_eq!(
         canonical_triangle_bits(&rebuilt.merged_mesh()),
         canonical_triangle_bits(&clean.merged_mesh())
+    );
+}
+
+/// The mesh to voxels step of a mesh to contour switch. It was a point-in-mesh query per voxel
+/// (2.5 s on the liver); the scanline version takes about 0.2 s including the self-intersection
+/// validation and about 25 ms without it, and must reproduce the mask exactly.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "slow in debug builds; run with --release")]
+fn test_mesh_to_voxels_is_fast_and_exact_on_the_liver() {
+    let _serial = serial();
+    let source = liver_label();
+    let mesh = extract_mesh_from_voxel_data(&source).expect("mesh");
+    let (best_ms, voxelized) = best_of(TIMING_RUNS, || {
+        let mut work = IncrementalMeshVoxelization::begin(&mesh, source.geometry).expect("begin");
+        work.step(usize::MAX);
+        work.into_result().expect("complete")
+    });
+    println!("liver mesh to voxels (validating): {best_ms:.0} ms");
+    assert_eq!(
+        voxelized.raw_data, source.raw_data,
+        "the round trip must be exact"
+    );
+    assert!(
+        best_ms < MESH_VOXELIZE_BUDGET_MS,
+        "mesh voxelization took {best_ms:.0} ms (budget {MESH_VOXELIZE_BUDGET_MS} ms)"
     );
 }

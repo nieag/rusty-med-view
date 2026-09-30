@@ -2,6 +2,8 @@ use super::*;
 use crate::convert::extract_mesh_from_voxel_data;
 use crate::model::{MeshFace, MeshVertex};
 use glam::Quat;
+use parry3d::math::Vector;
+use parry3d::shape::TriMesh;
 
 fn geometry() -> VoxelGeometry {
     VoxelGeometry::new(
@@ -279,4 +281,95 @@ fn test_edge_touching_voxel_shells_roundtrip() {
     let rebuilt = voxelize_mesh_to_voxel_data(&mesh, geometry).unwrap();
 
     assert_eq!(rebuilt.raw_data, raw_data);
+}
+
+/// The point-in-mesh query per voxel that the scanline replaced, kept as the reference.
+fn voxelize_by_point_queries(mesh: &MeshData, geometry: VoxelGeometry) -> Vec<u8> {
+    use parry3d::query::PointQuery;
+    use parry3d::shape::TriMeshFlags;
+    let (vertices, indices) = welded_closed_mesh(mesh, false).unwrap();
+    let vertices: Vec<Vector> = vertices
+        .iter()
+        .map(|world_mm| {
+            let voxel = world_mm_to_voxel_index(*world_mm, geometry);
+            Vector::new(voxel[0], voxel[1], voxel[2])
+        })
+        .collect();
+    let tri_mesh = TriMesh::with_flags(vertices, indices, TriMeshFlags::ORIENTED).unwrap();
+    let dimensions = geometry.dimensions;
+    let mut raw = vec![0_u8; dimensions.iter().map(|d| *d as usize).product()];
+    for z in 0..dimensions[2] {
+        for y in 0..dimensions[1] {
+            for x in 0..dimensions[0] {
+                if tri_mesh.contains_local_point(Vector::new(x as f32, y as f32, z as f32)) {
+                    raw[linear_index([x, y, z], dimensions)] = 1;
+                }
+            }
+        }
+    }
+    raw
+}
+
+#[test]
+fn test_scanline_voxelization_matches_point_queries_on_random_surfaces() {
+    let dimensions = [11, 9, 8];
+    let mut seed = 0x1234_5678_u32;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed
+    };
+    for case in 0..80 {
+        let geometry = VoxelGeometry::new(
+            dimensions,
+            [[1.0, 1.0, 1.0], [0.7, 1.3, 2.1], [2.0, 2.0, 3.0]][case % 3],
+            [10.0, 20.0, 30.0],
+            Quat::from_rotation_y(0.4).to_array(),
+        )
+        .unwrap();
+        let raw_data: Vec<u8> = (0..dimensions.iter().product::<u32>())
+            .map(|_| u8::from(next() % 3 == 0))
+            .collect();
+        if raw_data.iter().all(|value| *value == 0) {
+            continue;
+        }
+        let mesh = extract_mesh_from_voxel_data(&VoxelData { geometry, raw_data }).unwrap();
+        // The surface of a random mask passes through grid lines everywhere: the hard case.
+        let fast = voxelize_mesh_to_voxel_data(&mesh, geometry)
+            .unwrap()
+            .raw_data;
+        let reference = voxelize_by_point_queries(&mesh, geometry);
+        assert_eq!(fast, reference, "case {case}");
+    }
+}
+
+#[test]
+fn test_scanline_voxelization_matches_point_queries_on_a_deformed_surface() {
+    let dimensions = [16, 16, 16];
+    let geometry =
+        VoxelGeometry::new(dimensions, [1.0, 1.5, 2.0], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
+    let mut raw_data = vec![0_u8; 16 * 16 * 16];
+    for z in 4..12 {
+        for y in 3..13 {
+            for x in 2..14 {
+                raw_data[linear_index([x, y, z], dimensions)] = 1;
+            }
+        }
+    }
+    let mut mesh = extract_mesh_from_voxel_data(&VoxelData { geometry, raw_data }).unwrap();
+    // Push vertices off the grid lines by smooth, non-uniform amounts, as a mesh edit would.
+    for (index, vertex) in mesh.vertices.iter_mut().enumerate() {
+        let t = index as f32 * 0.37;
+        vertex.world_mm[0] += 0.4 * t.sin();
+        vertex.world_mm[1] += 0.3 * (t * 1.3).cos();
+        vertex.world_mm[2] += 0.5 * (t * 0.7).sin();
+    }
+    let fast = voxelize_mesh_to_voxel_data(&mesh, geometry)
+        .unwrap()
+        .raw_data;
+    let reference = voxelize_by_point_queries(&mesh, geometry);
+    let differing = fast.iter().zip(&reference).filter(|(a, b)| a != b).count();
+    // A sample closer to the surface than the tiny sample offset may differ; none is expected.
+    assert_eq!(differing, 0);
 }

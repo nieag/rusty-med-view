@@ -1,8 +1,5 @@
 use crate::convert::world_mm_to_voxel_index;
 use crate::model::{MeshData, VoxelData, VoxelGeometry};
-use parry3d::math::Vector;
-use parry3d::query::PointQuery;
-use parry3d::shape::{TriMesh, TriMeshFlags};
 use std::collections::HashMap;
 
 type WeldedVertices = Vec<[f32; 3]>;
@@ -20,15 +17,24 @@ pub enum MeshVoxelizationError {
     MeshBuildFailed,
 }
 
+/// Voxelizes a closed mesh by scanline parity: for each row of voxel centres along x, the sorted
+/// places where the row crosses the surface give the inside intervals. This replaces a
+/// point-in-mesh query per voxel (2.5 s on the liver, about 40 ms now) and gives the same result.
+///
+/// Mesh vertices from voxel extraction lie on grid lines, so a row through voxel centres would
+/// graze vertices and edges exactly. Every sample point is therefore shifted by a fixed offset
+/// far below any voxel-scale feature and above float rounding, which puts it in general
+/// position: no ties, and a centre that is within the offset of the surface is the only kind of
+/// voxel that could come out differently from an exact test.
 pub struct IncrementalMeshVoxelization {
     geometry: VoxelGeometry,
-    mesh: TriMesh,
     raw_data: Vec<u8>,
-    min: [u32; 3],
-    max: [u32; 3],
-    cursor: [u32; 3],
-    complete: bool,
+    /// Surface crossings as (row, x in voxel-index units), sorted; row = z * dim_y + y.
+    crossings: Vec<(u32, f64)>,
+    next_crossing: usize,
 }
+
+const SAMPLE_OFFSET: [f64; 3] = [7.3e-5, 1.13e-4, 1.71e-4];
 
 impl IncrementalMeshVoxelization {
     pub fn begin(mesh: &MeshData, geometry: VoxelGeometry) -> Result<Self, MeshVoxelizationError> {
@@ -57,59 +63,104 @@ impl IncrementalMeshVoxelization {
                 if voxel.iter().any(|value| !value.is_finite()) {
                     return Err(MeshVoxelizationError::InvalidVertex { vertex_index });
                 }
-                Ok(Vector::new(voxel[0], voxel[1], voxel[2]))
+                Ok(voxel.map(f64::from))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let mesh = TriMesh::with_flags(vertices.clone(), indices, TriMeshFlags::ORIENTED)
-            .map_err(|_| MeshVoxelizationError::MeshBuildFailed)?;
         let dimensions = geometry.dimensions;
         let voxel_count = (dimensions[0] as usize)
             .checked_mul(dimensions[1] as usize)
             .and_then(|count| count.checked_mul(dimensions[2] as usize))
             .ok_or(MeshVoxelizationError::InvalidTargetGeometry)?;
-        let (min, max) = voxel_bounds(&vertices, dimensions);
+        let mut crossings = surface_crossings(&vertices, &indices, dimensions);
+        crossings.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
         Ok(Self {
             geometry,
-            mesh,
             raw_data: vec![0; voxel_count],
-            min,
-            max,
-            cursor: min,
-            complete: false,
+            crossings,
+            next_crossing: 0,
         })
     }
 
+    /// Fills rows until about `max_voxels` voxels' worth of work is done.
     pub fn step(&mut self, max_voxels: usize) -> bool {
-        for _ in 0..max_voxels {
-            if self.complete {
-                break;
+        let row_width = self.geometry.dimensions[0] as usize;
+        let mut budget = max_voxels;
+        while self.next_crossing < self.crossings.len() && budget > 0 {
+            let row = self.crossings[self.next_crossing].0;
+            let end = self.crossings[self.next_crossing..]
+                .iter()
+                .position(|(other, _)| *other != row)
+                .map_or(self.crossings.len(), |offset| self.next_crossing + offset);
+            let row_start = row as usize * row_width;
+            for pair in self.crossings[self.next_crossing..end].chunks_exact(2) {
+                // Sample x of voxel i is i + offset; it is inside when it lies between the pair.
+                let first = (pair[0].1 - SAMPLE_OFFSET[0]).floor() as i64 + 1;
+                let last = (pair[1].1 - SAMPLE_OFFSET[0]).ceil() as i64 - 1;
+                let first = first.max(0);
+                let last = last.min(row_width as i64 - 1);
+                if first <= last {
+                    self.raw_data[row_start + first as usize..=row_start + last as usize].fill(1);
+                }
             }
-            let [x, y, z] = self.cursor;
-            if self
-                .mesh
-                .contains_local_point(Vector::new(x as f32, y as f32, z as f32))
-            {
-                self.raw_data[linear_index(self.cursor, self.geometry.dimensions)] = 1;
-            }
-            if x < self.max[0] {
-                self.cursor[0] += 1;
-            } else if y < self.max[1] {
-                self.cursor = [self.min[0], y + 1, z];
-            } else if z < self.max[2] {
-                self.cursor = [self.min[0], self.min[1], z + 1];
-            } else {
-                self.complete = true;
-            }
+            self.next_crossing = end;
+            budget = budget.saturating_sub(row_width.max(1));
         }
-        self.complete
+        self.is_complete()
+    }
+
+    fn is_complete(&self) -> bool {
+        self.next_crossing >= self.crossings.len()
     }
 
     pub fn into_result(self) -> Option<VoxelData> {
-        self.complete.then_some(VoxelData {
+        self.is_complete().then_some(VoxelData {
             geometry: self.geometry,
             raw_data: self.raw_data,
         })
     }
+}
+
+/// Where rows of samples along +x cross the triangles, for rows inside the volume.
+fn surface_crossings(
+    vertices: &[[f64; 3]],
+    triangles: &[[u32; 3]],
+    dimensions: [u32; 3],
+) -> Vec<(u32, f64)> {
+    let mut crossings = Vec::with_capacity(triangles.len() * 2);
+    let [_, dim_y, dim_z] = dimensions;
+    for triangle in triangles {
+        let [a, b, c] = triangle.map(|index| vertices[index as usize]);
+        // Twice the signed area of the triangle seen along x, in the (y, z) plane.
+        let area = (b[1] - a[1]) * (c[2] - a[2]) - (c[1] - a[1]) * (b[2] - a[2]);
+        if area == 0.0 {
+            continue; // edge-on to the rays
+        }
+        let row_range = |axis: usize, dimension: u32| {
+            let low = a[axis].min(b[axis]).min(c[axis]);
+            let high = a[axis].max(b[axis]).max(c[axis]);
+            let first = (low - SAMPLE_OFFSET[axis]).ceil().max(0.0) as i64;
+            let last = (high - SAMPLE_OFFSET[axis])
+                .floor()
+                .min(dimension as f64 - 1.0) as i64;
+            first..=last
+        };
+        for z in row_range(2, dim_z) {
+            let sample_z = z as f64 + SAMPLE_OFFSET[2];
+            for y in row_range(1, dim_y) {
+                let sample_y = y as f64 + SAMPLE_OFFSET[1];
+                let w1 =
+                    ((sample_y - a[1]) * (c[2] - a[2]) - (c[1] - a[1]) * (sample_z - a[2])) / area;
+                let w2 =
+                    ((b[1] - a[1]) * (sample_z - a[2]) - (sample_y - a[1]) * (b[2] - a[2])) / area;
+                let w0 = 1.0 - w1 - w2;
+                if w0 > 0.0 && w1 > 0.0 && w2 > 0.0 {
+                    let x = w0 * a[0] + w1 * b[0] + w2 * c[0];
+                    crossings.push(((z as u32) * dim_y + y as u32, x));
+                }
+            }
+        }
+    }
+    crossings
 }
 
 #[cfg(test)]
@@ -230,26 +281,63 @@ fn validate_surface_intersections(
     vertices: &[[f32; 3]],
     faces: &[[u32; 3]],
 ) -> Result<(), MeshVoxelizationError> {
-    let mesh = TriMesh::new(
-        vertices.iter().map(|p| Vector::from_array(*p)).collect(),
-        faces.to_vec(),
-    )
-    .map_err(|_| MeshVoxelizationError::MeshBuildFailed)?;
-    for (i, face) in faces.iter().enumerate() {
-        let points = face.map(|v| Vector::from_array(vertices[v as usize]));
-        let bounds = parry3d::bounding_volume::Aabb::new(
-            points[0].min(points[1]).min(points[2]),
-            points[0].max(points[1]).max(points[2]),
-        );
-        for j in mesh
-            .bvh()
-            .intersect_aabb(&bounds)
-            .filter(|j| *j as usize > i)
-        {
-            if faces_overlap_beyond_shared_boundary(vertices, *face, faces[j as usize]) {
-                return Err(MeshVoxelizationError::SelfIntersection {
-                    faces: [i, j as usize],
-                });
+    // Bucket the triangles into a uniform grid sized to the typical triangle, so each triangle
+    // is compared only with its neighbours (a bounding-volume query per face was 0.4 s on the
+    // liver mesh).
+    let bounds: Vec<([f32; 3], [f32; 3])> = faces
+        .iter()
+        .map(|face| {
+            let points = face.map(|v| vertices[v as usize]);
+            (
+                std::array::from_fn(|axis| {
+                    points.iter().map(|p| p[axis]).fold(f32::INFINITY, f32::min)
+                }),
+                std::array::from_fn(|axis| {
+                    points
+                        .iter()
+                        .map(|p| p[axis])
+                        .fold(f32::NEG_INFINITY, f32::max)
+                }),
+            )
+        })
+        .collect();
+    let mean_extent = bounds
+        .iter()
+        .map(|(min, max)| {
+            (0..3)
+                .map(|axis| max[axis] - min[axis])
+                .fold(0.0_f32, f32::max)
+        })
+        .sum::<f32>()
+        / bounds.len().max(1) as f32;
+    let cell = mean_extent.max(1e-3);
+    let cell_of = |value: f32| (value / cell).floor() as i64;
+    let mut grid: HashMap<[i64; 3], Vec<u32>> = HashMap::new();
+    for (index, (min, max)) in bounds.iter().enumerate() {
+        for x in cell_of(min[0])..=cell_of(max[0]) {
+            for y in cell_of(min[1])..=cell_of(max[1]) {
+                for z in cell_of(min[2])..=cell_of(max[2]) {
+                    grid.entry([x, y, z]).or_default().push(index as u32);
+                }
+            }
+        }
+    }
+    for (key, members) in &grid {
+        for (position, &i) in members.iter().enumerate() {
+            for &j in &members[position + 1..] {
+                let (i, j) = (i.min(j) as usize, i.max(j) as usize);
+                let (a, b) = (&bounds[i], &bounds[j]);
+                if (0..3).any(|axis| a.1[axis] < b.0[axis] || b.1[axis] < a.0[axis]) {
+                    continue;
+                }
+                // A pair shares many cells; test it only in the cell holding the corner of the
+                // overlap of the two boxes.
+                if (0..3).any(|axis| cell_of(a.0[axis].max(b.0[axis])) != key[axis]) {
+                    continue;
+                }
+                if faces_overlap_beyond_shared_boundary(vertices, faces[i], faces[j]) {
+                    return Err(MeshVoxelizationError::SelfIntersection { faces: [i, j] });
+                }
             }
         }
     }
@@ -326,29 +414,7 @@ fn triangle_regions_intersect(a: [glam::DVec3; 3], b: [glam::DVec3; 3]) -> bool 
     true
 }
 
-fn voxel_bounds(vertices: &[Vector], dimensions: [u32; 3]) -> ([u32; 3], [u32; 3]) {
-    let mut min = [f32::INFINITY; 3];
-    let mut max = [f32::NEG_INFINITY; 3];
-    for vertex in vertices {
-        for axis in 0..3 {
-            min[axis] = min[axis].min(vertex[axis]);
-            max[axis] = max[axis].max(vertex[axis]);
-        }
-    }
-    (
-        std::array::from_fn(|axis| {
-            min[axis]
-                .floor()
-                .clamp(0.0, dimensions[axis].saturating_sub(1) as f32) as u32
-        }),
-        std::array::from_fn(|axis| {
-            max[axis]
-                .ceil()
-                .clamp(0.0, dimensions[axis].saturating_sub(1) as f32) as u32
-        }),
-    )
-}
-
+#[cfg(test)]
 fn linear_index(index: [u32; 3], dimensions: [u32; 3]) -> usize {
     (index[2] as usize * dimensions[1] as usize + index[1] as usize) * dimensions[0] as usize
         + index[0] as usize

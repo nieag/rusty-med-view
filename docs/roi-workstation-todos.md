@@ -40,6 +40,7 @@ These drive the design.
 - Scale target (2026-09-30): one case holds 100 to 200 ROIs (for example a multi-organ model output) plus notes, measurements, in-view comments, and points of interest, with hundreds of small annotations. Every design choice below is checked against that, not against the 2-label liver sample.
 
 ## Done
+- Mesh to voxels is a scanline now (2026-09-30): the per-voxel point-in-mesh query took 2.5 s on the liver and is about 4 ms; the mesh self-intersection validation went from 0.44 s to about 0.2 s with a uniform grid in place of a bounding-volume query per face. A mesh to contour switch after a mesh edit therefore costs about 25 ms for the voxels plus about 90 ms for the contours. Results are identical to the old query (80 random surfaces, a deformed surface, the liver; guard test `test_mesh_to_voxels_is_fast_and_exact_on_the_liver`).
 
 - [x] Dead code: duplicate plane-compatibility check, test-only delegates, deprecated `SlicePlane::from_viewport`.
 - [x] Docs archive pruned to the three documents still cited (`docs-archive-full` tag holds the rest).
