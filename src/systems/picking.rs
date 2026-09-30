@@ -47,12 +47,12 @@ pub fn get_voxel_at_mouse(
         )
     };
 
-    let (vol_aspects, vol_dims, main_geometry) = {
+    let (vol_dims, main_geometry) = {
         let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
         if let Some((_, vol)) = query.iter().next() {
-            (vol.aspect_ratios(), Some(vol.dimensions), vol.geometry)
+            (Some(vol.dimensions), vol.geometry)
         } else {
-            ([1.0, 1.0, 1.0], None, None)
+            (None, None)
         }
     };
 
@@ -121,19 +121,6 @@ pub fn get_voxel_at_mouse(
                         mapped_pos = Some(pos);
                     }
                 }
-            }
-
-            if mapped_pos.is_none() {
-                let slice_aspect = plane.slice_aspect(vol_aspects);
-                let k = screen_aspect / slice_aspect;
-
-                let volume_uv = [
-                    ((mouse_uv[0] - 0.5) * k) / zoom + 0.5 + pan[0],
-                    (mouse_uv[1] - 0.5) / zoom + 0.5 + pan[1],
-                ];
-
-                mapped_pos =
-                    Some(plane.screen_uv_to_volume(volume_uv, cursor_pos[plane.depth_axis()]));
             }
 
             if let Some(pos) = mapped_pos {

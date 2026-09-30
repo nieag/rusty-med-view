@@ -271,6 +271,11 @@ impl ApplicationHandler<AppEvent> for App {
                 if let Some(category) = frame_stats.last_warning {
                     qa_runtime.last_render_warning = Some(category.to_string());
                 }
+                for message in ctx.gpu.errors.take() {
+                    handlers::set_status_message(&mut ctx.scene.session, message.clone());
+                    qa_runtime.last_render_error = Some(message.clone());
+                    qa_runtime.set_error("wgpu.runtime", message, Default::default());
+                }
                 if let Some(category) = frame_stats.last_error {
                     qa_runtime.last_render_error = Some(category.to_string());
                 }

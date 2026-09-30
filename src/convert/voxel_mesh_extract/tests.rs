@@ -469,7 +469,7 @@ fn test_incremental_rebuild_advances_one_chunk_per_step() {
 }
 
 #[test]
-fn test_incremental_dirty_rebuild_scans_all_chunks_for_global_sdf() {
+fn test_incremental_dirty_rebuild_rebuilds_only_the_affected_chunks_and_keeps_the_rest() {
     let dimensions = [48, 2, 1];
     let mut voxel = voxel_data_with_single_occupied(
         dimensions,
@@ -481,21 +481,84 @@ fn test_incremental_dirty_rebuild_scans_all_chunks_for_global_sdf() {
     voxel.raw_data[voxel_linear_index(dimensions, 40, 0, 0)] = 1;
     let base = extract_chunked_mesh_from_voxel_data(&voxel, 16).unwrap();
     voxel.raw_data[voxel_linear_index(dimensions, 16, 0, 0)] = 1;
-    let mut rebuild =
-        IncrementalChunkedMeshRebuild::begin_for_voxel_aabb(base, &voxel, [16, 0, 0], [17, 1, 1])
-            .unwrap();
+    let mut rebuild = IncrementalChunkedMeshRebuild::begin_for_voxel_aabb(
+        base.clone(),
+        &voxel,
+        [16, 0, 0],
+        [17, 1, 1],
+    )
+    .unwrap();
+    // The change is at the seam of the first two chunks; the third is far away.
     assert_eq!(
         rebuild
             .changed_keys()
             .iter()
             .map(|key| key.index)
             .collect::<Vec<_>>(),
-        vec![[0, 0, 0], [1, 0, 0], [2, 0, 0]]
+        vec![[0, 0, 0], [1, 0, 0]]
     );
     while !rebuild.step(&voxel).unwrap() {}
     let result = rebuild.into_result().unwrap();
+    let far_before = base
+        .chunks
+        .iter()
+        .find(|chunk| chunk.key.index == [2, 0, 0]);
+    let far_after = result
+        .chunks
+        .iter()
+        .find(|chunk| chunk.key.index == [2, 0, 0]);
+    assert!(
+        far_before
+            .zip(far_after)
+            .is_some_and(|(before, after)| Arc::ptr_eq(&before.data, &after.data)),
+        "an unaffected chunk is reused, not rebuilt"
+    );
     assert_eq!(
         canonical_triangles(&result.merged_mesh()),
         canonical_triangles(&extract_mesh_from_voxel_data(&voxel).unwrap())
     );
+}
+
+#[test]
+fn test_random_box_edits_match_a_clean_full_rebuild() {
+    let dimensions = [13, 11, 9];
+    let mut seed = 0x9e37_79b9_u32;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed
+    };
+    for case in 0..24 {
+        let mut source = VoxelData {
+            geometry: geometry(
+                dimensions,
+                [[0.7, 1.3, 2.1], [1.0, 1.0, 1.0], [2.0, 2.0, 3.0]][case % 3],
+                [10.0, 20.0, 30.0],
+                Quat::from_rotation_y(0.4).to_array(),
+            ),
+            raw_data: (0..voxel_cell_count(dimensions))
+                .map(|_| u8::from(next() % 3 == 0))
+                .collect(),
+        };
+        let chunk_size = [2, 4, 5][case % 3];
+        let mut chunked = extract_chunked_mesh_from_voxel_data(&source, chunk_size).unwrap();
+        // Flip a random box of up to 3 voxels per side.
+        let min: [u32; 3] = std::array::from_fn(|axis| next() % dimensions[axis]);
+        let max: [u32; 3] =
+            std::array::from_fn(|axis| (min[axis] + 1 + next() % 3).min(dimensions[axis]));
+        for z in min[2]..max[2] {
+            for y in min[1]..max[1] {
+                for x in min[0]..max[0] {
+                    source.raw_data[voxel_linear_index(dimensions, x, y, z)] ^= 1;
+                }
+            }
+        }
+        rebuild_chunked_mesh_for_voxel_aabb(&mut chunked, &source, min, max).unwrap();
+        assert!(
+            canonical_triangle_bits(&chunked.merged_mesh())
+                == canonical_triangle_bits(&extract_mesh_from_voxel_data(&source).unwrap()),
+            "case {case}: box {min:?}..{max:?} with chunk size {chunk_size}"
+        );
+    }
 }

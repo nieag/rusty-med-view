@@ -351,3 +351,33 @@ test("qa-5 the 3D view is cached and only re-marched when its image changes", as
   await page.waitForTimeout(800);
   expect(await marches()).toBeGreaterThan(before);
 });
+
+test("qa-6 every visible ROI shows its derived mesh and contours", async ({ page }) => {
+  await page.goto(`${BASE_URL}/?qa=1&sample=liver_0&preset=image_label_mpr_basic`, {
+    waitUntil: "domcontentloaded",
+  });
+  await page.waitForFunction(() => typeof window.__viewerQa === "object");
+  await page.waitForFunction(() => window.__viewerQa.state()?.qa?.ready === true, null, {
+    timeout: 30000,
+  });
+  // Every visible ROI is built, one after another, so wait for all of them.
+  await page.waitForFunction(
+    () => {
+      const rois = window.__viewerQa.state().rois.filter((roi) => roi.visible);
+      return rois.length >= 2 && rois.every((roi) => roi.mesh_cache_current);
+    },
+    null,
+    { timeout: 30000 },
+  );
+  const { rois, render } = await page.evaluate(() => ({
+    rois: window.__viewerQa.state().rois,
+    render: window.__viewerQa.state().render,
+  }));
+  const visible = rois.filter((roi) => roi.visible);
+  expect(visible.length).toBeGreaterThanOrEqual(2);
+  for (const roi of visible) {
+    expect(roi.mesh_cache_current, `mesh of ${roi.name}`).toBeTruthy();
+  }
+  expect(render.mesh_batch_count).toBeGreaterThan(0);
+  expect(render.contour_batch_count).toBeGreaterThan(0);
+});

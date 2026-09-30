@@ -344,7 +344,7 @@ fn test_mesh_viewport_sync_keeps_current_mesh_cache_current() {
         .unwrap();
     }
 
-    sync_active_roi_mesh_cache_for_viewports(&mut world, Some(entity));
+    sync_mesh_caches_for_viewports(&mut world, Some(entity));
 
     let roi = world.get::<&Roi>(entity).unwrap();
     assert!(roi.is_cache_current(RoiCacheKind::Mesh));
@@ -3265,9 +3265,147 @@ fn lifecycle_blob() -> (VoxelGeometry, Vec<u8>) {
     (geometry, raw)
 }
 
+fn spawn_sparse_voxel_roi_with_id(world: &mut World, id: u64) -> hecs::Entity {
+    let mut raw = vec![0_u8; 64];
+    raw[(2 * 4 + 1) * 4 + 1] = 1;
+    world.spawn(Roi::new_voxel_with_cache(
+        RoiId(id),
+        format!("Label {id}"),
+        VoxelGeometry::new([4, 4, 4], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap(),
+        raw,
+        None,
+    ))
+}
+
+fn settle_with_focus(world: &mut World, focus: &ViewFocus) {
+    for _ in 0..400 {
+        let pending = advance_roi_work(world, None, focus).pending;
+        assert_nothing_stale(world);
+        if !pending {
+            return;
+        }
+    }
+    panic!("ROI work never settled");
+}
+
+#[test]
+fn test_every_visible_roi_gets_derived_contours_and_mesh_and_hidden_ones_do_not() {
+    let mut world = World::new();
+    spawn_main_volume(&mut world, [1.0; 3], [0.0; 3]);
+    let first = spawn_sparse_voxel_roi_with_id(&mut world, 1);
+    let second = spawn_sparse_voxel_roi_with_id(&mut world, 2);
+    let hidden = spawn_sparse_voxel_roi_with_id(&mut world, 3);
+    world.get::<&mut RoiMetadata>(hidden).unwrap().is_visible = false;
+    for mode in [ViewMode::Axial, ViewMode::ThreeD] {
+        world.spawn((
+            Viewport {
+                mode,
+                rect: [0.0, 0.0, 400.0, 300.0],
+                uniform_index: 0,
+            },
+            ViewportState::default(),
+        ));
+    }
+    let focus = ViewFocus {
+        active_roi: Some(first),
+        cursor_uv: [0.5, 0.5, 0.5],
+    };
+
+    // Builds are demanded one ROI at a time, the active ROI first, so a frame never queues all
+    // of them at once.
+    let in_flight = |world: &World| {
+        [first, second, hidden]
+            .iter()
+            .filter(|entity| {
+                let roi = world.get::<&Roi>(**entity).unwrap();
+                roi.has_queued_job(RoiJobKind::RebuildMeshCache)
+                    || roi.running_job_kind() == Some(RoiJobKind::RebuildMeshCache)
+            })
+            .count()
+    };
+    advance_roi_work(&mut world, None, &focus);
+    assert!(
+        in_flight(&world) <= 1,
+        "at most one build is demanded at a time"
+    );
+    assert!(
+        world
+            .get::<&Roi>(first)
+            .unwrap()
+            .is_cache_current(RoiCacheKind::Mesh),
+        "the active ROI is built before the others"
+    );
+
+    settle_with_focus(&mut world, &focus);
+
+    for entity in [first, second] {
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert!(
+            roi.is_cache_current(RoiCacheKind::Mesh),
+            "mesh of {entity:?}"
+        );
+        assert!(
+            roi.contour_cache().is_some_and(|cache| cache
+                .views
+                .iter()
+                .any(|view| view.state == CacheViewState::Current && !view.data.is_empty())),
+            "contours of {entity:?}"
+        );
+    }
+    let roi = world.get::<&Roi>(hidden).unwrap();
+    assert!(
+        !roi.is_cache_current(RoiCacheKind::Mesh),
+        "a hidden ROI is not built"
+    );
+    assert!(
+        roi.contour_cache().is_none(),
+        "a hidden ROI has no derived contours"
+    );
+}
+
+/// The "nothing stale" rule (ADR 0004): whatever the render accessors would hand to a frame was
+/// built from the ROI's current revision, or is the in-progress preview of the current edit.
+fn assert_nothing_stale(world: &World) {
+    for (entity, roi) in world.query::<&Roi>().iter() {
+        if roi.renderable_voxel_cache(true).is_some() {
+            assert!(
+                roi.is_cache_current(RoiCacheKind::Voxel),
+                "{entity:?}: a frame would draw a voxel overlay of an old revision"
+            );
+        }
+        if !matches!(roi.body, RoiBody::Mesh(_)) && !roi.preview_state.active {
+            if let Some(mesh) = crate::render::roi_views::mesh_data_for_adapter(roi) {
+                assert!(
+                    roi.is_cache_current(RoiCacheKind::Mesh)
+                        && roi.mesh_cache().is_some_and(|cache| &cache.data == mesh),
+                    "{entity:?}: a frame would draw a mesh of an old revision"
+                );
+            }
+        }
+        if let Some(cache) = roi.contour_cache() {
+            for view in &cache.views {
+                let foreign_family = roi
+                    .contour_data()
+                    .is_none_or(|data| data.active_plane_family != view.key.family);
+                if foreign_family && roi.contour_view_data_for_render(&view.key).is_some() {
+                    assert!(
+                        (view.state == CacheViewState::Current
+                            && view.built_from == roi.dirty_state.authoritative)
+                            || (matches!(view.state, CacheViewState::Preview { .. })
+                                && roi.preview_state.active),
+                        "{entity:?}: a frame would draw a contour view of an old revision"
+                    );
+                }
+            }
+        }
+    }
+}
+
 fn settle(world: &mut World) {
     for _ in 0..400 {
-        if !advance_roi_work(world, None, &ViewFocus::default()).pending {
+        let pending = advance_roi_work(world, None, &ViewFocus::default()).pending;
+        assert_nothing_stale(world);
+        if !pending {
             return;
         }
     }
@@ -3645,4 +3783,38 @@ fn test_mesh_edit_then_contour_conversion_keeps_the_edited_shape_and_undo_restor
         Some(&mesh_before),
         "undoing the edit restores the mesh exactly"
     );
+}
+
+#[test]
+fn test_a_derived_contour_view_of_an_old_revision_is_not_drawn() {
+    let mut world = World::new();
+    let entity = spawn_sparse_voxel_roi(&mut world);
+    let geometry = world.get::<&Roi>(entity).unwrap().reference_geometry();
+    let key = ContourViewKey::from_plane(
+        orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.6], geometry).unwrap(),
+    );
+    assert_eq!(
+        ensure_contour_view_cache(&mut world, entity, &key).state,
+        RepresentationRequestState::Current
+    );
+    assert!(world
+        .get::<&Roi>(entity)
+        .unwrap()
+        .contour_view_data_for_render(&key)
+        .is_some());
+
+    // The authority moves on (an edit): every view built before it must disappear at once, even
+    // if nothing has marked the cache stale yet.
+    world
+        .get::<&mut Roi>(entity)
+        .unwrap()
+        .dirty_state
+        .authoritative
+        .shape += 1;
+    assert_nothing_stale(&world);
+    assert!(world
+        .get::<&Roi>(entity)
+        .unwrap()
+        .contour_view_data_for_render(&key)
+        .is_none());
 }

@@ -187,8 +187,11 @@ pub fn advance_roi_work(
     // Demand is resolved after voxel-producing work so a newly current voxel cache can schedule
     // its mesh in this same frame.
     sync_roi_contour_view_caches_for_viewports(world, focus);
-    sync_active_roi_mesh_cache_for_viewports(world, focus.active_roi);
+    sync_mesh_caches_for_viewports(world, focus.active_roi);
     process_voxel_mesh_rebuild_jobs(world);
+    // A mesh that just finished frees the next visible ROI to be demanded; doing it here keeps
+    // `pending` true so the frame loop continues instead of idling with a ROI still unbuilt.
+    sync_mesh_caches_for_viewports(world, focus.active_roi);
     record_completed_work_cycles(world);
 
     let mut pending = false;

@@ -38,15 +38,7 @@ fn mark_voxel_current_without_gpu(world: &mut World, entity: Entity) {
 }
 
 fn make_dummy_gpu_resources() -> Option<GpuVolumeResources> {
-    let instance = wgpu::Instance::default();
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        compatible_surface: None,
-        force_fallback_adapter: true,
-    }))
-    .ok()?;
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+    let (_adapter, device, queue) = crate::render::test_device()?;
     let (texture, view, sampler) = crate::io::volume::create_dummy_r8_texture(&device, &queue);
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("roi-views-test-empty-layout"),

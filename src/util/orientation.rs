@@ -58,42 +58,6 @@ impl SlicePlane {
             SlicePlane::Sagittal => 0, // X
         }
     }
-
-    /// Get slice aspect ratio from volume aspects (dimensions * spacing)
-    pub fn slice_aspect(&self, vol_aspects: [f32; 3]) -> f32 {
-        match self {
-            SlicePlane::Axial => vol_aspects[0] / vol_aspects[1],
-            SlicePlane::Coronal => vol_aspects[0] / vol_aspects[2],
-            SlicePlane::Sagittal => vol_aspects[1] / vol_aspects[2],
-        }
-    }
-
-    /// Convert screen UV (0..1, top-left origin) to volume UV (0..1)
-    pub fn screen_uv_to_volume(&self, uv: [f32; 2], cursor_depth: f32) -> [f32; 3] {
-        match self {
-            SlicePlane::Axial => {
-                // RADIOLOGICAL: Patient Right (x=1) on Screen Left (u=0)
-                [1.0 - uv[0], 1.0 - uv[1], cursor_depth]
-            }
-            SlicePlane::Coronal => {
-                // RADIOLOGICAL: Patient Right (x=1) on Screen Left (u=0)
-                [1.0 - uv[0], cursor_depth, 1.0 - uv[1]]
-            }
-            SlicePlane::Sagittal => {
-                // Anterior is LEFT (u=0), Superior is UP (v=0)
-                [cursor_depth, 1.0 - uv[0], 1.0 - uv[1]]
-            }
-        }
-    }
-
-    /// Convert volume UV (0..1) to screen UV (0..1)
-    pub fn volume_to_screen_uv(&self, pos: [f32; 3]) -> [f32; 2] {
-        match self {
-            SlicePlane::Axial => [1.0 - pos[0], 1.0 - pos[1]],
-            SlicePlane::Coronal => [1.0 - pos[0], 1.0 - pos[2]],
-            SlicePlane::Sagittal => [1.0 - pos[1], 1.0 - pos[2]],
-        }
-    }
 }
 
 /// Anatomical letter (`R`, `L`, `A`, `P`, `S`, `I`) of the dominant axis of a world direction, in
