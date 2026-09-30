@@ -188,6 +188,7 @@ pub fn advance_roi_work(
     // its mesh in this same frame.
     sync_roi_contour_view_caches_for_viewports(world, focus);
     sync_mesh_caches_for_viewports(world, focus.active_roi);
+    sync_speculative_voxel_cache(world, focus.active_roi);
     process_voxel_mesh_rebuild_jobs(world);
     // A mesh that just finished frees the next visible ROI to be demanded; doing it here keeps
     // `pending` true so the frame loop continues instead of idling with a ROI still unbuilt.

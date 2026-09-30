@@ -294,3 +294,32 @@ pub(crate) fn sync_mesh_caches_for_viewports(world: &mut World, active_roi: Opti
         }
     }
 }
+
+/// After an edit of the active mesh ROI, rebuilds its voxels while the user is idle, so that a
+/// switch to a contour tool finds them ready instead of starting a rebuild then. It only acts on
+/// a mesh that edit validation already passed (checking an unvalidated mesh would itself stall
+/// the frame) and that has a voxel grid to rebuild onto, when no edit preview is running and no
+/// rebuild is queued or running. It tries each revision once: a failure is reported by the job and
+/// not retried every frame.
+pub(crate) fn sync_speculative_voxel_cache(world: &mut World, active_roi: Option<hecs::Entity>) {
+    let Some(entity) = active_roi else {
+        return;
+    };
+    let wanted = world.get::<&Roi>(entity).is_ok_and(|roi| {
+        matches!(roi.body, RoiBody::Mesh(_))
+            && roi.voxel_cache().is_some()
+            && roi.job_state.speculative_voxel_shape != Some(roi.dirty_state.authoritative.shape)
+            && !roi.preview_state.active
+            && roi.validated_mesh_generation == Some(roi.dirty_state.authoritative.shape)
+            && !roi.is_cache_current(RoiCacheKind::Voxel)
+            && !roi.has_queued_job(RoiJobKind::RebuildVoxelCache)
+            && roi.running_job_kind().is_none()
+            && roi.job_state.pending_switch.is_none()
+    });
+    if wanted {
+        if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
+            roi.job_state.speculative_voxel_shape = Some(roi.dirty_state.authoritative.shape);
+        }
+        let _ = crate::app::roi::request_mesh_voxel_cache_rebuild(world, entity);
+    }
+}

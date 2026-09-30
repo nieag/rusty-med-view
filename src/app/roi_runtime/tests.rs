@@ -3818,3 +3818,66 @@ fn test_a_derived_contour_view_of_an_old_revision_is_not_drawn() {
         .contour_view_data_for_render(&key)
         .is_none());
 }
+
+#[test]
+fn test_an_idle_active_mesh_roi_rebuilds_its_voxels_after_an_edit_before_anyone_asks() {
+    let mut world = World::new();
+    spawn_main_volume(&mut world, [1.0; 3], [0.0; 3]);
+    let mut editor = EditorState::default();
+    let entity = world.spawn(Roi::new_mesh(
+        RoiId(310),
+        "Edited".to_string(),
+        closed_tetra_mesh_data(),
+    ));
+    editor.active_roi = Some(entity);
+    // A mesh ROI that came from voxels keeps the voxel grid it was extracted on.
+    {
+        let mut roi = world.get::<&mut Roi>(entity).unwrap();
+        let geometry = roi.reference_geometry();
+        let raw_data = vec![0; geometry.dimensions.iter().map(|d| *d as usize).product()];
+        roi.store_stale_voxel_cache(VoxelCache {
+            data: VoxelData { geometry, raw_data },
+            gpu_resources: None,
+        });
+    }
+    let focus = ViewFocus {
+        active_roi: Some(entity),
+        cursor_uv: [0.5; 3],
+    };
+
+    // Unedited and unvalidated: nothing is built on speculation.
+    advance_roi_work(&mut world, None, &focus);
+    assert!(!world
+        .get::<&Roi>(entity)
+        .unwrap()
+        .has_queued_job(RoiJobKind::RebuildVoxelCache));
+
+    begin_mesh_translation_preview(&mut world, entity, [0.25, 0.0, 0.0]).unwrap();
+    // While the drag is running its preview is on screen; no rebuild competes with it.
+    advance_roi_work(&mut world, None, &focus);
+    assert!(!world
+        .get::<&Roi>(entity)
+        .unwrap()
+        .has_queued_job(RoiJobKind::RebuildVoxelCache));
+
+    commit_mesh_edit_preview(&mut world, &editor).unwrap();
+    assert!(!world
+        .get::<&Roi>(entity)
+        .unwrap()
+        .is_cache_current(RoiCacheKind::Voxel));
+
+    // Idle frames alone bring the voxels up to date, so a later switch finds them ready.
+    settle_with_focus(&mut world, &focus);
+    let roi = world.get::<&Roi>(entity).unwrap();
+    assert!(roi.is_cache_current(RoiCacheKind::Voxel));
+    assert!(roi.voxel_cache().is_some());
+    drop(roi);
+    assert!(matches!(
+        ensure_editable(
+            &mut world,
+            entity,
+            EditTarget::Contour(OrthogonalFamily::Axial)
+        ),
+        Ok(Readiness::Switched(_))
+    ));
+}

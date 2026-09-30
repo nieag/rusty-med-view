@@ -422,6 +422,9 @@ pub struct RoiJobState {
     pub pending_switch: Option<crate::app::roi::switch::PendingSwitch>,
     /// Outcomes of this ROI's work for the user, drained by `advance_roi_work`.
     pub messages: Vec<String>,
+    /// The shape revision whose voxels were last rebuilt on speculation; a failed attempt is not
+    /// repeated every frame for the same revision.
+    pub speculative_voxel_shape: Option<u64>,
 }
 
 pub struct Roi {

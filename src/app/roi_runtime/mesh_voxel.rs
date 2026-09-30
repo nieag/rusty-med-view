@@ -254,7 +254,13 @@ pub(super) fn resume_mesh_voxel_rebuild_work(
     roi.job_metrics.last_completed_kind = Some(RoiJobKind::RebuildVoxelCache);
     roi.job_metrics.last_duration_ms = started_at.elapsed().as_secs_f32() * 1000.0;
     drop(roi);
-    report_roi_status(world, roi_entity, "Mesh voxel cache rebuilt.".to_string());
+    // A rebuild nobody asked for is quiet; only an explicit one (a switch, an export) is reported.
+    let speculative = world
+        .get::<&Roi>(roi_entity)
+        .is_ok_and(|roi| roi.job_state.speculative_voxel_shape == Some(source_generation));
+    if !speculative {
+        report_roi_status(world, roi_entity, "Mesh voxel cache rebuilt.".to_string());
+    }
     true
 }
 
