@@ -8,18 +8,11 @@ use crate::render::roi_views::{RenderRepresentationRequest, RoiRenderViews};
 impl AppState {
     pub fn qa_state_snapshot(&self) -> qa::QaSnapshot {
         if let Some(ctx) = &self.context {
-            let status = ctx
-                .scene
-                .world
-                .get::<&GuiState>(ctx.scene.entities.gui_state)
-                .ok()
-                .and_then(|state| state.status_message.clone());
+            let status = ctx.scene.session.gui.status_message.clone();
 
-            let (active_roi_entity, active_tool) = ctx
-                .scene
-                .world
-                .get::<&EditorState>(ctx.scene.entities.editor)
-                .map(|editor| {
+            let (active_roi_entity, active_tool) = {
+                let editor = &ctx.scene.session.editor;
+                {
                     (
                         editor.active_roi,
                         Some(match editor.active_tool {
@@ -29,8 +22,8 @@ impl AppState {
                             EditorTool::MeshDeform => "mesh_deform".to_string(),
                         }),
                     )
-                })
-                .unwrap_or((None, None));
+                }
+            };
 
             let mut active_roi_id = None;
             let mut active_roi_name = None;
@@ -177,12 +170,10 @@ impl AppState {
             let mut has_sagittal = false;
             let mut has_three_d = false;
             let mut all_required_rects_non_zero = true;
-            let cursor_pos = ctx
-                .scene
-                .world
-                .get::<&Transform>(ctx.scene.entities.cursor)
-                .map(|cursor| cursor.position)
-                .unwrap_or([0.5, 0.5, 0.5]);
+            let cursor_pos = {
+                let cursor = &ctx.scene.session.cursor;
+                cursor.position
+            };
             for (_, (vp, vp_state)) in ctx
                 .scene
                 .world

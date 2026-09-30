@@ -66,7 +66,7 @@ A saved case (backlog 3.7) is a versioned document of entity records keyed by `I
 
 Each stage is a commit series on chunk B's branch and leaves the lifecycle tests, the QA spec, clippy, fmt, and the wasm check green.
 
-1. **Singletons to fields.** Introduce `Scene`, move the nine, delete `AppEntities` and the impossible `Missing*` variants. Mechanical, large, no behaviour change.
+1. **Singletons to fields. Done.** The nine are plain fields of `Session` (`src/app/components.rs`; named `Session` rather than `Scene` because the hecs world is the other half of the scene); `AppEntities` and the impossible `Missing*` variants are gone. Functions take `&mut EditorState` or `&Session` instead of `(world, entities)`. `advance_roi_work` takes a `ViewFocus` (active ROI and cursor) instead of reading them from the world.
 2. **Split `Roi` into components.** Systems and the coordinator query components instead of one struct. The job-as-component scheduler trial (backlog 2b.9, step 5) belongs here and is kept only if it makes `roi_runtime.rs` smaller.
 3. **Annotations as entities** with `Anchor` in world millimetres and `Provenance`; migrate `AnnotationState` and the marker path; remove the 64-primitive cap by batching.
 4. **The file split** (backlog 2b.7): `roi_runtime.rs` and `components.rs` by concern, following the boundaries stage 1 and 2 expose.

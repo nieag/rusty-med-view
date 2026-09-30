@@ -12,7 +12,6 @@ use hecs::World;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoiEditHistoryError {
-    MissingEditorState,
     MissingRoi,
     NoActiveRoi,
     NoUndo,
@@ -100,20 +99,17 @@ pub fn replace_mesh_data_with_history(
 }
 
 /// Whether the active ROI has an edit to undo.
-pub fn can_undo_roi_edit(world: &World, editor_entity: hecs::Entity) -> bool {
-    active_roi_history(world, editor_entity).is_some_and(|history| !history.undo.is_empty())
+pub fn can_undo_roi_edit(world: &World, editor: &EditorState) -> bool {
+    active_roi_history(world, editor).is_some_and(|history| !history.undo.is_empty())
 }
 
 /// Whether the active ROI has an undone edit to redo.
-pub fn can_redo_roi_edit(world: &World, editor_entity: hecs::Entity) -> bool {
-    active_roi_history(world, editor_entity).is_some_and(|history| !history.redo.is_empty())
+pub fn can_redo_roi_edit(world: &World, editor: &EditorState) -> bool {
+    active_roi_history(world, editor).is_some_and(|history| !history.redo.is_empty())
 }
 
-fn active_roi_history(world: &World, editor_entity: hecs::Entity) -> Option<RoiHistory> {
-    let roi_entity = world
-        .get::<&EditorState>(editor_entity)
-        .ok()
-        .and_then(|editor| editor.active_roi)?;
+fn active_roi_history(world: &World, editor: &EditorState) -> Option<RoiHistory> {
+    let roi_entity = editor.active_roi?;
     world
         .get::<&Roi>(roi_entity)
         .ok()
@@ -123,29 +119,25 @@ fn active_roi_history(world: &World, editor_entity: hecs::Entity) -> Option<RoiH
 /// Undoes the active ROI's latest edit. Returns the ROI, which stays active.
 pub fn undo_roi_edit(
     world: &mut World,
-    editor_entity: hecs::Entity,
+    editor: &mut EditorState,
 ) -> Result<hecs::Entity, RoiEditHistoryError> {
-    apply_roi_edit_history(world, editor_entity, true)
+    apply_roi_edit_history(world, editor, true)
 }
 
 /// Redoes the active ROI's latest undone edit. Returns the ROI, which stays active.
 pub fn redo_roi_edit(
     world: &mut World,
-    editor_entity: hecs::Entity,
+    editor: &mut EditorState,
 ) -> Result<hecs::Entity, RoiEditHistoryError> {
-    apply_roi_edit_history(world, editor_entity, false)
+    apply_roi_edit_history(world, editor, false)
 }
 
 fn apply_roi_edit_history(
     world: &mut World,
-    editor_entity: hecs::Entity,
+    editor: &mut EditorState,
     undo: bool,
 ) -> Result<hecs::Entity, RoiEditHistoryError> {
-    let roi_entity = world
-        .get::<&EditorState>(editor_entity)
-        .map_err(|_| RoiEditHistoryError::MissingEditorState)?
-        .active_roi
-        .ok_or(RoiEditHistoryError::NoActiveRoi)?;
+    let roi_entity = editor.active_roi.ok_or(RoiEditHistoryError::NoActiveRoi)?;
     let entry = {
         let roi = world
             .get::<&Roi>(roi_entity)
@@ -172,11 +164,9 @@ fn apply_roi_edit_history(
     if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
         roi.history.step(undo, current);
     }
-    if let Ok(mut editor) = world.get::<&mut EditorState>(editor_entity) {
-        editor.contour_draft = None;
-        editor.contour_selection = None;
-        editor.mesh_selection = None;
-    }
+    editor.contour_draft = None;
+    editor.contour_selection = None;
+    editor.mesh_selection = None;
     Ok(roi_entity)
 }
 

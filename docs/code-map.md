@@ -7,7 +7,7 @@ This is a navigation guide to the current repository, not a second architecture 
 | Need | Entry point |
 | --- | --- |
 | Application startup and event loop | `src/lib.rs`, `src/app/mod.rs` |
-| ECS state and stable entity registry | `src/app/components.rs` |
+| ECS components and `Session` (the state that exists once: editor, input, GUI, cursor, windowing, annotations, overlay, protocol, window settings) | `src/app/components.rs` |
 | ROI domain model and mutations | `src/app/roi/` |
 | Derived ROI work and GPU cache synchronization | `src/app/roi_runtime.rs` |
 | User input and authoring | `src/systems/` |

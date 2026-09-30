@@ -13,7 +13,7 @@ use crate::app::{roi, roi_runtime};
 fn draw_roi_form(
     ui: &mut egui::Ui,
     world: &mut World,
-    entities: &AppEntities,
+    session: &mut Session,
     event_proxy: &EventLoopProxy<AppEvent>,
     roi_entity: hecs::Entity,
 ) {
@@ -51,15 +51,13 @@ fn draw_roi_form(
             match roi::request_mesh_voxel_cache_rebuild(world, roi_entity) {
                 Ok(()) => {
                     handlers::set_status_message(
-                        world,
-                        entities,
+                        session,
                         "Voxel-cache rebuild queued; mesh contours remain direct.".to_string(),
                     );
                     let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
                 }
                 Err(error) => handlers::set_status_message(
-                    world,
-                    entities,
+                    session,
                     format!("Voxel-cache rebuild request failed: {error:?}."),
                 ),
             }
@@ -71,33 +69,32 @@ pub fn draw_sidebar(
     ctx: &egui::Context,
     ui: &mut egui::Ui,
     world: &mut World,
-    entities: &AppEntities,
+    session: &mut Session,
     event_proxy: &EventLoopProxy<AppEvent>,
     volume_info: Option<[u32; 3]>,
 ) {
     ui.add_space(8.0);
 
     ui.collapsing("📁 Protocol", |ui| {
-        if let Ok(proto) = world.get::<&ProtocolState>(entities.protocol) {
-            let mut selected = proto.active_protocol.clone();
-            let registry = crate::render::protocols::get_protocol_registry();
-            egui::ComboBox::from_label("Active Protocol")
-                .selected_text(&selected)
-                .show_ui(ui, |ui| {
-                    for p in registry {
-                        if ui
-                            .selectable_value(&mut selected, p.name.clone(), &p.name)
-                            .clicked()
-                        {
-                            ctx.request_repaint();
-                        }
+        let proto = &session.protocol;
+        let mut selected = proto.active_protocol.clone();
+        let registry = crate::render::protocols::get_protocol_registry();
+        egui::ComboBox::from_label("Active Protocol")
+            .selected_text(&selected)
+            .show_ui(ui, |ui| {
+                for p in registry {
+                    if ui
+                        .selectable_value(&mut selected, p.name.clone(), &p.name)
+                        .clicked()
+                    {
+                        ctx.request_repaint();
                     }
-                });
+                }
+            });
 
-            if selected != proto.active_protocol {
-                let _ = event_proxy.send_event(AppEvent::SwitchProtocol(selected));
-                ctx.request_repaint();
-            }
+        if selected != proto.active_protocol {
+            let _ = event_proxy.send_event(AppEvent::SwitchProtocol(selected));
+            ctx.request_repaint();
         }
     });
 
@@ -133,25 +130,24 @@ pub fn draw_sidebar(
 
     // --- Windowing / Contrast (Detailed) ---
     ui.collapsing("🌓 Windowing", |ui| {
-        if let Ok(mut windowing) = world.get::<&mut VolumeWindowing>(entities.volume_windowing) {
-            ui.label("Center (HU)");
-            ui.add(egui::Slider::new(&mut windowing.center, -1024.0..=3071.0).show_value(true));
+        let windowing = &mut session.windowing;
+        ui.label("Center (HU)");
+        ui.add(egui::Slider::new(&mut windowing.center, -1024.0..=3071.0).show_value(true));
 
-            ui.label("Width (HU)");
-            ui.add(egui::Slider::new(&mut windowing.width, 1.0..=4096.0).show_value(true));
+        ui.label("Width (HU)");
+        ui.add(egui::Slider::new(&mut windowing.width, 1.0..=4096.0).show_value(true));
 
-            ui.separator();
-            ui.horizontal(|ui| {
-                if ui.button("Brain").clicked() {
-                    windowing.center = 40.0;
-                    windowing.width = 80.0;
-                }
-                if ui.button("Default").clicked() {
-                    windowing.center = 40.0;
-                    windowing.width = 400.0;
-                }
-            });
-        }
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui.button("Brain").clicked() {
+                windowing.center = 40.0;
+                windowing.width = 80.0;
+            }
+            if ui.button("Default").clicked() {
+                windowing.center = 40.0;
+                windowing.width = 400.0;
+            }
+        });
     });
 
     ui.separator();
@@ -175,35 +171,29 @@ pub fn draw_sidebar(
             ));
         }
 
-        let active_roi = world
-            .get::<&EditorState>(entities.editor)
-            .ok()
-            .and_then(|e| e.active_roi);
+        let active_roi = { let e = &session.editor; e.active_roi };
         let mut new_active_roi = active_roi;
 
         if ui.small_button("New contour ROI").clicked() {
-            match roi_runtime::create_empty_contour_roi(world, entities.editor, OrthogonalFamily::Axial)
+            match roi_runtime::create_empty_contour_roi(world, &mut session.editor, OrthogonalFamily::Axial)
             {
                 Ok(entity) => {
                     new_active_roi = Some(entity);
                     handlers::set_status_message(
-                        world,
-                        entities,
+                        session,
                         "Created contour ROI.".to_string(),
                     );
                     let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
                 }
-                Err(err) => handlers::set_status_message(world, entities, err),
+                Err(err) => handlers::set_status_message(session, err),
             }
         }
 
         if let Some(roi_entity) = new_active_roi {
-            draw_roi_form(ui, world, entities, event_proxy, roi_entity);
+            draw_roi_form(ui, world, session, event_proxy, roi_entity);
         }
 
-        let mesh_tool_active = world
-            .get::<&EditorState>(entities.editor)
-            .is_ok_and(|editor| editor.active_tool == EditorTool::MeshDeform);
+        let mesh_tool_active = { let editor = &session.editor; editor.active_tool == EditorTool::MeshDeform };
         let active_mesh_roi = new_active_roi.filter(|entity| {
             mesh_tool_active
                 || world.get::<&Roi>(*entity).is_ok_and(|roi| {
@@ -214,10 +204,7 @@ pub fn draw_sidebar(
             let has_mesh_preview = world
                 .get::<&Roi>(mesh_entity)
                 .is_ok_and(|roi| roi.mesh_edit_preview().is_some());
-            let (mut brush_radius_mm, mut brush_strength) = world
-                .get::<&EditorState>(entities.editor)
-                .map(|editor| (editor.mesh_brush_radius_mm, editor.mesh_brush_strength))
-                .unwrap_or((12.0, 1.0));
+            let (mut brush_radius_mm, mut brush_strength) = { let editor = &session.editor; (editor.mesh_brush_radius_mm, editor.mesh_brush_strength) };
             let radius_changed = ui
                 .add(egui::Slider::new(&mut brush_radius_mm, 1.0..=50.0).text("Minimum radius mm"))
                 .on_hover_text("The affected surface area grows during long drags. This is the minimum radius; disconnected surfaces remain unaffected.")
@@ -226,7 +213,8 @@ pub fn draw_sidebar(
                 .add(egui::Slider::new(&mut brush_strength, 0.1..=2.0).text("Strength"))
                 .changed();
             if radius_changed || strength_changed {
-                if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
+                {
+        let editor = &mut session.editor;
                     editor.mesh_brush_radius_mm = brush_radius_mm;
                     editor.mesh_brush_strength = brush_strength;
                 }
@@ -234,42 +222,40 @@ pub fn draw_sidebar(
             ui.horizontal(|ui| {
                 if has_mesh_preview {
                     if ui.small_button("Commit").clicked() {
-                        if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+                        {
+        let input = &mut session.input;
                             input.mesh_move_pending_commit = false;
                         }
-                        match roi::commit_mesh_edit_preview(world, entities.editor) {
+                        match roi::commit_mesh_edit_preview(world, &session.editor) {
                             Ok(()) => {
                                 handlers::set_status_message(
-                                    world,
-                                    entities,
+                                    session,
                                     "Committed mesh edit; build voxels explicitly when needed."
                                         .to_string(),
                                 );
                                 ctx.request_repaint();
                             }
                             Err(error) => handlers::set_status_message(
-                                world,
-                                entities,
+                                session,
                                 format!("Mesh commit failed: {error:?}."),
                             ),
                         }
                     }
                     if ui.small_button("Cancel").clicked() {
-                        if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+                        {
+        let input = &mut session.input;
                             input.mesh_move_pending_commit = false;
                         }
-                        match roi::cancel_mesh_edit_preview(world, entities.editor) {
+                        match roi::cancel_mesh_edit_preview(world, &session.editor) {
                             Ok(()) => {
                                 handlers::set_status_message(
-                                    world,
-                                    entities,
+                                    session,
                                     "Cancelled mesh edit preview.".to_string(),
                                 );
                                 ctx.request_repaint();
                             }
                             Err(error) => handlers::set_status_message(
-                                world,
-                                entities,
+                                session,
                                 format!("Mesh preview cancel failed: {error:?}."),
                             ),
                         }
@@ -300,8 +286,7 @@ pub fn draw_sidebar(
                                 roi.metadata.is_visible = false;
                             }
                             handlers::set_status_message(
-                                world,
-                                entities,
+                                session,
                                 "Only two ROI overlays can be visible at once in the current renderer."
                                     .to_string(),
                             );
@@ -330,9 +315,7 @@ pub fn draw_sidebar(
                 && world.get::<&Roi>(entity).is_ok_and(|roi| {
                     roi.primary_representation() == PrimaryRepresentation::Contour
                 })
-                && world
-                    .get::<&EditorState>(entities.editor)
-                    .is_ok_and(|editor| editor.active_tool == EditorTool::ContourSelect);
+                && { let editor = &session.editor; editor.active_tool == EditorTool::ContourSelect };
             if show_contour_point_controls {
                 ui.horizontal(|ui| {
                 if ui
@@ -340,23 +323,18 @@ pub fn draw_sidebar(
                     .on_hover_text("Insert a point in the selected loop.")
                     .clicked()
                 {
-                    let mouse_uv = world
-                        .get::<&InputState>(entities.input)
-                        .map(|input| input.mouse_uv)
-                        .unwrap_or([0.5, 0.5]);
-                    match crate::systems::insert_point_into_selected_loop(world, entities, mouse_uv)
+                    let mouse_uv = { let input = &session.input; input.mouse_uv };
+                    match crate::systems::insert_point_into_selected_loop(world, session, mouse_uv)
                     {
                         Ok(()) => {
                             handlers::set_status_message(
-                                world,
-                                entities,
+                                session,
                                 "Inserted contour point.".to_string(),
                             );
                             ctx.request_repaint();
                         }
                         Err(err) => handlers::set_status_message(
-                            world,
-                            entities,
+                            session,
                             format!("Insert point failed: {err:?}"),
                         ),
                     }
@@ -367,18 +345,16 @@ pub fn draw_sidebar(
                     .on_hover_text("Delete selected point or loop.")
                     .clicked()
                 {
-                    match crate::systems::delete_selected_contour_element(world, entities) {
+                    match crate::systems::delete_selected_contour_element(world, session) {
                         Ok(()) => {
                             handlers::set_status_message(
-                                world,
-                                entities,
+                                session,
                                 "Deleted selected contour element.".to_string(),
                             );
                             ctx.request_repaint();
                         }
                         Err(err) => handlers::set_status_message(
-                            world,
-                            entities,
+                            session,
                             format!("Delete failed: {err:?}"),
                         ),
                     }
@@ -388,21 +364,23 @@ pub fn draw_sidebar(
         }
 
         if new_active_roi != active_roi {
-            if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+            {
+        let input = &mut session.input;
                 input.contour_move_pending_commit = false;
                 input.mesh_move_pending_commit = false;
             }
             crate::systems::clear_contour_draft_for_roi_change(
                 world,
-                entities.editor,
+                &mut session.editor,
                 new_active_roi,
             );
             crate::systems::clear_contour_selection_for_roi_change(
                 world,
-                entities.editor,
+                &mut session.editor,
                 new_active_roi,
             );
-            if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
+            {
+        let editor = &mut session.editor;
                 editor.active_roi = new_active_roi;
                 let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
             }
@@ -414,12 +392,10 @@ pub fn draw_sidebar(
     // --- Annotations ---
     ui.collapsing("📍 Annotations", |ui| {
         if ui.button("➕ Add at Cursor").clicked() {
-            let mut current_pos = glam::Vec3::ZERO;
-            if let Ok(t) = world.get::<&Transform>(entities.cursor) {
-                current_pos = glam::Vec3::from(t.position);
-            }
+            let current_pos = glam::Vec3::from(session.cursor.position);
 
-            if let Ok(mut state) = world.get::<&mut AnnotationState>(entities.annotations) {
+            {
+                let state = &mut session.annotations;
                 let next_idx = state.annotations.len() + 1;
                 let new_id = uuid::Uuid::new_v4();
                 state.annotations.push(Annotation {
@@ -435,7 +411,8 @@ pub fn draw_sidebar(
         }
 
         if ui.button("📁 View All Notes").clicked() {
-            if let Ok(mut state) = world.get::<&mut AnnotationState>(entities.annotations) {
+            {
+                let state = &mut session.annotations;
                 state.focused_id = None;
                 state.show_right_sidebar = true;
             }
@@ -443,7 +420,8 @@ pub fn draw_sidebar(
 
         ui.separator();
 
-        if let Ok(mut state) = world.get::<&mut AnnotationState>(entities.annotations) {
+        {
+            let state = &mut session.annotations;
             if !state.annotations.is_empty() {
                 egui::ScrollArea::vertical()
                     .max_height(200.0)
@@ -484,7 +462,7 @@ pub fn draw_sidebar(
 
     ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
         ui.separator();
-        if let Some(hu) = crate::systems::get_hu_at_mouse(world, entities) {
+        if let Some(hu) = crate::systems::get_hu_at_mouse(world, session) {
             ui.label(format!("HU at cursor: {:.0}", hu));
         } else {
             ui.label("HU at cursor: --");

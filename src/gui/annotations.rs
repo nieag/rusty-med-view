@@ -1,6 +1,5 @@
 use crate::components::*;
 use crate::AppEvent;
-use hecs::World;
 use winit::event_loop::EventLoopProxy;
 
 const NOTE_PREVIEW_MAX_CHARS: usize = 64;
@@ -18,8 +17,7 @@ fn note_preview(note: &str) -> String {
 pub fn draw_discussion_sidebar(
     ctx: &egui::Context,
     ui: &mut egui::Ui,
-    world: &mut World,
-    entities: &AppEntities,
+    session: &mut Session,
     event_proxy: &EventLoopProxy<AppEvent>,
 ) {
     ui.heading("💬 Discussion");
@@ -31,7 +29,8 @@ pub fn draw_discussion_sidebar(
     let mut new_focus = None;
     let mut back_to_list = false;
 
-    if let Ok(mut state) = world.get::<&mut AnnotationState>(entities.annotations) {
+    {
+        let state = &mut session.annotations;
         if let Some(focused_id) = state.focused_id {
             let ann_idx = state.annotations.iter().position(|a| a.id == focused_id);
             if let Some(idx) = ann_idx {
@@ -203,7 +202,8 @@ pub fn draw_discussion_sidebar(
         let _ = event_proxy.send_event(AppEvent::DeleteAnnotation(id));
     }
     if let Some(pos) = to_locate {
-        if let Ok(mut t) = world.get::<&mut Transform>(entities.cursor) {
+        {
+            let t = &mut session.cursor;
             t.position = pos.into();
         }
     }
@@ -213,7 +213,8 @@ pub fn draw_discussion_sidebar(
 
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
         if ui.button("Close Sidebar").clicked() {
-            if let Ok(mut state) = world.get::<&mut AnnotationState>(entities.annotations) {
+            {
+                let state = &mut session.annotations;
                 state.show_right_sidebar = false;
             }
         }

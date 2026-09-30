@@ -3,7 +3,6 @@ use crate::app::events::AppEvent;
 use crate::app::roi_runtime;
 use crate::gui::Gui;
 use crate::io::volume;
-use crate::overlay::OverlayManager;
 use crate::render::pipeline;
 use crate::render::protocols;
 use hecs::World;
@@ -45,7 +44,7 @@ pub struct VolumeResources {
 
 pub struct SceneState {
     pub world: World,
-    pub entities: AppEntities,
+    pub session: Session,
     /// Tracks camera movement so the 3D raymarch can drop quality while it moves.
     pub camera_motion: crate::render::pipeline::CameraMotion,
 }
@@ -57,7 +56,6 @@ pub struct RenderingContext {
     pub volume_resources: VolumeResources,
     pub scene: SceneState,
     pub gui: Gui,
-    pub settings_entity: hecs::Entity,
     pub event_proxy: EventLoopProxy<AppEvent>,
 }
 
@@ -131,25 +129,6 @@ impl RenderingContext {
         let dummy_r8 = volume::create_dummy_r8_texture(&device, &queue);
         let default_lut = volume::create_default_colormap(&device, &queue);
 
-        let cursor = world.spawn((
-            Transform {
-                position: [0.5, 0.5, 0.5],
-            },
-            CursorTag,
-        ));
-        let settings_entity = world.spawn((WindowSettings {
-            width: config.width,
-            height: config.height,
-            viewport_rect: [0.0, 0.0, config.width as f32, config.height as f32],
-        },));
-
-        let gui_state = world.spawn((GuiState {
-            status_message: None,
-        },));
-
-        let input = world.spawn((InputState::default(),));
-        let protocol = world.spawn((ProtocolState::default(),));
-
         let uniform_buffer = pipeline::create_uniform_buffer(&device);
         let texture_bind_group_layout = pipeline::create_bind_group_layout(&device);
         let overlay_buffer = pipeline::create_overlay_buffer(&device);
@@ -178,28 +157,8 @@ impl RenderingContext {
             MainVolumeTag,
         ));
 
-        let editor = world.spawn((EditorState {
-            active_roi: None,
-            ..Default::default()
-        },));
-
-        let windowing = world.spawn((VolumeWindowing::default(),));
-        let annotations = world.spawn((AnnotationState::default(),));
-        let overlay = world.spawn((OverlayManager::default(),));
-
-        let entities = AppEntities {
-            input,
-            editor,
-            gui_state,
-            volume_windowing: windowing,
-            annotations,
-            overlay,
-            protocol,
-            cursor,
-            window_settings: settings_entity,
-        };
-
-        protocols::apply_protocol(&mut world, &entities, "Standard 2x2");
+        let mut session = Session::new(config.width, config.height);
+        protocols::apply_protocol(&mut world, &mut session, "Standard 2x2");
 
         let render_pipeline =
             pipeline::create_render_pipeline(&device, &texture_bind_group_layout, config.format);
@@ -266,11 +225,10 @@ impl RenderingContext {
             },
             scene: SceneState {
                 world,
-                entities,
+                session,
                 camera_motion: Default::default(),
             },
             gui,
-            settings_entity,
             event_proxy,
         })
     }

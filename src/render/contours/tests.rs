@@ -63,40 +63,24 @@ fn test_projection_helper_local_world_viewport_roundtrip_stays_stable() {
 #[test]
 fn test_prepare_contour_render_data_is_empty_when_no_visible_contour_roi() {
     let world = World::new();
-    let entities = AppEntities {
-        input: hecs::Entity::DANGLING,
-        editor: hecs::Entity::DANGLING,
-        gui_state: hecs::Entity::DANGLING,
-        volume_windowing: hecs::Entity::DANGLING,
-        annotations: hecs::Entity::DANGLING,
-        overlay: hecs::Entity::DANGLING,
-        protocol: hecs::Entity::DANGLING,
-        cursor: hecs::Entity::DANGLING,
-        window_settings: hecs::Entity::DANGLING,
-    };
+    let session = Session::new(800, 600);
 
-    let data = prepare_contour_render_data(&world, &entities);
+    let data = prepare_contour_render_data(&world, &session);
     assert!(data.vertices.is_empty());
 }
 
 #[test]
 fn test_prepare_contour_render_data_emits_vertices_for_matching_slice() {
     let mut world = World::new();
-    let cursor = world.spawn((Transform {
-        position: [0.5, 0.5, 0.5],
-    },));
-    let window_settings = world.spawn((WindowSettings {
-        width: 800,
-        height: 600,
-        viewport_rect: [0.0, 0.0, 800.0, 600.0],
-    },));
-    let editor = world.spawn((EditorState {
+    let mut session = Session::new(800, 600);
+    session.cursor.position = [0.5, 0.5, 0.5];
+    session.editor = EditorState {
         active_roi: None,
         active_tool: EditorTool::Navigation,
         contour_draft: None,
         contour_selection: None,
         ..EditorState::default()
-    },));
+    };
     let viewport = world.spawn((
         Viewport {
             mode: ViewMode::Axial,
@@ -177,21 +161,9 @@ fn test_prepare_contour_render_data_emits_vertices_for_matching_slice() {
         gpu_resources: None,
     });
     let roi_entity = world.spawn((roi, LayerSettings { opacity: 1.0 }, RoiTag));
-    world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(roi_entity);
+    session.editor.active_roi = Some(roi_entity);
 
-    let entities = AppEntities {
-        input: hecs::Entity::DANGLING,
-        editor,
-        gui_state: hecs::Entity::DANGLING,
-        volume_windowing: hecs::Entity::DANGLING,
-        annotations: hecs::Entity::DANGLING,
-        overlay: hecs::Entity::DANGLING,
-        protocol: hecs::Entity::DANGLING,
-        cursor,
-        window_settings,
-    };
-
-    let data = prepare_contour_render_data(&world, &entities);
+    let data = prepare_contour_render_data(&world, &session);
     assert!(!data.vertices.is_empty());
     assert_eq!(data.batches.len(), 1);
     assert_eq!(data.batches[0].scissor_rect, [0, 0, 800, 600]);
@@ -206,12 +178,12 @@ fn test_prepare_contour_render_data_emits_vertices_for_matching_slice() {
     second_roi.metadata.color = [0.1, 0.7, 0.2, 0.8];
     world.spawn((second_roi, LayerSettings { opacity: 0.5 }, RoiTag));
     {
-        let mut editor_state = world.get::<&mut EditorState>(editor).unwrap();
+        let editor_state = &mut session.editor;
         editor_state.active_roi = None;
         editor_state.active_tool = EditorTool::ContourSelect;
     }
 
-    let multi_roi_data = prepare_contour_render_data(&world, &entities);
+    let multi_roi_data = prepare_contour_render_data(&world, &session);
     assert_eq!(multi_roi_data.batches.len(), 1);
     assert!(multi_roi_data
         .vertices
@@ -229,7 +201,7 @@ fn test_prepare_contour_render_data_emits_vertices_for_matching_slice() {
         .unwrap()
         .metadata
         .is_visible = false;
-    let hidden_data = prepare_contour_render_data(&world, &entities);
+    let hidden_data = prepare_contour_render_data(&world, &session);
     assert!(!hidden_data.vertices.is_empty());
     assert_eq!(hidden_data.batches.len(), 1);
 }
@@ -237,21 +209,15 @@ fn test_prepare_contour_render_data_emits_vertices_for_matching_slice() {
 #[test]
 fn test_prepare_contour_render_data_uses_roi_geometry_when_main_volume_missing() {
     let mut world = World::new();
-    let cursor = world.spawn((Transform {
-        position: [0.5, 0.5, 0.5],
-    },));
-    let window_settings = world.spawn((WindowSettings {
-        width: 800,
-        height: 600,
-        viewport_rect: [0.0, 0.0, 800.0, 600.0],
-    },));
-    let editor = world.spawn((EditorState {
+    let mut session = Session::new(800, 600);
+    session.cursor.position = [0.5, 0.5, 0.5];
+    session.editor = EditorState {
         active_roi: None,
         active_tool: EditorTool::Navigation,
         contour_draft: None,
         contour_selection: None,
         ..EditorState::default()
-    },));
+    };
     world.spawn((
         Viewport {
             mode: ViewMode::Axial,
@@ -307,21 +273,9 @@ fn test_prepare_contour_render_data_uses_roi_geometry_when_main_volume_missing()
         gpu_resources: None,
     });
     let roi_entity = world.spawn((roi, LayerSettings { opacity: 1.0 }, RoiTag));
-    world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(roi_entity);
+    session.editor.active_roi = Some(roi_entity);
 
-    let entities = AppEntities {
-        input: hecs::Entity::DANGLING,
-        editor,
-        gui_state: hecs::Entity::DANGLING,
-        volume_windowing: hecs::Entity::DANGLING,
-        annotations: hecs::Entity::DANGLING,
-        overlay: hecs::Entity::DANGLING,
-        protocol: hecs::Entity::DANGLING,
-        cursor,
-        window_settings,
-    };
-
-    let data = prepare_contour_render_data(&world, &entities);
+    let data = prepare_contour_render_data(&world, &session);
     assert!(!data.vertices.is_empty());
 }
 
@@ -352,15 +306,8 @@ fn test_voxel_primary_oblique_view_cache_emits_contour_vertices() {
         },
         MainVolumeTag,
     ));
-    let cursor = world.spawn((Transform {
-        position: [0.5, 0.5, 0.5],
-    },));
-    let window_settings = world.spawn((WindowSettings {
-        width: 800,
-        height: 600,
-        viewport_rect: [0.0, 0.0, 800.0, 600.0],
-    },));
-    let editor = world.spawn((EditorState::default(),));
+    let mut session = Session::new(800, 600);
+    session.cursor.position = [0.5, 0.5, 0.5];
     world.spawn((
         Viewport {
             mode: ViewMode::Oblique,
@@ -403,21 +350,13 @@ fn test_voxel_primary_oblique_view_cache_emits_contour_vertices() {
         CacheViewState::Current,
     );
     let roi_entity = world.spawn((roi, LayerSettings { opacity: 0.5 }, RoiTag));
-    world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(roi_entity);
-    let entities = AppEntities {
-        input: hecs::Entity::DANGLING,
-        editor,
-        gui_state: hecs::Entity::DANGLING,
-        volume_windowing: hecs::Entity::DANGLING,
-        annotations: hecs::Entity::DANGLING,
-        overlay: hecs::Entity::DANGLING,
-        protocol: hecs::Entity::DANGLING,
-        cursor,
-        window_settings,
-    };
+    session.editor.active_roi = Some(roi_entity);
 
-    crate::app::roi_runtime::sync_roi_contour_view_caches_for_viewports(&mut world);
-    let data = prepare_contour_render_data(&world, &entities);
+    crate::app::roi_runtime::sync_roi_contour_view_caches_for_viewports(
+        &mut world,
+        &session.view_focus(),
+    );
+    let data = prepare_contour_render_data(&world, &session);
 
     let roi = world.get::<&Roi>(roi_entity).unwrap();
     assert!(roi

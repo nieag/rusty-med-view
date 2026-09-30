@@ -452,18 +452,18 @@ fn append_roi_contour_vertices(
     }
 }
 
-pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> ContourRenderData {
-    let (active_roi, active_tool, contour_draft, contour_selection) = world
-        .get::<&EditorState>(entities.editor)
-        .map(|editor| {
+pub fn prepare_contour_render_data(world: &World, session: &Session) -> ContourRenderData {
+    let (active_roi, active_tool, contour_draft, contour_selection) = {
+        let editor = &session.editor;
+        {
             (
                 editor.active_roi,
                 editor.active_tool,
                 editor.contour_draft.clone(),
                 editor.contour_selection.clone(),
             )
-        })
-        .unwrap_or((None, EditorTool::Navigation, None, None));
+        }
+    };
     let main_geometry = {
         let mut volume_query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
         volume_query
@@ -471,15 +471,15 @@ pub fn prepare_contour_render_data(world: &World, entities: &AppEntities) -> Con
             .next()
             .and_then(|(_, volume)| volume.geometry)
     };
-    let cursor_uv = world
-        .get::<&Transform>(entities.cursor)
-        .map(|cursor| cursor.position)
-        .unwrap_or([0.5, 0.5, 0.5]);
+    let cursor_uv = {
+        let cursor = &session.cursor;
+        cursor.position
+    };
 
-    let window_size = world
-        .get::<&WindowSettings>(entities.window_settings)
-        .map(|settings| [settings.width as f32, settings.height as f32])
-        .unwrap_or([1.0, 1.0]);
+    let window_size = {
+        let settings = &session.window_settings;
+        [settings.width as f32, settings.height as f32]
+    };
 
     let px_to_ndc = (2.0 / window_size[0].max(1.0)).min(2.0 / window_size[1].max(1.0));
     let line_width_ndc = LINE_WIDTH_PX * px_to_ndc;

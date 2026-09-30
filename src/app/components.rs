@@ -11,7 +11,6 @@ use web_time::Instant;
 use winit::keyboard::ModifiersState;
 
 // --- Basic Tags ---
-pub struct CursorTag;
 pub struct MainVolumeTag;
 pub struct RoiTag;
 
@@ -597,6 +596,8 @@ pub struct RoiJobState {
     pub work_cycle_started_at: Option<Instant>,
     /// A representation switch waiting for derived data (see `app::roi::switch`).
     pub pending_switch: Option<crate::app::roi::switch::PendingSwitch>,
+    /// Outcomes of this ROI's work for the user, drained by `advance_roi_work`.
+    pub messages: Vec<String>,
 }
 
 pub struct Roi {
@@ -838,18 +839,52 @@ pub struct AnnotationState {
     pub show_right_sidebar: bool,
 }
 
-// --- Singleton Entity Registry ---
-#[derive(Clone, Copy)]
-pub struct AppEntities {
-    pub input: hecs::Entity,
-    pub editor: hecs::Entity,
-    pub gui_state: hecs::Entity,
-    pub volume_windowing: hecs::Entity,
-    pub annotations: hecs::Entity,
-    pub overlay: hecs::Entity,
-    pub protocol: hecs::Entity,
-    pub cursor: hecs::Entity,
-    pub window_settings: hecs::Entity,
+// --- Session: state that exists once ---
+/// The state that exists once per running app, as plain fields. (Things that are many, such as
+/// ROIs and viewports, are entities in the `hecs` world; see ADR 0005.)
+pub struct Session {
+    pub input: InputState,
+    pub editor: EditorState,
+    pub gui: GuiState,
+    pub windowing: VolumeWindowing,
+    pub annotations: AnnotationState,
+    pub overlay: crate::overlay::OverlayManager,
+    pub protocol: ProtocolState,
+    pub cursor: Transform,
+    pub window_settings: WindowSettings,
+}
+
+impl Session {
+    /// What the user is looking at: the active ROI and the cursor.
+    pub fn view_focus(&self) -> crate::app::roi_runtime::ViewFocus {
+        crate::app::roi_runtime::ViewFocus {
+            active_roi: self.editor.active_roi,
+            cursor_uv: self.cursor.position,
+        }
+    }
+
+    /// A session for a window of the given size, with the cursor at the volume centre.
+    pub fn new(width: u32, height: u32) -> Self {
+        Self {
+            input: InputState::default(),
+            editor: EditorState::default(),
+            gui: GuiState {
+                status_message: None,
+            },
+            windowing: VolumeWindowing::default(),
+            annotations: AnnotationState::default(),
+            overlay: crate::overlay::OverlayManager::default(),
+            protocol: ProtocolState::default(),
+            cursor: Transform {
+                position: [0.5, 0.5, 0.5],
+            },
+            window_settings: WindowSettings {
+                width,
+                height,
+                viewport_rect: [0.0, 0.0, width as f32, height as f32],
+            },
+        }
+    }
 }
 
 #[cfg(test)]

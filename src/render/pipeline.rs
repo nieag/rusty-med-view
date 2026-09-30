@@ -349,15 +349,17 @@ fn run_frame_systems(
             overlay_buffer: &volume_res.overlay_buffer,
         },
     };
+    let focus = scene.session.view_focus();
     let roi_work_status =
-        crate::app::roi_runtime::advance_roi_work(&mut scene.world, Some(&roi_work));
-    systems::sys_handle_mouse_drag(&mut scene.world, &scene.entities);
-    gui.prepare(window, &mut scene.world, &scene.entities, event_proxy);
-    systems::sys_sync_annotations_to_overlay(&mut scene.world, &scene.entities);
-    if let Ok(mut overlay) = scene
-        .world
-        .get::<&mut crate::overlay::OverlayManager>(scene.entities.overlay)
+        crate::app::roi_runtime::advance_roi_work(&mut scene.world, Some(&roi_work), &focus);
+    if let Some(message) = roi_work_status.messages.last() {
+        scene.session.gui.status_message = Some(message.clone());
+    }
+    systems::sys_handle_mouse_drag(&mut scene.world, &mut scene.session);
+    gui.prepare(window, &mut scene.world, &mut scene.session, event_proxy);
+    systems::sys_sync_annotations_to_overlay(&mut scene.session);
     {
+        let overlay = &mut scene.session.overlay;
         overlay.rebuild_primitives();
     }
     roi_work_status
@@ -379,7 +381,7 @@ fn prepare_uniforms(
     volume_res: &VolumeResources,
 ) -> PreparedFrame {
     let (overlay_bytes, overlay_count, dragging_idx, overlay_mouse_uv) =
-        systems::get_overlay_render_data(&scene.world, &scene.entities);
+        systems::get_overlay_render_data(&scene.session);
     if !overlay_bytes.is_empty() {
         gpu.queue
             .write_buffer(&volume_res.overlay_buffer, 0, &overlay_bytes);
@@ -394,7 +396,7 @@ fn prepare_uniforms(
     let mut view3d = None;
     let mut camera_settling = false;
     for (e, rect, u_idx, _) in &viewports {
-        let mut u = systems::sys_prepare_render_data(&mut scene.world, &scene.entities, *e);
+        let mut u = systems::sys_prepare_render_data(&mut scene.world, &scene.session, *e);
         if u.view_mode == 0 {
             // The camera and windowing decide the image quality; the cursor does not, because
             // the crosshair is drawn over the cached image rather than into it.
@@ -645,7 +647,7 @@ pub fn render_frame(
     let known_mesh_parts = pipelines.mesh_overlay.fingerprints();
     let mesh_data = crate::render::meshes::prepare_mesh_render_data(
         &scene.world,
-        &scene.entities,
+        &scene.session,
         &known_mesh_parts,
     );
     stats.mesh_batch_count = mesh_data.batch_count() as u32;
@@ -659,7 +661,7 @@ pub fn render_frame(
     stats.mesh_chunks_reused = pipelines.mesh_overlay.reused_chunks_last_frame;
     crate::render::meshes::render_meshes(&mut encoder, &view, &pipelines.mesh_overlay);
 
-    let contour_data = contours::prepare_contour_render_data(&scene.world, &scene.entities);
+    let contour_data = contours::prepare_contour_render_data(&scene.world, &scene.session);
     stats.contour_batch_count = contour_data.batches.len() as u32;
     contours::upload_contour_render_data(
         &gpu.device,

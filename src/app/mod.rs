@@ -187,11 +187,11 @@ impl ApplicationHandler<AppEvent> for App {
         if let WindowEvent::CursorMoved { position, .. } = &event {
             systems::sys_update_mouse(
                 &mut ctx.scene.world,
-                &ctx.scene.entities,
+                &mut ctx.scene.session,
                 position.x,
                 position.y,
             );
-            systems::sys_handle_mouse_drag(&mut ctx.scene.world, &ctx.scene.entities);
+            systems::sys_handle_mouse_drag(&mut ctx.scene.world, &mut ctx.scene.session);
             ctx.window.request_redraw();
             return;
         }
@@ -206,7 +206,7 @@ impl ApplicationHandler<AppEvent> for App {
             WindowEvent::MouseInput { button, state, .. } => {
                 systems::sys_handle_mouse_button(
                     &mut ctx.scene.world,
-                    &ctx.scene.entities,
+                    &mut ctx.scene.session,
                     button,
                     state,
                 );
@@ -220,7 +220,7 @@ impl ApplicationHandler<AppEvent> for App {
                 if y_delta != 0.0 {
                     let changed_3d_zoom = systems::sys_handle_input_scroll(
                         &mut ctx.scene.world,
-                        &ctx.scene.entities,
+                        &mut ctx.scene.session,
                         y_delta,
                     );
                     if changed_3d_zoom {
@@ -231,11 +231,7 @@ impl ApplicationHandler<AppEvent> for App {
                 }
             }
             WindowEvent::ModifiersChanged(modifiers) => {
-                systems::sys_update_modifiers(
-                    &mut ctx.scene.world,
-                    &ctx.scene.entities,
-                    modifiers.state(),
-                );
+                systems::sys_update_modifiers(&mut ctx.scene.session, modifiers.state());
                 ctx.window.request_redraw();
             }
             WindowEvent::Resized(size) => {
@@ -355,12 +351,11 @@ impl ApplicationHandler<AppEvent> for App {
                                     &ctx.gpu.device,
                                     &ctx.gpu.queue,
                                     &mut ctx.scene.world,
-                                    &ctx.scene.entities,
+                                    &mut ctx.scene.session,
                                     loaded,
                                 );
                                 handlers::set_status_message(
-                                    &mut ctx.scene.world,
-                                    &ctx.scene.entities,
+                                    &mut ctx.scene.session,
                                     format!("Volume Loaded: {}x{}", dims[0], dims[1]),
                                 );
                                 dims
@@ -373,18 +368,15 @@ impl ApplicationHandler<AppEvent> for App {
                                     loaded_label,
                                 ) {
                                     Ok(outcome) => {
-                                        if let Ok(mut editor) = ctx
-                                            .scene
-                                            .world
-                                            .get::<&mut EditorState>(ctx.scene.entities.editor)
                                         {
-                                            editor.active_roi = outcome.entities.first().copied();
+                                            let editor = &mut ctx.scene.session.editor;
+                                            editor.active_roi = outcome.session.first().copied();
                                         }
                                         let dims = outcome.dimensions;
-                                        let message = if outcome.entities.len() > 1 {
+                                        let message = if outcome.session.len() > 1 {
                                             format!(
                                                 "Label Loaded: {} labels as separate ROIs ({}x{})",
-                                                outcome.entities.len(),
+                                                outcome.session.len(),
                                                 dims[0],
                                                 dims[1]
                                             )
@@ -392,8 +384,7 @@ impl ApplicationHandler<AppEvent> for App {
                                             format!("Label Loaded: {}x{}", dims[0], dims[1])
                                         };
                                         handlers::set_status_message(
-                                            &mut ctx.scene.world,
-                                            &ctx.scene.entities,
+                                            &mut ctx.scene.session,
                                             message,
                                         );
 
@@ -417,24 +408,14 @@ impl ApplicationHandler<AppEvent> for App {
                                                 &wasm_bindgen::JsValue::from_str(&json),
                                             );
                                         }
-                                        handlers::set_status_message(
-                                            &mut ctx.scene.world,
-                                            &ctx.scene.entities,
-                                            err,
-                                        );
+                                        handlers::set_status_message(&mut ctx.scene.session, err);
                                         [0, 0, 0]
                                     }
                                 }
                             }
                         };
 
-                        let active_roi = ctx
-                            .scene
-                            .world
-                            .query::<&EditorState>()
-                            .iter()
-                            .next()
-                            .and_then(|(_, e)| e.active_roi);
+                        let active_roi = ctx.scene.session.editor.active_roi;
                         roi_runtime::recreate_scene_bind_groups(
                             &ctx.gpu.device,
                             &mut ctx.scene.world,
@@ -476,16 +457,14 @@ impl ApplicationHandler<AppEvent> for App {
                                 == Some(QA_PRESET_IMAGE_LABEL_MPR_BASIC)
                             {
                                 qa_runtime.preset_phase = qa::QaPresetPhase::Applying;
-                                let active_roi = ctx
-                                    .scene
-                                    .world
-                                    .get::<&EditorState>(ctx.scene.entities.editor)
-                                    .ok()
-                                    .and_then(|editor| editor.active_roi);
+                                let active_roi = {
+                                    let editor = &mut ctx.scene.session.editor;
+                                    editor.active_roi
+                                };
                                 if let Some(active_roi) = active_roi {
                                     let ok = apply_image_label_mpr_basic_preset(
                                         &mut ctx.scene.world,
-                                        &ctx.scene.entities,
+                                        &mut ctx.scene.session,
                                         active_roi,
                                     );
                                     if ok {
@@ -554,8 +533,7 @@ impl ApplicationHandler<AppEvent> for App {
                             web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(&json));
                         }
                         handlers::set_status_message(
-                            &mut ctx.scene.world,
-                            &ctx.scene.entities,
+                            &mut ctx.scene.session,
                             format!("Error: {:?}", e),
                         );
                     }
@@ -563,13 +541,7 @@ impl ApplicationHandler<AppEvent> for App {
                 ctx.window.request_redraw();
             }
             AppEvent::RebuildBindGroups => {
-                let active_roi = ctx
-                    .scene
-                    .world
-                    .query::<&EditorState>()
-                    .iter()
-                    .next()
-                    .and_then(|(_, e)| e.active_roi);
+                let active_roi = ctx.scene.session.editor.active_roi;
                 roi_runtime::recreate_scene_bind_groups(
                     &ctx.gpu.device,
                     &mut ctx.scene.world,
@@ -586,34 +558,28 @@ impl ApplicationHandler<AppEvent> for App {
                 ctx.window.request_redraw();
             }
             AppEvent::SwitchProtocol(name) => {
-                protocols::apply_protocol(&mut ctx.scene.world, &ctx.scene.entities, &name);
+                protocols::apply_protocol(&mut ctx.scene.world, &mut ctx.scene.session, &name);
                 ctx.window.request_redraw();
             }
             AppEvent::ToggleMaximize(entity) => {
-                protocols::toggle_maximize(&mut ctx.scene.world, &ctx.scene.entities, entity);
+                protocols::toggle_maximize(&mut ctx.scene.world, &mut ctx.scene.session, entity);
                 ctx.window.request_redraw();
             }
             AppEvent::SwapViewports(a, b) => {
-                protocols::swap_viewports(&mut ctx.scene.world, &ctx.scene.entities, a, b);
+                protocols::swap_viewports(&mut ctx.scene.world, &ctx.scene.session, a, b);
                 ctx.window.request_redraw();
             }
             AppEvent::FocusAnnotation(id) => {
-                if let Ok(mut state) = ctx
-                    .scene
-                    .world
-                    .get::<&mut AnnotationState>(ctx.scene.entities.annotations)
                 {
+                    let state = &mut ctx.scene.session.annotations;
                     state.focused_id = Some(id);
                     state.show_right_sidebar = true;
                 }
                 ctx.window.request_redraw();
             }
             AppEvent::AddComment(id, text) => {
-                if let Ok(mut state) = ctx
-                    .scene
-                    .world
-                    .get::<&mut AnnotationState>(ctx.scene.entities.annotations)
                 {
+                    let state = &mut ctx.scene.session.annotations;
                     if let Some(ann) = state.annotations.iter_mut().find(|a| a.id == id) {
                         ann.comments.push(Comment {
                             author: "User".to_string(),
@@ -624,11 +590,8 @@ impl ApplicationHandler<AppEvent> for App {
                 ctx.window.request_redraw();
             }
             AppEvent::DeleteAnnotation(id) => {
-                if let Ok(mut state) = ctx
-                    .scene
-                    .world
-                    .get::<&mut AnnotationState>(ctx.scene.entities.annotations)
                 {
+                    let state = &mut ctx.scene.session.annotations;
                     state.annotations.retain(|a| a.id != id);
                     if state.focused_id == Some(id) {
                         state.focused_id = None;
@@ -646,12 +609,7 @@ fn apply_surface_size(ctx: &mut RenderingContext, size: winit::dpi::PhysicalSize
     ctx.gpu.config.width = size.width;
     ctx.gpu.config.height = size.height;
     ctx.gpu.surface.configure(&ctx.gpu.device, &ctx.gpu.config);
-    if let Ok(mut settings) = ctx
-        .scene
-        .world
-        .get::<&mut WindowSettings>(ctx.settings_entity)
-    {
-        settings.width = size.width;
-        settings.height = size.height;
-    }
+    let settings = &mut ctx.scene.session.window_settings;
+    settings.width = size.width;
+    settings.height = size.height;
 }

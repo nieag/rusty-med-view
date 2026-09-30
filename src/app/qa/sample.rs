@@ -2,6 +2,7 @@ use crate::app::components::*;
 #[cfg(target_arch = "wasm32")]
 use crate::app::events::AppEvent;
 use crate::app::roi_runtime;
+use crate::components::Session;
 #[cfg(target_arch = "wasm32")]
 use crate::io::nifti::{load_label_from_bytes, load_nifti_from_bytes};
 use crate::render::protocols;
@@ -107,11 +108,12 @@ pub(crate) async fn fetch_bytes(path: &str) -> Result<Vec<u8>, String> {
 
 pub(crate) fn apply_image_label_mpr_basic_preset(
     world: &mut hecs::World,
-    entities: &AppEntities,
+    session: &mut Session,
     active_roi: hecs::Entity,
 ) -> bool {
-    protocols::apply_protocol(world, entities, "ROI MPR + Oblique");
-    if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
+    protocols::apply_protocol(world, session, "ROI MPR + Oblique");
+    {
+        let editor = &mut session.editor;
         editor.active_roi = Some(active_roi);
     }
     if let Ok(mut roi) = world.get::<&mut Roi>(active_roi) {
@@ -135,7 +137,8 @@ pub(crate) fn apply_image_label_mpr_basic_preset(
                 );
                 let world_mm = crate::convert::volume_uv_to_world_mm(roi_uv, cache.data.geometry);
                 let uv = crate::convert::world_mm_to_volume_uv(world_mm, main_geometry);
-                if let Ok(mut cursor) = world.get::<&mut Transform>(entities.cursor) {
+                {
+                    let cursor = &mut session.cursor;
                     cursor.position = uv;
                 }
                 return true;

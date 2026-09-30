@@ -57,7 +57,7 @@ impl Gui {
         &mut self,
         window: &WinitWindow,
         world: &mut World,
-        entities: &AppEntities,
+        session: &mut Session,
         event_proxy: EventLoopProxy<AppEvent>,
     ) {
         let raw_input = self.state.take_egui_input(window);
@@ -65,10 +65,10 @@ impl Gui {
         let full_output = self.context.run(raw_input, |ctx| {
             // 1. Data Collection
             let (status_msg, volume_info, windowing_active, active_viewport_entity) = {
-                let status_msg = world
-                    .get::<&GuiState>(entities.gui_state)
-                    .map(|g| g.status_message.clone())
-                    .unwrap_or(None);
+                let status_msg = {
+                    let g = &session.gui;
+                    g.status_message.clone()
+                };
 
                 let volume_info = {
                     let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
@@ -83,10 +83,10 @@ impl Gui {
 
                 let windowing_active = volume_info.is_some();
 
-                let active_viewport_entity = world
-                    .get::<&InputState>(entities.input)
-                    .map(|i| i.active_viewport)
-                    .unwrap_or(None);
+                let active_viewport_entity = {
+                    let i = &session.input;
+                    i.active_viewport
+                };
 
                 (
                     status_msg,
@@ -102,7 +102,7 @@ impl Gui {
                     ctx,
                     ui,
                     world,
-                    entities,
+                    session,
                     &event_proxy,
                     status_msg,
                     windowing_active,
@@ -113,26 +113,20 @@ impl Gui {
                 .resizable(true)
                 .default_width(220.0)
                 .show(ctx, |ui| {
-                    sidebar::draw_sidebar(ctx, ui, world, entities, &event_proxy, volume_info);
+                    sidebar::draw_sidebar(ctx, ui, world, session, &event_proxy, volume_info);
                 });
 
-            let show_right_sidebar = world
-                .get::<&AnnotationState>(entities.annotations)
-                .map(|s| s.show_right_sidebar)
-                .unwrap_or(false);
+            let show_right_sidebar = {
+                let s = &session.annotations;
+                s.show_right_sidebar
+            };
 
             if show_right_sidebar {
                 egui::SidePanel::right("discussion_panel")
                     .resizable(true)
                     .default_width(320.0)
                     .show(ctx, |ui| {
-                        annotations::draw_discussion_sidebar(
-                            ctx,
-                            ui,
-                            world,
-                            entities,
-                            &event_proxy,
-                        );
+                        annotations::draw_discussion_sidebar(ctx, ui, session, &event_proxy);
                     });
             }
 
@@ -164,20 +158,18 @@ impl Gui {
                 vps.push((e, vp.mode, rect));
             }
 
-            for (_, settings) in world.query_mut::<&mut WindowSettings>() {
-                settings.viewport_rect = [
-                    x0 * pixels_per_point,
-                    y0 * pixels_per_point,
-                    central_rect.width() * pixels_per_point,
-                    central_rect.height() * pixels_per_point,
-                ];
-            }
+            session.window_settings.viewport_rect = [
+                x0 * pixels_per_point,
+                y0 * pixels_per_point,
+                central_rect.width() * pixels_per_point,
+                central_rect.height() * pixels_per_point,
+            ];
 
             // 4. Overlays
             overlays::draw_viewport_overlays(
                 ctx,
                 world,
-                entities,
+                session,
                 &event_proxy,
                 &overlays::OverlayViewCtx {
                     central_rect,
@@ -188,7 +180,8 @@ impl Gui {
             );
 
             // 5. Input Synchronization
-            if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+            {
+                let input = &mut session.input;
                 input.egui_wants_input = ctx.wants_pointer_input() || ctx.is_using_pointer();
             }
         });

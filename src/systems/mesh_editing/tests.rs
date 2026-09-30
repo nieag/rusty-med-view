@@ -1,11 +1,10 @@
 use super::*;
 use crate::app::roi::VoxelGeometry;
 use crate::components::{
-    AnnotationState, GuiState, InputState, MainVolumeTag, MeshFace, MeshVertex, ProtocolState,
-    RoiId, Transform, VolumeData, VolumeWindowing, WindowSettings,
+    EditorState, InputState, MainVolumeTag, MeshFace, MeshVertex, RoiId, VolumeData,
 };
 
-fn spawn_mesh_edit_world() -> (World, AppEntities, hecs::Entity) {
+fn spawn_mesh_edit_world() -> (World, Session, hecs::Entity) {
     let mut world = World::new();
     world.spawn((
         VolumeData {
@@ -63,45 +62,17 @@ fn spawn_mesh_edit_world() -> (World, AppEntities, hecs::Entity) {
         ],
     };
     let roi_entity = world.spawn((Roi::new_mesh(RoiId(1), "Mesh".to_string(), mesh),));
-    let cursor = world.spawn((Transform {
-        position: [0.5, 0.5, 0.5],
-    },));
-    let editor = world.spawn((EditorState {
+    let mut session = Session::new(800, 600);
+    session.editor = EditorState {
         active_roi: Some(roi_entity),
         active_tool: EditorTool::MeshDeform,
         ..EditorState::default()
-    },));
-    let input = world.spawn((InputState {
+    };
+    session.input = InputState {
         active_viewport: Some(viewport),
         ..InputState::default()
-    },));
-    let gui_state = world.spawn((GuiState {
-        status_message: None,
-    },));
-    let volume_windowing = world.spawn((VolumeWindowing::default(),));
-    let annotations = world.spawn((AnnotationState::default(),));
-    let overlay = world.spawn((crate::overlay::OverlayManager::default(),));
-    let protocol = world.spawn((ProtocolState::default(),));
-    let window_settings = world.spawn((WindowSettings {
-        width: 800,
-        height: 600,
-        viewport_rect: [0.0, 0.0, 800.0, 600.0],
-    },));
-    (
-        world,
-        AppEntities {
-            input,
-            editor,
-            gui_state,
-            volume_windowing,
-            annotations,
-            overlay,
-            protocol,
-            cursor,
-            window_settings,
-        },
-        roi_entity,
-    )
+    };
+    (world, session, roi_entity)
 }
 
 #[test]
@@ -379,17 +350,12 @@ fn test_liver_deformation_preserves_closed_surface_and_local_voxel_changes() {
 
 #[test]
 fn test_projected_mesh_drag_creates_preview_without_mutating_authority() {
-    let (mut world, entities, roi_entity) = spawn_mesh_edit_world();
-    let viewport_entity = world
-        .get::<&InputState>(entities.input)
-        .unwrap()
-        .active_viewport
-        .unwrap();
+    let (mut world, mut session, roi_entity) = spawn_mesh_edit_world();
+    let viewport_entity = session.input.active_viewport.unwrap();
     let viewport = world.get::<&Viewport>(viewport_entity).unwrap();
     let viewport_state = world.get::<&ViewportState>(viewport_entity).unwrap();
-    let projection =
-        build_display_projection_context(&world, &entities, &viewport, &viewport_state)
-            .expect("display projection");
+    let projection = build_display_projection_context(&world, &session, &viewport, &viewport_state)
+        .expect("display projection");
     // The default view looks along +Y, so this point is inside the
     // front-facing tetrahedron triangle rather than an occluded face.
     let surface_point = [4.25, 4.75, 4.0];
@@ -398,7 +364,7 @@ fn test_projected_mesh_drag_creates_preview_without_mutating_authority() {
     drop(viewport_state);
     drop(viewport);
 
-    let selection = select_mesh_vertex(&mut world, &entities, click_uv)
+    let selection = select_mesh_vertex(&mut world, &mut session, click_uv)
         .expect("mesh selection")
         .expect("selected surface");
     assert_eq!(selection.roi_entity, roi_entity);
@@ -412,14 +378,11 @@ fn test_projected_mesh_drag_creates_preview_without_mutating_authority() {
         .mesh_data()
         .unwrap()
         .clone();
-    world
-        .get::<&mut InputState>(entities.input)
-        .unwrap()
-        .drag_start_pos = click_uv;
+    session.input.drag_start_pos = click_uv;
 
     let revision = update_selected_mesh_deform_preview(
         &mut world,
-        &entities,
+        &session,
         [click_uv[0] + 0.05, click_uv[1]],
     )
     .expect("mesh preview");
@@ -444,7 +407,7 @@ fn test_projected_mesh_drag_creates_preview_without_mutating_authority() {
     for _ in 0..5 {
         update_selected_mesh_deform_preview(
             &mut world,
-            &entities,
+            &session,
             [click_uv[0] + 0.05, click_uv[1]],
         )
         .unwrap();

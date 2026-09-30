@@ -1,12 +1,12 @@
 use crate::app::roi::{self, EditTarget, Readiness, SwitchError};
 #[cfg(test)]
 use crate::app::roi_runtime;
+use crate::components::Session;
 #[cfg(test)]
 use crate::components::VoxelData;
 use crate::components::{
-    AppEntities, ContourData, ContourDraft, ContourLoop, ContourPoint, ContourSelection,
-    ContourSlice, EditorState, EditorTool, InputState, MainVolumeTag, Roi, Transform, ViewMode,
-    Viewport, VoxelGeometry,
+    ContourData, ContourDraft, ContourLoop, ContourPoint, ContourSelection, ContourSlice,
+    EditorState, EditorTool, MainVolumeTag, Roi, ViewMode, Viewport, VoxelGeometry,
 };
 use crate::convert::{
     contour_slice_contains_point, oblique_plane_from_view_rotation,
@@ -45,10 +45,10 @@ pub struct ContourEditViewport {
 
 pub fn resolve_active_contour_edit_viewport(
     world: &World,
-    entities: &AppEntities,
+    session: &Session,
     contour_data: &ContourData,
 ) -> Result<ContourEditViewport, ContourEditMappingError> {
-    let viewport = resolve_active_edit_view(world, entities)?;
+    let viewport = resolve_active_edit_view(world, session)?;
     if viewport.plane.family != contour_data.active_plane_family {
         return Err(ContourEditMappingError::PlaneFamilyMismatch {
             contour_family: contour_data.active_plane_family.into(),
@@ -61,15 +61,12 @@ pub fn resolve_active_contour_edit_viewport(
 /// The active 2D viewport and the plane it shows, whatever family the ROI's contours are in.
 fn resolve_active_edit_view(
     world: &World,
-    entities: &AppEntities,
+    session: &Session,
 ) -> Result<ContourEditViewport, ContourEditMappingError> {
-    let input = world
-        .get::<&InputState>(entities.input)
-        .map_err(|_| ContourEditMappingError::MissingActiveViewport)?;
-    let viewport_entity = input
+    let viewport_entity = session
+        .input
         .active_viewport
         .ok_or(ContourEditMappingError::MissingActiveViewport)?;
-    drop(input);
 
     let viewport = world
         .get::<&Viewport>(viewport_entity)
@@ -91,9 +88,7 @@ fn resolve_active_edit_view(
             ContourEditMappingError::MissingMainVolume
         })?;
 
-    let cursor = world
-        .get::<&Transform>(entities.cursor)
-        .map_err(|_| ContourEditMappingError::MissingCursor)?;
+    let cursor = &session.cursor;
 
     let plane = match viewport.mode {
         ViewMode::Axial => {
@@ -214,10 +209,10 @@ impl From<ContourPrepareError> for ContourSelectClickError {
 /// if needed (see `app::roi::switch`). Editing works in whichever 2D view the user is in.
 fn prepare_contour_edit(
     world: &mut World,
-    entities: &AppEntities,
+    session: &mut Session,
     roi_entity: hecs::Entity,
 ) -> Result<(), ContourPrepareError> {
-    let view_family = resolve_active_edit_view(world, entities)
+    let view_family = resolve_active_edit_view(world, session)
         .map_err(ContourPrepareError::Mapping)?
         .plane
         .family;
@@ -231,11 +226,12 @@ fn prepare_contour_edit(
         Readiness::Ready => Ok(()),
         Readiness::Pending => Err(ContourPrepareError::Pending),
         Readiness::Switched(report) => {
-            if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
+            {
+                let editor = &mut session.editor;
                 editor.contour_draft = None;
                 editor.contour_selection = None;
             }
-            crate::app::handlers::set_status_message(world, entities, report.message());
+            crate::app::handlers::set_status_message(session, report.message());
             Ok(())
         }
     }
@@ -248,11 +244,9 @@ fn contour_data_for_active_roi(world: &World, roi_entity: hecs::Entity) -> Optio
         .and_then(|roi| roi.contour_data().cloned())
 }
 
-pub fn clear_contour_draft_if_inactive(world: &mut World, editor_entity: hecs::Entity) {
-    if let Ok(mut editor) = world.get::<&mut EditorState>(editor_entity) {
-        if editor.active_tool != EditorTool::ContourDraw {
-            editor.contour_draft = None;
-        }
+pub fn clear_contour_draft_if_inactive(editor: &mut EditorState) {
+    if editor.active_tool != EditorTool::ContourDraw {
+        editor.contour_draft = None;
     }
 }
 
@@ -269,18 +263,18 @@ fn end_contour_move_preview_of(world: &mut World, roi_entity: Option<hecs::Entit
     }
 }
 
+/// Clears the draft of the previously active ROI and ends its in-flight edit when the active ROI
+/// is about to change to `new_active_roi`.
 pub fn clear_contour_draft_for_roi_change(
     world: &mut World,
-    editor_entity: hecs::Entity,
+    editor: &mut EditorState,
     new_active_roi: Option<hecs::Entity>,
 ) {
     let mut previous_active_roi = None;
-    if let Ok(mut editor) = world.get::<&mut EditorState>(editor_entity) {
-        if editor.active_roi != new_active_roi {
-            editor.contour_draft = None;
-            editor.mesh_selection = None;
-            previous_active_roi = editor.active_roi;
-        }
+    if editor.active_roi != new_active_roi {
+        editor.contour_draft = None;
+        editor.mesh_selection = None;
+        previous_active_roi = editor.active_roi;
     }
     if let Some(roi_entity) = previous_active_roi {
         if world
@@ -294,49 +288,45 @@ pub fn clear_contour_draft_for_roi_change(
 
 pub fn clear_contour_selection_for_roi_change(
     world: &mut World,
-    editor_entity: hecs::Entity,
+    editor: &mut EditorState,
     new_active_roi: Option<hecs::Entity>,
 ) {
     let mut previous_active_roi = None;
-    if let Ok(mut editor) = world.get::<&mut EditorState>(editor_entity) {
-        if editor.active_roi != new_active_roi {
-            editor.contour_selection = None;
-            editor.mesh_selection = None;
-            previous_active_roi = editor.active_roi;
-        }
+    if editor.active_roi != new_active_roi {
+        editor.contour_selection = None;
+        editor.mesh_selection = None;
+        previous_active_roi = editor.active_roi;
     }
     end_contour_move_preview_of(world, previous_active_roi);
 }
 
-pub fn clear_contour_selection_if_inactive(world: &mut World, editor_entity: hecs::Entity) {
+pub fn clear_contour_selection_if_inactive(world: &mut World, editor: &mut EditorState) {
     let mut active_roi = None;
-    if let Ok(mut editor) = world.get::<&mut EditorState>(editor_entity) {
-        if editor.active_tool != EditorTool::ContourSelect {
-            editor.contour_selection = None;
-            active_roi = editor.active_roi;
-        }
+    if editor.active_tool != EditorTool::ContourSelect {
+        editor.contour_selection = None;
+        active_roi = editor.active_roi;
     }
     end_contour_move_preview_of(world, active_roi);
 }
 
 pub fn handle_contour_draw_click(
     world: &mut World,
-    entities: &AppEntities,
+    session: &mut Session,
     viewport_uv: [f32; 2],
 ) -> Result<ContourDrawClickOutcome, ContourDrawClickError> {
-    let (active_tool, active_roi) = world
-        .get::<&EditorState>(entities.editor)
-        .map(|editor| (editor.active_tool, editor.active_roi))
-        .map_err(|_| ContourDrawClickError::ToolNotActive)?;
+    let (active_tool, active_roi) = {
+        let editor = &session.editor;
+        (editor.active_tool, editor.active_roi)
+    };
     if active_tool != EditorTool::ContourDraw {
         return Err(ContourDrawClickError::ToolNotActive);
     }
     let roi_entity = active_roi.ok_or(ContourDrawClickError::MissingActiveRoi)?;
-    prepare_contour_edit(world, entities, roi_entity)?;
+    prepare_contour_edit(world, session, roi_entity)?;
 
     let contour_data = contour_data_for_active_roi(world, roi_entity)
         .ok_or(ContourDrawClickError::ActiveRoiNotContour)?;
-    let viewport = resolve_active_contour_edit_viewport(world, entities, &contour_data)?;
+    let viewport = resolve_active_contour_edit_viewport(world, session, &contour_data)?;
     let point_local_mm = viewport_uv_to_contour_plane_local_mm(viewport_uv, viewport)
         .ok_or(ContourDrawClickError::ProjectionFailed)?;
     let existing_slice = contour_data
@@ -351,9 +341,7 @@ pub fn handle_contour_draw_click(
         .map_err(|_| ContourDrawClickError::ProjectionFailed)?;
 
     let loop_points_to_commit = {
-        let mut editor = world
-            .get::<&mut EditorState>(entities.editor)
-            .map_err(|_| ContourDrawClickError::ToolNotActive)?;
+        let editor = &mut session.editor;
         let reset_draft = editor
             .contour_draft
             .as_ref()
@@ -467,7 +455,8 @@ pub fn handle_contour_draw_click(
             committed_plane,
         )
         .map_err(|_| ContourDrawClickError::CommitFailed)?;
-        if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
+        {
+            let editor = &mut session.editor;
             editor.contour_draft = None;
         }
         Ok(ContourDrawClickOutcome::LoopCommitted)
@@ -575,22 +564,22 @@ fn point_to_segment_distance_px(
 
 pub fn handle_contour_select_click(
     world: &mut World,
-    entities: &AppEntities,
+    session: &mut Session,
     viewport_uv: [f32; 2],
 ) -> Result<Option<ContourSelection>, ContourSelectClickError> {
-    let (active_tool, active_roi) = world
-        .get::<&EditorState>(entities.editor)
-        .map(|editor| (editor.active_tool, editor.active_roi))
-        .map_err(|_| ContourSelectClickError::ToolNotActive)?;
+    let (active_tool, active_roi) = {
+        let editor = &session.editor;
+        (editor.active_tool, editor.active_roi)
+    };
     if active_tool != EditorTool::ContourSelect {
         return Err(ContourSelectClickError::ToolNotActive);
     }
     let roi_entity = active_roi.ok_or(ContourSelectClickError::MissingActiveRoi)?;
-    prepare_contour_edit(world, entities, roi_entity)?;
+    prepare_contour_edit(world, session, roi_entity)?;
 
     let contour_data = contour_data_for_active_roi(world, roi_entity)
         .ok_or(ContourSelectClickError::ActiveRoiNotContour)?;
-    let viewport = resolve_active_contour_edit_viewport(world, entities, &contour_data)?;
+    let viewport = resolve_active_contour_edit_viewport(world, session, &contour_data)?;
     let viewport_rect = world
         .get::<&Viewport>(viewport.viewport_entity)
         .map(|vp| vp.rect)
@@ -651,7 +640,8 @@ pub fn handle_contour_select_click(
         None
     };
 
-    if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
+    {
+        let editor = &mut session.editor;
         editor.contour_selection = selection.clone();
     }
     Ok(selection)
@@ -676,11 +666,9 @@ impl From<ContourEditMappingError> for ContourEditOperationError {
 
 fn selected_context(
     world: &World,
-    entities: &AppEntities,
+    session: &Session,
 ) -> Result<(ContourSelection, ContourData, ContourEditViewport), ContourEditOperationError> {
-    let editor = world
-        .get::<&EditorState>(entities.editor)
-        .map_err(|_| ContourEditOperationError::MissingSelection)?;
+    let editor = &session.editor;
     let selection = editor
         .contour_selection
         .clone()
@@ -694,7 +682,7 @@ fn selected_context(
 
     let contour_data = contour_data_for_active_roi(world, selection.roi_entity)
         .ok_or(ContourEditOperationError::ActiveRoiNotContour)?;
-    let viewport = resolve_active_contour_edit_viewport(world, entities, &contour_data)?;
+    let viewport = resolve_active_contour_edit_viewport(world, session, &contour_data)?;
     Ok((selection, contour_data, viewport))
 }
 
@@ -745,10 +733,10 @@ fn nearest_segment_index_in_loop(
 #[cfg(test)]
 pub fn move_selected_point(
     world: &mut World,
-    entities: &AppEntities,
+    session: &Session,
     viewport_uv: [f32; 2],
 ) -> Result<(), ContourEditOperationError> {
-    let (selection, mut contour_data, viewport) = selected_context(world, entities)?;
+    let (selection, mut contour_data, viewport) = selected_context(world, session)?;
     let dirty_plane =
         update_selected_point_in_data(&selection, &mut contour_data, viewport, viewport_uv)?;
     roi::replace_contour_data_for_slice_with_history(
@@ -762,10 +750,10 @@ pub fn move_selected_point(
 
 pub fn move_selected_point_preview(
     world: &mut World,
-    entities: &AppEntities,
+    session: &Session,
     viewport_uv: [f32; 2],
 ) -> Result<(), ContourEditOperationError> {
-    let (selection, mut contour_data, viewport) = selected_context(world, entities)?;
+    let (selection, mut contour_data, viewport) = selected_context(world, session)?;
     let dirty_plane =
         update_selected_point_in_data(&selection, &mut contour_data, viewport, viewport_uv)?;
     roi::begin_contour_move_preview(world, selection.roi_entity, contour_data, dirty_plane)
@@ -805,12 +793,10 @@ fn update_selected_point_in_data(
 
 pub fn finalize_selected_point_move(
     world: &mut World,
-    entities: &AppEntities,
+    session: &Session,
 ) -> Result<(), ContourEditOperationError> {
     let dirty_plane = {
-        let editor = world
-            .get::<&EditorState>(entities.editor)
-            .map_err(|_| ContourEditOperationError::MissingSelection)?;
+        let editor = &session.editor;
         let selection = editor
             .contour_selection
             .as_ref()
@@ -828,16 +814,16 @@ pub fn finalize_selected_point_move(
             .map(|slice| slice.plane)
             .ok_or(ContourEditOperationError::InvalidSelection)?
     };
-    roi::commit_contour_move_preview(world, entities.editor, dirty_plane)
+    roi::commit_contour_move_preview(world, &session.editor, dirty_plane)
         .map_err(|_| ContourEditOperationError::ReplaceFailed)
 }
 
 pub fn insert_point_into_selected_loop(
     world: &mut World,
-    entities: &AppEntities,
+    session: &mut Session,
     viewport_uv: [f32; 2],
 ) -> Result<(), ContourEditOperationError> {
-    let (selection, mut contour_data, viewport) = selected_context(world, entities)?;
+    let (selection, mut contour_data, viewport) = selected_context(world, session)?;
     let viewport_rect = world
         .get::<&Viewport>(viewport.viewport_entity)
         .map(|vp| vp.rect)
@@ -900,7 +886,8 @@ pub fn insert_point_into_selected_loop(
         dirty_plane,
     )
     .map_err(|_| ContourEditOperationError::ReplaceFailed)?;
-    if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
+    {
+        let editor = &mut session.editor;
         editor.contour_selection = Some(ContourSelection {
             roi_entity: selection.roi_entity,
             slice_index: selection.slice_index,
@@ -913,9 +900,9 @@ pub fn insert_point_into_selected_loop(
 
 pub fn delete_selected_contour_element(
     world: &mut World,
-    entities: &AppEntities,
+    session: &mut Session,
 ) -> Result<(), ContourEditOperationError> {
-    let (selection, mut contour_data, _) = selected_context(world, entities)?;
+    let (selection, mut contour_data, _) = selected_context(world, session)?;
     let Some(slice) = contour_data.slices.get_mut(selection.slice_index) else {
         return Err(ContourEditOperationError::InvalidSelection);
     };
@@ -946,7 +933,8 @@ pub fn delete_selected_contour_element(
     roi::replace_contour_data_with_history(world, selection.roi_entity, contour_data)
         .map_err(|_| ContourEditOperationError::ReplaceFailed)?;
 
-    if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
+    {
+        let editor = &mut session.editor;
         if clear_selection {
             editor.contour_selection = None;
         } else if let Some(point_idx) = selection.point_index {

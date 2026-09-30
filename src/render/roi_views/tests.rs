@@ -182,8 +182,8 @@ fn test_multi_contour_request_keeps_active_first_and_includes_inactive() {
 #[test]
 fn test_default_cap_accepts_eight_voxel_overlays_and_truncates_ninth() {
     let mut world = World::new();
-    let entities: Vec<_> = (1..=9).map(|id| spawn_voxel(&mut world, id)).collect();
-    for entity in entities {
+    let session: Vec<_> = (1..=9).map(|id| spawn_voxel(&mut world, id)).collect();
+    for entity in session {
         if !mark_voxel_renderable_with_gpu(&mut world, entity) {
             return;
         }

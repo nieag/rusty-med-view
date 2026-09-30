@@ -122,10 +122,32 @@ pub struct RoiWorkGpuContext<'a> {
     pub bind_groups: BindGroupResources<'a>,
 }
 
-/// Whether the ROI runtime needs another frame to finish queued work.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// What the user is looking at, which decides which derived forms are demanded first.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewFocus {
+    /// The ROI being edited or inspected, if any.
+    pub active_roi: Option<hecs::Entity>,
+    /// The cursor in volume UV; it selects the slice every 2D view shows.
+    pub cursor_uv: [f32; 3],
+}
+
+impl Default for ViewFocus {
+    fn default() -> Self {
+        Self {
+            active_roi: None,
+            cursor_uv: [0.5; 3],
+        }
+    }
+}
+
+/// What one `advance_roi_work` call found.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RoiWorkStatus {
+    /// The ROI runtime needs another frame to finish queued work.
     pub pending: bool,
+    /// Outcomes worth telling the user (a cache was rebuilt, a rebuild failed, a pending
+    /// representation switch completed), oldest first.
+    pub messages: Vec<String>,
 }
 
 /// Advances all demanded ROI work in the only supported frame order.
@@ -133,12 +155,13 @@ pub struct RoiWorkStatus {
 /// Conversion processors remain concrete functions during the migration, but callers no longer
 /// choose their order. The returned pending flag must drive another redraw independently of GUI
 /// repaint requests.
-pub fn advance_roi_work(world: &mut World, gpu: Option<&RoiWorkGpuContext<'_>>) -> RoiWorkStatus {
-    let active_roi = world
-        .query::<&EditorState>()
-        .iter()
-        .next()
-        .and_then(|(_, editor)| editor.active_roi);
+pub fn advance_roi_work(
+    world: &mut World,
+    gpu: Option<&RoiWorkGpuContext<'_>>,
+    focus: &ViewFocus,
+) -> RoiWorkStatus {
+    let active_roi = focus.active_roi;
+    let mut messages = Vec::new();
 
     if let Some(gpu) = gpu {
         process_contour_voxel_rebuild_jobs_with_gpu(
@@ -165,28 +188,25 @@ pub fn advance_roi_work(world: &mut World, gpu: Option<&RoiWorkGpuContext<'_>>) 
         recreate_scene_bind_groups(gpu.device, world, &gpu.bind_groups, active_roi);
     }
     for (_, outcome) in crate::app::roi::complete_pending_switches(world) {
-        set_runtime_status_message(
-            world,
-            match outcome {
-                Ok(report) => report.message(),
-                Err(error) => error.message(),
-            },
-        );
+        messages.push(match outcome {
+            Ok(report) => report.message(),
+            Err(error) => error.message(),
+        });
     }
 
     // Demand is resolved after voxel-producing work so a newly current voxel cache can schedule
     // its mesh in this same frame.
-    sync_roi_contour_view_caches_for_viewports(world);
-    sync_active_roi_mesh_cache_for_viewports(world);
+    sync_roi_contour_view_caches_for_viewports(world, focus);
+    sync_active_roi_mesh_cache_for_viewports(world, focus.active_roi);
     process_voxel_mesh_rebuild_jobs(world);
     record_completed_work_cycles(world);
 
-    RoiWorkStatus {
-        pending: world
-            .query::<&Roi>()
-            .iter()
-            .any(|(_, roi)| roi.running_job_kind().is_some() || !roi.job_state.pending.is_empty()),
+    let mut pending = false;
+    for (_, roi) in world.query_mut::<&mut Roi>() {
+        pending |= roi.running_job_kind().is_some() || !roi.job_state.pending.is_empty();
+        messages.append(&mut roi.job_state.messages);
     }
+    RoiWorkStatus { pending, messages }
 }
 
 fn record_completed_work_cycles(world: &mut World) {
@@ -455,12 +475,8 @@ pub(crate) fn ensure_contour_view_cache(
     }
 }
 
-pub(crate) fn sync_roi_contour_view_caches_for_viewports(world: &mut World) {
-    let active_roi = world
-        .query::<&EditorState>()
-        .iter()
-        .next()
-        .and_then(|(_, editor)| editor.active_roi);
+pub(crate) fn sync_roi_contour_view_caches_for_viewports(world: &mut World, focus: &ViewFocus) {
+    let active_roi = focus.active_roi;
     let mut roi_entities = active_roi.into_iter().collect::<Vec<_>>();
     roi_entities.extend(world.query::<&Roi>().iter().filter_map(|(entity, roi)| {
         (Some(entity) != active_roi
@@ -470,12 +486,7 @@ pub(crate) fn sync_roi_contour_view_caches_for_viewports(world: &mut World) {
     }));
     let main_geometry = main_volume_geometry(world);
 
-    let cursor_uv = world
-        .query::<&Transform>()
-        .iter()
-        .next()
-        .map(|(_, transform)| transform.position)
-        .unwrap_or([0.5, 0.5, 0.5]);
+    let cursor_uv = focus.cursor_uv;
 
     for roi_entity in roi_entities {
         let geometry = main_geometry.or_else(|| {
@@ -506,7 +517,10 @@ pub(crate) fn sync_roi_contour_view_caches_for_viewports(world: &mut World) {
     }
 }
 
-pub(crate) fn sync_active_roi_mesh_cache_for_viewports(world: &mut World) {
+pub(crate) fn sync_active_roi_mesh_cache_for_viewports(
+    world: &mut World,
+    active_roi: Option<hecs::Entity>,
+) {
     if !world
         .query::<&Viewport>()
         .iter()
@@ -514,11 +528,6 @@ pub(crate) fn sync_active_roi_mesh_cache_for_viewports(world: &mut World) {
     {
         return;
     }
-    let active_roi = world
-        .query::<&EditorState>()
-        .iter()
-        .next()
-        .and_then(|(_, editor)| editor.active_roi);
     let Some(active_roi) = active_roi else {
         return;
     };
@@ -669,15 +678,13 @@ fn spawn_label_rois(
     Ok(entities)
 }
 
+/// Creates an empty contour ROI in `active_plane_family` on the main volume's grid and makes it
+/// the active ROI.
 pub fn create_empty_contour_roi(
     world: &mut World,
-    editor_entity: hecs::Entity,
+    editor: &mut EditorState,
     active_plane_family: OrthogonalFamily,
 ) -> Result<hecs::Entity, String> {
-    if world.get::<&EditorState>(editor_entity).is_err() {
-        return Err("Missing editor state; contour ROI was not created.".to_string());
-    }
-
     let reference_voxel_geometry = main_volume_geometry(world)
         .ok_or_else(|| "Missing main volume geometry; contour ROI was not created.".to_string())?;
     let reference_geometry = reference_voxel_geometry;
@@ -722,9 +729,6 @@ pub fn create_empty_contour_roi(
         .expect("new contour ROI cache must match its reference geometry");
     }
 
-    let mut editor = world
-        .get::<&mut EditorState>(editor_entity)
-        .map_err(|_| "Missing editor state; contour ROI was not created.".to_string())?;
     editor.active_roi = Some(entity);
     Ok(entity)
 }
@@ -1411,7 +1415,7 @@ fn resume_mesh_voxel_rebuild_work(
     roi.job_metrics.last_completed_kind = Some(RoiJobKind::RebuildVoxelCache);
     roi.job_metrics.last_duration_ms = started_at.elapsed().as_secs_f32() * 1000.0;
     drop(roi);
-    set_runtime_status_message(world, "Mesh voxel cache rebuilt.".to_string());
+    report_roi_status(world, roi_entity, "Mesh voxel cache rebuilt.".to_string());
     true
 }
 
@@ -1421,7 +1425,11 @@ fn fail_mesh_voxel_rebuild(world: &mut World, roi_entity: hecs::Entity, reason: 
         roi.mark_cache_dirty(RoiCacheKind::Voxel);
         roi.job_metrics.failed_count = roi.job_metrics.failed_count.saturating_add(1);
     }
-    set_runtime_status_message(world, format!("Mesh voxel rebuild failed: {reason}."));
+    report_roi_status(
+        world,
+        roi_entity,
+        format!("Mesh voxel rebuild failed: {reason}."),
+    );
 }
 
 fn process_contour_voxel_rebuild_jobs_with_hook(
@@ -1684,8 +1692,9 @@ fn process_contour_voxel_rebuild_for_entity(
             "Skipping contour voxel rebuild for ROI {:?}: missing ROI reference grid",
             roi_entity
         );
-        set_runtime_status_message(
+        report_roi_status(
             world,
+            roi_entity,
             "Contour voxel rebuild failed: ROI reference geometry is unavailable.".to_string(),
         );
         fail_contour_voxel_rebuild(world, roi_entity);
@@ -1706,8 +1715,9 @@ fn process_contour_voxel_rebuild_for_entity(
                 roi_entity,
                 err
             );
-            set_runtime_status_message(
+            report_roi_status(
                 world,
+                roi_entity,
                 format!("Contour voxel rebuild failed: rasterization error ({err:?})."),
             );
             fail_contour_voxel_rebuild(world, roi_entity);
@@ -1836,8 +1846,9 @@ fn process_contour_voxel_rebuild_for_entity(
                 roi_entity
             );
             requeue_contour_voxel_rebuild(world, roi_entity);
-            set_runtime_status_message(
+            report_roi_status(
                 world,
+                roi_entity,
                 "Contour voxel rebuild failed: main volume bind-group is unavailable.".to_string(),
             );
             fail_contour_voxel_rebuild(world, roi_entity);
@@ -1854,8 +1865,9 @@ fn process_contour_voxel_rebuild_for_entity(
                         roi_entity,
                         err
                     );
-                    set_runtime_status_message(
+                    report_roi_status(
                         world,
+                        roi_entity,
                         format!("Contour voxel rebuild failed: GPU upload error ({err})."),
                     );
                     fail_contour_voxel_rebuild(world, roi_entity);
@@ -1911,7 +1923,11 @@ fn process_contour_voxel_rebuild_for_entity(
     roi.job_metrics.last_completed_kind = Some(RoiJobKind::RebuildVoxelCache);
     roi.job_metrics.last_duration_ms = started_at.elapsed().as_secs_f32() * 1000.0;
     drop(roi);
-    set_runtime_status_message(world, "Contour voxel cache rebuilt.".to_string());
+    report_roi_status(
+        world,
+        roi_entity,
+        "Contour voxel cache rebuilt.".to_string(),
+    );
     true
 }
 
@@ -1958,10 +1974,7 @@ fn process_voxel_body_install_jobs(
                         bind_group,
                     }),
                     Err(error) => {
-                        set_runtime_status_message(
-                            world,
-                            format!("Voxel upload failed ({error})."),
-                        );
+                        report_roi_status(world, entity, format!("Voxel upload failed ({error})."));
                         fail_contour_voxel_rebuild(world, entity);
                         continue;
                     }
@@ -2035,9 +2048,10 @@ fn main_volume_bind_group(world: &World) -> Option<wgpu::BindGroup> {
         .map(|(_, res)| res.bind_group.clone())
 }
 
-fn set_runtime_status_message(world: &mut World, message: String) {
-    if let Some((_, gui_state)) = world.query_mut::<&mut GuiState>().into_iter().next() {
-        gui_state.status_message = Some(message);
+/// Queues a message about `roi_entity`'s work; `advance_roi_work` returns it to the caller.
+fn report_roi_status(world: &mut World, roi_entity: hecs::Entity, message: String) {
+    if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
+        roi.job_state.messages.push(message);
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::app::roi;
+use crate::components::Session;
 use crate::components::{
-    AppEntities, EditorState, EditorTool, MeshBody, MeshData, MeshSelection, Roi, RoiBody,
-    ViewMode, Viewport, ViewportState,
+    EditorTool, MeshBody, MeshData, MeshSelection, Roi, RoiBody, ViewMode, Viewport, ViewportState,
 };
 #[cfg(test)]
 use crate::convert::deform_mesh_surface_brush;
@@ -31,22 +31,22 @@ pub enum MeshEditInteractionError {
 
 pub fn select_mesh_vertex(
     world: &mut World,
-    entities: &AppEntities,
+    session: &mut Session,
     viewport_uv: [f32; 2],
 ) -> Result<Option<MeshSelection>, MeshEditInteractionError> {
-    let (active_tool, roi_entity) = world
-        .get::<&EditorState>(entities.editor)
-        .map(|editor| (editor.active_tool, editor.active_roi))
-        .map_err(|_| MeshEditInteractionError::ToolNotActive)?;
+    let (active_tool, roi_entity) = {
+        let editor = &session.editor;
+        (editor.active_tool, editor.active_roi)
+    };
     if active_tool != EditorTool::MeshDeform {
         return Err(MeshEditInteractionError::ToolNotActive);
     }
     let roi_entity = roi_entity.ok_or(MeshEditInteractionError::MissingActiveRoi)?;
-    let viewport_entity = world
-        .get::<&crate::components::InputState>(entities.input)
-        .ok()
-        .and_then(|input| input.active_viewport)
-        .ok_or(MeshEditInteractionError::MissingViewport)?;
+    let viewport_entity = {
+        let input = &session.input;
+        input.active_viewport
+    }
+    .ok_or(MeshEditInteractionError::MissingViewport)?;
     let viewport = world
         .get::<&Viewport>(viewport_entity)
         .map_err(|_| MeshEditInteractionError::MissingViewport)?;
@@ -56,7 +56,7 @@ pub fn select_mesh_vertex(
     let viewport_state = world
         .get::<&ViewportState>(viewport_entity)
         .map_err(|_| MeshEditInteractionError::MissingViewport)?;
-    let projection = build_display_projection_context(world, entities, &viewport, &viewport_state)
+    let projection = build_display_projection_context(world, session, &viewport, &viewport_state)
         .ok_or(MeshEditInteractionError::ProjectionFailed)?;
     drop(viewport_state);
     drop(viewport);
@@ -64,7 +64,7 @@ pub fn select_mesh_vertex(
     match roi::ensure_editable(world, roi_entity, roi::EditTarget::Mesh) {
         Ok(roi::Readiness::Ready) => {}
         Ok(roi::Readiness::Switched(report)) => {
-            crate::app::handlers::set_status_message(world, entities, report.message());
+            crate::app::handlers::set_status_message(session, report.message());
         }
         Ok(roi::Readiness::Pending) => return Err(MeshEditInteractionError::SwitchPending),
         Err(roi::SwitchError::Locked) => return Err(MeshEditInteractionError::ActiveRoiLocked),
@@ -89,7 +89,8 @@ pub fn select_mesh_vertex(
             anchor_world_mm: hit.anchor_world_mm,
         });
     drop(roi);
-    if let Ok(mut editor) = world.get::<&mut EditorState>(entities.editor) {
+    {
+        let editor = &mut session.editor;
         editor.mesh_selection = selection;
     }
     Ok(selection)
@@ -97,32 +98,32 @@ pub fn select_mesh_vertex(
 
 pub fn update_selected_mesh_deform_preview(
     world: &mut World,
-    entities: &AppEntities,
+    session: &Session,
     current_uv: [f32; 2],
 ) -> Result<u64, MeshEditInteractionError> {
-    let (selection, radius_mm, strength) = world
-        .get::<&EditorState>(entities.editor)
-        .map(|editor| {
+    let (selection, radius_mm, strength) = {
+        let editor = &session.editor;
+        {
             (
                 editor.mesh_selection,
                 editor.mesh_brush_radius_mm,
                 editor.mesh_brush_strength,
             )
-        })
-        .map_err(|_| MeshEditInteractionError::MissingSelection)?;
+        }
+    };
     let selection = selection.ok_or(MeshEditInteractionError::MissingSelection)?;
     if !radius_mm.is_finite() || radius_mm <= 0.0 || !strength.is_finite() || strength <= 0.0 {
         return Err(MeshEditInteractionError::InvalidBrush);
     }
-    let start_uv = world
-        .get::<&crate::components::InputState>(entities.input)
-        .map(|input| input.drag_start_pos)
-        .map_err(|_| MeshEditInteractionError::MissingViewport)?;
-    let viewport_entity = world
-        .get::<&crate::components::InputState>(entities.input)
-        .ok()
-        .and_then(|input| input.active_viewport)
-        .ok_or(MeshEditInteractionError::MissingViewport)?;
+    let start_uv = {
+        let input = &session.input;
+        input.drag_start_pos
+    };
+    let viewport_entity = {
+        let input = &session.input;
+        input.active_viewport
+    }
+    .ok_or(MeshEditInteractionError::MissingViewport)?;
     let viewport = world
         .get::<&Viewport>(viewport_entity)
         .map_err(|_| MeshEditInteractionError::MissingViewport)?;
@@ -132,7 +133,7 @@ pub fn update_selected_mesh_deform_preview(
     let viewport_state = world
         .get::<&ViewportState>(viewport_entity)
         .map_err(|_| MeshEditInteractionError::MissingViewport)?;
-    let projection = build_display_projection_context(world, entities, &viewport, &viewport_state)
+    let projection = build_display_projection_context(world, session, &viewport, &viewport_state)
         .ok_or(MeshEditInteractionError::ProjectionFailed)?;
     drop(viewport_state);
     drop(viewport);

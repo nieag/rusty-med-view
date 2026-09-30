@@ -25,7 +25,7 @@ pub struct OverlayViewCtx<'a> {
 pub fn draw_viewport_overlays(
     ctx: &egui::Context,
     world: &mut World,
-    entities: &AppEntities,
+    session: &mut Session,
     event_proxy: &EventLoopProxy<AppEvent>,
     view_ctx: &OverlayViewCtx<'_>,
 ) {
@@ -33,10 +33,7 @@ pub fn draw_viewport_overlays(
     let vps = view_ctx.vps;
     let active_viewport_entity = view_ctx.active_viewport_entity;
     let volume_info = view_ctx.volume_info;
-    let mut cursor_pos = [0.0, 0.0, 0.0];
-    if let Ok(t) = world.get::<&Transform>(entities.cursor) {
-        cursor_pos = t.position;
-    }
+    let cursor_pos = session.cursor.position;
 
     let x0 = central_rect.min.x;
     let y0 = central_rect.min.y;
@@ -60,10 +57,10 @@ pub fn draw_viewport_overlays(
 
     // --- Viewport Separation Lines ---
     let active_protocol = {
-        world
-            .get::<&ProtocolState>(entities.protocol)
-            .map(|p| p.active_protocol.clone())
-            .unwrap_or_else(|_| "Standard 2x2".to_string())
+        {
+            let p = &session.protocol;
+            p.active_protocol.clone()
+        }
     };
 
     if active_protocol == "Standard 2x2" {
@@ -117,7 +114,8 @@ pub fn draw_viewport_overlays(
             .show(ctx, |ui| match mode {
                 ViewMode::ThreeD => {
                     label_res = Some(draw_label(ui, "3D View", is_active));
-                    if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
+                    {
+                        let w = &session.windowing;
                         ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
                     }
                 }
@@ -125,7 +123,8 @@ pub fn draw_viewport_overlays(
                     let slice_z = displayed_slice_number(cursor_pos[2], vol_dims[2]);
                     label_res = Some(draw_label(ui, "Axial (Top)", is_active));
                     ui.label(format!("Slice: {} / {}", slice_z, vol_dims[2]));
-                    if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
+                    {
+                        let w = &session.windowing;
                         ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
                     }
 
@@ -135,7 +134,8 @@ pub fn draw_viewport_overlays(
                     let slice_y = displayed_slice_number(cursor_pos[1], vol_dims[1]);
                     label_res = Some(draw_label(ui, "Coronal (Front)", is_active));
                     ui.label(format!("Slice: {} / {}", slice_y, vol_dims[1]));
-                    if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
+                    {
+                        let w = &session.windowing;
                         ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
                     }
                     slice_orientation_markers(ui, *rect, SlicePlane::Coronal, main_geometry);
@@ -144,7 +144,8 @@ pub fn draw_viewport_overlays(
                     let slice_x = displayed_slice_number(cursor_pos[0], vol_dims[0]);
                     label_res = Some(draw_label(ui, "Sagittal (Side)", is_active));
                     ui.label(format!("Slice: {} / {}", slice_x, vol_dims[0]));
-                    if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
+                    {
+                        let w = &session.windowing;
                         ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
                     }
                     slice_orientation_markers(ui, *rect, SlicePlane::Sagittal, main_geometry);
@@ -152,7 +153,8 @@ pub fn draw_viewport_overlays(
                 ViewMode::Oblique => {
                     label_res = Some(draw_label(ui, "Oblique", is_active));
                     ui.label("Slice: oblique");
-                    if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
+                    {
+                        let w = &session.windowing;
                         ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
                     }
                 }
@@ -210,18 +212,16 @@ pub fn draw_viewport_overlays(
             let mut vd_query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
             let vol_data = vd_query.iter().next().map(|(_, vd)| vd);
 
-            if let (Ok(mut state), Ok(mut overlay), Some(vd)) = (
-                world.get::<&mut AnnotationState>(entities.annotations),
-                world.get::<&mut OverlayManager>(entities.overlay),
-                vol_data,
-            ) {
+            if let Some(vd) = vol_data {
+                let state = &mut session.annotations;
+                let overlay = &mut session.overlay;
                 let focused_id = state.focused_id;
                 let items = &mut state.annotations;
 
-                let cursor_pos = world
-                    .get::<&Transform>(entities.cursor)
-                    .map(|t| glam::Vec3::from(t.position))
-                    .unwrap_or(glam::Vec3::ZERO);
+                let cursor_pos = {
+                    let t = &session.cursor;
+                    glam::Vec3::from(t.position)
+                };
 
                 let mut clicked_id = None;
                 for (e, mode, rect) in vps {
@@ -231,7 +231,7 @@ pub fn draw_viewport_overlays(
                             items,
                             &vs,
                             vd,
-                            &mut overlay,
+                            overlay,
                             &AnnotationViewCtx {
                                 rect: *rect,
                                 mode: *mode,
