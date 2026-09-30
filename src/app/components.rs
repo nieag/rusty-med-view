@@ -1,3 +1,4 @@
+pub use crate::app::annotations::{Anchor, CommentView, EntityId, Label, Provenance, Text, Thread};
 pub use crate::app::roi::{
     ContourBody, ContourData, ContourLoop, ContourMovePreview, ContourPoint, ContourSlice,
     MeshBody, MeshData, MeshEditPreview, MeshFace, MeshVertex, PrimaryRepresentation, RoiBody,
@@ -5,7 +6,6 @@ pub use crate::app::roi::{
 };
 use crate::convert::{ChunkedMeshData, GeometryIdentity, PlaneDefinition, PlaneFamily};
 pub use crate::model::{LoadedLabel, ViewMode, VolumeData};
-use glam::Vec3;
 use web_time::Instant;
 
 use winit::keyboard::ModifiersState;
@@ -797,25 +797,9 @@ pub enum LoadResult {
     Label(LoadedLabel), // Changed to local LoadedLabel
 }
 
-// --- ANNOTATIONS (Threaded discussions and notes) ---
-#[derive(Clone, Debug)]
-pub struct Comment {
-    pub author: String,
-    pub text: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct Annotation {
-    pub id: uuid::Uuid,
-    pub world_pos: Vec3,
-    pub label: String,
-    pub note: String,
-    pub comments: Vec<Comment>,
-}
-
+// --- Annotation panel state (the annotations themselves are entities: `app::annotations`) ---
 #[derive(Clone, Debug, Default)]
 pub struct AnnotationState {
-    pub annotations: Vec<Annotation>,
     pub focused_id: Option<uuid::Uuid>,
     pub show_right_sidebar: bool,
 }
@@ -829,6 +813,8 @@ pub struct Session {
     pub gui: GuiState,
     pub windowing: VolumeWindowing,
     pub annotations: AnnotationState,
+    /// Display name recorded as the author of what this user creates (no accounts yet).
+    pub user: String,
     pub protocol: ProtocolState,
     pub cursor: Transform,
     pub window_settings: WindowSettings,
@@ -853,6 +839,7 @@ impl Session {
             },
             windowing: VolumeWindowing::default(),
             annotations: AnnotationState::default(),
+            user: "Reviewer".to_string(),
             protocol: ProtocolState::default(),
             cursor: Transform {
                 position: [0.5, 0.5, 0.5],

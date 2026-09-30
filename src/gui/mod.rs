@@ -126,7 +126,7 @@ impl Gui {
                     .resizable(true)
                     .default_width(320.0)
                     .show(ctx, |ui| {
-                        annotations::draw_discussion_sidebar(ctx, ui, session, &event_proxy);
+                        annotations::draw_discussion_sidebar(ctx, ui, world, session, &event_proxy);
                     });
             }
 

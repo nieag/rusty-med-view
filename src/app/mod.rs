@@ -1,3 +1,4 @@
+pub mod annotations;
 pub mod components;
 pub mod context;
 pub mod events;
@@ -576,24 +577,15 @@ impl ApplicationHandler<AppEvent> for App {
                 ctx.window.request_redraw();
             }
             AppEvent::AddComment(id, text) => {
-                {
-                    let state = &mut ctx.scene.session.annotations;
-                    if let Some(ann) = state.annotations.iter_mut().find(|a| a.id == id) {
-                        ann.comments.push(Comment {
-                            author: "User".to_string(),
-                            text,
-                        });
-                    }
-                }
+                let author = ctx.scene.session.user.clone();
+                annotations::add_comment(&mut ctx.scene.world, id, text, &author);
                 ctx.window.request_redraw();
             }
             AppEvent::DeleteAnnotation(id) => {
-                {
-                    let state = &mut ctx.scene.session.annotations;
-                    state.annotations.retain(|a| a.id != id);
-                    if state.focused_id == Some(id) {
-                        state.focused_id = None;
-                    }
+                annotations::delete_annotation(&mut ctx.scene.world, id);
+                let state = &mut ctx.scene.session.annotations;
+                if state.focused_id == Some(id) {
+                    state.focused_id = None;
                 }
                 ctx.window.request_redraw();
             }

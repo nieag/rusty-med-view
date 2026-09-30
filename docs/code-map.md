@@ -7,6 +7,7 @@ This is a navigation guide to the current repository, not a second architecture 
 | Need | Entry point |
 | --- | --- |
 | Application startup and event loop | `src/lib.rs`, `src/app/mod.rs` |
+| Notes and comment threads as entities (`Anchor` in world mm, `Provenance`) | `src/app/annotations.rs` |
 | ECS components and `Session` (the state that exists once: editor, input, GUI, cursor, windowing, annotations, protocol, window settings) | `src/app/components.rs` |
 | ROI domain model and mutations | `src/app/roi/` |
 | Derived ROI work and GPU cache synchronization | `src/app/roi_runtime.rs` (frame order) and `src/app/roi_runtime/` (`contour_voxel`, `mesh_voxel`, `voxel_mesh`, `views`, `create`, `jobs`) |

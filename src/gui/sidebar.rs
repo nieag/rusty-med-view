@@ -392,62 +392,58 @@ pub fn draw_sidebar(
     // --- Annotations ---
     ui.collapsing("📍 Annotations", |ui| {
         if ui.button("➕ Add at Cursor").clicked() {
-            let current_pos = glam::Vec3::from(session.cursor.position);
-
-            {
+            let geometry = roi_runtime::main_volume_geometry(world);
+            if let Some(geometry) = geometry {
+                let cursor_mm =
+                    crate::convert::volume_uv_to_world_mm(session.cursor.position, geometry);
+                let next_idx = crate::app::annotations::annotation_rows(world).len() + 1;
+                let new_id = crate::app::annotations::spawn_annotation(
+                    world,
+                    cursor_mm,
+                    format!("Note {}", next_idx),
+                    &session.user,
+                );
                 let state = &mut session.annotations;
-                let next_idx = state.annotations.len() + 1;
-                let new_id = uuid::Uuid::new_v4();
-                state.annotations.push(Annotation {
-                    id: new_id,
-                    world_pos: current_pos,
-                    label: format!("Note {}", next_idx),
-                    note: String::new(),
-                    comments: vec![],
-                });
                 state.focused_id = Some(new_id);
                 state.show_right_sidebar = true;
             }
         }
 
         if ui.button("📁 View All Notes").clicked() {
-            {
-                let state = &mut session.annotations;
-                state.focused_id = None;
-                state.show_right_sidebar = true;
-            }
+            let state = &mut session.annotations;
+            state.focused_id = None;
+            state.show_right_sidebar = true;
         }
 
         ui.separator();
 
-        {
-            let state = &mut session.annotations;
-            if !state.annotations.is_empty() {
-                egui::ScrollArea::vertical()
-                    .max_height(200.0)
-                    .show(ui, |ui| {
-                        let mut to_focus = None;
-                        for ann in &state.annotations {
-                            let is_focused = state.focused_id == Some(ann.id);
-                            if ui
-                                .selectable_label(is_focused, format!("📍 {}", ann.label))
-                                .clicked()
-                            {
-                                to_focus = Some(ann.id);
-                            }
+        let rows = crate::app::annotations::annotation_rows(world);
+        let state = &mut session.annotations;
+        if !rows.is_empty() {
+            egui::ScrollArea::vertical()
+                .max_height(200.0)
+                .show(ui, |ui| {
+                    let mut to_focus = None;
+                    for row in &rows {
+                        let is_focused = state.focused_id == Some(row.id);
+                        if ui
+                            .selectable_label(is_focused, format!("📍 {}", row.label))
+                            .clicked()
+                        {
+                            to_focus = Some(row.id);
                         }
-                        if let Some(id) = to_focus {
-                            state.focused_id = Some(id);
-                            state.show_right_sidebar = true;
-                        }
-                    });
-            } else {
-                ui.label(
-                    egui::RichText::new("No notes yet.")
-                        .size(10.0)
-                        .color(egui::Color32::GRAY),
-                );
-            }
+                    }
+                    if let Some(id) = to_focus {
+                        state.focused_id = Some(id);
+                        state.show_right_sidebar = true;
+                    }
+                });
+        } else {
+            ui.label(
+                egui::RichText::new("No notes yet.")
+                    .size(10.0)
+                    .color(egui::Color32::GRAY),
+            );
         }
     });
 

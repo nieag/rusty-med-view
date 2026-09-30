@@ -204,6 +204,9 @@ pub fn draw_viewport_overlays(
     }
 
     // --- Draw Annotation Markers ---
+    // Markers are placed in volume UV for this frame from their world-millimetre anchors; a drag
+    // moves the UV, and the new anchor is written back after the layer is drawn.
+    let mut moved_anchors: Vec<(uuid::Uuid, [f32; 3])> = Vec::new();
     egui::Area::new("annotations_layer".into())
         .fixed_pos(central_rect.min)
         .interactable(true)
@@ -211,10 +214,21 @@ pub fn draw_viewport_overlays(
             let mut vd_query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
             let vol_data = vd_query.iter().next().map(|(_, vd)| vd);
 
-            if let Some(vd) = vol_data {
-                let state = &mut session.annotations;
-                let focused_id = state.focused_id;
-                let items = &mut state.annotations;
+            if let Some(vd) = vol_data.filter(|vd| vd.geometry.is_some()) {
+                let geometry = vd.geometry.expect("geometry checked above");
+                let focused_id = session.annotations.focused_id;
+                let mut items: Vec<Marker> = crate::app::annotations::annotation_rows(world)
+                    .into_iter()
+                    .map(|row| Marker {
+                        id: row.id,
+                        label: row.label,
+                        world_pos: glam::Vec3::from_array(crate::convert::world_mm_to_volume_uv(
+                            row.anchor_mm,
+                            geometry,
+                        )),
+                        moved: false,
+                    })
+                    .collect();
 
                 let cursor_pos = {
                     let t = &session.cursor;
@@ -226,7 +240,7 @@ pub fn draw_viewport_overlays(
                     if let Ok(vs) = world.get::<&ViewportState>(*e) {
                         if let Some(id) = draw_annotations(
                             ui,
-                            items,
+                            &mut items,
                             &vs,
                             vd,
                             &AnnotationViewCtx {
@@ -243,8 +257,32 @@ pub fn draw_viewport_overlays(
                 if let Some(id) = clicked_id {
                     let _ = event_proxy.send_event(AppEvent::FocusAnnotation(id));
                 }
+                moved_anchors.extend(items.iter().filter(|marker| marker.moved).map(|marker| {
+                    (
+                        marker.id,
+                        crate::convert::volume_uv_to_world_mm(
+                            marker.world_pos.to_array(),
+                            geometry,
+                        ),
+                    )
+                }));
             }
         });
+    for (id, world_mm) in moved_anchors {
+        if let Some(entity) = crate::app::annotations::find_annotation(world, id) {
+            if let Ok(mut anchor) = world.get::<&mut Anchor>(entity) {
+                anchor.world_mm = world_mm;
+            }
+        }
+    }
+}
+
+/// An annotation placed in the current frame's volume UV.
+struct Marker {
+    id: uuid::Uuid,
+    label: String,
+    world_pos: glam::Vec3,
+    moved: bool,
 }
 
 fn draw_label(ui: &mut egui::Ui, text: &str, is_active: bool) -> egui::Response {
@@ -340,7 +378,7 @@ struct AnnotationViewCtx {
 
 fn draw_annotations(
     ui: &mut egui::Ui,
-    annotations: &mut [Annotation],
+    annotations: &mut [Marker],
     view: &ViewportState,
     vol: &VolumeData,
     ann_ctx: &AnnotationViewCtx,
@@ -463,6 +501,7 @@ fn draw_annotations(
                             mapping,
                         ) {
                             ann.world_pos = glam::Vec3::from(vol_pos);
+                            ann.moved = true;
                         }
                     }
 
