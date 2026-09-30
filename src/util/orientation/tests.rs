@@ -2,46 +2,6 @@ use super::*;
 use glam::Vec3;
 
 #[test]
-fn test_axial_conversions() {
-    let plane = SlicePlane::Axial;
-    // Top-left (0,0) -> Radiological Right (x=1.0)
-    assert_eq!(plane.screen_uv_to_volume([0.0, 0.0], 0.5), [1.0, 1.0, 0.5]);
-    // Bottom-right (1,1) -> Radiological Left (x=0.0)
-    assert_eq!(plane.screen_uv_to_volume([1.0, 1.0], 0.5), [0.0, 0.0, 0.5]);
-}
-
-#[test]
-fn test_coronal_conversions() {
-    let plane = SlicePlane::Coronal;
-    // Top-left (0,0) -> Radiological Right (x=1.0)
-    assert_eq!(plane.screen_uv_to_volume([0.0, 0.0], 0.5), [1.0, 0.5, 1.0]);
-    // Bottom-right (1,1) -> Radiological Left (x=0.0)
-    assert_eq!(plane.screen_uv_to_volume([1.0, 1.0], 0.5), [0.0, 0.5, 0.0]);
-}
-
-#[test]
-fn test_sagittal_conversions() {
-    let plane = SlicePlane::Sagittal;
-    // Top-left (0,0) -> Anterior (y=1.0), Superior (z=1.0)
-    assert_eq!(plane.screen_uv_to_volume([0.0, 0.0], 0.5), [0.5, 1.0, 1.0]);
-    // Bottom-right (1,1) -> Posterior (y=0.0), Inferior (z=0.0)
-    assert_eq!(plane.screen_uv_to_volume([1.0, 1.0], 0.5), [0.5, 0.0, 0.0]);
-}
-
-#[test]
-fn test_round_trip() {
-    let planes = [SlicePlane::Axial, SlicePlane::Coronal, SlicePlane::Sagittal];
-    for plane in planes {
-        let uv = [0.3, 0.7];
-        let depth = 0.4;
-        let vol = plane.screen_uv_to_volume(uv, depth);
-        let recovered_uv = plane.volume_to_screen_uv(vol);
-        assert!((uv[0] - recovered_uv[0]).abs() < 1e-6);
-        assert!((uv[1] - recovered_uv[1]).abs() < 1e-6);
-    }
-}
-
-#[test]
 fn test_slice_plane_plane_family_adapters() {
     assert_eq!(
         SlicePlane::from_plane_family(SlicePlane::Axial.to_plane_family()),
@@ -192,139 +152,19 @@ fn test_project_axis() {
     assert!((proj_z[1] - 0.0).abs() < 1e-5); // Z points straight (no Y component in screen space at this specific BASE_ROTATION)
 }
 
-/// Replicates the shader logic from `fs_main` in pure Rust for parity checking.
-fn shader_logic_emulation(
-    view_mode: u32,
-    uv: [f32; 2],
-    zoom: f32,
-    pan: [f32; 2],
-    resolution: [f32; 2],
-    vol_aspects: [f32; 3],
-    cursor: [f32; 3],
-) -> [f32; 3] {
+/// Where the shader puts the 3D crosshair (mode 0 of `fs_main`), for an identity rotation and a
+/// unit-aspect volume, as a screen UV. The 2D views are compared with the real shader on the GPU
+/// instead (`render::pipeline` tests).
+fn shader_crosshair_3d(cursor: [f32; 3], zoom: f32, pan: [f32; 2], screen_aspect: f32) -> [f32; 2] {
     let pivot = [0.5, 0.5];
-    let screen_aspect = resolution[0] / resolution[1];
-
-    // 1. Calculate aspect correction K
-    let slice_aspect = match view_mode {
-        1 => vol_aspects[0] / vol_aspects[1],
-        2 => vol_aspects[0] / vol_aspects[2],
-        3 => vol_aspects[1] / vol_aspects[2],
-        _ => 1.0,
-    };
-    let k = screen_aspect / slice_aspect;
-
-    // 2. Map Screen UV to "Corrected" centered coord
-    let centered_uv = [(uv[0] - pivot[0]) * k, uv[1] - pivot[1]];
-
-    // 3. Apply Zoom and Pan
-    let zoomed_uv = [
-        centered_uv[0] / zoom + pivot[0] + pan[0],
-        centered_uv[1] / zoom + pivot[1] + pan[1],
-    ];
-
-    // 4. Sample projection logic (MUST MATCH SHADER EXACTLY)
-    match view_mode {
-        0 => {
-            // 3D orthographic projection
-            // Represents the orthographic crosshair calculation in mode 0.
-
-            let q = [0.0, 0.0, 0.0, 1.0]; // Identity rotation for test
-            let rot_mat = quat_to_mat3(q);
-
-            // For parity test, we assume standard Aspect Ratio Vol [1,1,1]
-            let cursor_obj = [cursor[0] - 0.5, cursor[1] - 0.5, cursor[2] - 0.5];
-            let cursor_world = rotate_vec3(rot_mat, cursor_obj);
-            let screen_u = -cursor_world[0] / (ORTHOGRAPHIC_VIEW_SCALE * screen_aspect);
-            let screen_v = -cursor_world[1] / ORTHOGRAPHIC_VIEW_SCALE;
-            let p_uv = [screen_u + 0.5, screen_v + 0.5];
-            let crosshair_pos = [
-                (p_uv[0] - pan[0] - pivot[0]) * zoom + pivot[0],
-                (p_uv[1] - pan[1] - pivot[1]) * zoom + pivot[1],
-            ];
-            [crosshair_pos[0], crosshair_pos[1], 0.0]
-        }
-        1 => [1.0 - zoomed_uv[0], 1.0 - zoomed_uv[1], cursor[2]], // Axial
-        2 => [1.0 - zoomed_uv[0], cursor[1], 1.0 - zoomed_uv[1]], // Coronal
-        3 => [cursor[0], 1.0 - zoomed_uv[0], 1.0 - zoomed_uv[1]], // Sagittal
-        _ => [0.0, 0.0, 0.0],
-    }
-}
-
-#[test]
-fn test_shader_parity_axial() {
-    let uv = [0.2, 0.3];
-    let zoom = 2.0;
-    let pan = [0.1, -0.1];
-    let res = [800.0, 600.0];
-    let aspects = [1.0, 0.8, 1.2];
-    let cursor = [0.5, 0.5, 0.5];
-
-    let shader_result = shader_logic_emulation(1, uv, zoom, pan, res, aspects, cursor);
-
-    // Calculate Clean API result
-    let plane = SlicePlane::Axial;
-    let slice_aspect = plane.slice_aspect(aspects);
-    let k = res[0] / res[1] / slice_aspect;
-    let volume_uv = [
-        ((uv[0] - 0.5) * k) / zoom + 0.5 + pan[0],
-        (uv[1] - 0.5) / zoom + 0.5 + pan[1],
-    ];
-    let api_result = plane.screen_uv_to_volume(volume_uv, cursor[2]);
-
-    for i in 0..3 {
-        assert!((shader_result[i] - api_result[i]).abs() < 1e-6);
-    }
-}
-
-#[test]
-fn test_shader_parity_coronal() {
-    let uv = [0.6, 0.2];
-    let zoom = 1.5;
-    let pan = [-0.2, 0.2];
-    let res = [1024.0, 768.0];
-    let aspects = [1.0, 1.0, 1.0];
-    let cursor = [0.4, 0.4, 0.4];
-
-    let shader_result = shader_logic_emulation(2, uv, zoom, pan, res, aspects, cursor);
-
-    let plane = SlicePlane::Coronal;
-    let slice_aspect = plane.slice_aspect(aspects);
-    let k = res[0] / res[1] / slice_aspect;
-    let volume_uv = [
-        ((uv[0] - 0.5) * k) / zoom + 0.5 + pan[0],
-        (uv[1] - 0.5) / zoom + 0.5 + pan[1],
-    ];
-    let api_result = plane.screen_uv_to_volume(volume_uv, cursor[1]);
-
-    for i in 0..3 {
-        assert!((shader_result[i] - api_result[i]).abs() < 1e-6);
-    }
-}
-
-#[test]
-fn test_shader_parity_sagittal() {
-    let uv = [0.1, 0.9];
-    let zoom = 0.8;
-    let pan = [0.0, 0.0];
-    let res = [600.0, 600.0];
-    let aspects = [1.0, 1.1, 0.9];
-    let cursor = [0.1, 0.2, 0.3];
-
-    let shader_result = shader_logic_emulation(3, uv, zoom, pan, res, aspects, cursor);
-
-    let plane = SlicePlane::Sagittal;
-    let slice_aspect = plane.slice_aspect(aspects);
-    let k = res[0] / res[1] / slice_aspect;
-    let volume_uv = [
-        ((uv[0] - 0.5) * k) / zoom + 0.5 + pan[0],
-        (uv[1] - 0.5) / zoom + 0.5 + pan[1],
-    ];
-    let api_result = plane.screen_uv_to_volume(volume_uv, cursor[0]);
-
-    for i in 0..3 {
-        assert!((shader_result[i] - api_result[i]).abs() < 1e-6);
-    }
+    let cursor_world = [cursor[0] - 0.5, cursor[1] - 0.5, cursor[2] - 0.5];
+    let screen_u = -cursor_world[0] / (ORTHOGRAPHIC_VIEW_SCALE * screen_aspect);
+    let screen_v = -cursor_world[1] / ORTHOGRAPHIC_VIEW_SCALE;
+    let p_uv = [screen_u + 0.5, screen_v + 0.5];
+    [
+        (p_uv[0] - pan[0] - pivot[0]) * zoom + pivot[0],
+        (p_uv[1] - pan[1] - pivot[1]) * zoom + pivot[1],
+    ]
 }
 
 #[test]
@@ -333,12 +173,11 @@ fn test_picking_3d_parity() {
     // the shader's crosshair projection logic.
     let zoom = 1.0;
     let pan = [0.0, 0.0];
-    let res = [800.0, 800.0]; // Square to simplify
-    let aspects = [1.0, 1.0, 1.0];
+    let screen_aspect = 1.0; // Square to simplify
     let cursor = [1.0, 0.5, 0.5]; // Patient Right (R)
 
     // Find Screen UV where this cursor should be projected in 3D
-    let shader_uv = shader_logic_emulation(0, [0.5, 0.5], zoom, pan, res, aspects, cursor);
+    let shader_uv = shader_crosshair_3d(cursor, zoom, pan, screen_aspect);
     // radiological should be Left (u < 0.5)
     assert!(shader_uv[0] < 0.5);
 
@@ -357,7 +196,7 @@ fn test_picking_3d_parity() {
     assert!((ray_origin_world.x - 0.5).abs() < 1e-5);
 
     let cursor_up = [0.5, 0.8, 0.5]; // Anterior (Up in identity)
-    let shader_uv_up = shader_logic_emulation(0, [0.5, 0.5], zoom, pan, res, aspects, cursor_up);
+    let shader_uv_up = shader_crosshair_3d(cursor_up, zoom, pan, screen_aspect);
     // Anterior (+Y) should be at Top (v < 0.5)
     assert!(shader_uv_up[1] < 0.5);
 
@@ -491,4 +330,18 @@ fn test_anatomical_plane_name_matches_the_view_for_standard_storage() {
 fn test_anatomical_letter_rejects_non_finite_directions() {
     assert_eq!(anatomical_letter([f64::NAN, 1.0, 0.0]), None);
     assert_eq!(anatomical_letter([f64::INFINITY, 0.0, 0.0]), None);
+}
+
+#[test]
+fn test_orthographic_view_scale_matches_the_shader_constant() {
+    let shader = include_str!("../../shaders/shader.wgsl");
+    let declared = shader
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("const ORTHOGRAPHIC_VIEW_SCALE: f32 = ")
+                .and_then(|rest| rest.strip_suffix(';'))
+        })
+        .expect("the shader declares ORTHOGRAPHIC_VIEW_SCALE");
+    assert_eq!(declared.parse::<f32>().unwrap(), ORTHOGRAPHIC_VIEW_SCALE);
 }

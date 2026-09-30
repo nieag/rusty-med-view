@@ -283,12 +283,12 @@ pub fn sys_handle_input_scroll(world: &mut World, session: &mut Session, delta: 
         None => return false,
     };
 
-    let mut vol_aspects = [1.0, 1.0, 1.0];
     let mut dims = [1u32, 1, 1];
     for (_, vol) in world.query::<&VolumeData>().iter() {
-        vol_aspects = vol.aspect_ratios();
         dims = vol.dimensions;
     }
+    let geometry = crate::app::roi_runtime::main_volume_geometry(world);
+    let cursor_uv = session.cursor.position;
 
     let mut changed_3d_zoom = false;
     if is_zoom {
@@ -296,18 +296,7 @@ pub fn sys_handle_input_scroll(world: &mut World, session: &mut Session, delta: 
             world.get::<&Viewport>(avp),
             world.get::<&mut ViewportState>(avp),
         ) {
-            let screen_aspect = if vp.rect[3] > 0.0 {
-                vp.rect[2] / vp.rect[3]
-            } else {
-                1.0
-            };
-            let k = match vp.mode {
-                ViewMode::ThreeD => 1.0,
-                ViewMode::Axial => screen_aspect / (vol_aspects[0] / vol_aspects[1]),
-                ViewMode::Coronal => screen_aspect / (vol_aspects[0] / vol_aspects[2]),
-                ViewMode::Sagittal => screen_aspect / (vol_aspects[1] / vol_aspects[2]),
-                ViewMode::Oblique => screen_aspect,
-            };
+            let k = viewport_aspect_factor(vp.mode, vp.rect, vs.user_rotation, cursor_uv, geometry);
 
             let mx_centered = (mouse_uv[0] - 0.5) * k;
             let my_centered = mouse_uv[1] - 0.5;
@@ -372,6 +361,37 @@ pub fn sys_handle_input_scroll(world: &mut World, session: &mut Session, delta: 
     changed_3d_zoom
 }
 
+/// `k` of the shared viewport mapping: the screen's aspect over the displayed plane's aspect, the
+/// factor that turns a horizontal screen offset into a volume offset. 1 for the 3D view.
+fn viewport_aspect_factor(
+    mode: ViewMode,
+    rect: [f32; 4],
+    user_rotation: [f32; 4],
+    cursor_uv: [f32; 3],
+    geometry: Option<crate::model::VoxelGeometry>,
+) -> f32 {
+    if mode == ViewMode::ThreeD {
+        return 1.0;
+    }
+    let screen_aspect = if rect[3] > 0.0 {
+        rect[2] / rect[3]
+    } else {
+        1.0
+    };
+    let slice_aspect = geometry
+        .and_then(|geometry| {
+            let plane = crate::render::roi_views::displayed_plane_for_viewport(
+                mode,
+                cursor_uv,
+                user_rotation,
+                geometry,
+            )?;
+            crate::convert::plane_display_aspect(plane, geometry)
+        })
+        .unwrap_or(1.0);
+    screen_aspect / slice_aspect
+}
+
 /// Handle mouse drag motion for panning and rotating.
 pub fn sys_handle_mouse_drag(world: &mut World, session: &mut Session) {
     let input = &session.input;
@@ -390,10 +410,8 @@ pub fn sys_handle_mouse_drag(world: &mut World, session: &mut Session) {
         return;
     };
 
-    let mut vol_aspects = [1.0, 1.0, 1.0];
-    for (_, vol) in world.query::<&VolumeData>().iter() {
-        vol_aspects = vol.aspect_ratios();
-    }
+    let geometry = crate::app::roi_runtime::main_volume_geometry(world);
+    let cursor_uv = session.cursor.position;
 
     let mut crosshair_update = None;
     let mut contour_move_update = None;
@@ -448,22 +466,7 @@ pub fn sys_handle_mouse_drag(world: &mut World, session: &mut Session) {
 
         if let Some((start_pan, start_pos, current_pos)) = drag_info {
             let zoom = vs.zoom;
-            let mut k = 1.0;
-            if vp.mode != ViewMode::ThreeD {
-                let screen_aspect = if vp.rect[3] > 0.0 {
-                    vp.rect[2] / vp.rect[3]
-                } else {
-                    1.0
-                };
-                let slice_aspect = match vp.mode {
-                    ViewMode::Axial => vol_aspects[0] / vol_aspects[1],
-                    ViewMode::Coronal => vol_aspects[0] / vol_aspects[2],
-                    ViewMode::Sagittal => vol_aspects[1] / vol_aspects[2],
-                    ViewMode::Oblique => 1.0,
-                    _ => 1.0,
-                };
-                k = screen_aspect / slice_aspect;
-            }
+            let k = viewport_aspect_factor(vp.mode, vp.rect, vs.user_rotation, cursor_uv, geometry);
             vs.pan[0] = start_pan[0] + ((start_pos[0] - current_pos[0]) * k) / zoom;
             vs.pan[1] = start_pan[1] + (start_pos[1] - current_pos[1]) / zoom;
         }

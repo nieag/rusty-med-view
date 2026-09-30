@@ -189,6 +189,18 @@ fn orthogonal_family(plane: PlaneDefinition) -> Option<OrthogonalFamily> {
     plane.family.orthogonal()
 }
 
+/// Width over height of the plane's full extent in millimetres: the `slice_aspect` of the shared
+/// viewport mapping (`ViewportMapping`), which every screen-to-volume conversion uses.
+pub fn plane_display_aspect(plane: PlaneDefinition, geometry: VoxelGeometry) -> Option<f32> {
+    match plane.family {
+        PlaneFamily::Oblique => {
+            let (_, _, lu, lv) = oblique_uv_basis_and_lengths(plane, geometry)?;
+            Some(lu / lv)
+        }
+        _ => plane_slice_aspect(orthogonal_family(plane)?, geometry),
+    }
+}
+
 fn plane_slice_aspect(family: OrthogonalFamily, geometry: VoxelGeometry) -> Option<f32> {
     let extents = [
         geometry.dimensions[0] as f32 * geometry.spacing()[0],
