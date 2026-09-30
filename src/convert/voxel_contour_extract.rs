@@ -187,17 +187,36 @@ pub fn extract_contours_from_voxel_data(
     voxel_data: &VoxelData,
     family: OrthogonalFamily,
 ) -> Result<ContourData, VoxelContourExtractionError> {
+    extract_contours_in_grid(voxel_data, family, voxel_data.geometry)
+}
+
+/// Like [`extract_contours_from_voxel_data`] for voxel data that covers only a box of
+/// `reference`. The slice planes are the reference grid's, so a slice has the same plane (and
+/// the same identity) whether it came from a box or from the whole grid.
+pub fn extract_contours_in_grid(
+    voxel_data: &VoxelData,
+    family: OrthogonalFamily,
+    reference: crate::model::VoxelGeometry,
+) -> Result<ContourData, VoxelContourExtractionError> {
     let geometry = voxel_data.geometry;
     let (depth_axis, _, _) = family_axes(family);
     let dimensions = geometry.dimensions;
     let depth_len = dimensions[depth_axis];
+    let offset = geometry
+        .offset_in(reference)
+        .ok_or(VoxelContourExtractionError::UnsupportedPlaneGeometry)?;
+    let reference_depth_len = reference.dimensions()[depth_axis];
     let mut slices = Vec::new();
 
     for depth_index in 0..depth_len {
         let plane = orthogonal_plane_from_volume_uv(
             family.into(),
-            family_slice_cursor_uv(family, depth_index, depth_len),
-            geometry,
+            family_slice_cursor_uv(
+                family,
+                depth_index + offset[depth_axis],
+                reference_depth_len,
+            ),
+            reference,
         )
         .ok_or(VoxelContourExtractionError::UnsupportedPlaneGeometry)?;
 

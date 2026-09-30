@@ -272,17 +272,24 @@ pub(super) fn process_contour_voxel_rebuild_for_entity(
             }
         })
     });
+    let full_contour = base_slice_voxel.is_some().then(|| contour_data.clone());
     if let (Some(slice_key), Some(_)) = (dirty_slice_key, base_slice_voxel.as_ref()) {
         contour_data
             .slices
             .retain(|slice| ContourSliceKey::from_plane(slice.plane) == slice_key);
     }
 
-    let target_geometry = world
-        .get::<&Roi>(roi_entity)
-        .ok()
-        .map(|roi| roi.reference_geometry());
-    let Some(target_geometry) = target_geometry else {
+    // Voxels are held only in a box around the shape (`convert::snug_grid`); the box never
+    // shrinks while the ROI is edited, so the retained cache and mesh chunks stay usable.
+    let grid = world.get::<&Roi>(roi_entity).ok().map(|roi| {
+        // An empty cache says nothing about where the shape will be, so it is not kept.
+        let previous = roi
+            .voxel_cache()
+            .filter(|cache| cache.data.raw_data.iter().any(|voxel| *voxel != 0))
+            .map(|cache| cache.data.geometry);
+        (roi.reference_geometry(), previous)
+    });
+    let Some((reference_geometry, previous_geometry)) = grid else {
         log::warn!(
             "Skipping contour voxel rebuild for ROI {:?}: missing ROI reference grid",
             roi_entity
@@ -295,6 +302,20 @@ pub(super) fn process_contour_voxel_rebuild_for_entity(
         fail_contour_voxel_rebuild(world, roi_entity);
         return false;
     };
+    let target_geometry =
+        snug_geometry_for_contour(&contour_data, reference_geometry, previous_geometry);
+    // The retained cache is patched in place, so it must be in the same box as the target.
+    let base_slice_voxel = base_slice_voxel.and_then(|base| {
+        if base.geometry.identity() == target_geometry.identity() {
+            Some(base)
+        } else {
+            base.embedded_in(target_geometry)
+        }
+    });
+    if let (None, Some(full)) = (&base_slice_voxel, full_contour) {
+        // The patch base could not be kept, so every slice is rasterized after all.
+        contour_data = full;
+    }
 
     let raster_started_at = Instant::now();
     let raster_result = if let Some(base) = base_slice_voxel.as_ref() {

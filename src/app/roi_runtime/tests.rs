@@ -1769,7 +1769,14 @@ fn test_process_contour_voxel_rebuild_jobs_builds_current_voxel_cache_for_contou
     assert_eq!(roi.running_job_kind(), None);
     assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildMeshCache));
     let voxel_cache = roi.voxel_cache().expect("voxel cache should exist");
-    assert_eq!(voxel_cache.data.geometry.dimensions, [4, 4, 4]);
+    assert!(
+        voxel_cache
+            .data
+            .geometry
+            .offset_in(roi.reference_geometry())
+            .is_some(),
+        "the voxels are a box of the reference grid"
+    );
     assert!(voxel_cache.data.raw_data.iter().any(|v| *v != 0));
     assert!(voxel_cache.gpu_resources.is_none());
     assert_ne!(roi.job_metrics.last_cpu_cache_install_ms, 42.0);
@@ -2436,7 +2443,12 @@ fn test_two_slice_commits_before_one_rebuild_keep_every_slice_in_voxel_cache() {
     };
     let occupied_per_layer = |world: &World| -> Vec<usize> {
         let roi = world.get::<&Roi>(entity).unwrap();
-        let data = &roi.voxel_cache().unwrap().data;
+        let data = roi
+            .voxel_cache()
+            .unwrap()
+            .data
+            .embedded_in(roi.reference_geometry())
+            .expect("the voxels are a box of the reference grid");
         (0..4)
             .map(|z| {
                 data.raw_data[z * 16..(z + 1) * 16]
@@ -3626,7 +3638,7 @@ fn test_an_idle_active_mesh_roi_rebuilds_its_voxels_after_an_edit_before_anyone_
 }
 
 #[test]
-fn test_a_cropped_label_roi_switches_to_contours_on_the_whole_grid_and_undo_restores_the_box() {
+fn test_a_cropped_label_roi_switches_to_contours_without_ever_holding_the_whole_grid() {
     let mut world = World::new();
     let mut editor = EditorState::default();
     let mut data = vec![0_u8; 64];
@@ -3647,13 +3659,24 @@ fn test_a_cropped_label_roi_switches_to_contours_on_the_whole_grid_and_undo_rest
         let roi = world.get::<&Roi>(entity).unwrap();
         assert!(matches!(roi.body, RoiBody::Contour(_)));
         let voxels = &roi.voxel_cache().unwrap().data;
+        assert_eq!(voxels.raw_data.len(), 2, "still just the box");
         assert_eq!(
-            voxels.geometry.identity(),
-            reference.identity(),
-            "edits can land anywhere, so the voxels now cover the whole reference grid"
+            voxels.embedded_in(reference).unwrap().raw_data,
+            data,
+            "and the same voxels in the same place"
         );
-        assert_eq!(voxels.raw_data.len(), 64);
-        assert_eq!(voxels.raw_data, data.clone());
+        // The slice planes are the reference grid's, like the planes an edit would use.
+        let slice = &roi.contour_data().unwrap().slices[0];
+        let expected = orthogonal_plane_from_volume_uv(
+            PlaneFamily::Axial,
+            [0.5, 0.5, crate::convert::slice_center_uv(1, 4)],
+            reference,
+        )
+        .unwrap();
+        assert_eq!(
+            ContourSliceKey::from_plane(slice.plane),
+            ContourSliceKey::from_plane(expected)
+        );
     }
 
     undo_roi_edit(&mut world, &mut editor).unwrap();
@@ -3668,4 +3691,70 @@ fn test_a_cropped_label_roi_switches_to_contours_on_the_whole_grid_and_undo_rest
         "the stored box, not the whole grid"
     );
     assert_eq!(roi.reference_geometry().identity(), reference.identity());
+}
+
+#[test]
+fn test_an_edit_outside_the_box_grows_it_and_keeps_what_was_there() {
+    let mut world = World::new();
+    spawn_main_volume(&mut world, [1.0; 3], [0.0; 3]);
+    let mut data = vec![0_u8; 64];
+    data[(4 + 1) * 4 + 1] = 1;
+    let entity = spawn_labels(&mut world, "crop.nii", &data)[0];
+    convert_and_settle(
+        &mut world,
+        entity,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    );
+    let reference = world.get::<&Roi>(entity).unwrap().reference_geometry();
+    let box_before = world
+        .get::<&Roi>(entity)
+        .unwrap()
+        .voxel_cache()
+        .unwrap()
+        .data
+        .geometry;
+
+    // Add a slice far from the stored box (layer 3; the label is on layer 1).
+    let mut contour = world
+        .get::<&Roi>(entity)
+        .unwrap()
+        .contour_data()
+        .unwrap()
+        .clone();
+    let mut far = contour.slices[0].clone();
+    far.plane = orthogonal_plane_from_volume_uv(
+        PlaneFamily::Axial,
+        [0.5, 0.5, crate::convert::slice_center_uv(3, 4)],
+        reference,
+    )
+    .unwrap();
+    contour.slices.push(far.clone());
+    replace_contour_data_for_slice_with_history(&mut world, entity, contour, far.plane).unwrap();
+    settle(&mut world);
+
+    let roi = world.get::<&Roi>(entity).unwrap();
+    let voxels = &roi.voxel_cache().unwrap().data;
+    assert!(roi.is_cache_current(RoiCacheKind::Voxel));
+    let box_after = voxels.geometry;
+    let (before, after) = (
+        box_before.offset_in(reference).unwrap(),
+        box_after.offset_in(reference).unwrap(),
+    );
+    assert!(
+        box_after.dimensions()[2] > box_before.dimensions()[2],
+        "the box grew in depth"
+    );
+    assert!(
+        after[2] <= before[2],
+        "and still starts at or before the old box"
+    );
+    let full = voxels.embedded_in(reference).unwrap().raw_data;
+    let layer = |z: usize| {
+        full[z * 16..(z + 1) * 16]
+            .iter()
+            .filter(|v| **v != 0)
+            .count()
+    };
+    assert!(layer(1) > 0, "the original layer is kept");
+    assert!(layer(3) > 0, "and the new one is there");
 }

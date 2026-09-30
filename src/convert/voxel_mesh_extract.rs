@@ -3,7 +3,7 @@ use crate::convert::{
     extract_smooth_mesh_from_voxel_data, smooth_mesh_cell_ranges, SmoothMeshExtractionError,
     SmoothMeshField,
 };
-use crate::model::{MeshData, MeshFace, VoxelData};
+use crate::model::{GeometryIdentity, MeshData, MeshFace, VoxelData};
 use std::{collections::HashMap, sync::Arc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,7 +29,9 @@ pub struct MeshChunk {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChunkedMeshData {
     pub chunk_size: u32,
-    pub voxel_dimensions: [u32; 3],
+    /// The voxel grid the chunks were extracted from. Chunk keys are indices of this grid, so
+    /// chunks can only be reused for voxel data on the same grid.
+    pub grid: GeometryIdentity,
     pub chunks: Vec<MeshChunk>,
 }
 
@@ -56,7 +58,7 @@ impl IncrementalChunkedMeshRebuild {
         Ok(Self {
             result: ChunkedMeshData {
                 chunk_size,
-                voxel_dimensions: dimensions,
+                grid: voxel_data.geometry.identity(),
                 chunks: Vec::new(),
             },
             smooth_field,
@@ -83,7 +85,7 @@ impl IncrementalChunkedMeshRebuild {
         let dimensions = voxel_data.geometry.dimensions;
         let chunk_size = chunked.chunk_size;
         let empty_box = (0..3).any(|axis| max_exclusive[axis] <= min_inclusive[axis]);
-        if chunk_size == 0 || chunked.voxel_dimensions != dimensions || empty_box {
+        if chunk_size == 0 || chunked.grid != voxel_data.geometry.identity() || empty_box {
             return Self::begin_full(voxel_data, chunk_size);
         }
 
@@ -151,7 +153,7 @@ impl IncrementalChunkedMeshRebuild {
         Ok(Self {
             result: ChunkedMeshData {
                 chunk_size,
-                voxel_dimensions: dimensions,
+                grid: voxel_data.geometry.identity(),
                 chunks: kept,
             },
             smooth_field,

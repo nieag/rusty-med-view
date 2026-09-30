@@ -85,8 +85,13 @@ pub(super) fn process_mesh_voxel_rebuild_for_entity(
         let RoiBody::Mesh(MeshBody { data: mesh, .. }) = &roi.body else {
             return false;
         };
-        // The whole reference grid: a deformed mesh may reach past the box its voxels came from.
-        let target_geometry = Some(roi.reference_geometry());
+        // A box of the reference grid around the mesh, never smaller than the previous one: a
+        // deformed mesh may reach past the box its voxels came from.
+        let target_geometry = Some(snug_geometry_for_mesh(
+            mesh,
+            roi.reference_geometry(),
+            roi.voxel_cache().map(|cache| cache.data.geometry),
+        ));
         (
             roi.dirty_state.authoritative.shape,
             mesh.clone(),

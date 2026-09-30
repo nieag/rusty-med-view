@@ -155,13 +155,6 @@ pub fn create_empty_contour_roi(
     let reference_voxel_geometry = main_volume_geometry(world)
         .ok_or_else(|| "Missing main volume geometry; contour ROI was not created.".to_string())?;
     let reference_geometry = reference_voxel_geometry;
-    let voxel_count = reference_voxel_geometry
-        .dimensions
-        .into_iter()
-        .try_fold(1usize, |count, dimension| {
-            count.checked_mul(dimension as usize)
-        })
-        .ok_or_else(|| "Contour ROI reference grid is too large.".to_string())?;
 
     let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
     let roi_name = format!("Contour ROI {}", next_roi_id);
@@ -183,11 +176,15 @@ pub fn create_empty_contour_roi(
         // The empty cache is valid for the initial empty contour authority. Its generation lets
         // the first changed-slice commit use the incremental slab rasterizer.
         let generation = roi.dirty_state.authoritative.shape;
+        // A one-voxel box: nothing is drawn yet, and the first edit grows it to fit the shape.
+        let empty_box = reference_voxel_geometry
+            .cropped([0; 3], [1; 3])
+            .map_err(|error| format!("Cannot create the contour ROI grid: {error}"))?;
         roi.install_voxel_cache_result(
             VoxelCache {
                 data: VoxelData {
-                    geometry: reference_voxel_geometry,
-                    raw_data: vec![0; voxel_count],
+                    geometry: empty_box,
+                    raw_data: vec![0],
                 },
                 gpu_resources: None,
             },

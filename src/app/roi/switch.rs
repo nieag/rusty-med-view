@@ -12,7 +12,7 @@ use crate::app::components::{
 use crate::app::roi::authority::request_mesh_voxel_cache_rebuild;
 use crate::app::roi::history::record_authority_change;
 use crate::app::roi::model::is_roi_locked;
-use crate::convert::{extract_contours_from_voxel_data, VoxelContourExtractionError};
+use crate::convert::{extract_contours_in_grid, VoxelContourExtractionError};
 use crate::model::OrthogonalFamily;
 use hecs::World;
 
@@ -368,22 +368,13 @@ pub(crate) fn convert_to_contour(
             }
         }
     };
-    // Contours are edited anywhere in the reference grid, so the voxels they are derived from and
-    // rasterized back into cover the whole grid, not just the box an imported label was stored in.
-    let source_voxel = {
-        let reference = world
-            .get::<&Roi>(roi_entity)
-            .map_err(|_| SwitchError::MissingRoi)?
-            .reference_geometry();
-        if source_voxel.geometry.identity() == reference.identity() {
-            source_voxel
-        } else {
-            source_voxel
-                .embedded_in(reference)
-                .ok_or(SwitchError::SourceUnavailable)?
-        }
-    };
-    let extracted = extract_contours_from_voxel_data(&source_voxel, family)
+    // The slice planes are the reference grid's, so the loops match the planes edits use even
+    // though the source voxels may cover only a box of the grid.
+    let reference = world
+        .get::<&Roi>(roi_entity)
+        .map_err(|_| SwitchError::MissingRoi)?
+        .reference_geometry();
+    let extracted = extract_contours_in_grid(&source_voxel, family, reference)
         .map_err(SwitchError::ExtractionFailed)?;
 
     let mut roi = world
