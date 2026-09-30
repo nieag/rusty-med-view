@@ -266,11 +266,210 @@ fn apply_window(value: f32, center: f32, width: f32) -> f32 {
 }
 // Note: Gizmo is now rendered via egui for proper font rendering
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+// Crosshair and overlay primitives drawn over `base`. Every layer is a `mix` toward a colour, so
+// the result over any background follows from evaluating this over two backgrounds (see
+// `fs_overlay_3d`).
+fn apply_overlays(
+    uv: vec2<f32>,
+    aspect: f32,
+    base: vec3<f32>,
+    draw_crosshair: bool,
+    crosshair_screen_pos: vec2<f32>,
+    ch_v1: vec2<f32>,
+    ch_v2: vec2<f32>,
+    ch_v3: vec2<f32>,
+    ch_len: f32,
+    ch_alpha: f32,
+) -> vec3<f32> {
+    var color = base;
+    // Crosshair
+    if draw_crosshair {
+        let ch_res = get_crosshair_color(uv, crosshair_screen_pos, ch_v1, ch_v2, ch_v3, aspect, ch_len, ch_alpha);
+        color = mix(color, ch_res.rgb, ch_res.a);
+    }
+
+    // --- Overlay Primitives ---
+    // Viewport mask bits: 1=3D(0), 2=Axial(1), 4=Coronal(2), 8=Sagittal(3)
+    let viewport_bit = 1u << uniforms.view_mode;
+
+    for (var i = 0u; i < uniforms.overlay_primitive_count; i++) {
+        if i >= MAX_OVERLAY_PRIMITIVES { break; }
+
+        let prim = overlay_primitives[i];
+        let viewport_mask = u32(prim.params.z);
+        
+        // Skip if not visible in this viewport
+        if (viewport_mask & viewport_bit) == 0u { continue; }
+
+        let kind = u32(prim.params.w);
+        let radius = prim.params.x;
+        let prim_color = prim.color;
+        
+        // Get world position (use mouse if this is the dragged primitive)
+        var world_pos = prim.world_pos.xyz;
+        var use_mouse_pos = false;
+        if uniforms.overlay_dragging_idx == i {
+            use_mouse_pos = true;
+        }
+        
+        // Project to screen UV based on viewport mode
+        var screen_pos = vec2<f32>(-10.0, -10.0);
+        var visible = false;
+
+        if uniforms.view_mode > 0u {
+            // --- 2D Viewport projection ---
+            let zoom = uniforms.zoom;
+            let pan = uniforms.pan;
+            let pivot = vec2<f32>(0.5, 0.5);
+            
+            // Calculate aspect correction
+            let screen_aspect_ratio = uniforms.resolution.x / uniforms.resolution.y;
+            let spacing = uniforms.volume_spacing.xyz;
+            let dims = vec3<f32>(uniforms.volume_dims.xyz);
+            let phys_x = dims.x * spacing.x;
+            let phys_y = dims.y * spacing.y;
+            let phys_z = dims.z * spacing.z;
+
+            var slice_aspect = 1.0;
+            var uv = vec2<f32>(0.0);
+
+            if uniforms.view_mode == 1u {
+                // Axial (XY) - Radiological: Patient Right (x=1) on Screen Left (u=0)
+                slice_aspect = phys_x / phys_y;
+                if use_mouse_pos {
+                    uv = uniforms.overlay_mouse_uv;
+                } else {
+                    uv = vec2<f32>(1.0 - world_pos.x, 1.0 - world_pos.y);
+                }
+            } else if uniforms.view_mode == 2u {
+                // Coronal (XZ) - Radiological: Patient Right (x=1) on Screen Left (u=0)
+                slice_aspect = phys_x / phys_z;
+                if use_mouse_pos {
+                    uv = uniforms.overlay_mouse_uv;
+                } else {
+                    uv = vec2<f32>(1.0 - world_pos.x, 1.0 - world_pos.z);
+                }
+            } else if uniforms.view_mode == 3u {
+                // Sagittal (YZ) - Anterior is LEFT (u=0), Superior is UP (v=0)
+                slice_aspect = phys_y / phys_z;
+                if use_mouse_pos {
+                    uv = uniforms.overlay_mouse_uv;
+                } else {
+                    uv = vec2<f32>(1.0 - world_pos.y, 1.0 - world_pos.z);
+                }
+            } else if uniforms.view_mode == 4u {
+                let q = uniforms.rotation;
+                let x2 = q.x + q.x;
+                let y2 = q.y + q.y;
+                let z2 = q.z + q.z;
+                let xx = q.x * x2;
+                let xy = q.x * y2;
+                let xz = q.x * z2;
+                let yy = q.y * y2;
+                let yz = q.y * z2;
+                let zz = q.z * z2;
+                let wx = q.w * x2;
+                let wy = q.w * y2;
+                let wz = q.w * z2;
+                let rot = mat3x3<f32>(
+                    vec3<f32>(1.0 - (yy + zz), xy + wz, xz - wy),
+                    vec3<f32>(xy - wz, 1.0 - (xx + zz), yz + wx),
+                    vec3<f32>(xz + wy, yz - wx, 1.0 - (xx + yy))
+                );
+                let u_axis = normalize(rot * vec3<f32>(1.0, 0.0, 0.0));
+                let v_axis = normalize(rot * vec3<f32>(0.0, 1.0, 0.0));
+                let phys = vec3<f32>(phys_x, phys_y, phys_z);
+                let lu = max(length(u_axis * phys), 1e-3);
+                let lv = max(length(v_axis * phys), 1e-3);
+                let center_mm = (uniforms.cursor_pos.xyz - 0.5) * phys;
+                let p_mm = (world_pos - 0.5) * phys;
+                let du = dot(p_mm - center_mm, u_axis);
+                let dv = dot(p_mm - center_mm, v_axis);
+                slice_aspect = lu / lv;
+                uv = vec2<f32>(0.5 - du / lu, 0.5 - dv / lv);
+            }
+
+            let k = screen_aspect_ratio / slice_aspect;
+            
+            // Project: world UV -> screen UV
+            // Inverse of: volume_uv = ((screen_uv - 0.5) * k / zoom) + 0.5 + pan
+            // screen_uv = ((volume_uv - 0.5 - pan) * zoom / k) + 0.5
+            let rel_pos = (uv - pan - pivot) * zoom;
+            screen_pos = (rel_pos / vec2<f32>(k, 1.0)) + pivot;
+            visible = screen_pos.x >= 0.0 && screen_pos.x <= 1.0 && screen_pos.y >= 0.0 && screen_pos.y <= 1.0;
+        } else {
+            // --- 3D Viewport projection (similar to crosshair) ---
+            let q = uniforms.rotation;
+            let x2 = q.x + q.x; let y2 = q.y + q.y; let z2 = q.z + q.z;
+            let xx = q.x * x2; let xy = q.x * y2; let xz = q.x * z2;
+            let yy = q.y * y2; let yz = q.y * z2; let zz = q.z * z2;
+            let wx = q.w * x2; let wy = q.w * y2; let wz = q.w * z2;
+            let rot_mat = mat3x3<f32>(
+                vec3<f32>(1.0 - (yy + zz), xy + wz, xz - wy),
+                vec3<f32>(xy - wz, 1.0 - (xx + zz), yz + wx),
+                vec3<f32>(xz + wy, yz - wx, 1.0 - (xx + yy))
+            );
+
+            let dims = vec3<f32>(uniforms.volume_dims.xyz);
+            let spacing = uniforms.volume_spacing.xyz;
+            let physical_size = dims * spacing;
+            let max_dim_vol = max(max(physical_size.x, physical_size.y), physical_size.z);
+            let aspect_ratio_vol = physical_size / max_dim_vol;
+
+            let pos_obj = (world_pos - 0.5) * aspect_ratio_vol;
+            let pos_world = rot_mat * pos_obj;
+
+            let proj_u = -pos_world.x / (ORTHOGRAPHIC_VIEW_SCALE * aspect);
+            let proj_v = -pos_world.y / ORTHOGRAPHIC_VIEW_SCALE;
+            let p_uv = vec2<f32>(proj_u + 0.5, proj_v + 0.5);
+
+            let zoom = uniforms.zoom;
+            let pan = uniforms.pan;
+            let pivot = uniforms.zoom_pivot;
+            screen_pos = (p_uv - pan - pivot) * zoom + pivot;
+            visible = true;
+        }
+
+        if !visible { continue; }
+        
+        // Distance from current pixel to primitive center (in UV space)
+        let dist = length(uv - screen_pos);
+        
+        // Convert radius from world units to screen units (approximate)
+        let screen_radius = radius * uniforms.zoom * 0.02; // Scale factor
+
+        if kind == PRIMITIVE_CIRCLE {
+            // Filled circle with soft edge
+            let edge_softness = 0.003;
+            let alpha_circle = 1.0 - smoothstep(screen_radius - edge_softness, screen_radius + edge_softness, dist);
+            if alpha_circle > 0.0 {
+                color = mix(color, prim_color.rgb, alpha_circle * prim_color.a);
+            }
+        } else if kind == PRIMITIVE_RING {
+            // Hollow ring
+            let thickness = prim.params.y * uniforms.zoom * 0.02;
+            let inner_dist = abs(dist - screen_radius);
+            let edge_softness = 0.002;
+            let alpha_ring = 1.0 - smoothstep(thickness - edge_softness, thickness + edge_softness, inner_dist);
+            if alpha_ring > 0.0 {
+                color = mix(color, prim_color.rgb, alpha_ring * prim_color.a);
+            }
+        }
+    }
+    return color;
+}
+
+const SHADE_FULL: u32 = 0u;
+const SHADE_MARCH: u32 = 1u;
+const SHADE_OVERLAY: u32 = 2u;
+
+fn shade(in: VertexOutput, mode: u32) -> vec4<f32> {
     // Early exit: if no volume is loaded, render solid black
     // This prevents NaN from 0/0 aspect ratio calculations and unwanted overlay drawing
     if uniforms.volume_dims.x == 0u || uniforms.volume_dims.y == 0u || uniforms.volume_dims.z == 0u {
+        if mode == SHADE_OVERLAY {
+            return vec4<f32>(0.0);
+        }
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
 
@@ -521,7 +720,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
 
 
-        if t_hit.x > t_hit.y || t_hit.y < 0.0 {
+        if t_hit.x > t_hit.y || t_hit.y < 0.0 || mode == SHADE_OVERLAY {
             final_color = vec4<f32>(0.0, 0.0, 0.0, 1.0);
         } else {
             let start_pos = cam_pos_obj + ray_dir_obj * max(t_hit.x, 0.0);
@@ -584,179 +783,35 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Gizmo is now rendered via egui, not shader
     }
 
-    // Crosshair
-    if draw_crosshair {
-        let ch_res = get_crosshair_color(in.uv, crosshair_screen_pos, ch_v1, ch_v2, ch_v3, aspect, ch_len, ch_alpha);
-        final_color = vec4<f32>(mix(final_color.rgb, ch_res.rgb, ch_res.a), 1.0);
+    if mode == SHADE_MARCH {
+        // Image only; the crosshair and primitives are drawn over the cached result each frame.
+        return vec4<f32>(final_color.rgb, 1.0);
     }
-
-    // --- Overlay Primitives ---
-    // Viewport mask bits: 1=3D(0), 2=Axial(1), 4=Coronal(2), 8=Sagittal(3)
-    let viewport_bit = 1u << uniforms.view_mode;
-
-    for (var i = 0u; i < uniforms.overlay_primitive_count; i++) {
-        if i >= MAX_OVERLAY_PRIMITIVES { break; }
-
-        let prim = overlay_primitives[i];
-        let viewport_mask = u32(prim.params.z);
-        
-        // Skip if not visible in this viewport
-        if (viewport_mask & viewport_bit) == 0u { continue; }
-
-        let kind = u32(prim.params.w);
-        let radius = prim.params.x;
-        let prim_color = prim.color;
-        
-        // Get world position (use mouse if this is the dragged primitive)
-        var world_pos = prim.world_pos.xyz;
-        var use_mouse_pos = false;
-        if uniforms.overlay_dragging_idx == i {
-            use_mouse_pos = true;
-        }
-        
-        // Project to screen UV based on viewport mode
-        var screen_pos = vec2<f32>(-10.0, -10.0);
-        var visible = false;
-
-        if uniforms.view_mode > 0u {
-            // --- 2D Viewport projection ---
-            let zoom = uniforms.zoom;
-            let pan = uniforms.pan;
-            let pivot = vec2<f32>(0.5, 0.5);
-            
-            // Calculate aspect correction
-            let screen_aspect_ratio = uniforms.resolution.x / uniforms.resolution.y;
-            let spacing = uniforms.volume_spacing.xyz;
-            let dims = vec3<f32>(uniforms.volume_dims.xyz);
-            let phys_x = dims.x * spacing.x;
-            let phys_y = dims.y * spacing.y;
-            let phys_z = dims.z * spacing.z;
-
-            var slice_aspect = 1.0;
-            var uv = vec2<f32>(0.0);
-
-            if uniforms.view_mode == 1u {
-                // Axial (XY) - Radiological: Patient Right (x=1) on Screen Left (u=0)
-                slice_aspect = phys_x / phys_y;
-                if use_mouse_pos {
-                    uv = uniforms.overlay_mouse_uv;
-                } else {
-                    uv = vec2<f32>(1.0 - world_pos.x, 1.0 - world_pos.y);
-                }
-            } else if uniforms.view_mode == 2u {
-                // Coronal (XZ) - Radiological: Patient Right (x=1) on Screen Left (u=0)
-                slice_aspect = phys_x / phys_z;
-                if use_mouse_pos {
-                    uv = uniforms.overlay_mouse_uv;
-                } else {
-                    uv = vec2<f32>(1.0 - world_pos.x, 1.0 - world_pos.z);
-                }
-            } else if uniforms.view_mode == 3u {
-                // Sagittal (YZ) - Anterior is LEFT (u=0), Superior is UP (v=0)
-                slice_aspect = phys_y / phys_z;
-                if use_mouse_pos {
-                    uv = uniforms.overlay_mouse_uv;
-                } else {
-                    uv = vec2<f32>(1.0 - world_pos.y, 1.0 - world_pos.z);
-                }
-            } else if uniforms.view_mode == 4u {
-                let q = uniforms.rotation;
-                let x2 = q.x + q.x;
-                let y2 = q.y + q.y;
-                let z2 = q.z + q.z;
-                let xx = q.x * x2;
-                let xy = q.x * y2;
-                let xz = q.x * z2;
-                let yy = q.y * y2;
-                let yz = q.y * z2;
-                let zz = q.z * z2;
-                let wx = q.w * x2;
-                let wy = q.w * y2;
-                let wz = q.w * z2;
-                let rot = mat3x3<f32>(
-                    vec3<f32>(1.0 - (yy + zz), xy + wz, xz - wy),
-                    vec3<f32>(xy - wz, 1.0 - (xx + zz), yz + wx),
-                    vec3<f32>(xz + wy, yz - wx, 1.0 - (xx + yy))
-                );
-                let u_axis = normalize(rot * vec3<f32>(1.0, 0.0, 0.0));
-                let v_axis = normalize(rot * vec3<f32>(0.0, 1.0, 0.0));
-                let phys = vec3<f32>(phys_x, phys_y, phys_z);
-                let lu = max(length(u_axis * phys), 1e-3);
-                let lv = max(length(v_axis * phys), 1e-3);
-                let center_mm = (uniforms.cursor_pos.xyz - 0.5) * phys;
-                let p_mm = (world_pos - 0.5) * phys;
-                let du = dot(p_mm - center_mm, u_axis);
-                let dv = dot(p_mm - center_mm, v_axis);
-                slice_aspect = lu / lv;
-                uv = vec2<f32>(0.5 - du / lu, 0.5 - dv / lv);
-            }
-
-            let k = screen_aspect_ratio / slice_aspect;
-            
-            // Project: world UV -> screen UV
-            // Inverse of: volume_uv = ((screen_uv - 0.5) * k / zoom) + 0.5 + pan
-            // screen_uv = ((volume_uv - 0.5 - pan) * zoom / k) + 0.5
-            let rel_pos = (uv - pan - pivot) * zoom;
-            screen_pos = (rel_pos / vec2<f32>(k, 1.0)) + pivot;
-            visible = screen_pos.x >= 0.0 && screen_pos.x <= 1.0 && screen_pos.y >= 0.0 && screen_pos.y <= 1.0;
-        } else {
-            // --- 3D Viewport projection (similar to crosshair) ---
-            let q = uniforms.rotation;
-            let x2 = q.x + q.x; let y2 = q.y + q.y; let z2 = q.z + q.z;
-            let xx = q.x * x2; let xy = q.x * y2; let xz = q.x * z2;
-            let yy = q.y * y2; let yz = q.y * z2; let zz = q.z * z2;
-            let wx = q.w * x2; let wy = q.w * y2; let wz = q.w * z2;
-            let rot_mat = mat3x3<f32>(
-                vec3<f32>(1.0 - (yy + zz), xy + wz, xz - wy),
-                vec3<f32>(xy - wz, 1.0 - (xx + zz), yz + wx),
-                vec3<f32>(xz + wy, yz - wx, 1.0 - (xx + yy))
-            );
-
-            let dims = vec3<f32>(uniforms.volume_dims.xyz);
-            let spacing = uniforms.volume_spacing.xyz;
-            let physical_size = dims * spacing;
-            let max_dim_vol = max(max(physical_size.x, physical_size.y), physical_size.z);
-            let aspect_ratio_vol = physical_size / max_dim_vol;
-
-            let pos_obj = (world_pos - 0.5) * aspect_ratio_vol;
-            let pos_world = rot_mat * pos_obj;
-
-            let proj_u = -pos_world.x / (ORTHOGRAPHIC_VIEW_SCALE * aspect);
-            let proj_v = -pos_world.y / ORTHOGRAPHIC_VIEW_SCALE;
-            let p_uv = vec2<f32>(proj_u + 0.5, proj_v + 0.5);
-
-            let zoom = uniforms.zoom;
-            let pan = uniforms.pan;
-            let pivot = uniforms.zoom_pivot;
-            screen_pos = (p_uv - pan - pivot) * zoom + pivot;
-            visible = true;
-        }
-
-        if !visible { continue; }
-        
-        // Distance from current pixel to primitive center (in UV space)
-        let dist = length(in.uv - screen_pos);
-        
-        // Convert radius from world units to screen units (approximate)
-        let screen_radius = radius * uniforms.zoom * 0.02; // Scale factor
-
-        if kind == PRIMITIVE_CIRCLE {
-            // Filled circle with soft edge
-            let edge_softness = 0.003;
-            let alpha_circle = 1.0 - smoothstep(screen_radius - edge_softness, screen_radius + edge_softness, dist);
-            if alpha_circle > 0.0 {
-                final_color = vec4<f32>(mix(final_color.rgb, prim_color.rgb, alpha_circle * prim_color.a), 1.0);
-            }
-        } else if kind == PRIMITIVE_RING {
-            // Hollow ring
-            let thickness = prim.params.y * uniforms.zoom * 0.02;
-            let inner_dist = abs(dist - screen_radius);
-            let edge_softness = 0.002;
-            let alpha_ring = 1.0 - smoothstep(thickness - edge_softness, thickness + edge_softness, inner_dist);
-            if alpha_ring > 0.0 {
-                final_color = vec4<f32>(mix(final_color.rgb, prim_color.rgb, alpha_ring * prim_color.a), 1.0);
-            }
-        }
+    if mode == SHADE_OVERLAY {
+        // Overlay layer alone as premultiplied colour and coverage: over black gives the
+        // premultiplied colour, over white adds the uncovered part.
+        let over_black = apply_overlays(in.uv, aspect, vec3<f32>(0.0), draw_crosshair, crosshair_screen_pos, ch_v1, ch_v2, ch_v3, ch_len, ch_alpha);
+        let over_white = apply_overlays(in.uv, aspect, vec3<f32>(1.0), draw_crosshair, crosshair_screen_pos, ch_v1, ch_v2, ch_v3, ch_len, ch_alpha);
+        let coverage = clamp(1.0 - dot(over_white - over_black, vec3<f32>(1.0 / 3.0)), 0.0, 1.0);
+        return vec4<f32>(over_black, coverage);
     }
-    return final_color;
+    let color = apply_overlays(in.uv, aspect, final_color.rgb, draw_crosshair, crosshair_screen_pos, ch_v1, ch_v2, ch_v3, ch_len, ch_alpha);
+    return vec4<f32>(color, 1.0);
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return shade(in, SHADE_FULL);
+}
+
+// 3D view image without crosshair and primitives, rendered into a cache only when it changes.
+@fragment
+fn fs_march_3d(in: VertexOutput) -> @location(0) vec4<f32> {
+    return shade(in, SHADE_MARCH);
+}
+
+// Crosshair and primitives of the 3D view over the cached image (premultiplied alpha blending).
+@fragment
+fn fs_overlay_3d(in: VertexOutput) -> @location(0) vec4<f32> {
+    return shade(in, SHADE_OVERLAY);
 }

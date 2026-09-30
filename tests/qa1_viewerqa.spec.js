@@ -298,3 +298,46 @@ test("qa-4 liver geometry, orientation letters, and viewport facts", async ({ pa
   expect(metrics.error_count).toBe(0);
   expect(metrics.warning_count).toBe(0);
 });
+
+test("qa-5 the 3D view is cached and only re-marched when its image changes", async ({ page }) => {
+  await page.goto(`${BASE_URL}/?qa=1&sample=liver_0&preset=image_label_mpr_basic`, {
+    waitUntil: "domcontentloaded",
+  });
+  await page.waitForFunction(() => typeof window.__viewerQa === "object");
+  await page.waitForFunction(() => window.__viewerQa.state()?.qa?.ready === true, null, {
+    timeout: 30000,
+  });
+  // Let the load, mesh build, and the full-quality settle frame finish.
+  await page.waitForTimeout(2500);
+
+  const marches = () => page.evaluate(() => window.__viewerQa.state().render.view3d_march_count);
+  const before = await marches();
+  expect(before).toBeGreaterThan(0);
+
+  // Scrolling a 2D view moves the cursor, which only moves the crosshair drawn over the cache.
+  const axial = await page.evaluate(() =>
+    window.__viewerQa.state().viewports.find((vp) => vp.mode === "axial").rect,
+  );
+  const scale = await page.evaluate(() => window.devicePixelRatio);
+  await page.mouse.move((axial[0] + axial[2] / 2) / scale, (axial[1] + axial[3] / 2) / scale);
+  for (let i = 0; i < 20; i++) {
+    await page.mouse.wheel(0, i % 2 ? 120 : -120);
+    await page.waitForTimeout(20);
+  }
+  await page.waitForTimeout(500);
+  expect(await marches(), "2D interaction must not re-march the 3D view").toBe(before);
+
+  // Zooming the 3D view changes its image and must re-march it.
+  const threeD = await page.evaluate(() =>
+    window.__viewerQa.state().viewports.find((vp) => vp.mode === "three_d").rect,
+  );
+  await page.mouse.move((threeD[0] + threeD[2] / 2) / scale, (threeD[1] + threeD[3] / 2) / scale);
+  await page.keyboard.down("Control");
+  for (let i = 0; i < 4; i++) {
+    await page.mouse.wheel(0, -120);
+    await page.waitForTimeout(30);
+  }
+  await page.keyboard.up("Control");
+  await page.waitForTimeout(800);
+  expect(await marches()).toBeGreaterThan(before);
+});

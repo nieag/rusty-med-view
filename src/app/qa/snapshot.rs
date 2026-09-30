@@ -577,6 +577,7 @@ impl AppState {
                 mesh_batch_count: self.qa.mesh_batch_count,
                 mesh_chunks_uploaded: self.qa.mesh_chunks_uploaded,
                 mesh_chunks_reused: self.qa.mesh_chunks_reused,
+                view3d_march_count: self.qa.view3d_march_count,
                 last_warning: self.qa.last_render_warning.clone(),
                 last_error: self.qa.last_render_error.clone(),
             };
@@ -642,6 +643,7 @@ impl AppState {
                     mesh_batch_count: self.qa.mesh_batch_count,
                     mesh_chunks_uploaded: self.qa.mesh_chunks_uploaded,
                     mesh_chunks_reused: self.qa.mesh_chunks_reused,
+                    view3d_march_count: self.qa.view3d_march_count,
                     last_warning: self.qa.last_render_warning.clone(),
                     last_error: self.qa.last_render_error.clone(),
                 },

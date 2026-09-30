@@ -2678,6 +2678,7 @@ dependencies = [
  "hecs",
  "js-sys",
  "log",
+ "naga",
  "nifti",
  "parry3d",
  "pollster 0.3.0",

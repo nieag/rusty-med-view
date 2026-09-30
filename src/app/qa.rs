@@ -154,6 +154,8 @@ pub struct QaSnapshotRender {
     pub mesh_batch_count: u32,
     pub mesh_chunks_uploaded: u32,
     pub mesh_chunks_reused: u32,
+    /// Times the 3D view was re-marched since start; unchanged while the cached image is reused.
+    pub view3d_march_count: u32,
     pub last_warning: Option<String>,
     pub last_error: Option<String>,
 }
@@ -234,6 +236,7 @@ pub struct QaRuntime {
     pub mesh_batch_count: u32,
     pub mesh_chunks_uploaded: u32,
     pub mesh_chunks_reused: u32,
+    pub view3d_march_count: u32,
     pub last_render_warning: Option<String>,
     pub last_render_error: Option<String>,
 }
@@ -284,6 +287,7 @@ impl QaRuntime {
             mesh_batch_count: 0,
             mesh_chunks_uploaded: 0,
             mesh_chunks_reused: 0,
+            view3d_march_count: 0,
             last_render_warning: None,
             last_render_error: None,
         }

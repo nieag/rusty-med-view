@@ -6,6 +6,7 @@ use crate::app::context::{GpuState, Pipelines, SceneState, VolumeResources};
 use crate::components::*;
 use crate::gui;
 use crate::overlay::OverlayPrimitive;
+use crate::render::view3d_cache::{clamp_rect, hash_image, QuadDraw, View3dCache, View3dPlan};
 use crate::render::{contours, geometry};
 use crate::systems;
 use hecs::World;
@@ -117,6 +118,59 @@ pub fn create_render_pipeline(
     bind_group_layout: &wgpu::BindGroupLayout,
     surface_format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
+    create_volume_pipeline(
+        device,
+        bind_group_layout,
+        surface_format,
+        "Render Pipeline",
+        "fs_main",
+        wgpu::BlendState::REPLACE,
+    )
+}
+
+/// The two passes that draw the cached 3D view (`render::view3d_cache`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View3dPass {
+    /// The image alone, marched into the cache.
+    March,
+    /// Crosshair and primitives over the copied image (premultiplied alpha).
+    Overlay,
+}
+
+pub fn create_view3d_pipeline(
+    device: &wgpu::Device,
+    bind_group_layout: &wgpu::BindGroupLayout,
+    surface_format: wgpu::TextureFormat,
+    pass: View3dPass,
+) -> wgpu::RenderPipeline {
+    match pass {
+        View3dPass::March => create_volume_pipeline(
+            device,
+            bind_group_layout,
+            surface_format,
+            "3D View March Pipeline",
+            "fs_march_3d",
+            wgpu::BlendState::REPLACE,
+        ),
+        View3dPass::Overlay => create_volume_pipeline(
+            device,
+            bind_group_layout,
+            surface_format,
+            "3D View Overlay Pipeline",
+            "fs_overlay_3d",
+            wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+        ),
+    }
+}
+
+fn create_volume_pipeline(
+    device: &wgpu::Device,
+    bind_group_layout: &wgpu::BindGroupLayout,
+    surface_format: wgpu::TextureFormat,
+    label: &str,
+    fragment_entry: &str,
+    blend: wgpu::BlendState,
+) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Main Shader"),
         source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
@@ -131,7 +185,7 @@ pub fn create_render_pipeline(
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Render Pipeline"),
+        label: Some(label),
         layout: Some(&render_pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
@@ -141,10 +195,10 @@ pub fn create_render_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_main"),
+            entry_point: Some(fragment_entry),
             targets: &[Some(wgpu::ColorTargetState {
                 format: surface_format,
-                blend: Some(wgpu::BlendState::REPLACE),
+                blend: Some(blend),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             compilation_options: Default::default(),
@@ -265,6 +319,8 @@ pub struct RenderFrameStats {
     /// The 3D camera moved recently, so the frame used reduced raymarch quality and one more
     /// frame at full quality is due.
     pub camera_settling: bool,
+    /// The 3D view was re-marched this frame (false when the cached image was reused).
+    pub view3d_marched: bool,
     pub mesh_chunks_uploaded: u32,
     pub mesh_chunks_reused: u32,
     pub roi_work_pending: bool,
@@ -307,12 +363,21 @@ fn run_frame_systems(
     roi_work_status
 }
 
-/// Write overlay and per-viewport uniforms to GPU buffers. Returns viewport list.
+/// What `prepare_uniforms` computed for the frame.
+struct PreparedFrame {
+    viewports: ViewportList,
+    /// The 3D view's cache plan, when there is a visible 3D viewport.
+    view3d: Option<View3dPlan>,
+    /// The 3D camera moved recently, so a full-quality frame is still due.
+    camera_settling: bool,
+}
+
+/// Write overlay and per-viewport uniforms to GPU buffers.
 fn prepare_uniforms(
     scene: &mut SceneState,
     gpu: &GpuState,
     volume_res: &VolumeResources,
-) -> (ViewportList, bool) {
+) -> PreparedFrame {
     let (overlay_bytes, overlay_count, dragging_idx, overlay_mouse_uv) =
         systems::get_overlay_render_data(&scene.world, &scene.entities);
     if !overlay_bytes.is_empty() {
@@ -324,15 +389,16 @@ fn prepare_uniforms(
     for (e, vp) in scene.world.query::<&Viewport>().iter() {
         viewports.push((e, vp.rect, vp.uniform_index, vp.mode));
     }
+    let scene_identity = main_volume_bind_group(&scene.world);
     let now = Instant::now();
-    let mut settling = false;
-    for (e, _, u_idx, _) in &viewports {
+    let mut view3d = None;
+    let mut camera_settling = false;
+    for (e, rect, u_idx, _) in &viewports {
         let mut u = systems::sys_prepare_render_data(&mut scene.world, &scene.entities, *e);
         if u.view_mode == 0 {
-            // Anything that changes the 3D image (camera, the cursor crosshair, windowing)
-            // counts as motion: interacting in a 2D view moves the cursor, and re-marching a
-            // zoomed-in 3D view at full quality on every such frame makes the 2D views lag.
-            let key = [
+            // The camera and windowing decide the image quality; the cursor does not, because
+            // the crosshair is drawn over the cached image rather than into it.
+            let camera_key = [
                 u.zoom,
                 u.pan[0],
                 u.pan[1],
@@ -340,16 +406,28 @@ fn prepare_uniforms(
                 u.rotation[1],
                 u.rotation[2],
                 u.rotation[3],
-                u.cursor_pos[0],
-                u.cursor_pos[1],
-                u.cursor_pos[2],
                 u.window_params[0],
                 u.window_params[1],
             ];
-            if scene.camera_motion.is_moving(*e, key, now) {
+            if scene.camera_motion.is_moving(*e, camera_key, now) {
                 u.ray_steps = MOVING_RAY_STEPS;
-                settling = true;
+                camera_settling = true;
             }
+            // Everything that changes the marched image: the uniforms without the fields the
+            // overlay pass owns, and the identity of the scene's textures.
+            let mut image_uniforms = u;
+            image_uniforms.cursor_pos = [0.0; 4];
+            image_uniforms.mouse_uv = [0.0; 2];
+            image_uniforms.overlay_mouse_uv = [0.0; 2];
+            image_uniforms.overlay_primitive_count = 0;
+            image_uniforms.overlay_dragging_idx = 0;
+            let window = [gpu.config.width, gpu.config.height];
+            view3d = clamp_rect(*rect, window).map(|rect| View3dPlan {
+                uniform_index: *u_idx,
+                rect,
+                image_key: hash_image(bytemuck::bytes_of(&image_uniforms), &scene_identity),
+                steps: u.ray_steps,
+            });
         }
         u.overlay_primitive_count = overlay_count;
         u.overlay_dragging_idx = dragging_idx;
@@ -361,7 +439,18 @@ fn prepare_uniforms(
             bytemuck::cast_slice(&[u]),
         );
     }
-    (viewports, settling)
+    PreparedFrame {
+        viewports,
+        view3d,
+        camera_settling,
+    }
+}
+
+fn main_volume_bind_group(world: &World) -> Option<wgpu::BindGroup> {
+    let mut query = world
+        .query::<&GpuVolumeResources>()
+        .with::<&MainVolumeTag>();
+    query.iter().next().map(|(_, res)| res.bind_group.clone())
 }
 
 /// Acquire the next surface texture, reconfiguring if needed. Returns None to skip the frame.
@@ -412,6 +501,7 @@ fn render_volume_pass(
     volume_res: &VolumeResources,
     render_pipeline: &wgpu::RenderPipeline,
     viewports: &ViewportList,
+    skip_uniform_index: Option<u32>,
 ) {
     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Render Pass"),
@@ -444,6 +534,9 @@ fn render_volume_pass(
     if let Some((_, res)) = query.iter().next() {
         let bg = &res.bind_group;
         for (_, rect, u_idx, _) in viewports {
+            if skip_uniform_index == Some(*u_idx) {
+                continue;
+            }
             render_pass.set_viewport(rect[0], rect[1], rect[2], rect[3], 0.0, 1.0);
             render_pass.set_bind_group(0, bg, &[(*u_idx as u64 * UNIFORM_STRIDE) as u32]);
             render_pass.draw_indexed(0..volume_res.num_indices, 0, 0..1);
@@ -468,8 +561,9 @@ pub fn render_frame(
 
     let roi_work_status = run_frame_systems(scene, gui, gpu, volume_res, window, event_proxy);
     stats.roi_work_pending = roi_work_status.pending;
-    let (viewports, camera_settling) = prepare_uniforms(scene, gpu, volume_res);
-    stats.camera_settling = camera_settling;
+    let prepared = prepare_uniforms(scene, gpu, volume_res);
+    stats.camera_settling = prepared.camera_settling;
+    let viewports = prepared.viewports;
     stats.viewport_uniform_count = viewports.len() as u32;
     let frame = match acquire_surface_texture(&gpu.surface, &gpu.device, &gpu.config) {
         AcquireSurfaceResult::Frame(f) => f,
@@ -491,6 +585,36 @@ pub fn render_frame(
             label: Some("Render Encoder"),
         });
 
+    // The 3D view is drawn from a cache; before the volume has a bind group it is drawn directly
+    // like the 2D views.
+    let cached_3d = prepared.view3d.zip(main_volume_bind_group(&scene.world));
+    let window_size = [gpu.config.width, gpu.config.height];
+    if let Some((plan, bind_group)) = &cached_3d {
+        if pipelines.view3d_cache.as_ref().map(|cache| cache.size()) != Some(window_size) {
+            pipelines.view3d_cache = Some(View3dCache::new(
+                &gpu.device,
+                gpu.config.format,
+                window_size,
+                &pipelines.blit_3d,
+            ));
+        }
+        let cache = pipelines
+            .view3d_cache
+            .as_mut()
+            .expect("cache was just created");
+        if !cache.is_current(plan) {
+            let quad = QuadDraw {
+                bind_group,
+                vertex_buffer: &volume_res.vertex_buffer,
+                index_buffer: &volume_res.index_buffer,
+                index_count: volume_res.num_indices,
+                uniform_offset: (plan.uniform_index as u64 * UNIFORM_STRIDE) as u32,
+            };
+            cache.march(&mut encoder, &pipelines.march_3d, &quad, plan);
+            stats.view3d_marched = true;
+        }
+    }
+
     render_volume_pass(
         &mut encoder,
         &view,
@@ -498,7 +622,25 @@ pub fn render_frame(
         volume_res,
         &pipelines.render,
         &viewports,
+        cached_3d.as_ref().map(|(plan, _)| plan.uniform_index),
     );
+
+    if let (Some((plan, bind_group)), Some(cache)) = (&cached_3d, &pipelines.view3d_cache) {
+        let quad = QuadDraw {
+            bind_group,
+            vertex_buffer: &volume_res.vertex_buffer,
+            index_buffer: &volume_res.index_buffer,
+            index_count: volume_res.num_indices,
+            uniform_offset: (plan.uniform_index as u64 * UNIFORM_STRIDE) as u32,
+        };
+        cache.composite(
+            &mut encoder,
+            &view,
+            (&pipelines.blit_3d, &pipelines.overlay_3d),
+            &quad,
+            plan,
+        );
+    }
 
     let known_mesh_parts = pipelines.mesh_overlay.fingerprints();
     let mesh_data = crate::render::meshes::prepare_mesh_render_data(
@@ -553,7 +695,7 @@ const MOVING_RAY_STEPS: u32 = 48;
 const CAMERA_SETTLE: web_time::Duration = web_time::Duration::from_millis(200);
 
 /// Number of values that identify what a 3D viewport currently shows.
-pub const CAMERA_KEY_LEN: usize = 12;
+pub const CAMERA_KEY_LEN: usize = 9;
 
 /// Remembers the last camera of each viewport and when it last changed.
 #[derive(Default)]

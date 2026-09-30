@@ -20,6 +20,14 @@ pub struct GpuState {
 
 pub struct Pipelines {
     pub render: wgpu::RenderPipeline,
+    /// 3D view image without crosshair, marched into `view3d_cache` (see `render::view3d_cache`).
+    pub march_3d: wgpu::RenderPipeline,
+    /// Crosshair and primitives of the 3D view over the cached image.
+    pub overlay_3d: wgpu::RenderPipeline,
+    /// Draws the cached 3D image into the window.
+    pub blit_3d: crate::render::view3d_cache::Blit3d,
+    /// `None` until the first frame.
+    pub view3d_cache: Option<crate::render::view3d_cache::View3dCache>,
     pub contour_overlay: crate::render::contours::ContourRenderer,
     pub mesh_overlay: crate::render::meshes::MeshRenderer,
 }
@@ -195,6 +203,19 @@ impl RenderingContext {
 
         let render_pipeline =
             pipeline::create_render_pipeline(&device, &texture_bind_group_layout, config.format);
+        let march_3d = pipeline::create_view3d_pipeline(
+            &device,
+            &texture_bind_group_layout,
+            config.format,
+            pipeline::View3dPass::March,
+        );
+        let blit_3d = crate::render::view3d_cache::Blit3d::new(&device, config.format);
+        let overlay_3d = pipeline::create_view3d_pipeline(
+            &device,
+            &texture_bind_group_layout,
+            config.format,
+            pipeline::View3dPass::Overlay,
+        );
         let contour_overlay =
             crate::render::contours::create_contour_renderer(&device, config.format);
         let mesh_overlay = crate::render::meshes::create_mesh_renderer(&device, config.format);
@@ -226,6 +247,10 @@ impl RenderingContext {
             },
             pipelines: Pipelines {
                 render: render_pipeline,
+                march_3d,
+                overlay_3d,
+                blit_3d,
+                view3d_cache: None,
                 contour_overlay,
                 mesh_overlay,
             },

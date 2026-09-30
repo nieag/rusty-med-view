@@ -69,7 +69,7 @@ fn test_camera_motion_is_still_at_rest_moving_on_change_and_settles() {
     );
     assert!(!motion.is_moving(viewport, still, start + second));
 
-    // Any component of the key counts, e.g. the cursor moving in a 2D view.
+    // Any component of the key counts, e.g. the windowing changing.
     let mut cursor_moved = still;
     cursor_moved[8] = 0.2;
     let t = start + 2 * second;
@@ -94,4 +94,37 @@ fn test_camera_motion_is_still_at_rest_moving_on_change_and_settles() {
     let mut rotated = cursor_moved;
     rotated[3] = 0.3;
     assert!(motion.is_moving(viewport, rotated, t + 3 * second));
+}
+
+fn validate_wgsl(name: &str, source: &str) -> naga::Module {
+    let module = naga::front::wgsl::parse_str(source)
+        .unwrap_or_else(|error| panic!("{name} does not parse:\n{}", error.emit_to_string(source)));
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .unwrap_or_else(|error| panic!("{name} does not validate: {error:?}"));
+    module
+}
+
+#[test]
+fn test_shaders_parse_and_validate_with_their_entry_points() {
+    let main = validate_wgsl("shader.wgsl", include_str!("../../shaders/shader.wgsl"));
+    let entries: Vec<_> = main.entry_points.iter().map(|e| e.name.as_str()).collect();
+    for entry in ["vs_main", "fs_main", "fs_march_3d", "fs_overlay_3d"] {
+        assert!(
+            entries.contains(&entry),
+            "shader.wgsl lacks {entry}: {entries:?}"
+        );
+    }
+    validate_wgsl(
+        "mesh_overlay.wgsl",
+        include_str!("../../shaders/mesh_overlay.wgsl"),
+    );
+    validate_wgsl("blit_3d.wgsl", include_str!("../../shaders/blit_3d.wgsl"));
+    validate_wgsl(
+        "contour_overlay.wgsl",
+        include_str!("../../shaders/contour_overlay.wgsl"),
+    );
 }

@@ -268,6 +268,9 @@ impl ApplicationHandler<AppEvent> for App {
                 qa_runtime.mesh_batch_count = frame_stats.mesh_batch_count;
                 qa_runtime.mesh_chunks_uploaded = frame_stats.mesh_chunks_uploaded;
                 qa_runtime.mesh_chunks_reused = frame_stats.mesh_chunks_reused;
+                if frame_stats.view3d_marched {
+                    qa_runtime.view3d_march_count = qa_runtime.view3d_march_count.saturating_add(1);
+                }
                 if let Some(category) = frame_stats.last_warning {
                     qa_runtime.last_render_warning = Some(category.to_string());
                 }

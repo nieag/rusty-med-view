@@ -36,3 +36,7 @@ js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Location", "Document", "Element", "HtmlCanvasElement", "console", "HtmlInputElement", "File", "FileReader", "FileList", "Blob"] }
 console_error_panic_hook = "0.1"
 console_log = "1.0"
+
+[dev-dependencies]
+# Validates the WGSL shaders in unit tests, so a shader error fails `cargo test` instead of the browser.
+naga = { version = "27", features = ["wgsl-in"] }
