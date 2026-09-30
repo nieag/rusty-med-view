@@ -78,6 +78,21 @@ Do after Phases 0 to 2 so measurements reflect the final structure. Measure each
 - [ ] **4.5 Memory (M).** Undo keeps up to 32 full mesh and contour clones; the SDF path allocates about five full-volume arrays; each mesh-drag event clones and re-validates the mesh. Use delta or shared-structure snapshots, and avoid clone per drag event.
 - [ ] **4.6 Small hot spots (S).** `roi_voxel_stats` scans every voxel of every ROI per frame while the Layers panel is open; cache by generation. Rebuild of overlay primitives runs twice per frame.
 
+## Foundation review (2026-09-30)
+
+Findings of a review after Phase 2, ordered by importance. Fixed items are marked; the rest are
+scheduled here. Details of the first two are in the commits named.
+
+- [x] **R1 Slice-scoped commit API could leave stale voxels (fixed, 4cdf8ff).** `replace_contour_data_for_slice` always scheduled a slice-local rebuild, which cannot clear a removed slice. The rule is now `dirty_region_for_slice_edit` / `dirty_region_for_slice_swap` in `authority.rs`. Found by the lifecycle tests in `roi_runtime/tests.rs`.
+- [ ] **R2 Layering cycle: `convert` and `app::roi` import each other (M).** The pure geometry and conversion layer imports domain types (`MeshData`, `ContourData`, `VoxelData`, `VoxelGeometry`) from `app::roi::model`, while `app::roi` calls `convert`. `render`, `util`, and `io` also depend on `app::components` (29 imports from `render`) and on `app::roi_runtime`. Move the pure types (geometry, voxel/mesh/contour data, `PlaneFamily`, plane definitions) into one `model` module that depends on nothing, so the direction is model, convert, app::roi, runtime, systems, render, gui. Enforce it with a test that scans `use crate::` lines.
+- [ ] **R3 `PlaneFamily::Oblique` makes authoritative contour data partial (M).** Ten `unreachable!` sites and several `if family == Oblique` guards exist because an authoritative `ContourData` may name the Oblique family although only orthogonal families are editable. Use a separate orthogonal-family type for `ContourData::active_plane_family` and keep Oblique only for derived per-slice view keys.
+- [ ] **R4 Only the active ROI (and mesh-authority ROIs) get derived contours and a mesh (M).** `sync_roi_contour_view_caches_for_viewports` and `sync_active_roi_mesh_cache_for_viewports` skip other visible voxel ROIs, so the second label of a multi-label import shows only a voxel overlay in the 2D and 3D views. Decide the rule (all visible ROIs, bounded by a budget) and build derived forms for them.
+- [ ] **R5 Stale derived contour views keep rendering after an edit, unmarked (S, decision).** After an edit, the views of other planes show the pre-edit contours until the rebuild finishes (200 ms and up on large volumes). This is stale-while-revalidate and may be right; if so mark it (dimmed or dashed) so the display never silently disagrees with the edit. See `contour_view_data_for_render`.
+- [ ] **R6 No GPU error handling (S).** No device-lost or uncaptured-error handler is installed, so a single wgpu validation error panics the wasm module (seen once this session). Log it, surface it through `__viewerQa.lastError`, and show a status message. Together with 6.1 (WebGL limits).
+- [ ] **R7 Memory hot spots (M, same as 4.5).** A mesh rebuild clones the whole voxel volume and the chunk set; each mesh drag update clones the mesh; each switch snapshot of a voxel body clones the volume (up to 32 history steps).
+- [ ] **R8 `roi_runtime.rs` is still 2,075 lines (M, same as 5.1).** It mixes the job coordinator, three rebuild pipelines, contour view caches, and label import. Split after R2, since the split follows the layering.
+- [ ] **R9 Docs lag the code (S).** `docs/current-state.md` and `docs/code-map.md` do not describe `app/roi/switch.rs`, `render/view3d_cache.rs`, `convert/mesh_deform.rs`, or the GPU mesh renderer.
+
 ## Phase 5: Structure cleanup
 
 - [ ] **5.1 Split `roi_runtime.rs` and `components.rs` by concern (M).** After Phase 2 they are much smaller: coordinator, per-representation rebuild, import, view building; viewport, ROI state, editing.
