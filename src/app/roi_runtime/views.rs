@@ -26,20 +26,6 @@ pub fn visible_voxel_overlay_count(world: &World) -> usize {
     renderable_voxel_overlay_rois(world, None).len()
 }
 
-pub fn can_enable_roi_visibility(world: &World, roi_entity: hecs::Entity) -> bool {
-    if let Ok(roi) = world.get::<&Roi>(roi_entity) {
-        if is_roi_visible(world, roi_entity) {
-            return true;
-        }
-        // Not shown now: would showing it use an overlay slot?
-        if roi.renderable_voxel_cache(true).is_none() {
-            return true;
-        }
-    }
-
-    visible_voxel_overlay_count(world) < MAX_SIMULTANEOUS_ROI_OVERLAYS
-}
-
 pub(super) fn build_contour_view_data_for_plane(
     voxel_data: &VoxelData,
     view_key: &ContourViewKey,

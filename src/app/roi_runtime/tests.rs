@@ -484,7 +484,6 @@ fn test_visible_voxel_overlay_count_ignores_non_renderable_rois() {
 
     assert_eq!(visible_voxel_overlay_count(&world), 0);
     assert!(renderable_voxel_overlay_rois(&world, Some(contour)).is_empty());
-    assert!(can_enable_roi_visibility(&world, contour));
 }
 
 #[test]

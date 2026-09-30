@@ -65,12 +65,24 @@ pub(crate) fn spawn_qa_fetch_volume(proxy: EventLoopProxy<AppEvent>) {
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn spawn_qa_fetch_label(proxy: EventLoopProxy<AppEvent>) {
     wasm_bindgen_futures::spawn_local(async move {
+        // `labels=N` swaps the sample labelmap for the synthetic many-label case of that size
+        // (512 x 512 x 300 voxels), the scale check of backlog 2b.10.
+        let synthetic_labels = web_sys::window()
+            .and_then(|win| win.location().search().ok())
+            .and_then(|search| crate::qa_param_value(&search, "labels"))
+            .and_then(|value| value.parse::<usize>().ok());
         let result = fetch_bytes("/qa_samples/liver_0_label.nii")
             .await
             .and_then(|bytes| {
-                load_label_from_bytes(&bytes, "liver_0_label.nii".to_string())
-                    .map(LoadResult::Label)
-                    .map_err(|e| e.to_string())
+                let label = load_label_from_bytes(&bytes, "liver_0_label.nii".to_string())
+                    .map_err(|e| e.to_string())?;
+                match synthetic_labels {
+                    Some(count) => {
+                        super::synthetic::tiled_label_map(&label, [512, 512, 300], count)
+                    }
+                    None => Ok(label),
+                }
+                .map(LoadResult::Label)
             });
         let event = result.map_err(crate::io::nifti::LoadError::DimensionError);
         let _ = proxy.send_event(AppEvent::VolumeLoaded(event));

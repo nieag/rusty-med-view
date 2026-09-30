@@ -143,6 +143,8 @@ pub struct Uniforms {
 #[derive(Clone)]
 pub struct GuiState {
     pub status_message: Option<String>,
+    /// Text the layer list is filtered by (matches ROI names, case-insensitively).
+    pub layer_filter: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -239,6 +241,7 @@ impl Session {
             editor: EditorState::default(),
             gui: GuiState {
                 status_message: None,
+                layer_filter: String::new(),
             },
             windowing: VolumeWindowing::default(),
             annotations: AnnotationState::default(),
