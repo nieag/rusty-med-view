@@ -87,6 +87,7 @@ impl AppState {
                     contour_cache_current: roi.is_cache_current(RoiCacheKind::Contour),
                     mesh_cache_current: roi.is_cache_current(RoiCacheKind::Mesh),
                     voxel_dimensions,
+                    approx_bytes: roi.approx_bytes() as u64,
                     non_empty_voxel_bounds: non_empty_bounds,
                     preview_active: roi.preview_state.active,
                     preview_revision: roi.preview_state.revision,

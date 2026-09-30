@@ -100,6 +100,8 @@ pub struct QaSnapshotRoi {
     pub contour_cache_current: bool,
     pub mesh_cache_current: bool,
     pub voxel_dimensions: Option<[u32; 3]>,
+    /// Estimate of the bytes this ROI holds (see `Roi::approx_bytes`).
+    pub approx_bytes: u64,
     pub non_empty_voxel_bounds: Option<[[u32; 3]; 2]>,
     pub preview_active: bool,
     pub preview_revision: u64,

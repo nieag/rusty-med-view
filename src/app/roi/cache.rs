@@ -465,3 +465,58 @@ impl Roi {
 
 #[cfg(test)]
 mod tests;
+
+/// An estimate of the bytes a ROI holds, for the scale budget (QA state and the scale guard). It
+/// counts the big arrays: voxel body and cache (each mirrored once on the GPU), meshes, contour
+/// points, and the undo and redo snapshots. It does not count allocator overhead.
+impl Roi {
+    pub fn approx_bytes(&self) -> usize {
+        use crate::app::components::{MeshData, RoiBody, RoiEditSnapshot};
+        fn voxel(data: &VoxelData) -> usize {
+            data.raw_data.len()
+        }
+        fn mesh(data: &MeshData) -> usize {
+            data.vertices.len() * 12 + data.faces.len() * 12
+        }
+        fn contours(slices: &[ContourSlice]) -> usize {
+            slices
+                .iter()
+                .flat_map(|slice| &slice.loops)
+                .map(|contour| contour.points.len() * 8)
+                .sum()
+        }
+        fn snapshot(snapshot: &RoiEditSnapshot) -> usize {
+            match snapshot {
+                RoiEditSnapshot::Voxel(data) => voxel(data),
+                RoiEditSnapshot::Contour(data) => contours(&data.slices),
+                RoiEditSnapshot::Mesh(data) => mesh(data),
+            }
+        }
+        let body = match &self.body {
+            RoiBody::Voxel(body) => voxel(&body.data),
+            RoiBody::Contour(body) => contours(&body.data.slices),
+            RoiBody::Mesh(body) => mesh(&body.data),
+        };
+        let caches = &self.session_caches;
+        let voxel_cache = caches.voxel.as_ref().map_or(0, |cache| {
+            voxel(&cache.data) * if cache.gpu_resources.is_some() { 2 } else { 1 }
+        });
+        let mesh_cache = caches.mesh.as_ref().map_or(0, |cache| {
+            mesh(&cache.data)
+                + cache.chunks.as_ref().map_or(0, |chunked| {
+                    chunked.chunks.iter().map(|chunk| mesh(&chunk.data)).sum()
+                })
+        });
+        let contour_cache = caches.contour.as_ref().map_or(0, |cache| {
+            cache.views.iter().map(|view| contours(&view.data)).sum()
+        });
+        let history: usize = self
+            .history
+            .undo
+            .iter()
+            .chain(&self.history.redo)
+            .map(|entry| snapshot(&entry.snapshot))
+            .sum();
+        body + voxel_cache + mesh_cache + contour_cache + history
+    }
+}
