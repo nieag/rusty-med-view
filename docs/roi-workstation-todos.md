@@ -20,6 +20,8 @@ These drive the design.
 - [x] Docs archive pruned to the three documents still cited (`docs-archive-full` tag holds the rest).
 - [x] Inline test modules moved to sibling `tests.rs` files.
 - [x] QA snapshot and sample bootstrap moved out of `app/mod.rs` into `app/qa/`.
+- [x] Phase 2 (automatic switching), the ROI lifecycle tests, and the 3D performance work (mesh on the GPU, cached 3D view, mesh deform that stops at contact); see the commit log.
+- [x] R1 (found by the lifecycle tests, 4cdf8ff): a slice-scoped contour commit that removed the slice left stale voxels; the rebuild rule now lives in `authority.rs`.
 - [x] Baseline: 331 tests pass, 6 ignored milestone tests pass in release (about 3 s), clippy, wasm, and rustfmt clean.
 
 ## Phase 0: Correctness and crashes (do first, all small)
@@ -55,9 +57,47 @@ Exit: the sidebar has no promotion controls; switching primary view keeps undo h
 - [x] **2.4 Remove manual promotion (M).** Done: the family dropdown, authority buttons, "Make displayed view editable", the promotion functions and error enums, and the history wipe are gone; the sidebar shows what the ROI is stored as and one "New contour ROI" button. Original scope: Delete the family dropdown, "Make displayed view editable", `RequiresConversion`, the seven promotion error enums, and `clear_roi_edit_history_for_roi` on switch. One error type for real failures. Report loss (volume delta or Dice) on each conversion.
 - [x] **2.5 Scope decisions (S).** Done (voxel-to-authority promotion removed; voxel is a derived export form). Decided: a contour tool on a mesh-primary ROI converts it to contour authority through the voxel cache, with the loss reported, and the conversion is one undo step (the mesh stays reachable through undo). Still to do: remove voxel-to-authority promotion (`promote_current_voxel_cache_to_authority`, `VoxelAuthorityPromotionError`) if confirmed unneeded; voxel stays a derived export form.
 
+## Phase 2b: Foundation hardening (before Phase 3)
+
+Added after the 2026-09-30 review of the finished Phase 2 code. Decision (2026-09-30): the drawing tools (Phase 3) wait until the foundation is correct in behaviour and in structure. The review chained import, conversion, edit, and undo on one ROI (`roi_runtime/tests.rs`, "ROI lifecycle") and found the model sound; one real bug was fixed on the way (4cdf8ff, see Done). What remains is layering, completeness, and robustness.
+
+Exit: the layering is enforced by a test; no unrepresentable-state panics (`unreachable!`) in the conversion code; every visible ROI shows all its derived forms; no GPU error can panic the app; the docs describe the code as it is; the lifecycle tests still pass.
+
+- [ ] **2b.1 One dependency-free `model` layer (M to L, do first).**
+  - *Problem:* `convert` (pure geometry and conversion algorithms) imports its data types from `app::roi::model`, and `app::roi` calls `convert`, so the two form a cycle. `render` imports 29 items from `app::components` and 5 from `app::roi_runtime`; `util` and `io` import from `app` too. A pure algorithm cannot be reused or tested without the ECS types, and the cycle is why every layering fix so far touched many files.
+  - *Approach:* move the pure types (`VoxelGeometry`, `VoxelData`, `MeshData`, `ContourData` and its parts, `PlaneFamily` and `PlaneDefinition`, slice keys) into one `model` module that imports nothing from the crate. The dependency order becomes model, convert, `app::roi`, runtime, systems, render, gui. Keep re-exports at the old paths for one commit so the move is mechanical.
+  - *Done when:* a unit test scans `use crate::` lines and fails on any upward import (for example `model` importing `convert`, or `convert` importing `app`); documented in `docs/code-map.md`.
+- [ ] **2b.2 Orthogonal family type for authoritative contours (M).**
+  - *Problem:* `ContourData::active_plane_family` is a `PlaneFamily`, which includes `Oblique`, although only orthogonal families can be edited. Ten `unreachable!` calls (`contour_raster.rs`, `voxel_contour_extract.rs`, `geometry.rs`) and several `if family == Oblique` guards exist to cope. An oblique authoritative contour set is a state the design forbids but the type allows.
+  - *Approach:* an `OrthogonalFamily { Axial, Coronal, Sagittal }` for authoritative contour data and the conversions that need an axis; `PlaneFamily` (with Oblique) stays only for derived per-slice view keys. The `unreachable!` sites and the guards disappear because the match is exhaustive.
+  - *Done when:* no `unreachable!` in `convert/`; `ensure_editable` no longer needs the `UnsupportedTarget` case for Oblique because `EditTarget::Contour` takes an `OrthogonalFamily`.
+- [ ] **2b.3 Derived forms for every visible ROI (M).**
+  - *Problem:* `sync_roi_contour_view_caches_for_viewports` and `sync_active_roi_mesh_cache_for_viewports` build contours and the mesh only for the active ROI (and mesh-authority ROIs). The second label of a multi-label import shows a voxel overlay only, in 2D and in 3D. This contradicts the product constraint that all views stay consistent.
+  - *Approach:* decide the rule (proposal: every visible ROI, with the active ROI first and a budget so ten labels do not queue ten mesh builds at once; cached forms of hidden ROIs are kept, not rebuilt). Reuse the existing demand-driven caches; the change is which ROIs create demand.
+  - *Done when:* the liver sample shows contours and a mesh for both labels; a test asserts it; the budget is measured on a many-label volume.
+- [ ] **2b.4 One viewport-mapping implementation (M, moved from 5.4).**
+  - *Problem:* the `screen_aspect / slice_aspect` mapping between viewport and volume exists in the shader, `geometry.rs`, `picking.rs`, and `input.rs`, and `ORTHOGRAPHIC_VIEW_SCALE` is duplicated in Rust and WGSL. Disagreement between copies caused earlier bugs (the half-voxel offset, the oblique shear).
+  - *Approach:* one Rust implementation in `convert/` and a tested contract for the shader (constants passed in uniforms, plus a test that evaluates both on a grid of points). Collapse the overlap of `SlicePlane`, `PlaneFamily`, and `ViewMode`.
+  - *Done when:* picking, contour editing, and rendering call the same functions; the shader/Rust agreement test exists.
+- [ ] **2b.5 GPU error handling and device limits (S, includes 6.1).**
+  - *Problem:* no device-lost or uncaptured-error handler is installed, so one wgpu validation error panics the wasm module (it happened once this session). `request_device` uses default limits, which normally fail on a WebGL2 adapter.
+  - *Approach:* install the handlers; log the error, surface it through `__viewerQa.lastError` and a status message, and keep running where possible. Request downlevel limits with the adapter's values or drop the `webgl` feature.
+  - *Done when:* a deliberately invalid GPU call in a test build is reported, not fatal.
+- [ ] **2b.6 Policy for stale derived views (S, decision then small change).**
+  - *Problem:* after an edit, derived contour views in other planes keep rendering the pre-edit contours until the voxel rebuild finishes (200 ms and up on large volumes), and nothing marks them as out of date. That is stale-while-revalidate and may be the right behaviour, but the display can silently disagree with the edit.
+  - *Approach:* decide between keeping stale views visible but marked (dimmed or dashed), and hiding them until current. Implement in `contour_view_data_for_render` and the contour renderer.
+  - *Done when:* the decision is recorded in ADR 0004 and a test pins it.
+- [ ] **2b.7 Split `roi_runtime.rs` and `components.rs` by concern (M, moved from 5.1, after 2b.1 and 2b.2).**
+  - *Problem:* `roi_runtime.rs` is 2,075 lines (job coordinator, three rebuild pipelines, contour view caches, label import); `components.rs` mixes ECS components with domain types.
+  - *Approach:* follow the layering: coordinator, one module per rebuild pipeline, view caches, import; components keep only ECS state. Do it after 2b.1 so the split follows real boundaries instead of guesses.
+  - *Done when:* no source file over about 800 lines except generated tables.
+- [ ] **2b.8 Docs and architecture record (S, last).**
+  - *Problem:* `docs/current-state.md` and `docs/code-map.md` do not describe `app/roi/switch.rs`, `render/view3d_cache.rs`, `convert/mesh_deform.rs`, or the GPU mesh renderer.
+  - *Approach:* update both, add the layering diagram, and record the decisions of 2b.3 and 2b.6 in the ADRs.
+
 ## Phase 3: Editing features and data completeness
 
-Exit: a deep-learning multi-organ segmentation can be imported, corrected, and exported without merging structures.
+Starts after Phase 2b (decision 2026-09-30). Exit: a deep-learning multi-organ segmentation can be imported, corrected, and exported without merging structures.
 
 - [x] **3.1 Multi-label ROIs (M).** A labelmap now imports as one voxel ROI per non-zero label (`create_voxel_rois_from_label`, `app/roi/label_import.rs`): each ROI keeps its label id as the voxel value so the overlay colormap still colours it, gets that colour as its ROI colour, and is named `<file> [label N]` (the plain file name for a single label). The first eight start visible; the first label becomes active. A map with no labels imports as one empty ROI. A memory budget (`MAX_IMPORT_LABEL_VOXELS`, 256M mask voxels) fails an oversized split with a message instead of exhausting memory; cropping masks to their bounds is the real fix (4.5). On the QA liver sample this separates liver (113,169 voxels) from tumor (546). The QA snapshot now lists ROIs in creation order and the strict QA spec asserts the split.
 - [ ] **3.2 Subtract/erase drawing (M).** Contour drawing is union-only and a loop inside an existing loop cannot make a hole. Add subtract and hole-creating modes on `geo` boolean ops.
@@ -75,36 +115,21 @@ Do after Phases 0 to 2 so measurements reflect the final structure. Measure each
 - [ ] **4.2 Image texture format (M).** R32Float is 4 bytes per voxel and nearest-only (oblique slices look blocky). Evaluate R16Float or normalized u16 with `float32-filterable` or linear sampling.
 - [x] **4.3 GPU mesh rendering (L).** Done (commit 8b22220): parts are uploaded once as indexed world-space geometry and a per-draw uniform carries the camera; geometry is rebuilt only when a fingerprint changes. Original scope: Meshes are projected on the CPU every frame, compared and re-uploaded whole, and drawn flat and translucent with no depth or lighting. Upload world-space vertices once, project on the GPU with a uniform matrix, add depth and normals.
 - [ ] **4.4 Real incremental mesh rebuild, or delete the plumbing (M).** `begin_for_voxel_aabb` ignores its AABB and rebuilds the full SDF plus all chunks on every edit. Either implement banded SDF updates or remove the dirty-region machinery around it.
-- [ ] **4.5 Memory (M).** Undo keeps up to 32 full mesh and contour clones; the SDF path allocates about five full-volume arrays; each mesh-drag event clones and re-validates the mesh. Use delta or shared-structure snapshots, and avoid clone per drag event.
+- [ ] **4.5 Memory (M).** Undo keeps up to 32 full mesh and contour clones, and a switch snapshot of a voxel body clones the whole volume (up to 32 steps); the SDF path allocates about five full-volume arrays; a mesh rebuild clones the whole voxel volume and the chunk set; each mesh-drag event clones the mesh (the topology is now built once per drag). Use delta or shared-structure snapshots (for example `Arc` for immutable bodies) and avoid the clones.
 - [ ] **4.6 Small hot spots (S).** `roi_voxel_stats` scans every voxel of every ROI per frame while the Layers panel is open; cache by generation. Rebuild of overlay primitives runs twice per frame.
-
-## Foundation review (2026-09-30)
-
-Findings of a review after Phase 2, ordered by importance. Fixed items are marked; the rest are
-scheduled here. Details of the first two are in the commits named.
-
-- [x] **R1 Slice-scoped commit API could leave stale voxels (fixed, 4cdf8ff).** `replace_contour_data_for_slice` always scheduled a slice-local rebuild, which cannot clear a removed slice. The rule is now `dirty_region_for_slice_edit` / `dirty_region_for_slice_swap` in `authority.rs`. Found by the lifecycle tests in `roi_runtime/tests.rs`.
-- [ ] **R2 Layering cycle: `convert` and `app::roi` import each other (M).** The pure geometry and conversion layer imports domain types (`MeshData`, `ContourData`, `VoxelData`, `VoxelGeometry`) from `app::roi::model`, while `app::roi` calls `convert`. `render`, `util`, and `io` also depend on `app::components` (29 imports from `render`) and on `app::roi_runtime`. Move the pure types (geometry, voxel/mesh/contour data, `PlaneFamily`, plane definitions) into one `model` module that depends on nothing, so the direction is model, convert, app::roi, runtime, systems, render, gui. Enforce it with a test that scans `use crate::` lines.
-- [ ] **R3 `PlaneFamily::Oblique` makes authoritative contour data partial (M).** Ten `unreachable!` sites and several `if family == Oblique` guards exist because an authoritative `ContourData` may name the Oblique family although only orthogonal families are editable. Use a separate orthogonal-family type for `ContourData::active_plane_family` and keep Oblique only for derived per-slice view keys.
-- [ ] **R4 Only the active ROI (and mesh-authority ROIs) get derived contours and a mesh (M).** `sync_roi_contour_view_caches_for_viewports` and `sync_active_roi_mesh_cache_for_viewports` skip other visible voxel ROIs, so the second label of a multi-label import shows only a voxel overlay in the 2D and 3D views. Decide the rule (all visible ROIs, bounded by a budget) and build derived forms for them.
-- [ ] **R5 Stale derived contour views keep rendering after an edit, unmarked (S, decision).** After an edit, the views of other planes show the pre-edit contours until the rebuild finishes (200 ms and up on large volumes). This is stale-while-revalidate and may be right; if so mark it (dimmed or dashed) so the display never silently disagrees with the edit. See `contour_view_data_for_render`.
-- [ ] **R6 No GPU error handling (S).** No device-lost or uncaptured-error handler is installed, so a single wgpu validation error panics the wasm module (seen once this session). Log it, surface it through `__viewerQa.lastError`, and show a status message. Together with 6.1 (WebGL limits).
-- [ ] **R7 Memory hot spots (M, same as 4.5).** A mesh rebuild clones the whole voxel volume and the chunk set; each mesh drag update clones the mesh; each switch snapshot of a voxel body clones the volume (up to 32 history steps).
-- [ ] **R8 `roi_runtime.rs` is still 2,075 lines (M, same as 5.1).** It mixes the job coordinator, three rebuild pipelines, contour view caches, and label import. Split after R2, since the split follows the layering.
-- [ ] **R9 Docs lag the code (S).** `docs/current-state.md` and `docs/code-map.md` do not describe `app/roi/switch.rs`, `render/view3d_cache.rs`, `convert/mesh_deform.rs`, or the GPU mesh renderer.
 
 ## Phase 5: Structure cleanup
 
-- [ ] **5.1 Split `roi_runtime.rs` and `components.rs` by concern (M).** After Phase 2 they are much smaller: coordinator, per-representation rebuild, import, view building; viewport, ROI state, editing.
+- [>] **5.1 Split `roi_runtime.rs` and `components.rs` by concern.** Moved to 2b.7. Original note: After Phase 2 they are much smaller: coordinator, per-representation rebuild, import, view building; viewport, ROI state, editing.
 - [ ] **5.2 Delete unused public items (S).** 7 have no callers (`mesh_cache_mut`, `create_voxel_roi_from_label`, `uv_to_world_axis`, `cursor_uv_to_world_depth`, `ijk_to_world_affine`, `world_to_ijk_affine`, `create_blank_labelmap`); 22 are test-only. Verify each; much overlaps Phase 1.
 - [ ] **5.3 Test-support module (S).** Move the remaining `cfg(test)` ROI creation helpers out of `roi_runtime.rs`.
-- [ ] **5.4 One viewport-mapping implementation (M).** The `screen_aspect / slice_aspect` logic is duplicated in the shader, `geometry.rs`, `picking.rs`, and `input.rs`; `ORTHOGRAPHIC_VIEW_SCALE` is duplicated in Rust and WGSL. Unify in `convert/` and pass constants via uniforms. Collapse `SlicePlane`, `PlaneFamily`, and `ViewMode` overlap.
+- [>] **5.4 One viewport-mapping implementation.** Moved to 2b.4. Original note: The `screen_aspect / slice_aspect` logic is duplicated in the shader, `geometry.rs`, `picking.rs`, and `input.rs`; `ORTHOGRAPHIC_VIEW_SCALE` is duplicated in Rust and WGSL. Unify in `convert/` and pass constants via uniforms. Collapse `SlicePlane`, `PlaneFamily`, and `ViewMode` overlap.
 - [ ] **5.5 Sidebar and input dedupe (S).** Repeated status-message match arms in `input.rs` and `sidebar.rs`, and a duplicated `focus_cursor_on_first_extracted_slice` branch.
 - [ ] **5.6 Dependency audit (S).** Check `geo`, `parry3d`, `uuid`, and others are all needed; each adds build time.
 
 ## Phase 6: Platform, release, and hygiene (*parallel* with Phases 3 to 5)
 
-- [ ] **6.1 WebGL fallback limits (S).** `request_device` uses default limits, which normally fail on a WebGL2 adapter even though the `webgl` feature is enabled. Use downlevel limits with the adapter's resolution, or drop the feature.
+- [>] **6.1 WebGL fallback limits.** Folded into 2b.5. Original note: `request_device` uses default limits, which normally fail on a WebGL2 adapter even though the `webgl` feature is enabled. Use downlevel limits with the adapter's resolution, or drop the feature.
 - [ ] **6.2 Keep QA data out of production (S).** `index.html` copies `qa_samples` (28 MB) into the Pages deploy and `?qa=1` enables the debug API there. Gate behind a build feature or a dev-only Trunk config.
 - [~] **6.3 CI (S).** Done: the QA spec (`tests/qa1_viewerqa.spec.js`) is a real gate: it launches Chrome with WebGPU (macOS defaults; override with `QA_CHROME_ARGS`), fails clearly when the app cannot initialize (`QA_ALLOW_NO_GPU=1` opts into the old lenient behaviour), waits for readiness instead of a fixed delay, and a new `qa-4` asserts the liver geometry, orientation letters, MPR viewport facts, and zero errors or warnings. `Trunk.toml` now ignores non-source directories so test artifacts no longer live-reload the page mid-run (restart `trunk serve` to pick it up). Still open: CI does not run the spec (GitHub runners have no WebGPU adapter; needs a software adapter), CI clippy still omits `--all-targets --all-features`, and the toolchain and `trunk` are unpinned; align the clippy flags documented in `clippy.toml`, `AGENTS.md`, and `ci.yml`.
 - [ ] **6.4 LICENSE and attribution (S, needs your input).** No LICENSE file; the marching-cubes table derives from an Apache-2.0 crate with only a code comment. Add a LICENSE and a NOTICE.
