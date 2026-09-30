@@ -1,6 +1,5 @@
 use crate::components::*;
 use crate::convert::slice_index_from_cursor_uv;
-use crate::overlay::OverlayManager;
 use crate::util::orientation::SlicePlane;
 use crate::AppEvent;
 use hecs::{Entity, World};
@@ -25,7 +24,7 @@ pub struct OverlayViewCtx<'a> {
 pub fn draw_viewport_overlays(
     ctx: &egui::Context,
     world: &mut World,
-    entities: &AppEntities,
+    session: &mut Session,
     event_proxy: &EventLoopProxy<AppEvent>,
     view_ctx: &OverlayViewCtx<'_>,
 ) {
@@ -33,10 +32,7 @@ pub fn draw_viewport_overlays(
     let vps = view_ctx.vps;
     let active_viewport_entity = view_ctx.active_viewport_entity;
     let volume_info = view_ctx.volume_info;
-    let mut cursor_pos = [0.0, 0.0, 0.0];
-    if let Ok(t) = world.get::<&Transform>(entities.cursor) {
-        cursor_pos = t.position;
-    }
+    let cursor_pos = session.cursor.position;
 
     let x0 = central_rect.min.x;
     let y0 = central_rect.min.y;
@@ -60,10 +56,10 @@ pub fn draw_viewport_overlays(
 
     // --- Viewport Separation Lines ---
     let active_protocol = {
-        world
-            .get::<&ProtocolState>(entities.protocol)
-            .map(|p| p.active_protocol.clone())
-            .unwrap_or_else(|_| "Standard 2x2".to_string())
+        {
+            let p = &session.protocol;
+            p.active_protocol.clone()
+        }
     };
 
     if active_protocol == "Standard 2x2" {
@@ -117,7 +113,8 @@ pub fn draw_viewport_overlays(
             .show(ctx, |ui| match mode {
                 ViewMode::ThreeD => {
                     label_res = Some(draw_label(ui, "3D View", is_active));
-                    if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
+                    {
+                        let w = &session.windowing;
                         ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
                     }
                 }
@@ -125,7 +122,8 @@ pub fn draw_viewport_overlays(
                     let slice_z = displayed_slice_number(cursor_pos[2], vol_dims[2]);
                     label_res = Some(draw_label(ui, "Axial (Top)", is_active));
                     ui.label(format!("Slice: {} / {}", slice_z, vol_dims[2]));
-                    if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
+                    {
+                        let w = &session.windowing;
                         ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
                     }
 
@@ -135,7 +133,8 @@ pub fn draw_viewport_overlays(
                     let slice_y = displayed_slice_number(cursor_pos[1], vol_dims[1]);
                     label_res = Some(draw_label(ui, "Coronal (Front)", is_active));
                     ui.label(format!("Slice: {} / {}", slice_y, vol_dims[1]));
-                    if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
+                    {
+                        let w = &session.windowing;
                         ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
                     }
                     slice_orientation_markers(ui, *rect, SlicePlane::Coronal, main_geometry);
@@ -144,7 +143,8 @@ pub fn draw_viewport_overlays(
                     let slice_x = displayed_slice_number(cursor_pos[0], vol_dims[0]);
                     label_res = Some(draw_label(ui, "Sagittal (Side)", is_active));
                     ui.label(format!("Slice: {} / {}", slice_x, vol_dims[0]));
-                    if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
+                    {
+                        let w = &session.windowing;
                         ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
                     }
                     slice_orientation_markers(ui, *rect, SlicePlane::Sagittal, main_geometry);
@@ -152,7 +152,8 @@ pub fn draw_viewport_overlays(
                 ViewMode::Oblique => {
                     label_res = Some(draw_label(ui, "Oblique", is_active));
                     ui.label("Slice: oblique");
-                    if let Ok(w) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
+                    {
+                        let w = &session.windowing;
                         ui.label(format!("W/L: {:.0} / {:.0}", w.width, w.center));
                     }
                 }
@@ -203,6 +204,9 @@ pub fn draw_viewport_overlays(
     }
 
     // --- Draw Annotation Markers ---
+    // Markers are placed in volume UV for this frame from their world-millimetre anchors; a drag
+    // moves the UV, and the new anchor is written back after the layer is drawn.
+    let mut moved_anchors: Vec<(uuid::Uuid, [f32; 3])> = Vec::new();
     egui::Area::new("annotations_layer".into())
         .fixed_pos(central_rect.min)
         .interactable(true)
@@ -210,28 +214,35 @@ pub fn draw_viewport_overlays(
             let mut vd_query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
             let vol_data = vd_query.iter().next().map(|(_, vd)| vd);
 
-            if let (Ok(mut state), Ok(mut overlay), Some(vd)) = (
-                world.get::<&mut AnnotationState>(entities.annotations),
-                world.get::<&mut OverlayManager>(entities.overlay),
-                vol_data,
-            ) {
-                let focused_id = state.focused_id;
-                let items = &mut state.annotations;
+            if let Some(vd) = vol_data.filter(|vd| vd.geometry.is_some()) {
+                let geometry = vd.geometry.expect("geometry checked above");
+                let focused_id = session.annotations.focused_id;
+                let mut items: Vec<Marker> = crate::app::annotations::annotation_rows(world)
+                    .into_iter()
+                    .map(|row| Marker {
+                        id: row.id,
+                        label: row.label,
+                        world_pos: glam::Vec3::from_array(crate::convert::world_mm_to_volume_uv(
+                            row.anchor_mm,
+                            geometry,
+                        )),
+                        moved: false,
+                    })
+                    .collect();
 
-                let cursor_pos = world
-                    .get::<&Transform>(entities.cursor)
-                    .map(|t| glam::Vec3::from(t.position))
-                    .unwrap_or(glam::Vec3::ZERO);
+                let cursor_pos = {
+                    let t = &session.cursor;
+                    glam::Vec3::from(t.position)
+                };
 
                 let mut clicked_id = None;
                 for (e, mode, rect) in vps {
                     if let Ok(vs) = world.get::<&ViewportState>(*e) {
                         if let Some(id) = draw_annotations(
                             ui,
-                            items,
+                            &mut items,
                             &vs,
                             vd,
-                            &mut overlay,
                             &AnnotationViewCtx {
                                 rect: *rect,
                                 mode: *mode,
@@ -246,8 +257,32 @@ pub fn draw_viewport_overlays(
                 if let Some(id) = clicked_id {
                     let _ = event_proxy.send_event(AppEvent::FocusAnnotation(id));
                 }
+                moved_anchors.extend(items.iter().filter(|marker| marker.moved).map(|marker| {
+                    (
+                        marker.id,
+                        crate::convert::volume_uv_to_world_mm(
+                            marker.world_pos.to_array(),
+                            geometry,
+                        ),
+                    )
+                }));
             }
         });
+    for (id, world_mm) in moved_anchors {
+        if let Some(entity) = crate::app::annotations::find_annotation(world, id) {
+            if let Ok(mut anchor) = world.get::<&mut Anchor>(entity) {
+                anchor.world_mm = world_mm;
+            }
+        }
+    }
+}
+
+/// An annotation placed in the current frame's volume UV.
+struct Marker {
+    id: uuid::Uuid,
+    label: String,
+    world_pos: glam::Vec3,
+    moved: bool,
 }
 
 fn draw_label(ui: &mut egui::Ui, text: &str, is_active: bool) -> egui::Response {
@@ -343,10 +378,9 @@ struct AnnotationViewCtx {
 
 fn draw_annotations(
     ui: &mut egui::Ui,
-    annotations: &mut [Annotation],
+    annotations: &mut [Marker],
     view: &ViewportState,
     vol: &VolumeData,
-    overlay: &mut OverlayManager,
     ann_ctx: &AnnotationViewCtx,
 ) -> Option<uuid::Uuid> {
     let rect = ann_ctx.rect;
@@ -379,7 +413,7 @@ fn draw_annotations(
         ViewMode::Oblique => 4,
     };
 
-    for (idx, ann) in annotations.iter_mut().enumerate() {
+    for ann in annotations.iter_mut() {
         if let Some(plane) = crate::util::orientation::SlicePlane::from_mode(mode) {
             let axis = plane.depth_axis();
             let ann_depth = ann.world_pos[axis];
@@ -426,9 +460,6 @@ fn draw_annotations(
             }
 
             if viewport_idx > 0 && response.dragged() {
-                overlay.dragging_idx = Some(idx);
-                overlay.dragging_viewport = viewport_idx as u32;
-
                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                     let screen_w = rect.width();
                     let screen_h = rect.height();
@@ -440,8 +471,6 @@ fn draw_annotations(
 
                     let ndc_x = (mouse_pos.x - rect.min.x) / rect.width();
                     let ndc_y = (mouse_pos.y - rect.min.y) / rect.height();
-
-                    overlay.mouse_screen_uv = [ndc_x, ndc_y];
 
                     let plane_definition = if mode == ViewMode::Oblique {
                         crate::convert::oblique_plane_from_view_rotation(
@@ -472,13 +501,12 @@ fn draw_annotations(
                             mapping,
                         ) {
                             ann.world_pos = glam::Vec3::from(vol_pos);
+                            ann.moved = true;
                         }
                     }
 
                     ann.world_pos = ann.world_pos.clamp(glam::Vec3::ZERO, glam::Vec3::ONE);
                 }
-            } else if response.drag_stopped() {
-                overlay.dragging_idx = None;
             }
 
             let draw_pos = if response.dragged() {

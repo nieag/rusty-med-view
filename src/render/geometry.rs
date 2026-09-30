@@ -1,9 +1,8 @@
 // src/geometry.rs
 // use crate::components::ViewState; // Removed
+use crate::components::Session;
 use crate::components::VoxelGeometry;
-use crate::components::{
-    AppEntities, MainVolumeTag, Transform, Viewport, ViewportState, VolumeData, WindowSettings,
-};
+use crate::components::{MainVolumeTag, Viewport, ViewportState, VolumeData};
 use glam::Vec3;
 use hecs::World;
 
@@ -101,7 +100,7 @@ impl DisplayProjectionContext {
 
 pub fn build_display_projection_context(
     world: &World,
-    entities: &AppEntities,
+    session: &Session,
     viewport: &Viewport,
     viewport_state: &ViewportState,
 ) -> Option<DisplayProjectionContext> {
@@ -109,14 +108,14 @@ pub fn build_display_projection_context(
     let (_, main_volume) = volume_query.iter().next()?;
     let main_geometry = crate::app::roi_runtime::main_volume_geometry(world)?;
 
-    let window_size = world
-        .get::<&WindowSettings>(entities.window_settings)
-        .map(|settings| [settings.width as f32, settings.height as f32])
-        .ok()?;
-    let cursor_pos = world
-        .get::<&Transform>(entities.cursor)
-        .map(|cursor| cursor.position)
-        .unwrap_or([0.5, 0.5, 0.5]);
+    let window_size = [
+        session.window_settings.width as f32,
+        session.window_settings.height as f32,
+    ];
+    let cursor_pos = {
+        let cursor = &session.cursor;
+        cursor.position
+    };
     let screen_aspect = if viewport.rect[3] > 0.0 {
         viewport.rect[2] / viewport.rect[3]
     } else {

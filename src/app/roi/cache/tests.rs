@@ -13,6 +13,7 @@ fn test_roi() -> Roi {
             slices: Vec::new(),
         },
     )
+    .0
 }
 
 fn test_voxel_cache(value: u8) -> VoxelCache {
@@ -35,7 +36,7 @@ fn test_voxel_cache_result_with_mismatched_reference_geometry_is_rejected() {
         [0.0, 0.0, 0.0, 1.0],
     )
     .unwrap();
-    let mut roi = Roi::new_contour_with_geometry(
+    let (mut roi, _) = Roi::new_contour_with_geometry(
         RoiId(1),
         "test".to_string(),
         reference_geometry,

@@ -3,7 +3,6 @@ use crate::app::events::AppEvent;
 use crate::app::roi_runtime;
 use crate::gui::Gui;
 use crate::io::volume;
-use crate::overlay::OverlayManager;
 use crate::render::pipeline;
 use crate::render::protocols;
 use hecs::World;
@@ -38,14 +37,13 @@ pub struct VolumeResources {
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
     pub num_indices: u32,
-    pub overlay_buffer: wgpu::Buffer,
     pub dummy_r8: (wgpu::Texture, wgpu::TextureView, wgpu::Sampler),
     pub default_lut: (wgpu::Texture, wgpu::TextureView),
 }
 
 pub struct SceneState {
     pub world: World,
-    pub entities: AppEntities,
+    pub session: Session,
     /// Tracks camera movement so the 3D raymarch can drop quality while it moves.
     pub camera_motion: crate::render::pipeline::CameraMotion,
 }
@@ -57,7 +55,6 @@ pub struct RenderingContext {
     pub volume_resources: VolumeResources,
     pub scene: SceneState,
     pub gui: Gui,
-    pub settings_entity: hecs::Entity,
     pub event_proxy: EventLoopProxy<AppEvent>,
 }
 
@@ -131,28 +128,8 @@ impl RenderingContext {
         let dummy_r8 = volume::create_dummy_r8_texture(&device, &queue);
         let default_lut = volume::create_default_colormap(&device, &queue);
 
-        let cursor = world.spawn((
-            Transform {
-                position: [0.5, 0.5, 0.5],
-            },
-            CursorTag,
-        ));
-        let settings_entity = world.spawn((WindowSettings {
-            width: config.width,
-            height: config.height,
-            viewport_rect: [0.0, 0.0, config.width as f32, config.height as f32],
-        },));
-
-        let gui_state = world.spawn((GuiState {
-            status_message: None,
-        },));
-
-        let input = world.spawn((InputState::default(),));
-        let protocol = world.spawn((ProtocolState::default(),));
-
         let uniform_buffer = pipeline::create_uniform_buffer(&device);
         let texture_bind_group_layout = pipeline::create_bind_group_layout(&device);
-        let overlay_buffer = pipeline::create_overlay_buffer(&device);
 
         let diffuse_bind_group = pipeline::create_scene_bind_group(
             &device,
@@ -163,7 +140,6 @@ impl RenderingContext {
                 uniform_buffer: &uniform_buffer,
                 overlay_views: [&dummy_r8.1; MAX_VOXEL_OVERLAY_SLOTS],
                 overlay_lut: &default_lut.1,
-                overlay_buffer: &overlay_buffer,
             },
         );
 
@@ -178,28 +154,8 @@ impl RenderingContext {
             MainVolumeTag,
         ));
 
-        let editor = world.spawn((EditorState {
-            active_roi: None,
-            ..Default::default()
-        },));
-
-        let windowing = world.spawn((VolumeWindowing::default(),));
-        let annotations = world.spawn((AnnotationState::default(),));
-        let overlay = world.spawn((OverlayManager::default(),));
-
-        let entities = AppEntities {
-            input,
-            editor,
-            gui_state,
-            volume_windowing: windowing,
-            annotations,
-            overlay,
-            protocol,
-            cursor,
-            window_settings: settings_entity,
-        };
-
-        protocols::apply_protocol(&mut world, &entities, "Standard 2x2");
+        let mut session = Session::new(config.width, config.height);
+        protocols::apply_protocol(&mut world, &mut session, "Standard 2x2");
 
         let render_pipeline =
             pipeline::create_render_pipeline(&device, &texture_bind_group_layout, config.format);
@@ -232,7 +188,6 @@ impl RenderingContext {
                 dummy_view: &dummy_r8.1,
                 dummy_sampler: &dummy_r8.2,
                 default_lut_view: &default_lut.1,
-                overlay_buffer: &overlay_buffer,
             },
             None,
         );
@@ -260,17 +215,15 @@ impl RenderingContext {
                 vertex_buffer,
                 index_buffer,
                 num_indices,
-                overlay_buffer,
                 dummy_r8,
                 default_lut,
             },
             scene: SceneState {
                 world,
-                entities,
+                session,
                 camera_motion: Default::default(),
             },
             gui,
-            settings_entity,
             event_proxy,
         })
     }

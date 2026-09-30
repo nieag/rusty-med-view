@@ -58,7 +58,7 @@ pub fn get_protocol_registry() -> Vec<HangingProtocol> {
     ]
 }
 
-pub fn apply_protocol(world: &mut World, entities: &AppEntities, protocol_name: &str) {
+pub fn apply_protocol(world: &mut World, session: &mut Session, protocol_name: &str) {
     let registry = get_protocol_registry();
     let protocol = registry
         .iter()
@@ -66,7 +66,8 @@ pub fn apply_protocol(world: &mut World, entities: &AppEntities, protocol_name: 
         .unwrap_or(&registry[0]);
 
     // If we are maximizing (going to a Single view), remember what we had before
-    if let Ok(mut proto_state) = world.get::<&mut ProtocolState>(entities.protocol) {
+    {
+        let proto_state = &mut session.protocol;
         // If we are maximizing (going to a Single view), remember what we had before
         if protocol_name.starts_with("Single") && !proto_state.active_protocol.starts_with("Single")
         {
@@ -101,18 +102,17 @@ pub fn apply_protocol(world: &mut World, entities: &AppEntities, protocol_name: 
     }
 
     // 3. Update active viewport
-    if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+    {
+        let input = &mut session.input;
         if let Some(e) = first_vp {
             input.active_viewport = Some(e);
         }
     }
 }
 
-pub fn toggle_maximize(world: &mut World, entities: &AppEntities, vp_entity: Entity) {
+pub fn toggle_maximize(world: &mut World, session: &mut Session, vp_entity: Entity) {
     let (mode, is_already_maximized) = {
-        let Ok(proto_state) = world.get::<&ProtocolState>(entities.protocol) else {
-            return;
-        };
+        let proto_state = &session.protocol;
         let Ok(vp) = world.get::<&Viewport>(vp_entity) else {
             return;
         };
@@ -122,15 +122,13 @@ pub fn toggle_maximize(world: &mut World, entities: &AppEntities, vp_entity: Ent
     if is_already_maximized {
         // Restore
         let restore_name = {
-            let Ok(mut proto_state) = world.get::<&mut ProtocolState>(entities.protocol) else {
-                return;
-            };
+            let proto_state = &mut session.protocol;
             proto_state
                 .last_protocol
                 .take()
                 .unwrap_or_else(|| "Standard 2x2".to_string())
         };
-        apply_protocol(world, entities, &restore_name);
+        apply_protocol(world, session, &restore_name);
     } else {
         // Maximize
         let protocol_name = match mode {
@@ -142,16 +140,11 @@ pub fn toggle_maximize(world: &mut World, entities: &AppEntities, vp_entity: Ent
         };
 
         // Ensure the "Single 3D" or similar exists or we fallback to one that fills the screen
-        apply_protocol(world, entities, protocol_name);
+        apply_protocol(world, session, protocol_name);
     }
 }
 
-pub fn swap_viewports(
-    world: &mut World,
-    _entities: &AppEntities,
-    entity_a: Entity,
-    entity_b: Entity,
-) {
+pub fn swap_viewports(world: &mut World, _session: &Session, entity_a: Entity, entity_b: Entity) {
     if entity_a == entity_b {
         return;
     }

@@ -10,7 +10,6 @@ pub mod systems;
 pub mod util;
 
 pub mod file_dialog;
-pub mod overlay;
 
 pub use crate::app::handlers as load_handlers;
 pub use crate::app::App;

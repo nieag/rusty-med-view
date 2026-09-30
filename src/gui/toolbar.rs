@@ -6,24 +6,24 @@ use winit::event_loop::EventLoopProxy;
 
 fn apply_roi_history_action(
     world: &mut World,
-    entities: &AppEntities,
+    session: &mut Session,
     event_proxy: &EventLoopProxy<AppEvent>,
     undo: bool,
 ) {
-    if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+    {
+        let input = &mut session.input;
         input.contour_move_pending_commit = false;
         input.mesh_move_pending_commit = false;
     }
     let result = if undo {
-        crate::app::roi::undo_roi_edit(world, entities.editor)
+        crate::app::roi::undo_roi_edit(world, &mut session.editor)
     } else {
-        crate::app::roi::redo_roi_edit(world, entities.editor)
+        crate::app::roi::redo_roi_edit(world, &mut session.editor)
     };
     match result {
         Ok(_) => {
             handlers::set_status_message(
-                world,
-                entities,
+                session,
                 if undo {
                     "Undid ROI edit.".to_string()
                 } else {
@@ -33,8 +33,7 @@ fn apply_roi_history_action(
             let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
         }
         Err(error) => handlers::set_status_message(
-            world,
-            entities,
+            session,
             format!("{} failed: {error:?}.", if undo { "Undo" } else { "Redo" }),
         ),
     }
@@ -56,48 +55,41 @@ fn roi_history_shortcuts(ctx: &egui::Context) -> (bool, bool) {
 
 fn set_editor_tool(
     world: &mut World,
-    entities: &AppEntities,
+    session: &mut Session,
     requested_tool: EditorTool,
 ) -> Result<(), String> {
     if requested_tool == EditorTool::Navigation {
-        if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
-            input.contour_move_pending_commit = false;
-            input.mesh_move_pending_commit = false;
-        }
-        let mut editor = world
-            .get::<&mut EditorState>(entities.editor)
-            .map_err(|_| "Missing editor state".to_string())?;
+        session.input.contour_move_pending_commit = false;
+        session.input.mesh_move_pending_commit = false;
+        let editor = &mut session.editor;
         editor.active_tool = EditorTool::Navigation;
         editor.contour_draft = None;
         editor.contour_selection = None;
         editor.mesh_selection = None;
-        drop(editor);
-        crate::app::roi::cancel_roi_edit_preview(world, entities.editor);
+        crate::app::roi::cancel_roi_edit_preview(world, &session.editor);
         return Ok(());
     }
 
-    let active_roi = world
-        .get::<&EditorState>(entities.editor)
-        .map_err(|_| "Missing editor state".to_string())?
+    let active_roi = session
+        .editor
         .active_roi
         .ok_or_else(|| "Select an ROI before choosing an edit tool.".to_string())?;
 
     let roi = world
         .get::<&Roi>(active_roi)
         .map_err(|_| "Active ROI is missing from the scene.".to_string())?;
-    if roi.metadata.is_locked {
+    if crate::app::roi::is_roi_locked(world, active_roi) {
         return Err("Active ROI is locked.".to_string());
     }
     drop(roi);
 
-    if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+    {
+        let input = &mut session.input;
         input.contour_move_pending_commit = false;
         input.mesh_move_pending_commit = false;
     }
 
-    let mut editor = world
-        .get::<&mut EditorState>(entities.editor)
-        .map_err(|_| "Missing editor state".to_string())?;
+    let editor = &mut session.editor;
     editor.active_tool = requested_tool;
     if requested_tool != EditorTool::ContourDraw {
         editor.contour_draft = None;
@@ -108,13 +100,12 @@ fn set_editor_tool(
     if requested_tool != EditorTool::MeshDeform {
         editor.mesh_selection = None;
     }
-    drop(editor);
     let cancel_preview = world.get::<&Roi>(active_roi).is_ok_and(|roi| {
         (roi.contour_move_preview().is_some() && requested_tool != EditorTool::ContourSelect)
             || (roi.mesh_edit_preview().is_some() && requested_tool != EditorTool::MeshDeform)
     });
     if cancel_preview {
-        crate::app::roi::cancel_roi_edit_preview(world, entities.editor);
+        crate::app::roi::cancel_roi_edit_preview(world, &session.editor);
     }
     Ok(())
 }
@@ -123,16 +114,16 @@ pub fn draw_toolbar(
     ctx: &egui::Context,
     ui: &mut egui::Ui,
     world: &mut World,
-    entities: &AppEntities,
+    session: &mut Session,
     event_proxy: &EventLoopProxy<AppEvent>,
     status_msg: Option<String>,
     windowing_active: bool,
 ) {
     let (undo_shortcut, redo_shortcut) = roi_history_shortcuts(ctx);
     if undo_shortcut {
-        apply_roi_history_action(world, entities, event_proxy, true);
+        apply_roi_history_action(world, session, event_proxy, true);
     } else if redo_shortcut {
-        apply_roi_history_action(world, entities, event_proxy, false);
+        apply_roi_history_action(world, session, event_proxy, false);
     }
 
     ui.horizontal(|ui| {
@@ -147,7 +138,8 @@ pub fn draw_toolbar(
             .on_hover_text("Load Main Volume (NIfTI)")
             .clicked()
         {
-            if let Ok(mut g) = world.get::<&mut GuiState>(entities.gui_state) {
+            {
+                let g = &mut session.gui;
                 g.status_message = Some("Loading...".to_string());
             }
             let proxy = event_proxy.clone();
@@ -164,7 +156,8 @@ pub fn draw_toolbar(
             .on_hover_text("Load Labelmap")
             .clicked()
         {
-            if let Ok(mut g) = world.get::<&mut GuiState>(entities.gui_state) {
+            {
+                let g = &mut session.gui;
                 g.status_message = Some("Loading Labelmap...".to_string());
             }
             let proxy = event_proxy.clone();
@@ -179,8 +172,8 @@ pub fn draw_toolbar(
 
         // --- Presets (Quick Access) ---
         if windowing_active {
-            if let Ok(mut windowing) = world.get::<&mut VolumeWindowing>(entities.volume_windowing)
             {
+                let windowing = &mut session.windowing;
                 ui.label("Presets:");
                 if ui.small_button("Soft").clicked() {
                     windowing.center = 40.0;
@@ -199,10 +192,10 @@ pub fn draw_toolbar(
 
         ui.separator();
         ui.label("Tool:");
-        let active_tool = world
-            .get::<&EditorState>(entities.editor)
-            .map(|editor| editor.active_tool)
-            .unwrap_or(EditorTool::Navigation);
+        let active_tool = {
+            let editor = &session.editor;
+            editor.active_tool
+        };
 
         for (label, tool) in [
             ("Nav", EditorTool::Navigation),
@@ -211,44 +204,43 @@ pub fn draw_toolbar(
             ("Deform Mesh", EditorTool::MeshDeform),
         ] {
             if ui.selectable_label(active_tool == tool, label).clicked() {
-                if let Err(message) = set_editor_tool(world, entities, tool) {
-                    handlers::set_status_message(world, entities, message);
+                if let Err(message) = set_editor_tool(world, session, tool) {
+                    handlers::set_status_message(session, message);
                 }
             }
         }
 
         ui.separator();
-        let can_undo = crate::app::roi::can_undo_roi_edit(world, entities.editor);
-        let can_redo = crate::app::roi::can_redo_roi_edit(world, entities.editor);
+        let can_undo = crate::app::roi::can_undo_roi_edit(world, &session.editor);
+        let can_redo = crate::app::roi::can_redo_roi_edit(world, &session.editor);
         if ui
             .add_enabled(can_undo, egui::Button::new("↶"))
             .on_hover_text("Undo ROI edit")
             .clicked()
         {
-            apply_roi_history_action(world, entities, event_proxy, true);
+            apply_roi_history_action(world, session, event_proxy, true);
         }
         if ui
             .add_enabled(can_redo, egui::Button::new("↷"))
             .on_hover_text("Redo ROI edit")
             .clicked()
         {
-            apply_roi_history_action(world, entities, event_proxy, false);
+            apply_roi_history_action(world, session, event_proxy, false);
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if let Ok(mut state) = world.get::<&mut AnnotationState>(entities.annotations) {
-                let icon = if state.show_right_sidebar {
-                    "📝"
-                } else {
-                    "🗒"
-                };
-                if ui
-                    .selectable_label(state.show_right_sidebar, format!("{} Notes", icon))
-                    .on_hover_text("Toggle Discussion Sidebar")
-                    .clicked()
-                {
-                    state.show_right_sidebar = !state.show_right_sidebar;
-                }
+            let state = &mut session.annotations;
+            let icon = if state.show_right_sidebar {
+                "📝"
+            } else {
+                "🗒"
+            };
+            if ui
+                .selectable_label(state.show_right_sidebar, format!("{} Notes", icon))
+                .on_hover_text("Toggle Discussion Sidebar")
+                .clicked()
+            {
+                state.show_right_sidebar = !state.show_right_sidebar;
             }
         });
     });

@@ -1,5 +1,4 @@
 use super::*;
-use hecs::Entity;
 
 #[test]
 fn test_contour_selection_click_does_not_cross_drag_threshold() {
@@ -30,7 +29,8 @@ fn test_mouse_drag_rotates_oblique_viewport() {
         },
         ViewportState::default(),
     ));
-    let input = world.spawn((InputState {
+    let mut session = Session::new(800, 600);
+    session.input = InputState {
         active_viewport: Some(viewport),
         mouse_uv: [0.65, 0.4],
         is_dragging: true,
@@ -38,21 +38,9 @@ fn test_mouse_drag_rotates_oblique_viewport() {
         rotation_start_pos: [0.5, 0.5],
         rotation_start_val: [0.0, 0.0, 0.0, 1.0],
         ..InputState::default()
-    },));
-    let editor = world.spawn((EditorState::default(),));
-    let entities = AppEntities {
-        input,
-        editor,
-        gui_state: Entity::DANGLING,
-        volume_windowing: Entity::DANGLING,
-        annotations: Entity::DANGLING,
-        overlay: Entity::DANGLING,
-        protocol: Entity::DANGLING,
-        cursor: Entity::DANGLING,
-        window_settings: Entity::DANGLING,
     };
 
-    sys_handle_mouse_drag(&mut world, &entities);
+    sys_handle_mouse_drag(&mut world, &mut session);
 
     let rotation = world.get::<&ViewportState>(viewport).unwrap().user_rotation;
     assert_ne!(rotation, [0.0, 0.0, 0.0, 1.0]);
@@ -70,23 +58,12 @@ fn test_scroll_reports_3d_zoom_for_redraw_coalescing() {
         },
         ViewportState::default(),
     ));
-    let input = world.spawn((InputState {
+    let mut session = Session::new(800, 600);
+    session.input = InputState {
         active_viewport: Some(viewport),
         modifiers: ModifiersState::CONTROL,
         ..InputState::default()
-    },));
-    let editor = world.spawn((EditorState::default(),));
-    let entities = AppEntities {
-        input,
-        editor,
-        gui_state: Entity::DANGLING,
-        volume_windowing: Entity::DANGLING,
-        annotations: Entity::DANGLING,
-        overlay: Entity::DANGLING,
-        protocol: Entity::DANGLING,
-        cursor: Entity::DANGLING,
-        window_settings: Entity::DANGLING,
     };
 
-    assert!(sys_handle_input_scroll(&mut world, &entities, 1.0));
+    assert!(sys_handle_input_scroll(&mut world, &mut session, 1.0));
 }

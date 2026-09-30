@@ -311,7 +311,17 @@ test("qa-5 the 3D view is cached and only re-marched when its image changes", as
   await page.waitForTimeout(2500);
 
   const marches = () => page.evaluate(() => window.__viewerQa.state().render.view3d_march_count);
-  const before = await marches();
+  // Late load work (a mesh or contour finishing) may still re-march once; wait until the count
+  // has held still for 1.5 s so the check below only sees what the interaction causes.
+  let before = await marches();
+  for (let stableSince = Date.now(); Date.now() - stableSince < 1500; ) {
+    await page.waitForTimeout(250);
+    const now = await marches();
+    if (now !== before) {
+      before = now;
+      stableSince = Date.now();
+    }
+  }
   expect(before).toBeGreaterThan(0);
 
   // Scrolling a 2D view moves the cursor, which only moves the crosshair drawn over the cache.

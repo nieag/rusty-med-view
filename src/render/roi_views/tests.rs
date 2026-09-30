@@ -1,7 +1,7 @@
 use super::*;
 use crate::app::components::{
-    ContourLoop, ContourPoint, ContourSlice, GpuVolumeResources, LayerSettings, MeshFace,
-    MeshVertex, RoiId, VoxelGeometry,
+    ContourLoop, ContourPoint, ContourSlice, GpuVolumeResources, MeshFace, MeshVertex, RoiId,
+    VoxelGeometry,
 };
 use crate::convert::PlaneFamily;
 use crate::model::ContourData;
@@ -18,7 +18,8 @@ fn test_geometry() -> VoxelGeometry {
 }
 
 fn spawn_voxel(world: &mut World, id: u64) -> Entity {
-    world.spawn((
+    crate::app::roi::spawn_roi_layer(
+        world,
         Roi::new_voxel_with_cache(
             RoiId(id),
             format!("roi-{id}"),
@@ -26,8 +27,8 @@ fn spawn_voxel(world: &mut World, id: u64) -> Entity {
             vec![1; 8],
             None,
         ),
-        LayerSettings { opacity: 0.5 },
-    ))
+        0.5,
+    )
 }
 
 fn mark_voxel_current_without_gpu(world: &mut World, entity: Entity) {
@@ -80,7 +81,8 @@ fn mark_voxel_renderable_with_gpu(world: &mut World, entity: Entity) -> bool {
 }
 
 fn spawn_contour_with_loops(world: &mut World, id: u64) -> Entity {
-    world.spawn((
+    crate::app::roi::spawn_roi_layer(
+        world,
         Roi::new_contour(
             RoiId(id),
             format!("contour-{id}"),
@@ -110,12 +112,13 @@ fn spawn_contour_with_loops(world: &mut World, id: u64) -> Entity {
                 }],
             },
         ),
-        LayerSettings { opacity: 0.5 },
-    ))
+        0.5,
+    )
 }
 
 fn spawn_mesh_with_faces(world: &mut World, id: u64) -> Entity {
-    world.spawn((
+    crate::app::roi::spawn_roi_layer(
+        world,
         Roi::new_mesh(
             RoiId(id),
             format!("mesh-{id}"),
@@ -136,8 +139,8 @@ fn spawn_mesh_with_faces(world: &mut World, id: u64) -> Entity {
                 }],
             },
         ),
-        LayerSettings { opacity: 0.5 },
-    ))
+        0.5,
+    )
 }
 
 #[test]
@@ -182,8 +185,8 @@ fn test_multi_contour_request_keeps_active_first_and_includes_inactive() {
 #[test]
 fn test_default_cap_accepts_eight_voxel_overlays_and_truncates_ninth() {
     let mut world = World::new();
-    let entities: Vec<_> = (1..=9).map(|id| spawn_voxel(&mut world, id)).collect();
-    for entity in entities {
+    let session: Vec<_> = (1..=9).map(|id| spawn_voxel(&mut world, id)).collect();
+    for entity in session {
         if !mark_voxel_renderable_with_gpu(&mut world, entity) {
             return;
         }

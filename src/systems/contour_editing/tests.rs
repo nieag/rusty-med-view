@@ -1,7 +1,7 @@
 use super::*;
 use crate::components::{
     ContourBody, ContourData, InputState, RoiBody, RoiCacheKind, RoiJobKind, ViewportState,
-    VoxelCache, WindowSettings,
+    VoxelCache,
 };
 use crate::model::OrthogonalFamily;
 
@@ -20,10 +20,7 @@ fn spawn_test_entities(
     mode: ViewMode,
     user_rotation: [f32; 4],
     active_viewport: Option<hecs::Entity>,
-) -> AppEntities {
-    let cursor = world.spawn((Transform {
-        position: [0.4, 0.55, 0.2],
-    },));
+) -> Session {
     let viewport = world.spawn((
         Viewport {
             mode,
@@ -37,10 +34,6 @@ fn spawn_test_entities(
             user_rotation,
         },
     ));
-    let input = world.spawn((InputState {
-        active_viewport: active_viewport.or(Some(viewport)),
-        ..InputState::default()
-    },));
     world.spawn((
         crate::components::VolumeData {
             dimensions: test_geometry().dimensions,
@@ -59,42 +52,24 @@ fn spawn_test_entities(
         MainVolumeTag,
     ));
 
-    let editor = world.spawn((crate::components::EditorState::default(),));
-    let gui_state = world.spawn((crate::components::GuiState {
-        status_message: None,
-    },));
-    let volume_windowing = world.spawn((crate::components::VolumeWindowing::default(),));
-    let annotations = world.spawn((crate::components::AnnotationState::default(),));
-    let overlay = world.spawn((crate::overlay::OverlayManager::default(),));
-    let protocol = world.spawn((crate::components::ProtocolState::default(),));
-    let window_settings = world.spawn((WindowSettings {
-        width: 800,
-        height: 600,
-        viewport_rect: [0.0, 0.0, 800.0, 600.0],
-    },));
-
-    AppEntities {
-        input,
-        editor,
-        gui_state,
-        volume_windowing,
-        annotations,
-        overlay,
-        protocol,
-        cursor,
-        window_settings,
-    }
+    let mut session = Session::new(800, 600);
+    session.cursor.position = [0.4, 0.55, 0.2];
+    session.input = InputState {
+        active_viewport: active_viewport.or(Some(viewport)),
+        ..InputState::default()
+    };
+    session
 }
 
 fn spawn_test_contour_roi(world: &mut World, family: OrthogonalFamily) -> hecs::Entity {
-    world.spawn((Roi::new_contour(
+    world.spawn(Roi::new_contour(
         crate::components::RoiId(100),
         "Contour".to_string(),
         ContourData {
             active_plane_family: family,
             slices: Vec::new(),
         },
-    ),))
+    ))
 }
 
 fn spawn_test_contour_roi_with_loop(world: &mut World, family: OrthogonalFamily) -> hecs::Entity {
@@ -106,7 +81,7 @@ fn spawn_test_contour_roi_with_loop(world: &mut World, family: OrthogonalFamily)
     )
     .unwrap();
     let plane = orthogonal_plane_from_volume_uv(family.into(), [0.4, 0.55, 0.2], geometry).unwrap();
-    let entity = world.spawn((Roi::new_contour_with_geometry(
+    let entity = world.spawn(Roi::new_contour_with_geometry(
         crate::components::RoiId(101),
         "ContourWithLoop".to_string(),
         VoxelGeometry::new(
@@ -139,7 +114,7 @@ fn spawn_test_contour_roi_with_loop(world: &mut World, family: OrthogonalFamily)
                 }],
             }],
         },
-    ),));
+    ));
     world.get::<&mut Roi>(entity).unwrap().session_caches.voxel = Some(VoxelCache {
         data: VoxelData {
             geometry,
@@ -176,13 +151,13 @@ fn reframe_first_contour_slice(world: &mut World, roi_entity: hecs::Entity) {
 #[test]
 fn test_contour_edit_rejects_viewport_family_mismatch() {
     let mut world = World::new();
-    let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+    let session = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     let contour = ContourData {
         active_plane_family: OrthogonalFamily::Coronal,
         slices: Vec::new(),
     };
 
-    let result = resolve_active_contour_edit_viewport(&world, &entities, &contour);
+    let result = resolve_active_contour_edit_viewport(&world, &session, &contour);
     assert_eq!(
         result,
         Err(ContourEditMappingError::PlaneFamilyMismatch {
@@ -195,13 +170,13 @@ fn test_contour_edit_rejects_viewport_family_mismatch() {
 #[test]
 fn test_contour_edit_rejects_three_d_viewport() {
     let mut world = World::new();
-    let entities = spawn_test_entities(&mut world, ViewMode::ThreeD, [0.0, 0.0, 0.0, 1.0], None);
+    let session = spawn_test_entities(&mut world, ViewMode::ThreeD, [0.0, 0.0, 0.0, 1.0], None);
     let contour = ContourData {
         active_plane_family: OrthogonalFamily::Axial,
         slices: Vec::new(),
     };
 
-    let result = resolve_active_contour_edit_viewport(&world, &entities, &contour);
+    let result = resolve_active_contour_edit_viewport(&world, &session, &contour);
     assert_eq!(
         result,
         Err(ContourEditMappingError::UnsupportedViewportMode)
@@ -211,7 +186,7 @@ fn test_contour_edit_rejects_three_d_viewport() {
 #[test]
 fn test_contour_edit_rejects_invalid_main_volume_geometry() {
     let mut world = World::new();
-    let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+    let session = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     for (_, volume) in world
         .query_mut::<&mut crate::components::VolumeData>()
         .with::<&MainVolumeTag>()
@@ -224,7 +199,7 @@ fn test_contour_edit_rejects_invalid_main_volume_geometry() {
     };
 
     assert_eq!(
-        resolve_active_contour_edit_viewport(&world, &entities, &contour),
+        resolve_active_contour_edit_viewport(&world, &session, &contour),
         Err(ContourEditMappingError::InvalidMainVolumeGeometry)
     );
 }
@@ -233,10 +208,10 @@ fn test_contour_edit_rejects_invalid_main_volume_geometry() {
 fn test_contour_edit_oblique_path_uses_plane_definition_roundtrip() {
     let mut world = World::new();
     let oblique_rotation = glam::Quat::from_euler(glam::EulerRot::XYZ, 0.3, -0.2, 0.15).to_array();
-    let entities = spawn_test_entities(&mut world, ViewMode::Oblique, oblique_rotation, None);
+    let session = spawn_test_entities(&mut world, ViewMode::Oblique, oblique_rotation, None);
     // Oblique views are derived views: the plane resolves even though no ROI can be authoritative
     // in it, so the mapping is checked through the family-independent view resolution.
-    let viewport = resolve_active_edit_view(&world, &entities).expect("viewport");
+    let viewport = resolve_active_edit_view(&world, &session).expect("viewport");
     assert_eq!(viewport.plane.family, PlaneFamily::Oblique);
 
     let click_a = [0.32, 0.67];
@@ -258,18 +233,18 @@ fn test_contour_edit_oblique_path_uses_plane_definition_roundtrip() {
 #[test]
 fn test_contour_draw_click_appends_draft_without_authoritative_mutation() {
     let mut world = World::new();
-    let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+    let mut session = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     let roi_entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial);
     {
-        let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+        let editor = &mut session.editor;
         editor.active_roi = Some(roi_entity);
         editor.active_tool = EditorTool::ContourDraw;
     }
 
-    let result = handle_contour_draw_click(&mut world, &entities, [0.4, 0.5]);
+    let result = handle_contour_draw_click(&mut world, &mut session, [0.4, 0.5]);
     assert_eq!(result, Ok(ContourDrawClickOutcome::PointAdded));
 
-    let editor = world.get::<&EditorState>(entities.editor).unwrap();
+    let editor = &session.editor;
     let draft = editor.contour_draft.as_ref().expect("draft");
     assert_eq!(draft.points.len(), 1);
     let roi = world.get::<&Roi>(roi_entity).unwrap();
@@ -279,23 +254,23 @@ fn test_contour_draw_click_appends_draft_without_authoritative_mutation() {
 #[test]
 fn test_contour_draw_loop_closure_rejects_fewer_than_three_points() {
     let mut world = World::new();
-    let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+    let mut session = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     let roi_entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial);
     {
-        let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+        let editor = &mut session.editor;
         editor.active_roi = Some(roi_entity);
         editor.active_tool = EditorTool::ContourDraw;
     }
 
     assert_eq!(
-        handle_contour_draw_click(&mut world, &entities, [0.45, 0.45]),
+        handle_contour_draw_click(&mut world, &mut session, [0.45, 0.45]),
         Ok(ContourDrawClickOutcome::PointAdded)
     );
     assert_eq!(
-        handle_contour_draw_click(&mut world, &entities, [0.55, 0.45]),
+        handle_contour_draw_click(&mut world, &mut session, [0.55, 0.45]),
         Ok(ContourDrawClickOutcome::PointAdded)
     );
-    let close_result = handle_contour_draw_click(&mut world, &entities, [0.45, 0.45]);
+    let close_result = handle_contour_draw_click(&mut world, &mut session, [0.45, 0.45]);
     assert_eq!(
         close_result,
         Err(ContourDrawClickError::LoopNeedsThreePoints)
@@ -305,27 +280,27 @@ fn test_contour_draw_loop_closure_rejects_fewer_than_three_points() {
 #[test]
 fn test_contour_draw_loop_commit_adds_slice_loop_and_queues_voxel_rebuild() {
     let mut world = World::new();
-    let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+    let mut session = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     let roi_entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial);
     {
-        let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+        let editor = &mut session.editor;
         editor.active_roi = Some(roi_entity);
         editor.active_tool = EditorTool::ContourDraw;
     }
 
     assert_eq!(
-        handle_contour_draw_click(&mut world, &entities, [0.40, 0.40]),
+        handle_contour_draw_click(&mut world, &mut session, [0.40, 0.40]),
         Ok(ContourDrawClickOutcome::PointAdded)
     );
     assert_eq!(
-        handle_contour_draw_click(&mut world, &entities, [0.58, 0.42]),
+        handle_contour_draw_click(&mut world, &mut session, [0.58, 0.42]),
         Ok(ContourDrawClickOutcome::PointAdded)
     );
     assert_eq!(
-        handle_contour_draw_click(&mut world, &entities, [0.52, 0.62]),
+        handle_contour_draw_click(&mut world, &mut session, [0.52, 0.62]),
         Ok(ContourDrawClickOutcome::PointAdded)
     );
-    let close_result = handle_contour_draw_click(&mut world, &entities, [0.40, 0.40]);
+    let close_result = handle_contour_draw_click(&mut world, &mut session, [0.40, 0.40]);
     assert_eq!(close_result, Ok(ContourDrawClickOutcome::LoopCommitted));
 
     let roi = world.get::<&Roi>(roi_entity).unwrap();
@@ -342,17 +317,13 @@ fn test_contour_draw_loop_commit_adds_slice_loop_and_queues_voxel_rebuild() {
                 )
     }));
     assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
-    assert!(world
-        .get::<&EditorState>(entities.editor)
-        .unwrap()
-        .contour_draft
-        .is_none());
+    assert!(&session.editor.contour_draft.is_none());
 }
 
 #[test]
 fn test_add_loop_path_reentering_existing_contour_commits_union_and_fills_voxels() {
     let mut world = World::new();
-    let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+    let mut session = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     let roi_entity = spawn_test_contour_roi_with_loop(&mut world, OrthogonalFamily::Axial);
     let initial_contour = world
         .get::<&Roi>(roi_entity)
@@ -373,23 +344,23 @@ fn test_add_loop_path_reentering_existing_contour_commits_union_and_fills_voxels
         roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
     }
     {
-        let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+        let editor = &mut session.editor;
         editor.active_roi = Some(roi_entity);
         editor.active_tool = EditorTool::ContourDraw;
     }
-    let viewport = resolve_active_contour_edit_viewport(&world, &entities, &initial_contour)
+    let viewport = resolve_active_contour_edit_viewport(&world, &session, &initial_contour)
         .expect("edit viewport");
     let click_uvs = [[4.0, -2.0], [10.0, -5.0], [10.0, 5.0], [4.0, 2.0]]
         .map(|local_mm| contour_plane_local_mm_to_viewport_uv(local_mm, viewport).unwrap());
 
     for click_uv in &click_uvs[..3] {
         assert_eq!(
-            handle_contour_draw_click(&mut world, &entities, *click_uv),
+            handle_contour_draw_click(&mut world, &mut session, *click_uv),
             Ok(ContourDrawClickOutcome::PointAdded)
         );
     }
     assert_eq!(
-        handle_contour_draw_click(&mut world, &entities, click_uvs[3]),
+        handle_contour_draw_click(&mut world, &mut session, click_uvs[3]),
         Ok(ContourDrawClickOutcome::LoopCommitted)
     );
 
@@ -426,7 +397,7 @@ fn test_add_loop_path_reentering_existing_contour_commits_union_and_fills_voxels
 #[test]
 fn test_add_loop_reprojects_display_points_into_existing_coplanar_slice_frame() {
     let mut world = World::new();
-    let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+    let mut session = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     let roi_entity = spawn_test_contour_roi_with_loop(&mut world, OrthogonalFamily::Axial);
     reframe_first_contour_slice(&mut world, roi_entity);
     let contour = world
@@ -435,9 +406,9 @@ fn test_add_loop_reprojects_display_points_into_existing_coplanar_slice_frame() 
         .contour_data()
         .unwrap()
         .clone();
-    let viewport = resolve_active_contour_edit_viewport(&world, &entities, &contour).unwrap();
+    let viewport = resolve_active_contour_edit_viewport(&world, &session, &contour).unwrap();
     {
-        let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+        let editor = &mut session.editor;
         editor.active_roi = Some(roi_entity);
         editor.active_tool = EditorTool::ContourDraw;
     }
@@ -446,12 +417,12 @@ fn test_add_loop_reprojects_display_points_into_existing_coplanar_slice_frame() 
 
     for click_uv in &click_uvs[..3] {
         assert_eq!(
-            handle_contour_draw_click(&mut world, &entities, *click_uv),
+            handle_contour_draw_click(&mut world, &mut session, *click_uv),
             Ok(ContourDrawClickOutcome::PointAdded)
         );
     }
     assert_eq!(
-        handle_contour_draw_click(&mut world, &entities, click_uvs[3]),
+        handle_contour_draw_click(&mut world, &mut session, click_uvs[3]),
         Ok(ContourDrawClickOutcome::LoopCommitted)
     );
 
@@ -472,8 +443,7 @@ fn test_add_loop_reprojects_display_points_into_existing_coplanar_slice_frame() 
 
 #[test]
 fn test_clear_contour_draft_when_tool_not_draw() {
-    let mut world = World::new();
-    let editor = world.spawn((EditorState {
+    let mut editor = EditorState {
         active_roi: Some(hecs::Entity::DANGLING),
         active_tool: EditorTool::Navigation,
         contour_draft: Some(ContourDraft {
@@ -489,14 +459,10 @@ fn test_clear_contour_draft_when_tool_not_draw() {
         }),
         contour_selection: None,
         ..EditorState::default()
-    },));
+    };
 
-    clear_contour_draft_if_inactive(&mut world, editor);
-    assert!(world
-        .get::<&EditorState>(editor)
-        .unwrap()
-        .contour_draft
-        .is_none());
+    clear_contour_draft_if_inactive(&mut editor);
+    assert!(editor.contour_draft.is_none());
 }
 
 #[test]
@@ -520,8 +486,8 @@ fn test_nearest_point_hit_respects_threshold() {
 #[test]
 fn test_contour_selection_converts_a_voxel_roi_to_contours_of_the_viewport_family() {
     let mut world = World::new();
-    let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
-    let voxel_roi = world.spawn((Roi::new_voxel_with_cache(
+    let mut session = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+    let voxel_roi = world.spawn(Roi::new_voxel_with_cache(
         crate::components::RoiId(1),
         "Voxel".to_string(),
         VoxelGeometry::new(
@@ -533,14 +499,14 @@ fn test_contour_selection_converts_a_voxel_roi_to_contours_of_the_viewport_famil
         .unwrap(),
         vec![0; 512],
         None,
-    ),));
+    ));
     {
-        let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+        let editor = &mut session.editor;
         editor.active_roi = Some(voxel_roi);
         editor.active_tool = EditorTool::ContourSelect;
     }
 
-    let result = handle_contour_select_click(&mut world, &entities, [0.5, 0.5]);
+    let result = handle_contour_select_click(&mut world, &mut session, [0.5, 0.5]);
 
     assert_eq!(result, Ok(None));
     let roi = world.get::<&Roi>(voxel_roi).unwrap();
@@ -554,15 +520,15 @@ fn test_contour_selection_converts_a_voxel_roi_to_contours_of_the_viewport_famil
 #[test]
 fn test_contour_selection_gives_an_empty_contour_roi_the_viewport_family() {
     let mut world = World::new();
-    let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+    let mut session = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     let roi_entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Coronal);
     {
-        let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+        let editor = &mut session.editor;
         editor.active_roi = Some(roi_entity);
         editor.active_tool = EditorTool::ContourSelect;
     }
 
-    let result = handle_contour_select_click(&mut world, &entities, [0.5, 0.5]);
+    let result = handle_contour_select_click(&mut world, &mut session, [0.5, 0.5]);
 
     assert_eq!(result, Ok(None));
     let roi = world.get::<&Roi>(roi_entity).unwrap();
@@ -577,7 +543,7 @@ fn test_contour_selection_gives_an_empty_contour_roi_the_viewport_family() {
 #[test]
 fn test_move_selected_point_updates_only_selected_point() {
     let mut world = World::new();
-    let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+    let mut session = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     let roi_entity = spawn_test_contour_roi_with_loop(&mut world, OrthogonalFamily::Axial);
     let before_points = world
         .get::<&Roi>(roi_entity)
@@ -589,7 +555,7 @@ fn test_move_selected_point_updates_only_selected_point() {
         .points
         .clone();
     {
-        let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+        let editor = &mut session.editor;
         editor.active_roi = Some(roi_entity);
         editor.active_tool = EditorTool::ContourSelect;
         editor.contour_selection = Some(ContourSelection {
@@ -600,7 +566,7 @@ fn test_move_selected_point_updates_only_selected_point() {
         });
     }
 
-    move_selected_point(&mut world, &entities, [0.6, 0.55]).unwrap();
+    move_selected_point(&mut world, &session, [0.6, 0.55]).unwrap();
 
     let roi = world.get::<&Roi>(roi_entity).unwrap();
     let after_points = &roi.contour_data().unwrap().slices[0].loops[0].points;
@@ -613,7 +579,7 @@ fn test_move_selected_point_updates_only_selected_point() {
 #[test]
 fn test_move_selected_point_reprojects_display_point_into_slice_frame() {
     let mut world = World::new();
-    let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+    let mut session = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     let roi_entity = spawn_test_contour_roi_with_loop(&mut world, OrthogonalFamily::Axial);
     reframe_first_contour_slice(&mut world, roi_entity);
     let contour = world
@@ -622,11 +588,11 @@ fn test_move_selected_point_reprojects_display_point_into_slice_frame() {
         .contour_data()
         .unwrap()
         .clone();
-    let viewport = resolve_active_contour_edit_viewport(&world, &entities, &contour).unwrap();
+    let viewport = resolve_active_contour_edit_viewport(&world, &session, &contour).unwrap();
     let target_local = [2.0, 3.0];
     let target_uv = contour_plane_local_mm_to_viewport_uv(target_local, viewport).unwrap();
     {
-        let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+        let editor = &mut session.editor;
         editor.active_roi = Some(roi_entity);
         editor.active_tool = EditorTool::ContourSelect;
         editor.contour_selection = Some(ContourSelection {
@@ -637,7 +603,7 @@ fn test_move_selected_point_reprojects_display_point_into_slice_frame() {
         });
     }
 
-    move_selected_point(&mut world, &entities, target_uv).unwrap();
+    move_selected_point(&mut world, &session, target_uv).unwrap();
 
     let roi = world.get::<&Roi>(roi_entity).unwrap();
     let slice = &roi.contour_data().unwrap().slices[0];
@@ -658,7 +624,7 @@ fn test_move_selected_point_reprojects_display_point_into_slice_frame() {
 #[test]
 fn test_move_selected_point_preview_defers_authoritative_commit_until_finalize() {
     let mut world = World::new();
-    let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+    let mut session = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     let roi_entity = spawn_test_contour_roi_with_loop(&mut world, OrthogonalFamily::Axial);
     let before_points = world
         .get::<&Roi>(roi_entity)
@@ -670,7 +636,7 @@ fn test_move_selected_point_preview_defers_authoritative_commit_until_finalize()
         .points
         .clone();
     {
-        let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+        let editor = &mut session.editor;
         editor.active_roi = Some(roi_entity);
         editor.active_tool = EditorTool::ContourSelect;
         editor.contour_selection = Some(ContourSelection {
@@ -681,7 +647,7 @@ fn test_move_selected_point_preview_defers_authoritative_commit_until_finalize()
         });
     }
 
-    move_selected_point_preview(&mut world, &entities, [0.9, 0.55]).unwrap();
+    move_selected_point_preview(&mut world, &session, [0.9, 0.55]).unwrap();
 
     {
         let roi = world.get::<&Roi>(roi_entity).unwrap();
@@ -710,7 +676,7 @@ fn test_move_selected_point_preview_defers_authoritative_commit_until_finalize()
         assert!(roi.session_caches.preview_mesh.is_none());
         assert_eq!(roi.running_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
     }
-    move_selected_point_preview(&mut world, &entities, [0.6, 0.55]).unwrap();
+    move_selected_point_preview(&mut world, &session, [0.6, 0.55]).unwrap();
     for _ in 0..64 {
         roi_runtime::process_contour_voxel_rebuild_jobs(&mut world);
         if world.get::<&Roi>(roi_entity).is_ok_and(|roi| {
@@ -792,7 +758,7 @@ fn test_move_selected_point_preview_defers_authoritative_commit_until_finalize()
         assert_eq!(roi.queued_job_kind(), None);
     }
 
-    finalize_selected_point_move(&mut world, &entities).unwrap();
+    finalize_selected_point_move(&mut world, &session).unwrap();
 
     let roi = world.get::<&Roi>(roi_entity).unwrap();
     let after_points = &roi.contour_data().unwrap().slices[0].loops[0].points;
@@ -814,10 +780,10 @@ fn test_move_selected_point_preview_defers_authoritative_commit_until_finalize()
 #[test]
 fn test_insert_point_adds_at_expected_loop_position() {
     let mut world = World::new();
-    let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+    let mut session = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     let roi_entity = spawn_test_contour_roi_with_loop(&mut world, OrthogonalFamily::Axial);
     {
-        let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+        let editor = &mut session.editor;
         editor.active_roi = Some(roi_entity);
         editor.active_tool = EditorTool::ContourSelect;
         editor.contour_selection = Some(ContourSelection {
@@ -828,16 +794,13 @@ fn test_insert_point_adds_at_expected_loop_position() {
         });
     }
 
-    insert_point_into_selected_loop(&mut world, &entities, [0.55, 0.45]).unwrap();
+    insert_point_into_selected_loop(&mut world, &mut session, [0.55, 0.45]).unwrap();
 
     let roi = world.get::<&Roi>(roi_entity).unwrap();
     let points = &roi.contour_data().unwrap().slices[0].loops[0].points;
     assert_eq!(points.len(), 5);
     assert_eq!(
-        world
-            .get::<&EditorState>(entities.editor)
-            .unwrap()
-            .contour_selection,
+        session.editor.contour_selection,
         Some(ContourSelection {
             roi_entity,
             slice_index: 0,
@@ -851,7 +814,7 @@ fn test_insert_point_adds_at_expected_loop_position() {
 #[test]
 fn test_insert_point_reprojects_display_point_into_slice_frame() {
     let mut world = World::new();
-    let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+    let mut session = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     let roi_entity = spawn_test_contour_roi_with_loop(&mut world, OrthogonalFamily::Axial);
     reframe_first_contour_slice(&mut world, roi_entity);
     let contour = world
@@ -860,11 +823,11 @@ fn test_insert_point_reprojects_display_point_into_slice_frame() {
         .contour_data()
         .unwrap()
         .clone();
-    let viewport = resolve_active_contour_edit_viewport(&world, &entities, &contour).unwrap();
+    let viewport = resolve_active_contour_edit_viewport(&world, &session, &contour).unwrap();
     let target_local = [2.0, 3.0];
     let target_uv = contour_plane_local_mm_to_viewport_uv(target_local, viewport).unwrap();
     {
-        let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+        let editor = &mut session.editor;
         editor.active_roi = Some(roi_entity);
         editor.active_tool = EditorTool::ContourSelect;
         editor.contour_selection = Some(ContourSelection {
@@ -875,7 +838,7 @@ fn test_insert_point_reprojects_display_point_into_slice_frame() {
         });
     }
 
-    insert_point_into_selected_loop(&mut world, &entities, target_uv).unwrap();
+    insert_point_into_selected_loop(&mut world, &mut session, target_uv).unwrap();
 
     let roi = world.get::<&Roi>(roi_entity).unwrap();
     let slice = &roi.contour_data().unwrap().slices[0];
@@ -889,10 +852,10 @@ fn test_insert_point_reprojects_display_point_into_slice_frame() {
 #[test]
 fn test_delete_selected_point_removes_expected_point() {
     let mut world = World::new();
-    let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+    let mut session = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     let roi_entity = spawn_test_contour_roi_with_loop(&mut world, OrthogonalFamily::Axial);
     {
-        let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+        let editor = &mut session.editor;
         editor.active_roi = Some(roi_entity);
         editor.active_tool = EditorTool::ContourSelect;
         editor.contour_selection = Some(ContourSelection {
@@ -903,7 +866,7 @@ fn test_delete_selected_point_removes_expected_point() {
         });
     }
 
-    delete_selected_contour_element(&mut world, &entities).unwrap();
+    delete_selected_contour_element(&mut world, &mut session).unwrap();
 
     let roi = world.get::<&Roi>(roi_entity).unwrap();
     let points = &roi.contour_data().unwrap().slices[0].loops[0].points;
@@ -914,7 +877,7 @@ fn test_delete_selected_point_removes_expected_point() {
 #[test]
 fn test_delete_below_valid_size_removes_loop_and_clears_selection() {
     let mut world = World::new();
-    let entities = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
+    let mut session = spawn_test_entities(&mut world, ViewMode::Axial, [0.0, 0.0, 0.0, 1.0], None);
     let geometry = VoxelGeometry::new(
         [64, 48, 32],
         [1.0, 1.0, 1.0],
@@ -924,7 +887,7 @@ fn test_delete_below_valid_size_removes_loop_and_clears_selection() {
     .unwrap();
     let plane =
         orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.4, 0.55, 0.2], geometry).unwrap();
-    let roi_entity = world.spawn((Roi::new_contour(
+    let roi_entity = world.spawn(Roi::new_contour(
         crate::components::RoiId(102),
         "TinyLoop".to_string(),
         ContourData {
@@ -947,9 +910,9 @@ fn test_delete_below_valid_size_removes_loop_and_clears_selection() {
                 }],
             }],
         },
-    ),));
+    ));
     {
-        let mut editor = world.get::<&mut EditorState>(entities.editor).unwrap();
+        let editor = &mut session.editor;
         editor.active_roi = Some(roi_entity);
         editor.active_tool = EditorTool::ContourSelect;
         editor.contour_selection = Some(ContourSelection {
@@ -960,14 +923,10 @@ fn test_delete_below_valid_size_removes_loop_and_clears_selection() {
         });
     }
 
-    delete_selected_contour_element(&mut world, &entities).unwrap();
+    delete_selected_contour_element(&mut world, &mut session).unwrap();
 
     let roi = world.get::<&Roi>(roi_entity).unwrap();
     assert!(roi.contour_data().unwrap().slices.is_empty());
-    assert!(world
-        .get::<&EditorState>(entities.editor)
-        .unwrap()
-        .contour_selection
-        .is_none());
+    assert!(&session.editor.contour_selection.is_none());
     assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
 }

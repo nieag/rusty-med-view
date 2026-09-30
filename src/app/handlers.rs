@@ -12,7 +12,7 @@ use hecs::World;
 pub struct LabelLoadOutcome {
     /// One ROI per non-zero label, in ascending label order (a single empty ROI when the map has
     /// no labels). The first is the one to make active.
-    pub entities: Vec<hecs::Entity>,
+    pub session: Vec<hecs::Entity>,
     pub dimensions: [u32; 3],
 }
 
@@ -23,7 +23,7 @@ pub fn handle_volume_load(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     world: &mut World,
-    entities: &AppEntities,
+    session: &mut Session,
     loaded: &LoadedVolume,
 ) -> [u32; 3] {
     log::info!("Volume loaded: {:?} dimensions", loaded.dimensions);
@@ -50,7 +50,8 @@ pub fn handle_volume_load(
     }
 
     // Start every slice plane on a voxel centre, not on a layer boundary.
-    if let Ok(mut cursor) = world.get::<&mut Transform>(entities.cursor) {
+    {
+        let cursor = &mut session.cursor;
         cursor.position = crate::convert::centered_cursor_uv(volume_data_dimensions);
     }
 
@@ -66,7 +67,7 @@ pub fn handle_volume_load(
 
 /// Handle a successfully loaded labelmap by spawning one ROI per label.
 ///
-/// Returns the new entities and the dimensions of the loaded labelmap.
+/// Returns the new session and the dimensions of the loaded labelmap.
 pub fn handle_label_load(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -74,17 +75,15 @@ pub fn handle_label_load(
     loaded_label: &LoadedLabel,
 ) -> Result<LabelLoadOutcome, String> {
     log::info!("Labelmap loaded: {:?} dimensions", loaded_label.dimensions);
-    let entities = roi_runtime::create_voxel_rois_from_label(device, queue, world, loaded_label)?;
+    let session = roi_runtime::create_voxel_rois_from_label(device, queue, world, loaded_label)?;
 
     Ok(LabelLoadOutcome {
-        entities,
+        session,
         dimensions: loaded_label.dimensions,
     })
 }
 
 /// Update GUI status message
-pub fn set_status_message(world: &mut World, entities: &AppEntities, message: String) {
-    if let Ok(mut gui_state) = world.get::<&mut GuiState>(entities.gui_state) {
-        gui_state.status_message = Some(message);
-    }
+pub fn set_status_message(session: &mut Session, message: String) {
+    session.gui.status_message = Some(message);
 }

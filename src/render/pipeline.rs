@@ -5,7 +5,6 @@
 use crate::app::context::{GpuState, Pipelines, SceneState, VolumeResources};
 use crate::components::*;
 use crate::gui;
-use crate::overlay::OverlayPrimitive;
 use crate::render::view3d_cache::{clamp_rect, hash_image, QuadDraw, View3dCache, View3dPlan};
 use crate::render::{contours, geometry};
 use crate::systems;
@@ -70,24 +69,12 @@ pub fn create_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout 
         },
         count: None,
     });
-    entries.push(wgpu::BindGroupLayoutEntry {
-        binding: 12,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Storage { read_only: true },
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    });
 
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         entries: &entries,
         label: Some("texture_bind_group_layout"),
     })
 }
-
-const MAX_OVERLAY_PRIMITIVES: usize = 64;
 
 /// WebGPU minimum uniform buffer offset alignment (bytes).
 /// TODO: query from device.limits().min_uniform_buffer_offset_alignment at runtime.
@@ -100,17 +87,6 @@ const fn align_to(value: u64, alignment: u64) -> u64 {
 }
 
 const UNIFORM_STRIDE: u64 = align_to(std::mem::size_of::<Uniforms>() as u64, UNIFORM_ALIGNMENT);
-
-/// Create the overlay primitives storage buffer.
-pub fn create_overlay_buffer(device: &wgpu::Device) -> wgpu::Buffer {
-    let buffer_size = (std::mem::size_of::<OverlayPrimitive>() * MAX_OVERLAY_PRIMITIVES) as u64;
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Overlay Primitives Buffer"),
-        size: buffer_size,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
-}
 
 /// Create the main render pipeline.
 pub fn create_render_pipeline(
@@ -253,7 +229,6 @@ pub struct SceneTextureViews<'a> {
     pub uniform_buffer: &'a wgpu::Buffer,
     pub overlay_views: [&'a wgpu::TextureView; MAX_VOXEL_OVERLAY_SLOTS],
     pub overlay_lut: &'a wgpu::TextureView,
-    pub overlay_buffer: &'a wgpu::Buffer,
 }
 
 /// Create a bind group for the scene with volume and overlay textures.
@@ -291,14 +266,6 @@ pub fn create_scene_bind_group(
     entries.push(wgpu::BindGroupEntry {
         binding: 11,
         resource: wgpu::BindingResource::TextureView(views.overlay_lut),
-    });
-    entries.push(wgpu::BindGroupEntry {
-        binding: 12,
-        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-            buffer: views.overlay_buffer,
-            offset: 0,
-            size: None,
-        }),
     });
 
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -346,20 +313,16 @@ fn run_frame_systems(
             dummy_view: &volume_res.dummy_r8.1,
             dummy_sampler: &volume_res.dummy_r8.2,
             default_lut_view: &volume_res.default_lut.1,
-            overlay_buffer: &volume_res.overlay_buffer,
         },
     };
+    let focus = scene.session.view_focus();
     let roi_work_status =
-        crate::app::roi_runtime::advance_roi_work(&mut scene.world, Some(&roi_work));
-    systems::sys_handle_mouse_drag(&mut scene.world, &scene.entities);
-    gui.prepare(window, &mut scene.world, &scene.entities, event_proxy);
-    systems::sys_sync_annotations_to_overlay(&mut scene.world, &scene.entities);
-    if let Ok(mut overlay) = scene
-        .world
-        .get::<&mut crate::overlay::OverlayManager>(scene.entities.overlay)
-    {
-        overlay.rebuild_primitives();
+        crate::app::roi_runtime::advance_roi_work(&mut scene.world, Some(&roi_work), &focus);
+    if let Some(message) = roi_work_status.messages.last() {
+        scene.session.gui.status_message = Some(message.clone());
     }
+    systems::sys_handle_mouse_drag(&mut scene.world, &mut scene.session);
+    gui.prepare(window, &mut scene.world, &mut scene.session, event_proxy);
     roi_work_status
 }
 
@@ -378,13 +341,6 @@ fn prepare_uniforms(
     gpu: &GpuState,
     volume_res: &VolumeResources,
 ) -> PreparedFrame {
-    let (overlay_bytes, overlay_count, dragging_idx, overlay_mouse_uv) =
-        systems::get_overlay_render_data(&scene.world, &scene.entities);
-    if !overlay_bytes.is_empty() {
-        gpu.queue
-            .write_buffer(&volume_res.overlay_buffer, 0, &overlay_bytes);
-    }
-
     let mut viewports = Vec::new();
     for (e, vp) in scene.world.query::<&Viewport>().iter() {
         viewports.push((e, vp.rect, vp.uniform_index, vp.mode));
@@ -394,7 +350,7 @@ fn prepare_uniforms(
     let mut view3d = None;
     let mut camera_settling = false;
     for (e, rect, u_idx, _) in &viewports {
-        let mut u = systems::sys_prepare_render_data(&mut scene.world, &scene.entities, *e);
+        let mut u = systems::sys_prepare_render_data(&mut scene.world, &scene.session, *e);
         if u.view_mode == 0 {
             // The camera and windowing decide the image quality; the cursor does not, because
             // the crosshair is drawn over the cached image rather than into it.
@@ -418,9 +374,6 @@ fn prepare_uniforms(
             let mut image_uniforms = u;
             image_uniforms.cursor_pos = [0.0; 4];
             image_uniforms.mouse_uv = [0.0; 2];
-            image_uniforms.overlay_mouse_uv = [0.0; 2];
-            image_uniforms.overlay_primitive_count = 0;
-            image_uniforms.overlay_dragging_idx = 0;
             let window = [gpu.config.width, gpu.config.height];
             view3d = clamp_rect(*rect, window).map(|rect| View3dPlan {
                 uniform_index: *u_idx,
@@ -429,9 +382,6 @@ fn prepare_uniforms(
                 steps: u.ray_steps,
             });
         }
-        u.overlay_primitive_count = overlay_count;
-        u.overlay_dragging_idx = dragging_idx;
-        u.overlay_mouse_uv = overlay_mouse_uv;
         let offset = *u_idx as u64 * UNIFORM_STRIDE;
         gpu.queue.write_buffer(
             &volume_res.uniform_buffer,
@@ -645,7 +595,7 @@ pub fn render_frame(
     let known_mesh_parts = pipelines.mesh_overlay.fingerprints();
     let mesh_data = crate::render::meshes::prepare_mesh_render_data(
         &scene.world,
-        &scene.entities,
+        &scene.session,
         &known_mesh_parts,
     );
     stats.mesh_batch_count = mesh_data.batch_count() as u32;
@@ -659,7 +609,7 @@ pub fn render_frame(
     stats.mesh_chunks_reused = pipelines.mesh_overlay.reused_chunks_last_frame;
     crate::render::meshes::render_meshes(&mut encoder, &view, &pipelines.mesh_overlay);
 
-    let contour_data = contours::prepare_contour_render_data(&scene.world, &scene.entities);
+    let contour_data = contours::prepare_contour_render_data(&scene.world, &scene.session);
     stats.contour_batch_count = contour_data.batches.len() as u32;
     contours::upload_contour_render_data(
         &gpu.device,

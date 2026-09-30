@@ -11,6 +11,7 @@ use crate::app::components::{
 };
 use crate::app::roi::authority::request_mesh_voxel_cache_rebuild;
 use crate::app::roi::history::record_authority_change;
+use crate::app::roi::model::is_roi_locked;
 use crate::convert::{extract_contours_from_voxel_data, VoxelContourExtractionError};
 use crate::model::OrthogonalFamily;
 use hecs::World;
@@ -120,7 +121,7 @@ pub fn ensure_editable(
             _ => false,
         };
         (
-            roi.metadata.is_locked,
+            is_roi_locked(world, roi_entity),
             already,
             roi.job_state.pending_switch,
             roi.dirty_state.authoritative,
@@ -349,7 +350,7 @@ pub(crate) fn convert_to_contour(
         let roi = world
             .get::<&Roi>(roi_entity)
             .map_err(|_| SwitchError::MissingRoi)?;
-        if roi.metadata.is_locked {
+        if is_roi_locked(world, roi_entity) {
             return Err(SwitchError::Locked);
         }
         match &roi.body {
@@ -398,7 +399,7 @@ pub(crate) fn convert_to_mesh(
         let roi = world
             .get::<&Roi>(roi_entity)
             .map_err(|_| SwitchError::MissingRoi)?;
-        if roi.metadata.is_locked {
+        if is_roi_locked(world, roi_entity) {
             return Err(SwitchError::Locked);
         }
         let cache = roi.mesh_cache().ok_or(SwitchError::SourceUnavailable)?;

@@ -1,4 +1,4 @@
-use crate::components::{AppEntities, MeshData, Roi, ViewMode, Viewport, ViewportState};
+use crate::components::{MeshData, Roi, Session, ViewMode, Viewport, ViewportState};
 use crate::convert::{ChunkedMeshData, MeshChunkKey};
 use crate::render::geometry::{
     build_display_projection_context, project_world_mm_to_viewport_uv_3d, DisplayProjectionContext,
@@ -232,16 +232,12 @@ fn create_draw_bind_group(
 /// from `known` (what the renderer already holds); everything else is one uniform per viewport.
 pub fn prepare_mesh_render_data(
     world: &World,
-    entities: &AppEntities,
+    session: &Session,
     known: &HashMap<MeshPartKey, u64>,
 ) -> MeshRenderData {
     let mut data = MeshRenderData::default();
     let roi_views = RoiRenderViews::for_world(world, RenderRepresentationRequest::default());
-    let (mesh_selection, active_tool) = world
-        .get::<&crate::components::EditorState>(entities.editor)
-        .ok()
-        .map(|editor| (editor.mesh_selection, editor.active_tool))
-        .unwrap_or((None, crate::components::EditorTool::Navigation));
+    let (mesh_selection, active_tool) = (session.editor.mesh_selection, session.editor.active_tool);
 
     let mut viewports = Vec::new();
     for (viewport_entity, (viewport, viewport_state)) in
@@ -251,7 +247,7 @@ pub fn prepare_mesh_render_data(
             continue;
         }
         let Some(projection_ctx) =
-            build_display_projection_context(world, entities, viewport, viewport_state)
+            build_display_projection_context(world, session, viewport, viewport_state)
         else {
             continue;
         };
@@ -274,7 +270,9 @@ pub fn prepare_mesh_render_data(
             continue;
         };
         let color = {
-            let color = roi.metadata.color;
+            let color = world
+                .get::<&crate::components::RoiMetadata>(mesh_view.entity)
+                .map_or([1.0; 4], |metadata| metadata.color);
             [color[0], color[1], color[2], color[3] * MESH_ALPHA_SCALE]
         };
         let mut parts: Vec<(MeshRenderPartKey, &MeshData)> = Vec::new();
@@ -331,7 +329,7 @@ pub fn prepare_mesh_render_data(
     if active_tool == crate::components::EditorTool::MeshDeform {
         if let Some(selection) = mesh_selection {
             if let Ok(roi) = world.get::<&Roi>(selection.roi_entity) {
-                if roi.metadata.is_visible {
+                if crate::app::roi::is_roi_visible(world, selection.roi_entity) {
                     let mesh = roi
                         .mesh_edit_preview()
                         .map(|preview| &preview.mesh_data)

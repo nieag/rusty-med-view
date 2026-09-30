@@ -19,20 +19,16 @@ fn drag_exceeds_threshold_px(
     delta_x * delta_x + delta_y * delta_y >= CONTOUR_DRAG_THRESHOLD_PX * CONTOUR_DRAG_THRESHOLD_PX
 }
 
-fn set_status_message(world: &mut World, entities: &AppEntities, message: String) {
-    if let Ok(mut gui_state) = world.get::<&mut GuiState>(entities.gui_state) {
-        gui_state.status_message = Some(message);
-    }
+fn set_status_message(session: &mut Session, message: String) {
+    session.gui.status_message = Some(message);
 }
 
 /// Update keyboard modifier state (Ctrl/Shift/Alt) in the ECS.
-pub fn sys_update_modifiers(world: &mut World, entities: &AppEntities, mods: ModifiersState) {
-    if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
-        input.modifiers = mods;
-    }
+pub fn sys_update_modifiers(session: &mut Session, mods: ModifiersState) {
+    session.input.modifiers = mods;
 }
 
-pub fn sys_update_mouse(world: &mut World, entities: &AppEntities, x: f64, y: f64) {
+pub fn sys_update_mouse(world: &mut World, session: &mut Session, x: f64, y: f64) {
     let mut found_viewport = None;
     let mut local_uv = [0.0, 0.0];
 
@@ -52,7 +48,8 @@ pub fn sys_update_mouse(world: &mut World, entities: &AppEntities, x: f64, y: f6
         }
     }
 
-    if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+    {
+        let input = &mut session.input;
         input.last_mouse_pos = [x, y];
         if let Some(e) = found_viewport {
             input.active_viewport = Some(e);
@@ -64,21 +61,20 @@ pub fn sys_update_mouse(world: &mut World, entities: &AppEntities, x: f64, y: f6
 /// Handle mouse button events for clicking, dragging, and picking.
 pub fn sys_handle_mouse_button(
     world: &mut World,
-    entities: &AppEntities,
+    session: &mut Session,
     button: MouseButton,
     state: ElementState,
 ) {
-    crate::systems::clear_contour_draft_if_inactive(world, entities.editor);
-    crate::systems::clear_contour_selection_if_inactive(world, entities.editor);
+    crate::systems::clear_contour_draft_if_inactive(&mut session.editor);
+    crate::systems::clear_contour_selection_if_inactive(world, &mut session.editor);
 
-    let mut active_vp = None;
-    let mut alt_pressed = false;
+    let active_vp = session.input.active_viewport;
+    let alt_pressed = session.input.modifiers.alt_key();
     let mut finalize_contour_move = false;
     let mut finalize_mesh_move = false;
 
-    if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
-        active_vp = input.active_viewport;
-        alt_pressed = input.modifiers.alt_key();
+    {
+        let input = &mut session.input;
 
         if input.egui_wants_input && state == ElementState::Pressed {
             return;
@@ -125,38 +121,27 @@ pub fn sys_handle_mouse_button(
     }
 
     if finalize_contour_move {
-        let _ = crate::systems::finalize_selected_point_move(world, entities);
+        let _ = crate::systems::finalize_selected_point_move(world, session);
     }
     if finalize_mesh_move {
-        match crate::app::roi::commit_mesh_edit_preview(world, entities.editor) {
+        match crate::app::roi::commit_mesh_edit_preview(world, &session.editor) {
             Ok(()) => set_status_message(
-                world,
-                entities,
+                session,
                 "Committed mesh deformation; build voxels explicitly when needed.".to_string(),
             ),
             Err(crate::app::roi::MeshMutationError::InvalidMesh(error)) => set_status_message(
-                world,
-                entities,
+                session,
                 format!("Deformation rejected; previous mesh kept. Try a shorter drag or larger brush. {error:?}."),
             ),
             Err(error) => set_status_message(
-                world,
-                entities,
+                session,
                 format!("Mesh deformation commit failed: {error:?}."),
             ),
         }
     }
 
-    let ctrl_pressed = if let Ok(input) = world.get::<&InputState>(entities.input) {
-        input.modifiers.control_key()
-    } else {
-        false
-    };
-    let super_pressed = if let Ok(input) = world.get::<&InputState>(entities.input) {
-        input.modifiers.super_key()
-    } else {
-        false
-    };
+    let ctrl_pressed = session.input.modifiers.control_key();
+    let super_pressed = session.input.modifiers.super_key();
 
     if button == MouseButton::Left
         && !alt_pressed
@@ -164,143 +149,116 @@ pub fn sys_handle_mouse_button(
         && !super_pressed
         && state == ElementState::Pressed
     {
-        let active_tool = world
-            .get::<&EditorState>(entities.editor)
-            .map(|editor| editor.active_tool)
-            .unwrap_or(EditorTool::Navigation);
+        let active_tool = {
+            let editor = &session.editor;
+            editor.active_tool
+        };
         if active_tool == EditorTool::ContourDraw {
-            let click_pos = world
-                .get::<&InputState>(entities.input)
-                .map(|input| input.mouse_uv)
-                .unwrap_or([0.5, 0.5]);
-            match crate::systems::handle_contour_draw_click(world, entities, click_pos) {
+            let click_pos = {
+                let input = &session.input;
+                input.mouse_uv
+            };
+            match crate::systems::handle_contour_draw_click(world, session, click_pos) {
                 Ok(crate::systems::ContourDrawClickOutcome::PointAdded) => {}
                 Ok(crate::systems::ContourDrawClickOutcome::LoopCommitted) => {
-                    set_status_message(world, entities, "Contour loop committed.".to_string());
+                    set_status_message(session, "Contour loop committed.".to_string());
                 }
                 Err(crate::systems::ContourDrawClickError::LoopNeedsThreePoints) => {
                     set_status_message(
-                        world,
-                        entities,
+                        session,
                         "Need at least 3 points to close a contour loop.".to_string(),
                     );
                 }
                 Err(crate::systems::ContourDrawClickError::MissingActiveRoi) => {
-                    set_status_message(
-                        world,
-                        entities,
-                        "Select a contour ROI before drawing.".to_string(),
-                    );
+                    set_status_message(session, "Select a contour ROI before drawing.".to_string());
                 }
                 Err(crate::systems::ContourDrawClickError::ActiveRoiNotContour) => {
-                    set_status_message(
-                        world,
-                        entities,
-                        "Active ROI is not contour-primary.".to_string(),
-                    );
+                    set_status_message(session, "Active ROI is not contour-primary.".to_string());
                 }
                 Err(crate::systems::ContourDrawClickError::Mapping(error)) => {
-                    set_status_message(world, entities, format!("Contour draw blocked: {error:?}"));
+                    set_status_message(session, format!("Contour draw blocked: {error:?}"));
                 }
                 Err(crate::systems::ContourDrawClickError::SwitchPending) => {
                     set_status_message(
-                        world,
-                        entities,
+                        session,
                         "Preparing the ROI for contour editing...".to_string(),
                     );
                 }
                 Err(crate::systems::ContourDrawClickError::Switch(error)) => {
-                    set_status_message(world, entities, error.message());
+                    set_status_message(session, error.message());
                 }
                 Err(_) => {}
             }
             return;
         }
         if active_tool == EditorTool::ContourSelect {
-            let click_pos = world
-                .get::<&InputState>(entities.input)
-                .map(|input| input.mouse_uv)
-                .unwrap_or([0.5, 0.5]);
-            match crate::systems::handle_contour_select_click(world, entities, click_pos) {
+            let click_pos = {
+                let input = &session.input;
+                input.mouse_uv
+            };
+            match crate::systems::handle_contour_select_click(world, session, click_pos) {
                 Ok(Some(selection)) => {
                     if selection.point_index.is_some() {
-                        set_status_message(world, entities, "Selected contour point.".to_string());
+                        set_status_message(session, "Selected contour point.".to_string());
                     } else {
-                        set_status_message(world, entities, "Selected contour loop.".to_string());
+                        set_status_message(session, "Selected contour loop.".to_string());
                     }
                 }
                 Ok(None) => {}
                 Err(crate::systems::ContourSelectClickError::MissingActiveRoi) => {
                     set_status_message(
-                        world,
-                        entities,
+                        session,
                         "Select a contour ROI before selecting contours.".to_string(),
                     );
                 }
                 Err(crate::systems::ContourSelectClickError::ActiveRoiNotContour) => {
-                    set_status_message(
-                        world,
-                        entities,
-                        "Active ROI is not contour-primary.".to_string(),
-                    );
+                    set_status_message(session, "Active ROI is not contour-primary.".to_string());
                 }
                 Err(crate::systems::ContourSelectClickError::Mapping(error)) => {
-                    set_status_message(
-                        world,
-                        entities,
-                        format!("Contour selection blocked: {error:?}"),
-                    );
+                    set_status_message(session, format!("Contour selection blocked: {error:?}"));
                 }
                 Err(crate::systems::ContourSelectClickError::SwitchPending) => {
                     set_status_message(
-                        world,
-                        entities,
+                        session,
                         "Preparing the ROI for contour editing...".to_string(),
                     );
                 }
                 Err(crate::systems::ContourSelectClickError::Switch(error)) => {
-                    set_status_message(world, entities, error.message());
+                    set_status_message(session, error.message());
                 }
                 Err(_) => {}
             }
             return;
         }
         if active_tool == EditorTool::MeshDeform {
-            let click_pos = world
-                .get::<&InputState>(entities.input)
-                .map(|input| input.mouse_uv)
-                .unwrap_or([0.5, 0.5]);
-            match crate::systems::select_mesh_vertex(world, entities, click_pos) {
-                Ok(Some(_)) => {
-                    set_status_message(world, entities, "Selected mesh surface.".to_string())
-                }
+            let click_pos = {
+                let input = &session.input;
+                input.mouse_uv
+            };
+            match crate::systems::select_mesh_vertex(world, session, click_pos) {
+                Ok(Some(_)) => set_status_message(session, "Selected mesh surface.".to_string()),
                 Ok(None) => {}
                 Err(crate::systems::MeshEditInteractionError::SwitchPending) => {
                     set_status_message(
-                        world,
-                        entities,
+                        session,
                         "Preparing the ROI for mesh editing...".to_string(),
                     );
                 }
                 Err(crate::systems::MeshEditInteractionError::Switch(error)) => {
-                    set_status_message(world, entities, error.message());
+                    set_status_message(session, error.message());
                 }
-                Err(error) => set_status_message(
-                    world,
-                    entities,
-                    format!("Mesh selection blocked: {error:?}."),
-                ),
+                Err(error) => {
+                    set_status_message(session, format!("Mesh selection blocked: {error:?}."))
+                }
             }
             return;
         }
 
         if let Some(avp) = active_vp {
-            let mut click_pos = [0.0, 0.0];
-            if let Ok(input) = world.get::<&InputState>(entities.input) {
-                click_pos = input.mouse_uv;
-            }
-            if let Some(target_pos) = get_voxel_at_mouse(world, entities, avp, click_pos) {
-                if let Ok(mut t) = world.get::<&mut Transform>(entities.cursor) {
+            let click_pos = session.input.mouse_uv;
+            if let Some(target_pos) = get_voxel_at_mouse(world, session, avp, click_pos) {
+                {
+                    let t = &mut session.cursor;
                     t.position = target_pos;
                 }
             }
@@ -312,19 +270,13 @@ pub fn sys_handle_mouse_button(
 ///
 /// Returns whether this changed a 3D zoom. Callers can coalesce the expensive
 /// 3D redraw path while preserving immediate redraws for the slice views.
-pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta: f32) -> bool {
-    let mut active_vp = None;
-    let mut mouse_uv = [0.5, 0.5];
-    let mut is_zoom = false;
-
-    if let Ok(input) = world.get::<&InputState>(entities.input) {
-        if input.egui_wants_input {
-            return false;
-        }
-        active_vp = input.active_viewport;
-        mouse_uv = input.mouse_uv;
-        is_zoom = input.modifiers.control_key();
+pub fn sys_handle_input_scroll(world: &mut World, session: &mut Session, delta: f32) -> bool {
+    if session.input.egui_wants_input {
+        return false;
     }
+    let active_vp = session.input.active_viewport;
+    let mouse_uv = session.input.mouse_uv;
+    let is_zoom = session.input.modifiers.control_key();
 
     let avp = match active_vp {
         Some(e) => e,
@@ -371,7 +323,8 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
             vs.pivot = [0.5, 0.5];
             changed_3d_zoom = vp.mode == ViewMode::ThreeD;
         }
-    } else if let Ok(mut transform) = world.get::<&mut Transform>(entities.cursor) {
+    } else {
+        let transform = &mut session.cursor;
         if let Ok(vp) = world.get::<&Viewport>(avp) {
             let (axis, dim) = match vp.mode {
                 ViewMode::Axial => (2, dims[2]),
@@ -384,7 +337,8 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
                 return false;
             }
 
-            if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+            {
+                let input = &mut session.input;
                 let abs_delta = delta.abs();
                 let factor = if abs_delta <= 1.0 {
                     1.0
@@ -419,21 +373,15 @@ pub fn sys_handle_input_scroll(world: &mut World, entities: &AppEntities, delta:
 }
 
 /// Handle mouse drag motion for panning and rotating.
-pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
-    let mut active_vp = None;
-    let mut is_dragging = false;
-    let mut is_rotating = false;
-    let mut is_panning = false;
-
-    if let Ok(input) = world.get::<&InputState>(entities.input) {
-        if input.egui_wants_input && !input.is_dragging && !input.is_rotating && !input.is_panning {
-            return;
-        }
-        active_vp = input.active_viewport;
-        is_dragging = input.is_dragging;
-        is_rotating = input.is_rotating;
-        is_panning = input.is_panning;
+pub fn sys_handle_mouse_drag(world: &mut World, session: &mut Session) {
+    let input = &session.input;
+    if input.egui_wants_input && !input.is_dragging && !input.is_rotating && !input.is_panning {
+        return;
     }
+    let active_vp = input.active_viewport;
+    let is_dragging = input.is_dragging;
+    let is_rotating = input.is_rotating;
+    let is_panning = input.is_panning;
 
     if (!is_dragging && !is_rotating && !is_panning) || active_vp.is_none() {
         return;
@@ -458,7 +406,8 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
         let mut drag_info = None;
         let mut rotate_info = None;
 
-        if let Ok(input) = world.get::<&InputState>(entities.input) {
+        {
+            let input = &session.input;
             if is_panning {
                 drag_info = Some((input.drag_start_pan, input.drag_start_pos, input.mouse_uv));
             }
@@ -470,10 +419,10 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
                 ));
             }
             // Crosshair update during drag - prepare info
-            let active_tool = world
-                .get::<&EditorState>(entities.editor)
-                .map(|editor| editor.active_tool)
-                .unwrap_or(EditorTool::Navigation);
+            let active_tool = {
+                let editor = &session.editor;
+                editor.active_tool
+            };
             if is_dragging && !is_panning && !is_rotating {
                 if active_tool == EditorTool::Navigation {
                     crosshair_update = Some((avp, input.mouse_uv));
@@ -521,10 +470,7 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
 
         if let Some((start_quat, start_pos, current_pos)) = rotate_info {
             let sensitivity = 3.0;
-            let mut has_shift = false;
-            if let Ok(input) = world.get::<&InputState>(entities.input) {
-                has_shift = input.modifiers.shift_key();
-            }
+            let has_shift = session.input.modifiers.shift_key();
             let delta_x = (current_pos[0] - start_pos[0]) * sensitivity;
             let delta_y = (start_pos[1] - current_pos[1]) * sensitivity;
             let start_q = Quat::from_array(start_quat);
@@ -543,23 +489,26 @@ pub fn sys_handle_mouse_drag(world: &mut World, entities: &AppEntities) {
 
     // Now update crosshair outside ViewPortState borrow
     if let Some((avp, uv)) = crosshair_update {
-        if let Some(target_pos) = get_voxel_at_mouse(world, entities, avp, uv) {
-            if let Ok(mut t) = world.get::<&mut Transform>(entities.cursor) {
+        if let Some(target_pos) = get_voxel_at_mouse(world, session, avp, uv) {
+            {
+                let t = &mut session.cursor;
                 t.position = target_pos;
             }
         }
     }
 
     if let Some(uv) = contour_move_update {
-        if crate::systems::move_selected_point_preview(world, entities, uv).is_ok() {
-            if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+        if crate::systems::move_selected_point_preview(world, session, uv).is_ok() {
+            {
+                let input = &mut session.input;
                 input.contour_move_pending_commit = true;
             }
         }
     }
     if let Some(uv) = mesh_move_update {
-        if crate::systems::update_selected_mesh_deform_preview(world, entities, uv).is_ok() {
-            if let Ok(mut input) = world.get::<&mut InputState>(entities.input) {
+        if crate::systems::update_selected_mesh_deform_preview(world, session, uv).is_ok() {
+            {
+                let input = &mut session.input;
                 input.mesh_move_pending_commit = true;
             }
         }

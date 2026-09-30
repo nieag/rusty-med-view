@@ -1,7 +1,5 @@
 // src/systems/render_prep.rs
 use crate::components::*;
-use crate::overlay::OverlayManager;
-use glam::Vec3;
 use hecs::World;
 
 /// Prepare a `Uniforms` struct for the given viewport mode.
@@ -10,7 +8,7 @@ pub const FULL_RAY_STEPS: u32 = 128;
 
 pub fn sys_prepare_render_data(
     world: &mut World,
-    entities: &AppEntities,
+    session: &Session,
     viewport_entity: hecs::Entity,
 ) -> Uniforms {
     // 1. Get Viewport and State
@@ -40,18 +38,11 @@ pub fn sys_prepare_render_data(
     let resolution = [vp_rect[2], vp_rect[3]];
 
     // 2. Get Cursor
-    let mut cursor_pos = [0.0; 4];
-    if let Ok(t) = world.get::<&Transform>(entities.cursor) {
-        cursor_pos[0] = t.position[0];
-        cursor_pos[1] = t.position[1];
-        cursor_pos[2] = t.position[2];
-    }
+    let position = session.cursor.position;
+    let cursor_pos = [position[0], position[1], position[2], 0.0];
 
     // 4. Get Mouse UV
-    let mut mouse_uv = [0.5, 0.5];
-    if let Ok(inp) = world.get::<&InputState>(entities.input) {
-        mouse_uv = inp.mouse_uv;
-    }
+    let mouse_uv = session.input.mouse_uv;
 
     // 5. Get Volume Info and Compose Rotation
     let mut volume_dims = [0u32; 4];
@@ -101,10 +92,10 @@ pub fn sys_prepare_render_data(
     // 6. Get Overlay Info
     let mut overlay_flags = 0u32;
     let mut voxel_overlays = [VoxelOverlayUniform::default(); MAX_VOXEL_OVERLAY_SLOTS];
-    let active_roi = world
-        .get::<&EditorState>(entities.editor)
-        .ok()
-        .and_then(|editor| editor.active_roi);
+    let active_roi = {
+        let editor = &session.editor;
+        editor.active_roi
+    };
     for (layer_count, overlay) in
         crate::app::roi_runtime::renderable_voxel_overlay_rois(world, active_roi)
             .into_iter()
@@ -150,7 +141,8 @@ pub fn sys_prepare_render_data(
         volume_intensity_range[0],
         volume_intensity_range[1],
     ];
-    if let Ok(windowing) = world.get::<&VolumeWindowing>(entities.volume_windowing) {
+    {
+        let windowing = &session.windowing;
         window_params[0] = windowing.center;
         window_params[1] = windowing.width;
     }
@@ -169,48 +161,9 @@ pub fn sys_prepare_render_data(
         oblique_origin_uv,
         oblique_u_dir_length,
         oblique_v_dir_length,
-        overlay_mouse_uv: mouse_uv,
-        overlay_primitive_count: 0,
-        overlay_dragging_idx: u32::MAX,
         zoom: zoom_val,
         view_mode,
         overlay_flags,
         ray_steps: FULL_RAY_STEPS,
     }
-}
-
-pub fn sys_sync_annotations_to_overlay(world: &mut World, entities: &AppEntities) {
-    let mut annotation_positions: Vec<Vec3> = Vec::new();
-    if let Ok(ann_state) = world.get::<&AnnotationState>(entities.annotations) {
-        for ann in &ann_state.annotations {
-            annotation_positions.push(ann.world_pos);
-        }
-    }
-
-    if let Ok(mut overlay) = world.get::<&mut OverlayManager>(entities.overlay) {
-        overlay.annotations.clear();
-        for pos in &annotation_positions {
-            overlay.add_annotation(*pos);
-        }
-        overlay.rebuild_primitives();
-    }
-}
-
-pub fn get_overlay_render_data(
-    world: &World,
-    entities: &AppEntities,
-) -> (Vec<u8>, u32, u32, [f32; 2]) {
-    let mut primitives_bytes = Vec::new();
-    let mut count = 0u32;
-    let mut dragging_idx = u32::MAX;
-    let mut mouse_uv = [0.5f32, 0.5];
-
-    if let Ok(overlay) = world.get::<&OverlayManager>(entities.overlay) {
-        count = overlay.primitives.len() as u32;
-        dragging_idx = overlay.dragging_idx.map(|i| i as u32).unwrap_or(u32::MAX);
-        mouse_uv = overlay.mouse_screen_uv;
-        primitives_bytes = bytemuck::cast_slice(&overlay.primitives).to_vec();
-    }
-
-    (primitives_bytes, count, dragging_idx, mouse_uv)
 }

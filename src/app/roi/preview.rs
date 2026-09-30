@@ -62,13 +62,6 @@ impl Roi {
     }
 }
 
-fn active_roi(world: &World, editor_entity: hecs::Entity) -> Option<hecs::Entity> {
-    world
-        .get::<&EditorState>(editor_entity)
-        .ok()
-        .and_then(|editor| editor.active_roi)
-}
-
 pub fn begin_contour_move_preview(
     world: &mut World,
     roi_entity: hecs::Entity,
@@ -97,11 +90,12 @@ pub fn begin_contour_move_preview(
 /// Commits the active ROI's contour drag as one undoable edit.
 pub fn commit_contour_move_preview(
     world: &mut World,
-    editor_entity: hecs::Entity,
+    editor: &EditorState,
     dirty_plane: PlaneDefinition,
 ) -> Result<(), ContourMutationError> {
-    let roi_entity =
-        active_roi(world, editor_entity).ok_or(ContourMutationError::MissingPreview)?;
+    let roi_entity = editor
+        .active_roi
+        .ok_or(ContourMutationError::MissingPreview)?;
     let preview = world
         .get::<&mut Roi>(roi_entity)
         .map_err(|_| ContourMutationError::MissingRoi)?
@@ -151,9 +145,9 @@ pub fn set_mesh_edit_preview(
 /// deformed mesh is still a closed manifold.
 pub fn commit_mesh_edit_preview(
     world: &mut World,
-    editor_entity: hecs::Entity,
+    editor: &EditorState,
 ) -> Result<(), MeshMutationError> {
-    let roi_entity = active_roi(world, editor_entity).ok_or(MeshMutationError::MissingPreview)?;
+    let roi_entity = editor.active_roi.ok_or(MeshMutationError::MissingPreview)?;
     // Validate before taking the preview: an invalid deformation is reported and the preview
     // stays, so the user's drag is not thrown away and can still be cancelled or adjusted.
     {
@@ -186,9 +180,9 @@ pub fn commit_mesh_edit_preview(
 /// Discards the active ROI's mesh deformation without committing it.
 pub fn cancel_mesh_edit_preview(
     world: &mut World,
-    editor_entity: hecs::Entity,
+    editor: &EditorState,
 ) -> Result<(), MeshMutationError> {
-    let roi_entity = active_roi(world, editor_entity).ok_or(MeshMutationError::MissingPreview)?;
+    let roi_entity = editor.active_roi.ok_or(MeshMutationError::MissingPreview)?;
     world
         .get::<&mut Roi>(roi_entity)
         .map_err(|_| MeshMutationError::MissingRoi)?
@@ -199,8 +193,8 @@ pub fn cancel_mesh_edit_preview(
 }
 
 /// Discards whatever edit the active ROI is previewing. Returns whether there was one.
-pub fn cancel_roi_edit_preview(world: &mut World, editor_entity: hecs::Entity) -> bool {
-    let Some(roi_entity) = active_roi(world, editor_entity) else {
+pub fn cancel_roi_edit_preview(world: &mut World, editor: &EditorState) -> bool {
+    let Some(roi_entity) = editor.active_roi else {
         return false;
     };
     let had_preview = world
@@ -245,7 +239,7 @@ mod tests {
 
     #[test]
     fn test_a_contour_roi_holds_only_a_contour_preview() {
-        let mut roi = Roi::new_contour(RoiId(1), "test".to_string(), contour_data());
+        let (mut roi, _) = Roi::new_contour(RoiId(1), "test".to_string(), contour_data());
         let RoiBody::Contour(body) = &mut roi.body else {
             unreachable!()
         };
@@ -259,8 +253,8 @@ mod tests {
     #[test]
     fn test_previews_belong_to_their_own_roi() {
         let mut world = World::new();
-        let first = world.spawn((Roi::new_contour(RoiId(1), "a".into(), contour_data()),));
-        let second = world.spawn((Roi::new_contour(RoiId(2), "b".into(), contour_data()),));
+        let first = world.spawn(Roi::new_contour(RoiId(1), "a".into(), contour_data()));
+        let second = world.spawn(Roi::new_contour(RoiId(2), "b".into(), contour_data()));
         let plane = crate::convert::PlaneDefinition {
             family: PlaneFamily::Axial,
             origin_mm: [0.0; 3],
@@ -288,12 +282,12 @@ mod tests {
     #[test]
     fn test_changing_the_active_roi_ends_the_previous_rois_preview_only() {
         let mut world = World::new();
-        let previous = world.spawn((Roi::new_contour(RoiId(1), "a".into(), contour_data()),));
-        let next = world.spawn((Roi::new_contour(RoiId(2), "b".into(), contour_data()),));
-        let editor_entity = world.spawn((EditorState {
+        let previous = world.spawn(Roi::new_contour(RoiId(1), "a".into(), contour_data()));
+        let next = world.spawn(Roi::new_contour(RoiId(2), "b".into(), contour_data()));
+        let mut editor = EditorState {
             active_roi: Some(previous),
             ..EditorState::default()
-        },));
+        };
         let plane = crate::convert::PlaneDefinition {
             family: PlaneFamily::Axial,
             origin_mm: [0.0; 3],
@@ -304,11 +298,7 @@ mod tests {
         begin_contour_move_preview(&mut world, previous, contour_data(), plane).unwrap();
         begin_contour_move_preview(&mut world, next, contour_data(), plane).unwrap();
 
-        crate::systems::clear_contour_selection_for_roi_change(
-            &mut world,
-            editor_entity,
-            Some(next),
-        );
+        crate::systems::clear_contour_selection_for_roi_change(&mut world, &mut editor, Some(next));
 
         let previous_roi = world.get::<&Roi>(previous).unwrap();
         assert!(!previous_roi.has_edit_preview());
@@ -323,11 +313,11 @@ mod tests {
     #[test]
     fn test_cancel_roi_edit_preview_clears_the_active_rois_preview_and_session() {
         let mut world = World::new();
-        let roi_entity = world.spawn((Roi::new_contour(
+        let roi_entity = world.spawn(Roi::new_contour(
             RoiId(1),
             "test".to_string(),
             contour_data(),
-        ),));
+        ));
         world.get::<&mut Roi>(roi_entity).unwrap().begin_preview();
         let mut roi = world.get::<&mut Roi>(roi_entity).unwrap();
         let RoiBody::Contour(body) = &mut roi.body else {
@@ -337,12 +327,12 @@ mod tests {
             contour_data: contour_data(),
         });
         drop(roi);
-        let editor_entity = world.spawn((EditorState {
+        let editor = EditorState {
             active_roi: Some(roi_entity),
             ..EditorState::default()
-        },));
+        };
 
-        assert!(cancel_roi_edit_preview(&mut world, editor_entity));
+        assert!(cancel_roi_edit_preview(&mut world, &editor));
 
         assert!(!world.get::<&Roi>(roi_entity).unwrap().has_edit_preview());
         assert!(!world.get::<&Roi>(roi_entity).unwrap().preview_state.active);
@@ -364,15 +354,15 @@ mod tests {
                 .map(|vertex_indices| MeshFace { vertex_indices })
                 .to_vec(),
         };
-        let roi_entity = world.spawn((Roi::new_mesh(
+        let roi_entity = world.spawn(Roi::new_mesh(
             RoiId(1),
             "test".to_string(),
             original.clone(),
-        ),));
-        let editor_entity = world.spawn((EditorState {
+        ));
+        let editor = EditorState {
             active_roi: Some(roi_entity),
             ..EditorState::default()
-        },));
+        };
         let open_mesh = MeshData {
             vertices: vec![
                 MeshVertex { world_mm: [0.0; 3] },
@@ -390,7 +380,7 @@ mod tests {
         begin_mesh_edit_preview(&mut world, roi_entity, open_mesh.clone()).unwrap();
 
         assert!(matches!(
-            commit_mesh_edit_preview(&mut world, editor_entity),
+            commit_mesh_edit_preview(&mut world, &editor),
             Err(MeshMutationError::InvalidMesh(_))
         ));
         // The rejected drag is kept so the user can adjust or cancel it; nothing was committed.
@@ -399,9 +389,9 @@ mod tests {
         assert!(roi.preview_state.active);
         assert_eq!(roi.mesh_data(), Some(&original));
         drop(roi);
-        assert!(!crate::app::roi::can_undo_roi_edit(&world, editor_entity));
+        assert!(!crate::app::roi::can_undo_roi_edit(&world, &editor));
 
-        cancel_mesh_edit_preview(&mut world, editor_entity).unwrap();
+        cancel_mesh_edit_preview(&mut world, &editor).unwrap();
         let roi = world.get::<&Roi>(roi_entity).unwrap();
         assert!(roi.mesh_edit_preview().is_none());
         assert!(!roi.preview_state.active);

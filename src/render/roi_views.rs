@@ -1,6 +1,6 @@
 use crate::app::components::{
     CacheViewState, ContourBody, ContourSlice, LayerSettings, MeshBody, MeshData, Roi, RoiBody,
-    RoiCacheKind, MAX_VOXEL_OVERLAY_SLOTS,
+    RoiCacheKind, RoiMetadata, MAX_VOXEL_OVERLAY_SLOTS,
 };
 use hecs::{Entity, World};
 
@@ -84,7 +84,7 @@ impl RoiRenderViews {
             if let Ok(active_roi) = world.get::<&Roi>(active) {
                 if let Some(overlay) = voxel_overlay_candidate(world, active) {
                     voxel_candidates.push(overlay);
-                } else if active_roi.metadata.is_visible {
+                } else if crate::app::roi::is_roi_visible(world, active) {
                     views.voxel_skips.push(RoiRenderSkip {
                         entity: active,
                         reason: voxel_non_renderable_reason(&active_roi),
@@ -99,10 +99,11 @@ impl RoiRenderViews {
             contour_skips: &mut views.contour_skips,
             mesh_skips: &mut views.mesh_skips,
         };
-        for (entity, roi) in world.query::<&Roi>().iter() {
+        for (entity, (roi, metadata)) in world.query::<(&Roi, &RoiMetadata)>().iter() {
             if Some(entity) == request.active_roi {
                 collect_contour_and_mesh_views(
                     roi,
+                    metadata.is_visible,
                     entity,
                     request.active_roi,
                     request.contour_active_only,
@@ -111,18 +112,18 @@ impl RoiRenderViews {
                 continue;
             }
             if let Ok(settings) = world.get::<&LayerSettings>(entity) {
-                if roi.renderable_voxel_cache().is_some() {
+                if roi.renderable_voxel_cache(metadata.is_visible).is_some() {
                     voxel_candidates.push(VoxelOverlayView {
                         entity,
                         opacity: settings.opacity,
                     });
-                } else if roi.metadata.is_visible {
+                } else if metadata.is_visible {
                     views.voxel_skips.push(RoiRenderSkip {
                         entity,
                         reason: voxel_non_renderable_reason(roi),
                     });
                 }
-            } else if roi.metadata.is_visible {
+            } else if metadata.is_visible {
                 views.voxel_skips.push(RoiRenderSkip {
                     entity,
                     reason: voxel_non_renderable_reason(roi),
@@ -131,6 +132,7 @@ impl RoiRenderViews {
 
             collect_contour_and_mesh_views(
                 roi,
+                metadata.is_visible,
                 entity,
                 request.active_roi,
                 request.contour_active_only,
@@ -146,16 +148,16 @@ impl RoiRenderViews {
         );
         voxel_candidates[active_prefix..].sort_by_key(|candidate| {
             world
-                .get::<&Roi>(candidate.entity)
-                .map(|roi| roi.metadata.roi_id.0)
+                .get::<&RoiMetadata>(candidate.entity)
+                .map(|metadata| metadata.roi_id.0)
                 .unwrap_or(u64::MAX)
         });
         views.contour_overlays.sort_by_key(|view| {
             (
                 Some(view.entity) != request.active_roi,
                 world
-                    .get::<&Roi>(view.entity)
-                    .map(|roi| roi.metadata.roi_id.0)
+                    .get::<&RoiMetadata>(view.entity)
+                    .map(|metadata| metadata.roi_id.0)
                     .unwrap_or(u64::MAX),
             )
         });
@@ -163,8 +165,8 @@ impl RoiRenderViews {
             (
                 Some(view.entity) != request.active_roi,
                 world
-                    .get::<&Roi>(view.entity)
-                    .map(|roi| roi.metadata.roi_id.0)
+                    .get::<&RoiMetadata>(view.entity)
+                    .map(|metadata| metadata.roi_id.0)
                     .unwrap_or(u64::MAX),
             )
         });
@@ -194,7 +196,7 @@ impl RoiRenderViews {
 fn voxel_overlay_candidate(world: &World, entity: Entity) -> Option<VoxelOverlayView> {
     let roi = world.get::<&Roi>(entity).ok()?;
     let settings = world.get::<&LayerSettings>(entity).ok()?;
-    roi.renderable_voxel_cache()?;
+    roi.renderable_voxel_cache(crate::app::roi::is_roi_visible(world, entity))?;
     Some(VoxelOverlayView {
         entity,
         opacity: settings.opacity,
@@ -260,12 +262,13 @@ pub fn displayed_plane_for_viewport(
 
 fn collect_contour_and_mesh_views(
     roi: &Roi,
+    is_visible: bool,
     entity: Entity,
     active_roi: Option<Entity>,
     contour_active_only: bool,
     acc: &mut ContourMeshAcc<'_>,
 ) {
-    if !roi.metadata.is_visible {
+    if !is_visible {
         return;
     }
     if let Some(contour) = contour_data_for_adapter(roi) {
@@ -362,7 +365,7 @@ pub fn contour_renderable_in_viewport(
         Ok(roi) => roi,
         Err(_) => return false,
     };
-    if !roi.metadata.is_visible {
+    if !crate::app::roi::is_roi_visible(world, active_roi) {
         return false;
     }
     let geometry = {

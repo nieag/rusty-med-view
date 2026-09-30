@@ -10,7 +10,7 @@ fn test_uniform_stride_covers_current_uniform_size() {
 #[test]
 fn test_eight_overlay_uniform_array_matches_wgsl_alignment() {
     assert_eq!(std::mem::size_of::<VoxelOverlayUniform>(), 80);
-    assert_eq!(std::mem::size_of::<Uniforms>(), 832);
+    assert_eq!(std::mem::size_of::<Uniforms>(), 816);
     assert_eq!(std::mem::offset_of!(Uniforms, voxel_overlays), 48);
     assert_eq!(std::mem::offset_of!(Uniforms, window_params), 688);
     assert_eq!(std::mem::offset_of!(Uniforms, oblique_origin_uv), 752);

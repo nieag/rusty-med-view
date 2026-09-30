@@ -4,16 +4,10 @@ use glam::Vec3;
 use hecs::World;
 
 /// Get the HU intensity value at the current mouse position.
-pub fn get_hu_at_mouse(world: &World, entities: &AppEntities) -> Option<f32> {
-    let (viewport_entity, mouse_uv) = {
-        if let Ok(input) = world.get::<&InputState>(entities.input) {
-            (input.active_viewport, input.mouse_uv)
-        } else {
-            (None, [0.5, 0.5])
-        }
-    };
+pub fn get_hu_at_mouse(world: &World, session: &Session) -> Option<f32> {
+    let (viewport_entity, mouse_uv) = (session.input.active_viewport, session.input.mouse_uv);
 
-    let voxel_pos = get_voxel_at_mouse(world, entities, viewport_entity?, mouse_uv)?;
+    let voxel_pos = get_voxel_at_mouse(world, session, viewport_entity?, mouse_uv)?;
 
     let mut query = world.query::<&VolumeData>().with::<&MainVolumeTag>();
     if let Some((_, vol)) = query.iter().next() {
@@ -34,7 +28,7 @@ pub fn get_hu_at_mouse(world: &World, entities: &AppEntities) -> Option<f32> {
 /// Calculate volume coordinate (0.0..1.0) under the mouse cursor.
 pub fn get_voxel_at_mouse(
     world: &World,
-    entities: &AppEntities,
+    session: &Session,
     viewport_entity: hecs::Entity,
     mouse_uv: [f32; 2],
 ) -> Option<[f32; 3]> {
@@ -62,10 +56,10 @@ pub fn get_voxel_at_mouse(
         }
     };
 
-    let cursor_pos = world
-        .get::<&Transform>(entities.cursor)
-        .map(|t| t.position)
-        .unwrap_or([0.0, 0.0, 0.0]);
+    let cursor_pos = {
+        let t = &session.cursor;
+        t.position
+    };
 
     if mode != ViewMode::ThreeD {
         // --- 2D Slices ---
@@ -327,14 +321,6 @@ mod tests {
             },
             MainVolumeTag,
         ));
-        let cursor = world.spawn((Transform {
-            position: [0.5, 0.5, 0.5],
-        },));
-        let window_settings = world.spawn((WindowSettings {
-            width: 900,
-            height: 600,
-            viewport_rect: [0.0, 0.0, 900.0, 600.0],
-        },));
         let viewport = world.spawn((
             Viewport {
                 mode: ViewMode::Axial,
@@ -343,17 +329,8 @@ mod tests {
             },
             ViewportState::default(),
         ));
-        let entities = AppEntities {
-            input: hecs::Entity::DANGLING,
-            editor: hecs::Entity::DANGLING,
-            gui_state: hecs::Entity::DANGLING,
-            volume_windowing: hecs::Entity::DANGLING,
-            annotations: hecs::Entity::DANGLING,
-            overlay: hecs::Entity::DANGLING,
-            protocol: hecs::Entity::DANGLING,
-            cursor,
-            window_settings,
-        };
+        let mut session = Session::new(900, 600);
+        session.cursor.position = [0.5, 0.5, 0.5];
         let mouse_uv = [0.75, 0.5];
         let plane = crate::convert::orthogonal_plane_from_volume_uv(
             crate::convert::PlaneFamily::Axial,
@@ -374,7 +351,7 @@ mod tests {
         )
         .unwrap();
 
-        let actual = get_voxel_at_mouse(&world, &entities, viewport, mouse_uv).unwrap();
+        let actual = get_voxel_at_mouse(&world, &session, viewport, mouse_uv).unwrap();
 
         for axis in 0..3 {
             assert!((actual[axis] - expected[axis]).abs() < 1e-6);

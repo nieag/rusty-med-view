@@ -383,8 +383,8 @@ impl Roi {
         Ok(())
     }
 
-    pub fn renderable_voxel_cache(&self) -> Option<&GpuVolumeResources> {
-        if self.metadata.is_visible && self.is_cache_current(RoiCacheKind::Voxel) {
+    pub fn renderable_voxel_cache(&self, is_visible: bool) -> Option<&GpuVolumeResources> {
+        if is_visible && self.is_cache_current(RoiCacheKind::Voxel) {
             self.voxel_gpu_cache()
         } else {
             None

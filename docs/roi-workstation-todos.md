@@ -16,8 +16,8 @@ Work proceeds in chunks, foundation first. A chunk is a bounded set of plan item
 
 | Chunk | Plan items | Needs from the owner first |
 | --- | --- | --- |
-| A Structure | 2b.1 layering (done), 2b.2 orthogonal family type | nothing |
-| B Scene model | ADR 0005, 2b.9 (singletons to fields, `Roi` into components, annotations as entities), 2b.7 file split | nothing (decided: comments follow a 3D point; several reviewers; mocked author name; local files now, a server later; ROI conflicts are reported) |
+| A Structure (done) | 2b.1 layering (done), 2b.2 orthogonal family type | nothing |
+| B Scene model (done) | ADR 0005, 2b.9 (singletons to fields, `Roi` into components, annotations as entities), 2b.7 file split | nothing (decided: comments follow a 3D point; several reviewers; mocked author name; local files now, a server later; ROI conflicts are reported) |
 | C Completeness | 2b.3 derived forms for all visible ROIs, 2b.4 one viewport mapping, 2b.5 GPU error handling, 2b.6 nothing stale, 2b.6b incremental mesh rebuild | nothing (decided) |
 | D Scale | 2b.10 (cropped ROIs, display beyond 8 slots, layer list, work budget), 4.5 memory | nothing: a synthetic many-label case is generated from the liver sample |
 | E Docs | 2b.8, folded into each chunk as it lands, final check here | nothing |
@@ -127,7 +127,8 @@ Exit: the layering is enforced by a test; the scene model is decided and applied
     3. Split `Roi` into small components (metadata, body, caches, jobs, history, visibility and lock) so systems select ROIs by which components they have.
     4. Make annotations, measurements, points, and comments entities that share components (a world or view anchor, text, colour, visibility, timestamps); this replaces `AnnotationState` and the marker path (see 3.6).
     5. Try the job-as-component scheduler on the ROI coordinator together with 2b.3 and keep it only if it shrinks `roi_runtime.rs`.
-  - *Done when:* `AppEntities` holds only real entities or is gone; annotations are entities; the lifecycle and QA tests pass unchanged; ADR 0005 is accepted.
+  - *Progress:* stage 1 (singletons to `Session` fields, `AppEntities` deleted) and stage 2 (`RoiMetadata` component, `roi_runtime` split by concern with shared job endings; the full `Roi` split was measured and rejected, see ADR 0005) are done; stage 3 (notes and comment threads as entities with world-mm anchors and provenance; GPU marker path removed) are done; stage 4 (`components.rs` split) is done, so ADR 0005 is fully applied; the rest of 3.6 (undo, comment edit and retract, measurements, points of interest) stays in Phase 3.
+  - *Done when:* `AppEntities` is gone (done); annotations are entities; the lifecycle and QA tests pass unchanged; ADR 0005 is accepted.
 - [ ] **2b.10 Scale to 100 to 200 ROIs (L; measure first).**
   - *Problem:* three things do not scale, none of them the ECS. (a) Memory: each label imports as its own full-volume mask, cache, and GPU texture, so 200 ROIs on a 512x512x300 scan is far beyond browser memory (100 ROIs times 79 MB is 7.9 GB before GPU copies). (b) Display: the voxel overlay has 8 GPU slots (`MAX_VOXEL_OVERLAY_SLOTS`), so at most 8 ROIs show as voxels; the rest show nothing. (c) Interface: the layer panel lists ROIs with no search, filter, or virtualisation, and the job scheduler has no budget across many ROIs.
   - *Approach:* crop each ROI's voxel data and caches to its bounding box using the ROI's own geometry (the affine model already allows a cropped origin), which is also the real fix noted in 3.1 and 4.5; show ROIs beyond the slots through a shared display labelmap or contours; a searchable, virtualised layer list with visibility groups; a work budget per frame and per queue that favours the active and visible ROIs (with 2b.3).

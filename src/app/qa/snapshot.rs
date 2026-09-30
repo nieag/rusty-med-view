@@ -8,18 +8,11 @@ use crate::render::roi_views::{RenderRepresentationRequest, RoiRenderViews};
 impl AppState {
     pub fn qa_state_snapshot(&self) -> qa::QaSnapshot {
         if let Some(ctx) = &self.context {
-            let status = ctx
-                .scene
-                .world
-                .get::<&GuiState>(ctx.scene.entities.gui_state)
-                .ok()
-                .and_then(|state| state.status_message.clone());
+            let status = ctx.scene.session.gui.status_message.clone();
 
-            let (active_roi_entity, active_tool) = ctx
-                .scene
-                .world
-                .get::<&EditorState>(ctx.scene.entities.editor)
-                .map(|editor| {
+            let (active_roi_entity, active_tool) = {
+                let editor = &ctx.scene.session.editor;
+                {
                     (
                         editor.active_roi,
                         Some(match editor.active_tool {
@@ -29,8 +22,8 @@ impl AppState {
                             EditorTool::MeshDeform => "mesh_deform".to_string(),
                         }),
                     )
-                })
-                .unwrap_or((None, None));
+                }
+            };
 
             let mut active_roi_id = None;
             let mut active_roi_name = None;
@@ -55,11 +48,12 @@ impl AppState {
             let mut active_roi_overlay_slot = None;
             let mut active_roi_visible = false;
             let mut active_roi_has_renderable_cache = false;
-            for (entity, roi) in ctx.scene.world.query::<&Roi>().iter() {
+            for (entity, (roi, metadata)) in ctx.scene.world.query::<(&Roi, &RoiMetadata)>().iter()
+            {
                 if Some(entity) == active_roi_entity {
-                    active_roi_id = Some(roi.metadata.roi_id.0);
-                    active_roi_name = Some(roi.metadata.name.clone());
-                    active_roi_visible = roi.metadata.is_visible;
+                    active_roi_id = Some(metadata.roi_id.0);
+                    active_roi_name = Some(metadata.name.clone());
+                    active_roi_visible = metadata.is_visible;
                     active_roi_has_renderable_cache = overlay_slots.contains_key(&entity);
                 }
                 let voxel_dimensions = roi
@@ -75,10 +69,10 @@ impl AppState {
                     active_roi_overlay_slot = overlay_slots.get(&entity).copied();
                 }
                 rois.push(qa::QaSnapshotRoi {
-                    id: roi.metadata.roi_id.0,
-                    name: roi.metadata.name.clone(),
+                    id: metadata.roi_id.0,
+                    name: metadata.name.clone(),
                     authority: format!("{:?}", roi.primary_representation()),
-                    visible: roi.metadata.is_visible,
+                    visible: metadata.is_visible,
                     active: Some(entity) == active_roi_entity,
                     overlay_slot: overlay_slots.get(&entity).copied(),
                     reference_geometry_dimensions: roi.reference_geometry().dimensions(),
@@ -177,12 +171,10 @@ impl AppState {
             let mut has_sagittal = false;
             let mut has_three_d = false;
             let mut all_required_rects_non_zero = true;
-            let cursor_pos = ctx
-                .scene
-                .world
-                .get::<&Transform>(ctx.scene.entities.cursor)
-                .map(|cursor| cursor.position)
-                .unwrap_or([0.5, 0.5, 0.5]);
+            let cursor_pos = {
+                let cursor = &ctx.scene.session.cursor;
+                cursor.position
+            };
             for (_, (vp, vp_state)) in ctx
                 .scene
                 .world
@@ -655,9 +647,9 @@ impl AppState {
         let visible_rois = self.context.as_ref().map_or(0, |ctx| {
             ctx.scene
                 .world
-                .query::<&Roi>()
+                .query::<&RoiMetadata>()
                 .iter()
-                .filter(|(_, roi)| roi.metadata.is_visible)
+                .filter(|(_, metadata)| metadata.is_visible)
                 .count()
         });
         let overlay_slots_used = self.context.as_ref().map_or(0, |ctx| {

@@ -1,14 +1,14 @@
 use super::*;
 use crate::components::{
-    ContourData, MainVolumeTag, MeshCache, MeshFace, MeshVertex, RoiId, Transform, VolumeData,
-    VoxelData, VoxelGeometry, WindowSettings,
+    ContourData, MainVolumeTag, MeshCache, MeshFace, MeshVertex, RoiId, VolumeData, VoxelData,
+    VoxelGeometry,
 };
 use crate::model::OrthogonalFamily;
 use crate::render::geometry::world_to_ndc;
 use crate::render::geometry::ViewProjection;
 use glam::Vec3;
 
-fn spawn_world_base() -> (World, AppEntities) {
+fn spawn_world_base() -> (World, Session) {
     let mut world = World::new();
     world.spawn((
         VolumeData {
@@ -27,61 +27,21 @@ fn spawn_world_base() -> (World, AppEntities) {
         },
         MainVolumeTag,
     ));
-    let cursor = world.spawn((Transform {
-        position: [0.5, 0.5, 0.5],
-    },));
-    let ws = world.spawn((WindowSettings {
-        width: 800,
-        height: 600,
-        viewport_rect: [0.0, 0.0, 800.0, 600.0],
-    },));
-    let editor = world.spawn((crate::components::EditorState::default(),));
-    let input = world.spawn((crate::components::InputState::default(),));
-    let gui_state = world.spawn((crate::components::GuiState {
-        status_message: None,
-    },));
-    let volume_windowing = world.spawn((crate::components::VolumeWindowing::default(),));
-    let annotations = world.spawn((crate::components::AnnotationState::default(),));
-    let overlay = world.spawn((crate::overlay::OverlayManager::default(),));
-    let protocol = world.spawn((crate::components::ProtocolState::default(),));
-    (
-        world,
-        AppEntities {
-            input,
-            editor,
-            gui_state,
-            volume_windowing,
-            annotations,
-            overlay,
-            protocol,
-            cursor,
-            window_settings: ws,
-        },
-    )
+    (world, Session::new(800, 600))
 }
 
 #[test]
 fn test_prepare_mesh_render_data_empty_without_main_volume() {
     let world = World::new();
-    let entities = AppEntities {
-        input: hecs::Entity::DANGLING,
-        editor: hecs::Entity::DANGLING,
-        gui_state: hecs::Entity::DANGLING,
-        volume_windowing: hecs::Entity::DANGLING,
-        annotations: hecs::Entity::DANGLING,
-        overlay: hecs::Entity::DANGLING,
-        protocol: hecs::Entity::DANGLING,
-        cursor: hecs::Entity::DANGLING,
-        window_settings: hecs::Entity::DANGLING,
-    };
-    let data = prepare_mesh_render_data(&world, &entities, &HashMap::new());
+    let session = Session::new(800, 600);
+    let data = prepare_mesh_render_data(&world, &session, &HashMap::new());
     assert!(data.parts.is_empty());
     assert!(data.draws.is_empty());
 }
 
 #[test]
 fn test_prepare_mesh_render_data_skips_non_3d_viewports() {
-    let (mut world, entities) = spawn_world_base();
+    let (mut world, session) = spawn_world_base();
     world.spawn((
         Viewport {
             mode: ViewMode::Axial,
@@ -90,7 +50,7 @@ fn test_prepare_mesh_render_data_skips_non_3d_viewports() {
         },
         ViewportState::default(),
     ));
-    world.spawn((Roi::new_mesh(
+    world.spawn(Roi::new_mesh(
         RoiId(1),
         "Mesh".to_string(),
         MeshData {
@@ -109,15 +69,15 @@ fn test_prepare_mesh_render_data_skips_non_3d_viewports() {
                 vertex_indices: [0, 1, 2],
             }],
         },
-    ),));
-    let data = prepare_mesh_render_data(&world, &entities, &HashMap::new());
+    ));
+    let data = prepare_mesh_render_data(&world, &session, &HashMap::new());
     assert!(data.parts.is_empty());
     assert!(data.draws.is_empty());
 }
 
 #[test]
 fn test_prepare_mesh_render_data_uses_main_volume_geometry_for_projection() {
-    let (mut world, entities) = spawn_world_base();
+    let (mut world, session) = spawn_world_base();
     {
         let mut query = world.query::<&mut VolumeData>().with::<&MainVolumeTag>();
         let (_, vol) = query.iter().next().expect("main volume");
@@ -145,7 +105,7 @@ fn test_prepare_mesh_render_data_uses_main_volume_geometry_for_projection() {
         },
     ));
     let world_vertex = [2.0, 2.0, 2.0];
-    world.spawn((Roi::new_mesh(
+    world.spawn(Roi::new_mesh(
         RoiId(2),
         "Mesh".to_string(),
         MeshData {
@@ -164,8 +124,8 @@ fn test_prepare_mesh_render_data_uses_main_volume_geometry_for_projection() {
                 vertex_indices: [0, 1, 2],
             }],
         },
-    ),));
-    let data = prepare_mesh_render_data(&world, &entities, &HashMap::new());
+    ));
+    let data = prepare_mesh_render_data(&world, &session, &HashMap::new());
     assert_eq!(data.draws.len(), 1);
     assert_eq!(data.parts.len(), 1);
     let geometry = data.parts[0]
@@ -247,7 +207,7 @@ fn test_prepare_mesh_render_data_uses_main_volume_geometry_for_projection() {
 
 #[test]
 fn test_prepare_mesh_render_data_emits_wgpu_handle_for_selected_mesh_vertex() {
-    let (mut world, entities) = spawn_world_base();
+    let (mut world, mut session) = spawn_world_base();
     let viewport_entity = world.spawn((
         Viewport {
             mode: ViewMode::ThreeD,
@@ -256,7 +216,7 @@ fn test_prepare_mesh_render_data_emits_wgpu_handle_for_selected_mesh_vertex() {
         },
         ViewportState::default(),
     ));
-    let roi_entity = world.spawn((Roi::new_mesh(
+    let roi_entity = world.spawn(Roi::new_mesh(
         RoiId(22),
         "Selected mesh".to_string(),
         MeshData {
@@ -275,11 +235,9 @@ fn test_prepare_mesh_render_data_emits_wgpu_handle_for_selected_mesh_vertex() {
                 vertex_indices: [0, 1, 2],
             }],
         },
-    ),));
+    ));
     {
-        let mut editor = world
-            .get::<&mut crate::components::EditorState>(entities.editor)
-            .unwrap();
+        let editor = &mut session.editor;
         editor.active_roi = Some(roi_entity);
         editor.active_tool = crate::components::EditorTool::MeshDeform;
         editor.mesh_selection = Some(crate::components::MeshSelection {
@@ -290,7 +248,7 @@ fn test_prepare_mesh_render_data_emits_wgpu_handle_for_selected_mesh_vertex() {
         });
     }
 
-    let data = prepare_mesh_render_data(&world, &entities, &HashMap::new());
+    let data = prepare_mesh_render_data(&world, &session, &HashMap::new());
     let key = MeshPartKey {
         roi_entity,
         part: MeshRenderPartKey::Handle(viewport_entity),
@@ -309,7 +267,7 @@ fn test_prepare_mesh_render_data_emits_wgpu_handle_for_selected_mesh_vertex() {
 
 #[test]
 fn test_prepare_mesh_render_data_skips_invalid_face_indices() {
-    let (mut world, entities) = spawn_world_base();
+    let (mut world, session) = spawn_world_base();
     world.spawn((
         Viewport {
             mode: ViewMode::ThreeD,
@@ -318,7 +276,7 @@ fn test_prepare_mesh_render_data_skips_invalid_face_indices() {
         },
         ViewportState::default(),
     ));
-    world.spawn((Roi::new_mesh(
+    world.spawn(Roi::new_mesh(
         RoiId(3),
         "Mesh".to_string(),
         MeshData {
@@ -329,15 +287,15 @@ fn test_prepare_mesh_render_data_skips_invalid_face_indices() {
                 vertex_indices: [0, 1, 2],
             }],
         },
-    ),));
-    let data = prepare_mesh_render_data(&world, &entities, &HashMap::new());
+    ));
+    let data = prepare_mesh_render_data(&world, &session, &HashMap::new());
     assert!(data.parts.is_empty());
     assert!(data.draws.is_empty());
 }
 
 #[test]
 fn test_prepare_mesh_render_data_preserves_unchanged_chunk_identity_and_vertices() {
-    let (mut world, entities) = spawn_world_base();
+    let (mut world, session) = spawn_world_base();
     world.spawn((
         Viewport {
             mode: ViewMode::ThreeD,
@@ -355,7 +313,7 @@ fn test_prepare_mesh_render_data_preserves_unchanged_chunk_identity_and_vertices
     voxel.raw_data[1] = 1;
     voxel.raw_data[20] = 1;
     let chunked = crate::convert::extract_chunked_mesh_from_voxel_data(&voxel, 16).unwrap();
-    let mut roi = Roi::new_contour(
+    let (mut roi, roi_meta) = Roi::new_contour(
         RoiId(4),
         "Contour".to_string(),
         ContourData {
@@ -375,9 +333,9 @@ fn test_prepare_mesh_render_data_preserves_unchanged_chunk_identity_and_vertices
     roi.dirty_state.mesh.dirty = false;
     roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
     roi.dirty_state.mesh.built_from = roi.dirty_state.authoritative;
-    let roi_entity = world.spawn((roi,));
+    let roi_entity = crate::app::roi::spawn_roi_layer(&mut world, (roi, roi_meta), 1.0);
 
-    let before = prepare_mesh_render_data(&world, &entities, &HashMap::new());
+    let before = prepare_mesh_render_data(&world, &session, &HashMap::new());
     assert_eq!(before.parts.len(), 2);
     assert!(before.parts.iter().all(|part| part.geometry.is_some()));
     let known = before
@@ -396,7 +354,7 @@ fn test_prepare_mesh_render_data_preserves_unchanged_chunk_identity_and_vertices
             chunks: Some(rebuilt),
         });
     }
-    let after = prepare_mesh_render_data(&world, &entities, &known);
+    let after = prepare_mesh_render_data(&world, &session, &known);
 
     let part_for = |chunk: MeshChunkKey| {
         after
@@ -417,7 +375,7 @@ fn test_prepare_mesh_render_data_preserves_unchanged_chunk_identity_and_vertices
 
 #[test]
 fn test_camera_motion_changes_only_the_draw_uniform() {
-    let (mut world, entities) = spawn_world_base();
+    let (mut world, session) = spawn_world_base();
     let viewport = world.spawn((
         Viewport {
             mode: ViewMode::ThreeD,
@@ -426,7 +384,7 @@ fn test_camera_motion_changes_only_the_draw_uniform() {
         },
         ViewportState::default(),
     ));
-    world.spawn((Roi::new_mesh(
+    world.spawn(Roi::new_mesh(
         RoiId(5),
         "Mesh".to_string(),
         MeshData {
@@ -445,8 +403,8 @@ fn test_camera_motion_changes_only_the_draw_uniform() {
                 vertex_indices: [0, 1, 2],
             }],
         },
-    ),));
-    let first = prepare_mesh_render_data(&world, &entities, &HashMap::new());
+    ));
+    let first = prepare_mesh_render_data(&world, &session, &HashMap::new());
     let known = first
         .parts
         .iter()
@@ -459,7 +417,7 @@ fn test_camera_motion_changes_only_the_draw_uniform() {
         state.pan = [0.1, -0.05];
         state.user_rotation = glam::Quat::from_rotation_y(0.7).to_array();
     }
-    let second = prepare_mesh_render_data(&world, &entities, &known);
+    let second = prepare_mesh_render_data(&world, &session, &known);
 
     assert!(second.parts.iter().all(|part| part.geometry.is_none()));
     assert_ne!(first.draws[0].uniform.row0, second.draws[0].uniform.row0);
