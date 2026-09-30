@@ -3,7 +3,7 @@
 //!
 //! Supports both `.nii` and `.nii.gz` files via gzip detection.
 
-use crate::app::roi::VoxelGeometry;
+use crate::model::VoxelGeometry;
 use flate2::read::GzDecoder;
 use glam::{DMat4, DVec3, DVec4};
 use nifti::{InMemNiftiVolume, NiftiHeader, RandomAccessNiftiVolume};
@@ -357,7 +357,7 @@ pub fn load_nifti_from_bytes(data: &[u8]) -> Result<LoadedVolume, LoadError> {
 pub fn load_label_from_bytes(
     data: &[u8],
     filename: String,
-) -> Result<crate::components::LoadedLabel, LoadError> {
+) -> Result<crate::model::LoadedLabel, LoadError> {
     let ParsedNifti {
         header,
         volume,
@@ -386,7 +386,7 @@ pub fn load_label_from_bytes(
         }
     }
 
-    Ok(crate::components::LoadedLabel {
+    Ok(crate::model::LoadedLabel {
         dimensions: [width, height, depth],
         geometry,
         data: label_data,

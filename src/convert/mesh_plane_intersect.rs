@@ -1,5 +1,5 @@
-use crate::app::roi::{ContourData, ContourLoop, ContourPoint, ContourSlice, MeshData};
 use crate::convert::{world_mm_to_plane_local_mm, PlaneDefinition};
+use crate::model::{ContourData, ContourLoop, ContourPoint, ContourSlice, MeshData};
 use glam::Vec3;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -183,10 +183,10 @@ fn chain_segments(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{VoxelData, VoxelGeometry};
     use crate::convert::{
         extract_mesh_from_voxel_data, orthogonal_plane_from_volume_uv, PlaneFamily,
     };
+    use crate::model::{VoxelData, VoxelGeometry};
 
     #[test]
     fn test_closed_voxel_mesh_intersection_produces_closed_loop() {

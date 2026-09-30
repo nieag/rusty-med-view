@@ -1,7 +1,7 @@
-use crate::app::roi::{MeshData, MeshFace, MeshVertex, VoxelData};
 use crate::convert::{
     signed_distance_from_voxel_data, voxel_index_to_world_mm, SignedDistanceError,
 };
+use crate::model::{MeshData, MeshFace, MeshVertex, VoxelData};
 use std::collections::HashMap;
 
 // Local marching-cubes implementation. The compact case table encodes the
@@ -272,8 +272,8 @@ fn linear_index(index: [u32; 3], dimensions: [u32; 3]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::roi::VoxelGeometry;
     use crate::convert::voxelize_mesh_to_voxel_data;
+    use crate::model::VoxelGeometry;
 
     fn voxel_data(raw_data: Vec<u8>) -> VoxelData {
         VoxelData {

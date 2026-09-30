@@ -4,7 +4,7 @@ use crate::components::{
     ViewMode, Viewport, ViewportState,
 };
 #[cfg(test)]
-use crate::convert::{apply_displacement, brush_displacement};
+use crate::convert::deform_mesh_surface_brush;
 use crate::convert::{deform_mesh_surface_brush_limited, MeshDeformBase};
 use crate::render::geometry::{
     build_display_projection_context, project_world_mm_to_viewport_uv_3d, DisplayProjectionContext,
@@ -64,7 +64,7 @@ pub fn select_mesh_vertex(
     match roi::ensure_editable(world, roi_entity, roi::EditTarget::Mesh) {
         Ok(roi::Readiness::Ready) => {}
         Ok(roi::Readiness::Switched(report)) => {
-            crate::io::handlers::set_status_message(world, entities, report.message());
+            crate::app::handlers::set_status_message(world, entities, report.message());
         }
         Ok(roi::Readiness::Pending) => return Err(MeshEditInteractionError::SwitchPending),
         Err(roi::SwitchError::Locked) => return Err(MeshEditInteractionError::ActiveRoiLocked),
@@ -323,30 +323,6 @@ fn ray_plane_intersection(
     }
     let t = (point_on_plane - origin).dot(plane_normal) / denominator;
     t.is_finite().then_some(origin + direction * t)
-}
-
-/// The brush without collision limiting, for tests of the falloff itself.
-#[cfg(test)]
-pub fn deform_mesh_surface_brush(
-    mesh: &MeshData,
-    seed_indices: [u32; 3],
-    anchor_world_mm: [f32; 3],
-    delta_world_mm: [f32; 3],
-    radius_mm: f32,
-    strength: f32,
-) -> MeshData {
-    let Some(base) = MeshDeformBase::new(mesh) else {
-        return mesh.clone();
-    };
-    let displacement = brush_displacement(
-        &base,
-        seed_indices,
-        anchor_world_mm,
-        delta_world_mm,
-        radius_mm,
-        strength,
-    );
-    apply_displacement(&base, mesh, &displacement, 1.0)
 }
 
 #[cfg(test)]

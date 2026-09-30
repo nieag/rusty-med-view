@@ -5,8 +5,8 @@
 //! scaled back to the largest fraction that stays free of new intersections, so a drag meets the
 //! surface like a wall instead of producing a mesh that fails validation at commit.
 
-use crate::components::{MeshData, MeshVertex};
 use crate::convert::mesh_voxelize::faces_overlap_beyond_shared_boundary;
+use crate::model::{MeshData, MeshVertex};
 use glam::Vec3;
 use parry3d::bounding_volume::{Aabb, BoundingVolume};
 use parry3d::math::Vector;
@@ -337,6 +337,30 @@ pub fn deform_mesh_surface_brush_limited(
         apply_displacement(base, mesh, &displacement, fraction),
         fraction,
     )
+}
+
+/// The brush without collision limiting, for tests of the falloff itself.
+#[cfg(test)]
+pub fn deform_mesh_surface_brush(
+    mesh: &MeshData,
+    seed_indices: [u32; 3],
+    anchor_world_mm: [f32; 3],
+    delta_world_mm: [f32; 3],
+    radius_mm: f32,
+    strength: f32,
+) -> MeshData {
+    let Some(base) = MeshDeformBase::new(mesh) else {
+        return mesh.clone();
+    };
+    let displacement = brush_displacement(
+        &base,
+        seed_indices,
+        anchor_world_mm,
+        delta_world_mm,
+        radius_mm,
+        strength,
+    );
+    apply_displacement(&base, mesh, &displacement, 1.0)
 }
 
 fn bounds_of(face: &[u32; 3], positions: &[[f32; 3]]) -> Aabb {

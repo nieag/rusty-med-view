@@ -1,5 +1,5 @@
+use crate::app::handlers;
 use crate::components::*;
-use crate::io::handlers;
 use crate::{file_dialog, nifti_loader, AppEvent};
 use hecs::World;
 use winit::event_loop::EventLoopProxy;

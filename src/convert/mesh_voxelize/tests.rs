@@ -1,6 +1,6 @@
 use super::*;
-use crate::components::{MeshFace, MeshVertex};
 use crate::convert::extract_mesh_from_voxel_data;
+use crate::model::{MeshFace, MeshVertex};
 use glam::Quat;
 
 fn geometry() -> VoxelGeometry {
@@ -194,7 +194,7 @@ fn test_folded_closed_surface_is_rejected_before_voxelization() {
     // validator must catch that accumulated deformation before resampling.
     for step in 0..10 {
         let anchor = mesh.vertices[0].world_mm;
-        mesh = crate::systems::mesh_editing::deform_mesh_surface_brush(
+        mesh = crate::convert::deform_mesh_surface_brush(
             &mesh,
             [0, 1, 2],
             anchor,

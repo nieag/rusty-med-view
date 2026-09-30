@@ -231,7 +231,7 @@ fn prepare_contour_edit(
                 editor.contour_draft = None;
                 editor.contour_selection = None;
             }
-            crate::io::handlers::set_status_message(world, entities, report.message());
+            crate::app::handlers::set_status_message(world, entities, report.message());
             Ok(())
         }
     }

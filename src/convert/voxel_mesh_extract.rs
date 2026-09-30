@@ -1,8 +1,8 @@
-use crate::app::roi::{MeshData, MeshFace, VoxelData};
 use crate::convert::{
     build_smooth_mesh_field, extract_smooth_mesh_chunk_from_field,
     extract_smooth_mesh_from_voxel_data, SmoothMeshExtractionError, SmoothMeshField,
 };
+use crate::model::{MeshData, MeshFace, VoxelData};
 use std::{collections::HashMap, sync::Arc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,8 +1,8 @@
 use super::*;
-use crate::components::VoxelGeometry;
 use crate::convert::{
     plane_local_mm_to_world_mm, rasterize_contours_to_voxel_data, world_mm_to_voxel_index,
 };
+use crate::model::VoxelGeometry;
 use glam::Quat;
 
 fn identity_geometry(dimensions: [u32; 3]) -> VoxelGeometry {

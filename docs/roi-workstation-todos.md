@@ -4,6 +4,26 @@ Prioritized backlog from the 2026-09-29 full-codebase review. Work top-to-bottom
 
 Findings marked **[repro]** were reproduced with a throwaway test during the review. Each becomes a permanent regression test that fails before its fix.
 
+## Working agreement (2026-09-30)
+
+Work proceeds in chunks, foundation first. A chunk is a bounded set of plan items with an exit check; nothing from a later chunk starts before the current one is finished and reported.
+
+- **One chunk, one branch.** Each chunk is a branch `chunk/<letter>-<name>` off `main`. Items land as separate commits on it. When the exit check passes, the branch is merged into `main` without a pull request (fast-forward or a merge commit) and tagged `chunk-<letter>`. There is no other process; we are the only contributors.
+- **Every commit is green:** `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, `cargo check --target wasm32-unknown-unknown`. A chunk's exit check also runs the release guard tests (`cargo test --release --test switch_guard`, on an idle machine, because it asserts timings) and the QA spec against a rebuilt app.
+- **The lifecycle tests are the safety net.** The three "ROI lifecycle" tests in `roi_runtime/tests.rs` must pass unchanged through every structural chunk.
+- **Each chunk ends with a short report:** what changed, what was deleted, how to check it by hand, and the decisions the next chunk needs from the owner. Decisions are collected there, not asked one at a time.
+- **No new features inside a structural chunk.** A bug found on the way is fixed in its own commit with a test, and named in the report.
+
+| Chunk | Plan items | Needs from the owner first |
+| --- | --- | --- |
+| A Structure | 2b.1 layering (done), 2b.2 orthogonal family type | nothing |
+| B Scene model | ADR 0005, 2b.9 (singletons to fields, `Roi` into components, annotations as entities), 2b.7 file split | in-view comment anchoring; whether a session is shared between people |
+| C Completeness | 2b.3 derived forms for all visible ROIs, 2b.4 one viewport mapping, 2b.5 GPU error handling, 2b.6 stale-view policy | confirm 2b.3 and 2b.6 recommendations |
+| D Scale | 2b.10 (cropped ROIs, display beyond 8 slots, layer list, work budget), 4.5 memory | a realistic multi-label case and scan size |
+| E Docs | 2b.8, folded into each chunk as it lands, final check here | nothing |
+
+Phase 3 (editing features) starts after chunk D.
+
 ## Product constraints
 
 These drive the design.
@@ -64,7 +84,7 @@ Added after the 2026-09-30 review of the finished Phase 2 code; the evidence and
 
 Exit: the layering is enforced by a test; the scene model is decided and applied (2b.9); a 150-ROI case fits in memory (2b.10); no unrepresentable-state panics (`unreachable!`) in the conversion code; every visible ROI shows all its derived forms; no GPU error can panic the app; the docs describe the code as it is; the lifecycle tests still pass.
 
-- [ ] **2b.1 One dependency-free `model` layer (M to L, do first).**
+- [x] **2b.1 One dependency-free `model` layer (M to L, do first).** Done on branch `chunk/a-structure`: `src/model/` (geometry and planes, voxel, mesh, contour, volume, view) imports nothing from the crate; `convert`, `util`, and `io` import only lower layers; the load handlers moved from `io` to `app/handlers.rs`; `tests/layering.rs` enforces it (and was checked to fail on a deliberate violation). The upper layers (`app`, `render`, `systems`, `gui`) still depend on each other both ways; that is 2b.9 and 2b.7. Original scope:
   - *Problem:* `convert` (pure geometry and conversion algorithms) imports its data types from `app::roi::model`, and `app::roi` calls `convert`, so the two form a cycle. `render` imports 29 items from `app::components` and 5 from `app::roi_runtime`; `util` and `io` import from `app` too. A pure algorithm cannot be reused or tested without the ECS types, and the cycle is why every layering fix so far touched many files.
   - *Approach:* move the pure types (`VoxelGeometry`, `VoxelData`, `MeshData`, `ContourData` and its parts, `PlaneFamily` and `PlaneDefinition`, slice keys) into one `model` module that imports nothing from the crate. The dependency order becomes model, convert, `app::roi`, runtime, systems, render, gui. Keep re-exports at the old paths for one commit so the move is mechanical.
   - *Done when:* a unit test scans `use crate::` lines and fails on any upward import (for example `model` importing `convert`, or `convert` importing `app`); documented in `docs/code-map.md`.

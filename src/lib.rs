@@ -4,6 +4,7 @@ pub mod app;
 pub mod convert;
 pub mod gui;
 pub mod io;
+pub mod model;
 pub mod render;
 pub mod systems;
 pub mod util;
@@ -11,8 +12,8 @@ pub mod util;
 pub mod file_dialog;
 pub mod overlay;
 
+pub use crate::app::handlers as load_handlers;
 pub use crate::app::App;
-pub use crate::io::handlers as load_handlers;
 pub use crate::io::nifti as nifti_loader;
 pub use crate::io::volume;
 pub use crate::util::orientation;

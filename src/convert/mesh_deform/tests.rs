@@ -1,6 +1,6 @@
 use super::*;
-use crate::components::{VoxelData, VoxelGeometry};
 use crate::convert::{extract_mesh_from_voxel_data, validate_mesh_for_voxelization};
+use crate::model::{VoxelData, VoxelGeometry};
 
 /// A 6 x 6 x 2 voxel slab: closed, and thin enough that pushing one face in reaches the other.
 fn slab() -> MeshData {
@@ -33,7 +33,7 @@ fn top_face_seed(mesh: &MeshData) -> ([u32; 3], [f32; 3]) {
                 .all(|index| (mesh.vertices[*index as usize].world_mm[2] - top).abs() < 1e-4)
         })
         .min_by(|a, b| {
-            let distance = |face: &crate::components::MeshFace| {
+            let distance = |face: &crate::model::MeshFace| {
                 let centre = face.vertex_indices.iter().fold(Vec3::ZERO, |sum, index| {
                     sum + Vec3::from_array(mesh.vertices[*index as usize].world_mm)
                 }) / 3.0;
@@ -96,7 +96,7 @@ fn test_coincident_vertices_move_together() {
         .map(|world_mm| MeshVertex { world_mm })
         .to_vec(),
         faces: [[0, 1, 2], [3, 4, 1]]
-            .map(|vertex_indices| crate::components::MeshFace { vertex_indices })
+            .map(|vertex_indices| crate::model::MeshFace { vertex_indices })
             .to_vec(),
     };
     let base = MeshDeformBase::new(&mesh).unwrap();
@@ -111,7 +111,7 @@ fn test_coincident_vertices_move_together() {
 fn test_a_face_with_a_missing_vertex_has_no_deform_base() {
     let mesh = MeshData {
         vertices: vec![MeshVertex { world_mm: [0.0; 3] }],
-        faces: vec![crate::components::MeshFace {
+        faces: vec![crate::model::MeshFace {
             vertex_indices: [0, 1, 2],
         }],
     };

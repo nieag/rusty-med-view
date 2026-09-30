@@ -1,4 +1,4 @@
-use crate::components::{VolumeData, VoxelData};
+use crate::model::{VolumeData, VoxelData};
 use crate::nifti_loader::LoadedVolume;
 
 /// Create a 3D texture from float intensity data (R32Float format)

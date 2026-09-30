@@ -375,9 +375,9 @@ fn geometry_from_columns(
     column_x: [f64; 3],
     column_y: [f64; 3],
     column_z: [f64; 3],
-) -> crate::app::roi::VoxelGeometry {
+) -> crate::model::VoxelGeometry {
     use glam::{DMat4, DVec4};
-    crate::app::roi::VoxelGeometry::from_affine(
+    crate::model::VoxelGeometry::from_affine(
         [8, 8, 8],
         DMat4::from_cols(
             DVec4::new(column_x[0], column_x[1], column_x[2], 0.0),

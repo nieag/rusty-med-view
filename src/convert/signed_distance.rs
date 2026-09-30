@@ -1,4 +1,4 @@
-use crate::app::roi::VoxelData;
+use crate::model::VoxelData;
 
 const DISTANCE_INFINITY: f32 = 1.0e20;
 
@@ -171,7 +171,7 @@ fn linear_index(index: [u32; 3], dimensions: [u32; 3]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::roi::VoxelGeometry;
+    use crate::model::VoxelGeometry;
 
     fn voxel_data(dimensions: [u32; 3], spacing: [f32; 3], raw_data: Vec<u8>) -> VoxelData {
         VoxelData {

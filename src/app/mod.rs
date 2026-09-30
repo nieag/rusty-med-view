@@ -1,6 +1,7 @@
 pub mod components;
 pub mod context;
 pub mod events;
+pub mod handlers;
 pub mod qa;
 pub mod roi;
 pub mod roi_runtime;
@@ -13,7 +14,6 @@ use crate::app::qa::sample::{
 };
 #[cfg(target_arch = "wasm32")]
 use crate::app::qa::sample::{spawn_qa_fetch_label, spawn_qa_fetch_volume};
-use crate::io::handlers;
 use crate::render::pipeline;
 use crate::render::protocols;
 use crate::systems;

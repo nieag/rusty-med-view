@@ -1,81 +1,8 @@
-use crate::app::roi::VoxelGeometry;
 use crate::convert::coord_mapping::{volume_uv_to_voxel_index, voxel_index_to_volume_uv};
+use crate::model::VoxelGeometry;
 use glam::{DVec3, Quat, Vec3};
 
-/// Stable identity for a validated voxel grid and its coordinate convention.
-///
-/// This intentionally stores affine bits rather than a hash so cache acceptance can remain
-/// deterministic and collision-free without introducing a hashing policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct GeometryIdentity {
-    dimensions: [u32; 3],
-    ijk_to_world_bits: [u64; 16],
-}
-
-impl GeometryIdentity {
-    pub(crate) const fn new(dimensions: [u32; 3], ijk_to_world_bits: [u64; 16]) -> Self {
-        Self {
-            dimensions,
-            ijk_to_world_bits,
-        }
-    }
-
-    pub const fn dimensions(self) -> [u32; 3] {
-        self.dimensions
-    }
-
-    pub const fn ijk_to_world_bits(self) -> [u64; 16] {
-        self.ijk_to_world_bits
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PlaneFamily {
-    Axial,
-    Coronal,
-    Sagittal,
-    Oblique,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PlaneDefinition {
-    pub family: PlaneFamily,
-    pub origin_mm: [f32; 3],
-    pub u_axis_mm: [f32; 3],
-    pub v_axis_mm: [f32; 3],
-    pub normal_mm: [f32; 3],
-}
-
-impl PlaneDefinition {
-    /// Builds a finite, non-degenerate plane frame and derives its normal from the two axes.
-    pub fn new(
-        family: PlaneFamily,
-        origin_mm: [f32; 3],
-        u_axis_mm: [f32; 3],
-        v_axis_mm: [f32; 3],
-    ) -> Option<Self> {
-        let origin = Vec3::from_array(origin_mm);
-        if !origin.is_finite() {
-            return None;
-        }
-        let u_axis = Vec3::from_array(u_axis_mm);
-        let v_axis = Vec3::from_array(v_axis_mm);
-        if !u_axis.is_finite() || !v_axis.is_finite() {
-            return None;
-        }
-        let normal = u_axis.cross(v_axis);
-        if normal.length_squared() <= 1e-12 {
-            return None;
-        }
-        Some(Self {
-            family,
-            origin_mm,
-            u_axis_mm,
-            v_axis_mm,
-            normal_mm: normal.normalize().to_array(),
-        })
-    }
-}
+pub use crate::model::{GeometryIdentity, PlaneDefinition, PlaneFamily};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewportMapping {

@@ -174,3 +174,71 @@ fn test_mesh_deform_update_is_fast_and_keeps_the_liver_valid() {
         assert!(worst_ms < 250.0, "worst deform update {worst_ms:.1} ms");
     }
 }
+
+/// A dirty-region mesh rebuild must equal a clean full rebuild on the real liver; also records
+/// the timing of the incremental setup and chunk work.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "slow in debug builds; run with --release")]
+fn test_liver_dirty_mesh_rebuild_matches_clean_full_rebuild() {
+    use rusty_med_view::convert::{
+        ChunkedMeshData, IncrementalChunkedMeshRebuild, DEFAULT_MESH_CHUNK_SIZE,
+    };
+    use rusty_med_view::model::{MeshData, VoxelData};
+
+    fn full_rebuild(voxels: &VoxelData) -> ChunkedMeshData {
+        let mut work =
+            IncrementalChunkedMeshRebuild::begin_full(voxels, DEFAULT_MESH_CHUNK_SIZE).unwrap();
+        while !work.step(voxels).unwrap() {}
+        work.into_result().unwrap()
+    }
+
+    fn canonical_triangle_bits(mesh: &MeshData) -> Vec<[[u32; 3]; 3]> {
+        let mut triangles = mesh
+            .faces
+            .iter()
+            .map(|face| {
+                let mut points = face
+                    .vertex_indices
+                    .map(|index| mesh.vertices[index as usize].world_mm.map(f32::to_bits));
+                points.sort();
+                points
+            })
+            .collect::<Vec<_>>();
+        triangles.sort();
+        triangles
+    }
+
+    let mut voxels = liver_label();
+    let base = full_rebuild(&voxels);
+    let changed_index = voxels
+        .raw_data
+        .iter()
+        .position(|value| *value != 0)
+        .unwrap();
+    voxels.raw_data[changed_index] = 0;
+    let [width, height, _] = voxels.geometry.dimensions();
+    let changed = [
+        changed_index as u32 % width,
+        (changed_index as u32 / width) % height,
+        changed_index as u32 / (width * height),
+    ];
+    let setup_started = Instant::now();
+    let mut work = IncrementalChunkedMeshRebuild::begin_for_voxel_aabb(
+        base,
+        &voxels,
+        changed,
+        changed.map(|value| value + 1),
+    )
+    .unwrap();
+    let setup_duration = setup_started.elapsed();
+    let chunk_started = Instant::now();
+    while !work.step(&voxels).unwrap() {}
+    let chunk_duration = chunk_started.elapsed();
+    let rebuilt = work.into_result().unwrap();
+    println!("liver dirty mesh rebuild: setup={setup_duration:?}, chunks={chunk_duration:?}");
+    let clean = full_rebuild(&voxels);
+    assert_eq!(
+        canonical_triangle_bits(&rebuilt.merged_mesh()),
+        canonical_triangle_bits(&clean.merged_mesh())
+    );
+}

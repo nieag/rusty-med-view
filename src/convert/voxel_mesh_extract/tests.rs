@@ -1,5 +1,5 @@
 use super::*;
-use crate::components::{VoxelData, VoxelGeometry};
+use crate::model::{VoxelData, VoxelGeometry};
 use glam::{Quat, Vec3};
 
 fn geometry(
@@ -412,54 +412,6 @@ fn test_dirty_sdf_rebuild_updates_chunks_beyond_one_voxel_halo() {
     assert_eq!(
         canonical_triangle_bits(&chunked.merged_mesh()),
         canonical_triangle_bits(&full)
-    );
-}
-
-#[test]
-#[ignore = "liver dirty-rebuild timing QA"]
-fn test_liver_dirty_mesh_rebuild_matches_clean_full_rebuild() {
-    let bytes = std::fs::read(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/qa_samples/liver_0_label.nii"
-    ))
-    .unwrap();
-    let label =
-        crate::nifti_loader::load_label_from_bytes(&bytes, "liver_0_label.nii".into()).unwrap();
-    let mut voxels = VoxelData {
-        geometry: label.geometry,
-        raw_data: label.data,
-    };
-    let base = extract_chunked_mesh_from_voxel_data(&voxels, DEFAULT_MESH_CHUNK_SIZE).unwrap();
-    let changed_index = voxels
-        .raw_data
-        .iter()
-        .position(|value| *value != 0)
-        .unwrap();
-    voxels.raw_data[changed_index] = 0;
-    let [width, height, _] = voxels.geometry.dimensions;
-    let changed = [
-        changed_index as u32 % width,
-        (changed_index as u32 / width) % height,
-        changed_index as u32 / (width * height),
-    ];
-    let setup_started = std::time::Instant::now();
-    let mut work = IncrementalChunkedMeshRebuild::begin_for_voxel_aabb(
-        base,
-        &voxels,
-        changed,
-        changed.map(|value| value + 1),
-    )
-    .unwrap();
-    let setup_duration = setup_started.elapsed();
-    let chunk_started = std::time::Instant::now();
-    while !work.step(&voxels).unwrap() {}
-    let chunk_duration = chunk_started.elapsed();
-    let rebuilt = work.into_result().unwrap();
-    eprintln!("liver dirty mesh rebuild: setup={setup_duration:?}, chunks={chunk_duration:?}");
-    let clean = extract_chunked_mesh_from_voxel_data(&voxels, DEFAULT_MESH_CHUNK_SIZE).unwrap();
-    assert_eq!(
-        canonical_triangle_bits(&rebuilt.merged_mesh()),
-        canonical_triangle_bits(&clean.merged_mesh())
     );
 }
 

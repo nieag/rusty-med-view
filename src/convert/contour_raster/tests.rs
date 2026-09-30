@@ -1,6 +1,6 @@
 use super::*;
-use crate::components::{ContourLoop, ContourPoint, ContourSlice};
 use crate::convert::{orthogonal_plane_from_volume_uv, PlaneFamily};
+use crate::model::{ContourLoop, ContourPoint, ContourSlice};
 
 fn index(dimensions: [u32; 3], x: u32, y: u32, z: u32) -> usize {
     (z as usize * dimensions[1] as usize + y as usize) * dimensions[0] as usize + x as usize

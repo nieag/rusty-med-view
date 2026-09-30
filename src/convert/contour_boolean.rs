@@ -1,4 +1,4 @@
-use crate::app::roi::{ContourLoop, ContourPoint, ContourSlice};
+use crate::model::{ContourLoop, ContourPoint, ContourSlice};
 use geo::{BooleanOps, Contains, Coord, LineString, MultiPolygon, Point, Polygon};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,10 +122,10 @@ fn point_on_loop_boundary(point: [f32; 2], contour_loop: &ContourLoop) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{ContourData, VoxelGeometry};
     use crate::convert::{
         orthogonal_plane_from_volume_uv, rasterize_contours_to_voxel_data, PlaneFamily,
     };
+    use crate::model::{ContourData, VoxelGeometry};
 
     fn square(min: [f32; 2], max: [f32; 2]) -> ContourLoop {
         ContourLoop {

@@ -1,5 +1,5 @@
-use crate::app::roi::{MeshData, VoxelData, VoxelGeometry};
 use crate::convert::world_mm_to_voxel_index;
+use crate::model::{MeshData, VoxelData, VoxelGeometry};
 use parry3d::math::Vector;
 use parry3d::query::PointQuery;
 use parry3d::shape::{TriMesh, TriMeshFlags};

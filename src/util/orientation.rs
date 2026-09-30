@@ -19,11 +19,11 @@ pub enum SlicePlane {
 
 impl SlicePlane {
     /// Create from ViewMode
-    pub fn from_mode(mode: crate::components::ViewMode) -> Option<Self> {
+    pub fn from_mode(mode: crate::model::ViewMode) -> Option<Self> {
         match mode {
-            crate::components::ViewMode::Axial => Some(SlicePlane::Axial),
-            crate::components::ViewMode::Coronal => Some(SlicePlane::Coronal),
-            crate::components::ViewMode::Sagittal => Some(SlicePlane::Sagittal),
+            crate::model::ViewMode::Axial => Some(SlicePlane::Axial),
+            crate::model::ViewMode::Coronal => Some(SlicePlane::Coronal),
+            crate::model::ViewMode::Sagittal => Some(SlicePlane::Sagittal),
             _ => None,
         }
     }
@@ -138,7 +138,7 @@ pub fn opposite_letter(letter: char) -> char {
 
 /// Anatomical letters of the positive and negative direction of each voxel index axis, derived
 /// from the grid's affine so reflected (LAS/LPS) and permuted volumes are labelled truthfully.
-pub fn index_axis_letters(geometry: crate::app::roi::VoxelGeometry) -> [[char; 2]; 3] {
+pub fn index_axis_letters(geometry: crate::model::VoxelGeometry) -> [[char; 2]; 3] {
     let affine = geometry.ijk_to_world_affine();
     let columns = [affine.x_axis, affine.y_axis, affine.z_axis];
     columns.map(|column| {
@@ -168,7 +168,7 @@ impl SlicePlane {
     }
 
     /// Anatomical letters of this view's edges for the given grid.
-    pub fn edge_letters(&self, geometry: crate::app::roi::VoxelGeometry) -> EdgeLetters {
+    pub fn edge_letters(&self, geometry: crate::model::VoxelGeometry) -> EdgeLetters {
         let letters = index_axis_letters(geometry);
         let (left_axis, top_axis) = self.left_top_index_axes();
         EdgeLetters {
@@ -181,7 +181,7 @@ impl SlicePlane {
 
     /// Anatomical plane this index-space view actually shows, from the world direction of its
     /// depth axis: `"axial"`, `"coronal"`, or `"sagittal"`.
-    pub fn anatomical_plane_name(&self, geometry: crate::app::roi::VoxelGeometry) -> &'static str {
+    pub fn anatomical_plane_name(&self, geometry: crate::model::VoxelGeometry) -> &'static str {
         match index_axis_letters(geometry)[self.depth_axis()][0] {
             'R' | 'L' => "sagittal",
             'A' | 'P' => "coronal",

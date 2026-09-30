@@ -4,8 +4,8 @@ use crate::AppEvent;
 use hecs::World;
 use winit::event_loop::EventLoopProxy;
 
+use crate::app::handlers;
 use crate::app::{roi, roi_runtime};
-use crate::io::handlers;
 
 /// One line saying what the ROI is stored as, and the one explicit conversion left in the UI.
 ///

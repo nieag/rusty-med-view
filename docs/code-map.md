@@ -19,15 +19,25 @@ This is a navigation guide to the current repository, not a second architecture 
 
 ## Module ownership
 
+Layer order, enforced for the lower layers by `tests/layering.rs`: `model` <- `convert` <- `util`,
+`io` <- everything else. A file in a lower layer may only name modules at or below its own layer.
+The upper layers (`app`, `render`, `systems`, `gui`) still depend on each other in both
+directions; untangling that is backlog item 2b.9 and 2b.7.
+
 ```text
+src/model/         Pure data shared by every layer: VoxelGeometry, VoxelData, PlaneFamily and
+                   PlaneDefinition, contour and mesh data, VolumeData, LoadedLabel, ViewMode.
+                   Imports nothing from the crate.
+src/app/handlers.rs
+                   Loading a volume or labelmap into the scene, and status messages
 src/app/roi/       ROI identity, authority, cache state, history, previews, requests, scheduling
 src/app/roi_runtime.rs
                    Concrete conversion executor, cache installation, GPU-resource synchronization
-src/convert/       Pure geometry/rasterization/extraction/meshing functions; no ECS or WGPU ownership
+src/convert/       Pure geometry/rasterization/extraction/meshing functions; depends on model only
 src/systems/       Input, picking, contour editing, mesh editing, render-data preparation
 src/render/         Render protocols, WGPU pipelines, contour/mesh view preparation and drawing
 src/gui/            egui controls only
-src/io/             NIfTI parsing and volume/texture loading
+src/io/             NIfTI parsing and volume/texture upload (depends on model, convert, util)
 src/util/           Shared orientation helpers
 src/overlay/        Annotation-overlay primitives and management
 ```

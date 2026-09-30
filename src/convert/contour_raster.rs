@@ -1,9 +1,9 @@
-use crate::app::roi::{ContourData, VoxelData, VoxelGeometry};
 use crate::convert::{
     nearest_depth_layer, orthogonal_depth_axis, plane_local_mm_to_world_mm,
     voxel_index_to_world_mm, world_mm_to_plane_local_mm, world_mm_to_voxel_index, PlaneDefinition,
     PlaneFamily,
 };
+use crate::model::{ContourData, VoxelData, VoxelGeometry};
 use glam::Vec3;
 
 const EPSILON: f32 = 1e-6;

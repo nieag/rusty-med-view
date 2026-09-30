@@ -999,7 +999,7 @@ fn test_mesh_authority_keeps_direct_plane_contour_after_voxel_rebuild() {
     convert_to_mesh(&mut world, entity).unwrap();
     let editor = world.spawn((EditorState::default(),));
     world.get::<&mut EditorState>(editor).unwrap().active_roi = Some(entity);
-    let deformed = crate::systems::mesh_editing::deform_mesh_surface_brush(
+    let deformed = crate::convert::deform_mesh_surface_brush(
         world.get::<&Roi>(entity).unwrap().mesh_data().unwrap(),
         [0, 1, 3],
         [0.5, 0.0, 0.5],
@@ -1200,7 +1200,7 @@ fn test_rotated_anisotropic_roi_keeps_direct_contours_through_mesh_resample() {
         .clone();
     let seeds = original.faces[original.faces.len() / 2].vertex_indices;
     let anchor = original.vertices[seeds[0] as usize].world_mm;
-    let deformed = crate::systems::mesh_editing::deform_mesh_surface_brush(
+    let deformed = crate::convert::deform_mesh_surface_brush(
         &original,
         seeds,
         anchor,
@@ -2728,7 +2728,7 @@ fn test_liver_explicit_voxel_rebuild_frame_timing() {
     convert_to_mesh(&mut world, entity).unwrap();
     let seeds = mesh.faces[mesh.faces.len() / 2].vertex_indices;
     let anchor = mesh.vertices[seeds[0] as usize].world_mm;
-    let deformed = crate::systems::mesh_editing::deform_mesh_surface_brush(
+    let deformed = crate::convert::deform_mesh_surface_brush(
         &mesh,
         seeds,
         anchor,

@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::roi::VoxelGeometryError;
+use crate::model::VoxelGeometryError;
 use glam::{DMat4, DVec4};
 
 fn approx_eq(lhs: [f32; 3], rhs: [f32; 3], epsilon: f32) -> bool {
