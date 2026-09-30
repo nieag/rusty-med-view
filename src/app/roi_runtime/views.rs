@@ -198,16 +198,11 @@ pub(crate) fn ensure_contour_view_cache(
 }
 
 pub(crate) fn sync_roi_contour_view_caches_for_viewports(world: &mut World, focus: &ViewFocus) {
-    let active_roi = focus.active_roi;
-    let mut roi_entities = active_roi.into_iter().collect::<Vec<_>>();
-    roi_entities.extend(world.query::<(&Roi, &RoiMetadata)>().iter().filter_map(
-        |(entity, (roi, metadata))| {
-            (Some(entity) != active_roi
-                && metadata.is_visible
-                && matches!(roi.body, RoiBody::Mesh(_)))
-            .then_some(entity)
-        },
-    ));
+    // Every visible ROI is shown in every view, so every visible ROI that does not carry its own
+    // contours gets derived ones; the active ROI first. Hidden ROIs keep what they have.
+    let roi_entities = demanded_roi_order(world, focus.active_roi, |roi| {
+        !matches!(roi.body, RoiBody::Contour(_))
+    });
     let main_geometry = main_volume_geometry(world);
 
     let cursor_uv = focus.cursor_uv;
@@ -241,10 +236,30 @@ pub(crate) fn sync_roi_contour_view_caches_for_viewports(world: &mut World, focu
     }
 }
 
-pub(crate) fn sync_active_roi_mesh_cache_for_viewports(
-    world: &mut World,
+/// The visible ROIs that satisfy `wanted`, the active one first and the rest by ROI id.
+fn demanded_roi_order(
+    world: &World,
     active_roi: Option<hecs::Entity>,
-) {
+    wanted: impl Fn(&Roi) -> bool,
+) -> Vec<hecs::Entity> {
+    let mut others: Vec<(u64, hecs::Entity)> = world
+        .query::<(&Roi, &RoiMetadata)>()
+        .iter()
+        .filter(|(entity, (roi, metadata))| {
+            Some(*entity) != active_roi && metadata.is_visible && wanted(roi)
+        })
+        .map(|(entity, (_, metadata))| (metadata.roi_id.0, entity))
+        .collect();
+    others.sort_unstable();
+    active_roi
+        .into_iter()
+        .chain(others.into_iter().map(|(_, entity)| entity))
+        .collect()
+}
+
+/// Demands a derived mesh for visible ROIs while a 3D view exists: the active ROI first, then
+/// the others one at a time, so ten labels never queue ten builds at once.
+pub(crate) fn sync_mesh_caches_for_viewports(world: &mut World, active_roi: Option<hecs::Entity>) {
     if !world
         .query::<&Viewport>()
         .iter()
@@ -252,21 +267,30 @@ pub(crate) fn sync_active_roi_mesh_cache_for_viewports(
     {
         return;
     }
-    let Some(active_roi) = active_roi else {
-        return;
-    };
-    let Ok(mut roi) = world.get::<&mut Roi>(active_roi) else {
-        return;
-    };
-    if matches!(&roi.body, RoiBody::Mesh(_))
-        || roi.is_cache_current(RoiCacheKind::Mesh)
-        || roi.has_queued_job(RoiJobKind::RebuildMeshCache)
-        || roi.running_job_kind() == Some(RoiJobKind::RebuildMeshCache)
-    {
+    // A queued build that cannot start yet (its voxel cache is not current) must not block the
+    // others, or one stuck ROI would starve every label.
+    let busy = world.query::<&Roi>().iter().any(|(_, roi)| {
+        roi.running_job_kind() == Some(RoiJobKind::RebuildMeshCache)
+            || (roi.has_queued_job(RoiJobKind::RebuildMeshCache)
+                && roi.is_cache_current(RoiCacheKind::Voxel))
+    });
+    if busy {
         return;
     }
-    if roi.voxel_cache().is_some() && roi.is_cache_current(RoiCacheKind::Voxel) {
-        roi.mark_cache_dirty(RoiCacheKind::Mesh);
-        roi.enqueue_rebuild(RoiJobKind::RebuildMeshCache);
+    let candidates = demanded_roi_order(world, active_roi, |roi| {
+        !matches!(roi.body, RoiBody::Mesh(_))
+    });
+    for entity in candidates {
+        let Ok(mut roi) = world.get::<&mut Roi>(entity) else {
+            continue;
+        };
+        if !roi.is_cache_current(RoiCacheKind::Mesh)
+            && roi.voxel_cache().is_some()
+            && roi.is_cache_current(RoiCacheKind::Voxel)
+        {
+            roi.mark_cache_dirty(RoiCacheKind::Mesh);
+            roi.enqueue_rebuild(RoiJobKind::RebuildMeshCache);
+            return;
+        }
     }
 }

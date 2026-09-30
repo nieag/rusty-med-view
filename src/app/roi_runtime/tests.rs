@@ -344,7 +344,7 @@ fn test_mesh_viewport_sync_keeps_current_mesh_cache_current() {
         .unwrap();
     }
 
-    sync_active_roi_mesh_cache_for_viewports(&mut world, Some(entity));
+    sync_mesh_caches_for_viewports(&mut world, Some(entity));
 
     let roi = world.get::<&Roi>(entity).unwrap();
     assert!(roi.is_cache_current(RoiCacheKind::Mesh));
@@ -3263,6 +3263,102 @@ fn lifecycle_blob() -> (VoxelGeometry, Vec<u8>) {
         }
     }
     (geometry, raw)
+}
+
+fn spawn_sparse_voxel_roi_with_id(world: &mut World, id: u64) -> hecs::Entity {
+    let mut raw = vec![0_u8; 64];
+    raw[(2 * 4 + 1) * 4 + 1] = 1;
+    world.spawn(Roi::new_voxel_with_cache(
+        RoiId(id),
+        format!("Label {id}"),
+        VoxelGeometry::new([4, 4, 4], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap(),
+        raw,
+        None,
+    ))
+}
+
+fn settle_with_focus(world: &mut World, focus: &ViewFocus) {
+    for _ in 0..400 {
+        if !advance_roi_work(world, None, focus).pending {
+            return;
+        }
+    }
+    panic!("ROI work never settled");
+}
+
+#[test]
+fn test_every_visible_roi_gets_derived_contours_and_mesh_and_hidden_ones_do_not() {
+    let mut world = World::new();
+    spawn_main_volume(&mut world, [1.0; 3], [0.0; 3]);
+    let first = spawn_sparse_voxel_roi_with_id(&mut world, 1);
+    let second = spawn_sparse_voxel_roi_with_id(&mut world, 2);
+    let hidden = spawn_sparse_voxel_roi_with_id(&mut world, 3);
+    world.get::<&mut RoiMetadata>(hidden).unwrap().is_visible = false;
+    for mode in [ViewMode::Axial, ViewMode::ThreeD] {
+        world.spawn((
+            Viewport {
+                mode,
+                rect: [0.0, 0.0, 400.0, 300.0],
+                uniform_index: 0,
+            },
+            ViewportState::default(),
+        ));
+    }
+    let focus = ViewFocus {
+        active_roi: Some(first),
+        cursor_uv: [0.5, 0.5, 0.5],
+    };
+
+    // Builds are demanded one ROI at a time, the active ROI first, so a frame never queues all
+    // of them at once.
+    let in_flight = |world: &World| {
+        [first, second, hidden]
+            .iter()
+            .filter(|entity| {
+                let roi = world.get::<&Roi>(**entity).unwrap();
+                roi.has_queued_job(RoiJobKind::RebuildMeshCache)
+                    || roi.running_job_kind() == Some(RoiJobKind::RebuildMeshCache)
+            })
+            .count()
+    };
+    advance_roi_work(&mut world, None, &focus);
+    assert!(
+        in_flight(&world) <= 1,
+        "at most one build is demanded at a time"
+    );
+    assert!(
+        world
+            .get::<&Roi>(first)
+            .unwrap()
+            .is_cache_current(RoiCacheKind::Mesh),
+        "the active ROI is built before the others"
+    );
+
+    settle_with_focus(&mut world, &focus);
+
+    for entity in [first, second] {
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert!(
+            roi.is_cache_current(RoiCacheKind::Mesh),
+            "mesh of {entity:?}"
+        );
+        assert!(
+            roi.contour_cache().is_some_and(|cache| cache
+                .views
+                .iter()
+                .any(|view| view.state == CacheViewState::Current && !view.data.is_empty())),
+            "contours of {entity:?}"
+        );
+    }
+    let roi = world.get::<&Roi>(hidden).unwrap();
+    assert!(
+        !roi.is_cache_current(RoiCacheKind::Mesh),
+        "a hidden ROI is not built"
+    );
+    assert!(
+        roi.contour_cache().is_none(),
+        "a hidden ROI has no derived contours"
+    );
 }
 
 fn settle(world: &mut World) {
