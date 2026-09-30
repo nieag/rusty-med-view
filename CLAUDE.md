@@ -8,6 +8,6 @@ Follow [AGENTS.md](AGENTS.md) for repository instructions.
 - Foundation review (evidence and reasoning behind Phase 2b): [docs/foundation-review-2026-09-30.md](docs/foundation-review-2026-09-30.md)
 - Code map: [docs/code-map.md](docs/code-map.md)
 - Rendering boundary: [docs/rendering-architecture.md](docs/rendering-architecture.md)
-- Architecture decisions: [docs/adr/](docs/adr/)
+- Architecture decisions: [docs/adr/](docs/adr/) (0005 scene entity model is proposed)
 - Accepted ROI-core record: [docs/roi-core-restructure-plan.md](docs/roi-core-restructure-plan.md)
 - Historical plans and handoffs: [docs/archive/](docs/archive/)
