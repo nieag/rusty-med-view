@@ -354,3 +354,111 @@ fn test_oblique_slice_outside_voxel_bounds_returns_no_slices() {
 
     assert!(contour.is_empty());
 }
+
+// The BTree-based tracer this module used before; kept as the reference the fast one must match.
+mod reference {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    pub fn component_boundary_loops(component: &[[u32; 2]]) -> Vec<Vec<[u32; 2]>> {
+        let component_set: BTreeSet<[u32; 2]> = component.iter().copied().collect();
+        let mut adjacency: BTreeMap<[u32; 2], BTreeSet<[u32; 2]>> = BTreeMap::new();
+
+        for [x, y] in component {
+            if *y == 0 || !component_set.contains(&[*x, *y - 1]) {
+                add_edge(&mut adjacency, [*x, *y], [*x + 1, *y]);
+            }
+            if !component_set.contains(&[*x + 1, *y]) {
+                add_edge(&mut adjacency, [*x + 1, *y], [*x + 1, *y + 1]);
+            }
+            if !component_set.contains(&[*x, *y + 1]) {
+                add_edge(&mut adjacency, [*x + 1, *y + 1], [*x, *y + 1]);
+            }
+            if *x == 0 || !component_set.contains(&[*x - 1, *y]) {
+                add_edge(&mut adjacency, [*x, *y + 1], [*x, *y]);
+            }
+        }
+
+        let mut unused_edges = BTreeSet::new();
+        for (a, neighbors) in &adjacency {
+            for b in neighbors {
+                unused_edges.insert(ordered_edge(*a, *b));
+            }
+        }
+
+        let mut loops = Vec::new();
+        while let Some(&(start, next)) = unused_edges.iter().next() {
+            unused_edges.remove(&ordered_edge(start, next));
+            let mut loop_points = vec![start, next];
+            let mut previous = start;
+            let mut current = next;
+            let max_steps = adjacency.len().saturating_mul(4).max(8);
+
+            for _ in 0..max_steps {
+                if current == start {
+                    loop_points.pop();
+                    if loop_points.len() >= 4 {
+                        loops.push(loop_points);
+                    }
+                    break;
+                }
+                let Some(candidate) = adjacency.get(&current).and_then(|neighbors| {
+                    neighbors.iter().copied().find(|point| {
+                        *point != previous && unused_edges.contains(&ordered_edge(current, *point))
+                    })
+                }) else {
+                    break;
+                };
+                unused_edges.remove(&ordered_edge(current, candidate));
+                previous = current;
+                current = candidate;
+                loop_points.push(current);
+            }
+        }
+        loops
+    }
+
+    fn ordered_edge(a: [u32; 2], b: [u32; 2]) -> ([u32; 2], [u32; 2]) {
+        if a <= b {
+            (a, b)
+        } else {
+            (b, a)
+        }
+    }
+
+    fn add_edge(adjacency: &mut BTreeMap<[u32; 2], BTreeSet<[u32; 2]>>, a: [u32; 2], b: [u32; 2]) {
+        adjacency.entry(a).or_default().insert(b);
+        adjacency.entry(b).or_default().insert(a);
+    }
+}
+
+#[test]
+fn test_boundary_tracing_matches_the_reference_on_random_masks() {
+    let mut seed = 0xabcd_1234_u32;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed
+    };
+    let mut pinch_or_hole_cases = 0;
+    for case in 0..400 {
+        let (width, height) = (3 + next() % 14, 3 + next() % 14);
+        let density = [2, 3, 4, 5][case % 4];
+        let mask: Vec<bool> = (0..width * height).map(|_| next() % density != 0).collect();
+        for component in connected_components_4n(&mask, width, height) {
+            let fast = component_boundary_loops(&component);
+            let reference = reference::component_boundary_loops(&component);
+            assert_eq!(
+                fast, reference,
+                "case {case}, mask {mask:?}, {width}x{height}"
+            );
+            if fast.len() > 1 {
+                pinch_or_hole_cases += 1;
+            }
+        }
+    }
+    assert!(
+        pinch_or_hole_cases > 20,
+        "the random masks must include components with holes or touching loops"
+    );
+}

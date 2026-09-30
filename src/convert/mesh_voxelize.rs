@@ -54,8 +54,18 @@ impl IncrementalMeshVoxelization {
         prevalidated: bool,
     ) -> Result<Self, MeshVoxelizationError> {
         validate_target_geometry(geometry)?;
-        let (welded_vertices, indices) = welded_closed_mesh(mesh, !prevalidated)?;
-        let vertices = welded_vertices
+        // A mesh that was already validated skips the welding and the topology checks; the scan
+        // only needs its triangles.
+        let (source_vertices, indices) = if prevalidated {
+            check_indices(mesh)?;
+            (
+                mesh.vertices.iter().map(|vertex| vertex.world_mm).collect(),
+                mesh.faces.iter().map(|face| face.vertex_indices).collect(),
+            )
+        } else {
+            welded_closed_mesh(mesh, true)?
+        };
+        let vertices = source_vertices
             .iter()
             .enumerate()
             .map(|(vertex_index, world_mm)| {
@@ -175,6 +185,23 @@ pub fn voxelize_mesh_to_voxel_data(
 
 pub fn validate_mesh_for_voxelization(mesh: &MeshData) -> Result<(), MeshVoxelizationError> {
     welded_closed_mesh(mesh, true).map(|_| ())
+}
+
+/// The checks that keep a prevalidated mesh from indexing out of range or carrying NaNs.
+fn check_indices(mesh: &MeshData) -> Result<(), MeshVoxelizationError> {
+    if mesh.vertices.is_empty() || mesh.faces.is_empty() {
+        return Err(MeshVoxelizationError::EmptyMesh);
+    }
+    for (face_index, face) in mesh.faces.iter().enumerate() {
+        if face
+            .vertex_indices
+            .iter()
+            .any(|index| *index as usize >= mesh.vertices.len())
+        {
+            return Err(MeshVoxelizationError::InvalidFace { face_index });
+        }
+    }
+    Ok(())
 }
 
 fn validate_target_geometry(geometry: VoxelGeometry) -> Result<(), MeshVoxelizationError> {

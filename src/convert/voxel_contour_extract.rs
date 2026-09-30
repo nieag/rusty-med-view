@@ -5,7 +5,6 @@ use crate::convert::{
 use crate::model::{
     ContourData, ContourLoop, ContourPoint, ContourSlice, OrthogonalFamily, VoxelData,
 };
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoxelContourExtractionError {
@@ -333,6 +332,7 @@ fn voxel_index_from_family_coords(
 fn connected_components_4n(mask: &[bool], width: u32, height: u32) -> Vec<Vec<[u32; 2]>> {
     let mut visited = vec![false; mask.len()];
     let mut components = Vec::new();
+    let mut stack = Vec::new();
 
     for y in 0..height {
         for x in 0..width {
@@ -341,21 +341,34 @@ fn connected_components_4n(mask: &[bool], width: u32, height: u32) -> Vec<Vec<[u
                 continue;
             }
 
-            let mut queue = VecDeque::from([[x, y]]);
+            // Breadth-first order is part of the contract: the loops of a slice come out in the
+            // order of each component's first cell, and the boundary tracer only looks at the
+            // set of cells, so any traversal order of one component gives the same loops.
             let mut component = Vec::new();
+            stack.push([x, y]);
             visited[start] = true;
-
-            while let Some([cx, cy]) = queue.pop_front() {
+            while let Some([cx, cy]) = stack.pop() {
                 component.push([cx, cy]);
-                for [nx, ny] in neighbors_4(cx, cy, width, height) {
-                    let nidx = (ny * width + nx) as usize;
-                    if !visited[nidx] && mask[nidx] {
-                        visited[nidx] = true;
-                        queue.push_back([nx, ny]);
+                let mut visit = |nx: u32, ny: u32| {
+                    let index = (ny * width + nx) as usize;
+                    if !visited[index] && mask[index] {
+                        visited[index] = true;
+                        stack.push([nx, ny]);
                     }
+                };
+                if cx > 0 {
+                    visit(cx - 1, cy);
+                }
+                if cx + 1 < width {
+                    visit(cx + 1, cy);
+                }
+                if cy > 0 {
+                    visit(cx, cy - 1);
+                }
+                if cy + 1 < height {
+                    visit(cx, cy + 1);
                 }
             }
-
             components.push(component);
         }
     }
@@ -363,92 +376,149 @@ fn connected_components_4n(mask: &[bool], width: u32, height: u32) -> Vec<Vec<[u
     components
 }
 
-fn neighbors_4(x: u32, y: u32, width: u32, height: u32) -> Vec<[u32; 2]> {
-    let mut result = Vec::with_capacity(4);
-    if x > 0 {
-        result.push([x - 1, y]);
-    }
-    if x + 1 < width {
-        result.push([x + 1, y]);
-    }
-    if y > 0 {
-        result.push([x, y - 1]);
-    }
-    if y + 1 < height {
-        result.push([x, y + 1]);
-    }
-    result
-}
+// Directions from a boundary vertex, in the order their target vertices sort by `[x, y]`:
+// (x-1, y) < (x, y-1) < (x, y+1) < (x+1, y). Neighbours are tried in this order, which fixes
+// which way the tracer turns at a vertex where two loops touch.
+const LEFT: usize = 0;
+const UP: usize = 1;
+const DOWN: usize = 2;
+const RIGHT: usize = 3;
+const DIRECTION_STEPS: [[i64; 2]; 4] = [[-1, 0], [0, -1], [0, 1], [1, 0]];
+const OPPOSITE: [usize; 4] = [RIGHT, DOWN, UP, LEFT];
 
+/// The outlines (outer boundaries and holes) of one 4-connected component, as loops of grid
+/// vertices. Edges of the cells that face a non-member are linked into loops, starting from the
+/// smallest unused edge and taking the smallest unused neighbour at each vertex.
 fn component_boundary_loops(component: &[[u32; 2]]) -> Vec<Vec<[u32; 2]>> {
-    let component_set: BTreeSet<[u32; 2]> = component.iter().copied().collect();
-    let mut adjacency: BTreeMap<[u32; 2], BTreeSet<[u32; 2]>> = BTreeMap::new();
-
+    let Some(first) = component.first() else {
+        return Vec::new();
+    };
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (first[0], first[1], first[0], first[1]);
     for [x, y] in component {
-        if *y == 0 || !component_set.contains(&[*x, *y - 1]) {
-            add_edge(&mut adjacency, [*x, *y], [*x + 1, *y]);
-        }
-        if !component_set.contains(&[*x + 1, *y]) {
-            add_edge(&mut adjacency, [*x + 1, *y], [*x + 1, *y + 1]);
-        }
-        if !component_set.contains(&[*x, *y + 1]) {
-            add_edge(&mut adjacency, [*x + 1, *y + 1], [*x, *y + 1]);
-        }
-        if *x == 0 || !component_set.contains(&[*x - 1, *y]) {
-            add_edge(&mut adjacency, [*x, *y + 1], [*x, *y]);
-        }
+        min_x = min_x.min(*x);
+        min_y = min_y.min(*y);
+        max_x = max_x.max(*x);
+        max_y = max_y.max(*y);
     }
-
-    let mut unused_edges = BTreeSet::new();
-    for (a, neighbors) in &adjacency {
-        for b in neighbors {
-            unused_edges.insert(ordered_edge(*a, *b));
-        }
+    let cell_width = (max_x - min_x + 1) as usize;
+    let cell_height = (max_y - min_y + 1) as usize;
+    let mut member = vec![false; cell_width * cell_height];
+    for [x, y] in component {
+        member[(y - min_y) as usize * cell_width + (x - min_x) as usize] = true;
     }
+    let contains = |x: i64, y: i64| {
+        x >= min_x as i64
+            && y >= min_y as i64
+            && x <= max_x as i64
+            && y <= max_y as i64
+            && member[(y - min_y as i64) as usize * cell_width + (x - min_x as i64) as usize]
+    };
 
-    let mut loops = Vec::new();
-    while let Some(&(start, next)) = unused_edges.iter().next() {
-        unused_edges.remove(&ordered_edge(start, next));
-        let mut loop_points = vec![start, next];
-        let mut previous = start;
-        let mut current = next;
-        let max_steps = adjacency.len().saturating_mul(4).max(8);
-
-        for _ in 0..max_steps {
-            if current == start {
-                loop_points.pop();
-                if loop_points.len() >= 4 {
-                    loops.push(loop_points);
-                }
-                break;
+    // Per vertex: which of the four directions have a boundary edge, and which are used up.
+    let vertex_width = cell_width + 1;
+    let vertex_height = cell_height + 1;
+    let mut linked = vec![0u8; vertex_width * vertex_height];
+    let mut used = vec![0u8; vertex_width * vertex_height];
+    let vertex_index =
+        |x: i64, y: i64| (y - min_y as i64) as usize * vertex_width + (x - min_x as i64) as usize;
+    let mut vertex_count = 0usize;
+    let mut add_edge = |linked: &mut Vec<u8>, a: [i64; 2], direction: usize| {
+        let b = [
+            a[0] + DIRECTION_STEPS[direction][0],
+            a[1] + DIRECTION_STEPS[direction][1],
+        ];
+        for (from, toward) in [(a, direction), (b, OPPOSITE[direction])] {
+            let entry = &mut linked[vertex_index(from[0], from[1])];
+            if *entry == 0 {
+                vertex_count += 1;
             }
-            let Some(candidate) = adjacency.get(&current).and_then(|neighbors| {
-                neighbors.iter().copied().find(|point| {
-                    *point != previous && unused_edges.contains(&ordered_edge(current, *point))
-                })
-            }) else {
-                break;
-            };
-            unused_edges.remove(&ordered_edge(current, candidate));
-            previous = current;
-            current = candidate;
-            loop_points.push(current);
+            *entry |= 1 << toward;
+        }
+    };
+    for [cx, cy] in component {
+        let (x, y) = (*cx as i64, *cy as i64);
+        if !contains(x, y - 1) {
+            add_edge(&mut linked, [x, y], RIGHT);
+        }
+        if !contains(x + 1, y) {
+            add_edge(&mut linked, [x + 1, y], DOWN);
+        }
+        if !contains(x, y + 1) {
+            add_edge(&mut linked, [x + 1, y + 1], LEFT);
+        }
+        if !contains(x - 1, y) {
+            add_edge(&mut linked, [x, y + 1], UP);
+        }
+    }
+
+    let is_unused = |linked: &[u8], used: &[u8], vertex: [i64; 2], direction: usize| {
+        let index = vertex_index(vertex[0], vertex[1]);
+        linked[index] & (1 << direction) != 0 && used[index] & (1 << direction) == 0
+    };
+    let mark_used = |used: &mut Vec<u8>, vertex: [i64; 2], direction: usize| {
+        let other = [
+            vertex[0] + DIRECTION_STEPS[direction][0],
+            vertex[1] + DIRECTION_STEPS[direction][1],
+        ];
+        used[vertex_index(vertex[0], vertex[1])] |= 1 << direction;
+        used[vertex_index(other[0], other[1])] |= 1 << OPPOSITE[direction];
+    };
+
+    let max_steps = vertex_count.saturating_mul(4).max(8);
+    let mut loops = Vec::new();
+    // The smallest unused edge (a, b) with a < b: scan vertices by x then y and look down, then
+    // right, the only directions that lead to a larger vertex.
+    for x in min_x as i64..=max_x as i64 + 1 {
+        for y in min_y as i64..=max_y as i64 + 1 {
+            for first_direction in [DOWN, RIGHT] {
+                if !is_unused(&linked, &used, [x, y], first_direction) {
+                    continue;
+                }
+                mark_used(&mut used, [x, y], first_direction);
+                let start = [x, y];
+                let mut current = [
+                    x + DIRECTION_STEPS[first_direction][0],
+                    y + DIRECTION_STEPS[first_direction][1],
+                ];
+                let mut previous = start;
+                let mut loop_points = vec![start, current];
+                for _ in 0..max_steps {
+                    if current == start {
+                        loop_points.pop();
+                        if loop_points.len() >= 4 {
+                            loops.push(loop_points);
+                        }
+                        break;
+                    }
+                    let Some(direction) = (0..4).find(|direction| {
+                        let target = [
+                            current[0] + DIRECTION_STEPS[*direction][0],
+                            current[1] + DIRECTION_STEPS[*direction][1],
+                        ];
+                        target != previous && is_unused(&linked, &used, current, *direction)
+                    }) else {
+                        break;
+                    };
+                    mark_used(&mut used, current, direction);
+                    previous = current;
+                    current = [
+                        current[0] + DIRECTION_STEPS[direction][0],
+                        current[1] + DIRECTION_STEPS[direction][1],
+                    ];
+                    loop_points.push(current);
+                }
+            }
         }
     }
     loops
-}
-
-fn ordered_edge(a: [u32; 2], b: [u32; 2]) -> ([u32; 2], [u32; 2]) {
-    if a <= b {
-        (a, b)
-    } else {
-        (b, a)
-    }
-}
-
-fn add_edge(adjacency: &mut BTreeMap<[u32; 2], BTreeSet<[u32; 2]>>, a: [u32; 2], b: [u32; 2]) {
-    adjacency.entry(a).or_default().insert(b);
-    adjacency.entry(b).or_default().insert(a);
+        .into_iter()
+        .map(|points: Vec<[i64; 2]>| {
+            points
+                .into_iter()
+                .map(|[x, y]| [x as u32, y as u32])
+                .collect()
+        })
+        .collect()
 }
 
 fn voxel_index(index: [u32; 3], dimensions: [u32; 3]) -> usize {
