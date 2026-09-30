@@ -69,15 +69,7 @@ mod tests {
     use super::*;
 
     fn software_device() -> Option<(wgpu::Adapter, wgpu::Device)> {
-        let instance = wgpu::Instance::default();
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            compatible_surface: None,
-            force_fallback_adapter: true,
-        }))
-        .ok()?;
-        let (device, _queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+        let (adapter, device, _queue) = crate::render::test_device()?;
         Some((adapter, device))
     }
 

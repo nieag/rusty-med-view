@@ -33,17 +33,7 @@ fn test_uniform_buffer_size_covers_all_viewport_slots() {
 
 #[test]
 fn test_main_shader_and_eight_overlay_bindings_validate() {
-    let instance = wgpu::Instance::default();
-    let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        compatible_surface: None,
-        force_fallback_adapter: true,
-    })) else {
-        return;
-    };
-    let Ok((device, _queue)) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-    else {
+    let Some((_adapter, device, _queue)) = crate::render::test_device() else {
         return;
     };
 
