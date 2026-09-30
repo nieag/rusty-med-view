@@ -15,6 +15,8 @@ pub struct GpuState {
     pub queue: wgpu::Queue,
     pub surface: wgpu::Surface<'static>,
     pub config: wgpu::SurfaceConfiguration,
+    /// Errors wgpu reported outside any error scope, for the frame loop to surface.
+    pub errors: crate::render::gpu_errors::GpuErrorSink,
 }
 
 pub struct Pipelines {
@@ -93,12 +95,17 @@ impl RenderingContext {
             })?;
 
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
+            .request_device(&wgpu::DeviceDescriptor {
+                required_limits: crate::render::gpu_errors::required_limits(&adapter),
+                ..wgpu::DeviceDescriptor::default()
+            })
             .await
             .map_err(|err| RenderingInitError {
                 category: "wgpu.device",
                 message: format!("Failed to create device: {err}"),
             })?;
+
+        let gpu_errors = crate::render::gpu_errors::GpuErrorSink::install(&device);
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps.formats[0];
@@ -199,6 +206,7 @@ impl RenderingContext {
                 queue,
                 surface,
                 config,
+                errors: gpu_errors,
             },
             pipelines: Pipelines {
                 render: render_pipeline,
