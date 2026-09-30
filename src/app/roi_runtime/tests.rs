@@ -3618,3 +3618,67 @@ fn test_slice_local_rebuild_is_only_chosen_when_it_can_clear_the_old_slab() {
         RoiDirtyRegion::Full
     );
 }
+
+#[test]
+fn test_mesh_edit_then_contour_conversion_keeps_the_edited_shape_and_undo_restores_the_mesh() {
+    let (geometry, original) = lifecycle_blob();
+    let mut world = World::new();
+    spawn_main_volume(&mut world, [1.0; 3], [0.0; 3]);
+    let entity = world.spawn((Roi::new_voxel_with_cache(
+        RoiId(1),
+        "Blob".to_string(),
+        geometry,
+        original.clone(),
+        None,
+    ),));
+    let editor = spawn_editor_for(&mut world, entity);
+    settle(&mut world);
+    convert_and_settle(&mut world, entity, EditTarget::Mesh);
+    let mesh_before = world
+        .get::<&Roi>(entity)
+        .unwrap()
+        .mesh_data()
+        .cloned()
+        .unwrap();
+
+    // Move the whole surface one voxel along x, as a committed mesh edit.
+    let mut moved = mesh_before.clone();
+    for vertex in &mut moved.vertices {
+        vertex.world_mm[0] += 1.0;
+    }
+    replace_mesh_data_with_history(&mut world, entity, moved).unwrap();
+    settle(&mut world);
+
+    // The shape the user now expects: the source shifted by one voxel in x.
+    let mut shifted = vec![0_u8; original.len()];
+    for z in 0..14 {
+        for y in 0..14 {
+            for x in 1..14 {
+                shifted[(z * 14 + y) * 14 + x] = original[(z * 14 + y) * 14 + x - 1];
+            }
+        }
+    }
+
+    // Converting to contours voxelizes the edited mesh, so the contours are the edited shape.
+    convert_and_settle(
+        &mut world,
+        entity,
+        EditTarget::Contour(PlaneFamily::Coronal),
+    );
+    let dice_shifted = dice_of(&settled_voxels(&world, entity), &shifted);
+    let dice_unshifted = dice_of(&settled_voxels(&world, entity), &original);
+    assert!(
+        dice_shifted > 0.85 && dice_shifted > dice_unshifted,
+        "contours follow the mesh edit: dice vs shifted {dice_shifted:.3}, vs original {dice_unshifted:.3}"
+    );
+
+    // Undo the conversion, then the mesh edit: the original mesh comes back exactly.
+    undo_roi_edit(&mut world, editor).unwrap();
+    undo_roi_edit(&mut world, editor).unwrap();
+    settle(&mut world);
+    assert_eq!(
+        world.get::<&Roi>(entity).unwrap().mesh_data(),
+        Some(&mesh_before),
+        "undoing the edit restores the mesh exactly"
+    );
+}
