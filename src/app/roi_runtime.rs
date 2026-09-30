@@ -27,11 +27,13 @@ use web_time::{Duration, Instant};
 
 mod contour_voxel;
 mod create;
+mod jobs;
 mod mesh_voxel;
 mod views;
 mod voxel_mesh;
 pub(crate) use self::contour_voxel::*;
 pub use self::create::*;
+use self::jobs::*;
 use self::mesh_voxel::*;
 pub use self::views::*;
 use self::voxel_mesh::*;
@@ -415,13 +417,6 @@ fn process_voxel_body_install_jobs(
         }
     }
     installed_any
-}
-
-fn record_job_discarded(world: &mut World, roi_entity: hecs::Entity, duration: Duration) {
-    if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-        roi.job_metrics.discarded_count = roi.job_metrics.discarded_count.saturating_add(1);
-        roi.job_metrics.last_duration_ms = duration.as_secs_f32() * 1000.0;
-    }
 }
 
 fn main_volume_bind_group(world: &World) -> Option<wgpu::BindGroup> {

@@ -77,10 +77,7 @@ pub(crate) fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
         )
         .is_err()
     {
-        if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
-            roi.finish_job(RoiJobKind::RebuildMeshCache);
-            roi.job_metrics.failed_count = roi.job_metrics.failed_count.saturating_add(1);
-        }
+        fail_job(world, entity, RoiJobKind::RebuildMeshCache);
         return;
     }
     resume_voxel_mesh_rebuild_work(world, entity, frame_started_at, FRAME_JOB_BUDGET);
@@ -104,10 +101,12 @@ pub(super) fn resume_voxel_mesh_rebuild_work(
             })
     });
     if !is_current {
-        record_job_discarded(world, entity, work.started_at.elapsed());
-        if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
-            roi.finish_job(RoiJobKind::RebuildMeshCache);
-        }
+        discard_job(
+            world,
+            entity,
+            RoiJobKind::RebuildMeshCache,
+            work.started_at.elapsed(),
+        );
         return;
     }
 
@@ -122,12 +121,7 @@ pub(super) fn resume_voxel_mesh_rebuild_work(
         };
     }
     if !completed {
-        if world.insert_one(entity, work).is_err() {
-            if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
-                roi.finish_job(RoiJobKind::RebuildMeshCache);
-                roi.job_metrics.failed_count = roi.job_metrics.failed_count.saturating_add(1);
-            }
-        }
+        suspend_work(world, entity, RoiJobKind::RebuildMeshCache, work);
         return;
     }
 
@@ -170,9 +164,10 @@ pub(super) fn fail_voxel_mesh_rebuild(
     error: VoxelMeshExtractionError,
 ) {
     log::warn!("Voxel mesh rebuild failed for ROI {entity:?}: {error:?}");
-    if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
-        roi.finish_job(RoiJobKind::RebuildMeshCache);
-        roi.mark_cache_dirty(RoiCacheKind::Mesh);
-        roi.job_metrics.failed_count = roi.job_metrics.failed_count.saturating_add(1);
-    }
+    fail_job_marking_dirty(
+        world,
+        entity,
+        RoiJobKind::RebuildMeshCache,
+        RoiCacheKind::Mesh,
+    );
 }

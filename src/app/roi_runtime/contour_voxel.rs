@@ -111,10 +111,12 @@ pub(super) fn resume_contour_preview_mesh_work(
             })
     });
     if !is_current {
-        record_job_discarded(world, roi_entity, work.started_at.elapsed());
-        if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-            roi.finish_job(RoiJobKind::RebuildVoxelCache);
-        }
+        discard_job(
+            world,
+            roi_entity,
+            RoiJobKind::RebuildVoxelCache,
+            work.started_at.elapsed(),
+        );
         return false;
     }
 
@@ -124,10 +126,7 @@ pub(super) fn resume_contour_preview_mesh_work(
             Ok(done) => completed = done,
             Err(error) => {
                 log::warn!("Contour preview mesh extraction failed: {error:?}");
-                if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-                    roi.finish_job(RoiJobKind::RebuildVoxelCache);
-                    roi.job_metrics.failed_count = roi.job_metrics.failed_count.saturating_add(1);
-                }
+                fail_job(world, roi_entity, RoiJobKind::RebuildVoxelCache);
                 return false;
             }
         }
@@ -137,12 +136,7 @@ pub(super) fn resume_contour_preview_mesh_work(
     }
 
     if !completed {
-        if world.insert_one(roi_entity, work).is_err() {
-            if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-                roi.finish_job(RoiJobKind::RebuildVoxelCache);
-                roi.job_metrics.failed_count = roi.job_metrics.failed_count.saturating_add(1);
-            }
-        }
+        suspend_work(world, roi_entity, RoiJobKind::RebuildVoxelCache, work);
         return false;
     }
 
@@ -242,10 +236,12 @@ pub(super) fn process_contour_voxel_rebuild_for_entity(
                 && roi.dirty_state.authoritative.shape == authoritative_generation
         });
         if !is_current_preview || preview.is_none() {
-            record_job_discarded(world, roi_entity, started_at.elapsed());
-            if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-                roi.finish_job(RoiJobKind::RebuildVoxelCache);
-            }
+            discard_job(
+                world,
+                roi_entity,
+                RoiJobKind::RebuildVoxelCache,
+                started_at.elapsed(),
+            );
             return false;
         }
         preview.expect("preview presence checked")
@@ -371,10 +367,7 @@ pub(super) fn process_contour_voxel_rebuild_for_entity(
             Ok(rebuild) => rebuild,
             Err(error) => {
                 log::warn!("Contour preview mesh extraction failed: {error:?}");
-                if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-                    roi.finish_job(RoiJobKind::RebuildVoxelCache);
-                    roi.job_metrics.failed_count = roi.job_metrics.failed_count.saturating_add(1);
-                }
+                fail_job(world, roi_entity, RoiJobKind::RebuildVoxelCache);
                 return false;
             }
         };
@@ -412,10 +405,7 @@ pub(super) fn process_contour_voxel_rebuild_for_entity(
             started_at,
         };
         if world.insert_one(roi_entity, work).is_err() {
-            if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-                roi.finish_job(RoiJobKind::RebuildVoxelCache);
-                roi.job_metrics.failed_count = roi.job_metrics.failed_count.saturating_add(1);
-            }
+            fail_job(world, roi_entity, RoiJobKind::RebuildVoxelCache);
             return false;
         }
         return true;
@@ -539,11 +529,12 @@ pub(super) fn requeue_contour_voxel_rebuild(world: &mut World, roi_entity: hecs:
 }
 
 pub(super) fn fail_contour_voxel_rebuild(world: &mut World, roi_entity: hecs::Entity) {
-    if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-        roi.finish_job(RoiJobKind::RebuildVoxelCache);
-        roi.mark_cache_dirty(RoiCacheKind::Voxel);
-        roi.job_metrics.failed_count = roi.job_metrics.failed_count.saturating_add(1);
-    }
+    fail_job_marking_dirty(
+        world,
+        roi_entity,
+        RoiJobKind::RebuildVoxelCache,
+        RoiCacheKind::Voxel,
+    );
 }
 
 pub(super) fn merge_voxel_aabbs(

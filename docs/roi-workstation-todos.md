@@ -127,7 +127,7 @@ Exit: the layering is enforced by a test; the scene model is decided and applied
     3. Split `Roi` into small components (metadata, body, caches, jobs, history, visibility and lock) so systems select ROIs by which components they have.
     4. Make annotations, measurements, points, and comments entities that share components (a world or view anchor, text, colour, visibility, timestamps); this replaces `AnnotationState` and the marker path (see 3.6).
     5. Try the job-as-component scheduler on the ROI coordinator together with 2b.3 and keep it only if it shrinks `roi_runtime.rs`.
-  - *Progress:* stage 1 (singletons to `Session` fields, `AppEntities` deleted) is done; stages 2 to 4 of ADR 0005 remain.
+  - *Progress:* stage 1 (singletons to `Session` fields, `AppEntities` deleted) and stage 2 (`RoiMetadata` component, `roi_runtime` split by concern with shared job endings; the full `Roi` split was measured and rejected, see ADR 0005) are done; stages 3 (annotations as entities) and 4 (`components.rs` split) remain.
   - *Done when:* `AppEntities` is gone (done); annotations are entities; the lifecycle and QA tests pass unchanged; ADR 0005 is accepted.
 - [ ] **2b.10 Scale to 100 to 200 ROIs (L; measure first).**
   - *Problem:* three things do not scale, none of them the ECS. (a) Memory: each label imports as its own full-volume mask, cache, and GPU texture, so 200 ROIs on a 512x512x300 scan is far beyond browser memory (100 ROIs times 79 MB is 7.9 GB before GPU copies). (b) Display: the voxel overlay has 8 GPU slots (`MAX_VOXEL_OVERLAY_SLOTS`), so at most 8 ROIs show as voxels; the rest show nothing. (c) Interface: the layer panel lists ROIs with no search, filter, or virtualisation, and the job scheduler has no budget across many ROIs.

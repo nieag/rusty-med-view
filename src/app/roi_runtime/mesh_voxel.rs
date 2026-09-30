@@ -157,10 +157,12 @@ pub(super) fn resume_mesh_voxel_rebuild_work(
             })
     });
     if !is_current {
-        record_job_discarded(world, roi_entity, work.started_at.elapsed());
-        if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-            roi.finish_job(RoiJobKind::RebuildVoxelCache);
-        }
+        discard_job(
+            world,
+            roi_entity,
+            RoiJobKind::RebuildVoxelCache,
+            work.started_at.elapsed(),
+        );
         return false;
     }
     let scan_started_at = Instant::now();
@@ -187,10 +189,12 @@ pub(super) fn resume_mesh_voxel_rebuild_work(
         .get::<&Roi>(roi_entity)
         .is_ok_and(|roi| roi.dirty_state.authoritative.shape != source_generation)
     {
-        record_job_discarded(world, roi_entity, started_at.elapsed());
-        if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-            roi.finish_job(RoiJobKind::RebuildVoxelCache);
-        }
+        discard_job(
+            world,
+            roi_entity,
+            RoiJobKind::RebuildVoxelCache,
+            started_at.elapsed(),
+        );
         return false;
     }
 
@@ -259,11 +263,12 @@ pub(super) fn fail_mesh_voxel_rebuild(
     roi_entity: hecs::Entity,
     reason: &'static str,
 ) {
-    if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
-        roi.finish_job(RoiJobKind::RebuildVoxelCache);
-        roi.mark_cache_dirty(RoiCacheKind::Voxel);
-        roi.job_metrics.failed_count = roi.job_metrics.failed_count.saturating_add(1);
-    }
+    fail_job_marking_dirty(
+        world,
+        roi_entity,
+        RoiJobKind::RebuildVoxelCache,
+        RoiCacheKind::Voxel,
+    );
     report_roi_status(
         world,
         roi_entity,
