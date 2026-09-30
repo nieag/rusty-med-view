@@ -50,7 +50,7 @@ pub fn create_voxel_rois_from_label(
     loaded_label: &LoadedLabel,
 ) -> Result<Vec<hecs::Entity>, String> {
     let import_spec = prepare_voxel_roi_import(world, loaded_label)?;
-    let masks = label_masks_for_import(&loaded_label.data)?;
+    let masks = label_masks_for_import(&loaded_label.data, import_spec.geometry.dimensions())?;
 
     let placeholder_bg = world
         .query::<&GpuVolumeResources>()
@@ -61,14 +61,13 @@ pub fn create_voxel_rois_from_label(
         .ok_or_else(|| {
             "Cannot create a label ROI without an initialized main volume resource".to_string()
         })?;
-    let dimensions = import_spec.geometry.dimensions();
 
     spawn_label_rois(
         world,
         import_spec.geometry,
         &loaded_label.filename,
         masks,
-        |mask_bytes| {
+        |mask_bytes, dimensions| {
             let (texture, view, sampler) = crate::io::volume::create_r8_texture_from_label_bytes(
                 device,
                 queue,
@@ -88,16 +87,20 @@ pub fn create_voxel_rois_from_label(
 
 /// One mask per non-zero label, or a single all-zero mask for a map without labels. Fails when
 /// the split would exceed the import memory budget.
-pub(super) fn label_masks_for_import(data: &[u8]) -> Result<Vec<LabelMask>, String> {
+pub(super) fn label_masks_for_import(
+    data: &[u8],
+    dimensions: [u32; 3],
+) -> Result<Vec<LabelMask>, String> {
     let labels = present_label_ids(data);
-    check_label_import_budget(data.len(), labels.len())?;
     if labels.is_empty() {
         return Ok(vec![LabelMask {
             label: 0,
+            min: [0; 3],
+            dimensions,
             data: data.to_vec(),
         }]);
     }
-    Ok(split_labelmap(data, &labels))
+    split_labelmap(data, dimensions, &labels)
 }
 
 /// Spawns one ROI entity per mask. `gpu_for_mask` builds the GPU mirror for a mask (`None` when
@@ -107,19 +110,26 @@ pub(super) fn spawn_label_rois(
     geometry: VoxelGeometry,
     filename: &str,
     masks: Vec<LabelMask>,
-    mut gpu_for_mask: impl FnMut(&[u8]) -> Result<Option<GpuVolumeResources>, String>,
+    mut gpu_for_mask: impl FnMut(&[u8], [u32; 3]) -> Result<Option<GpuVolumeResources>, String>,
 ) -> Result<Vec<hecs::Entity>, String> {
     let already_visible = visible_voxel_overlay_count(world);
     let label_count = masks.len();
     let mut entities = Vec::with_capacity(label_count);
     for (index, mask) in masks.into_iter().enumerate() {
-        let gpu_resources = gpu_for_mask(&mask.data)?;
+        // Each ROI owns just the box around its label, on the same world grid.
+        let mask_geometry = geometry
+            .cropped(mask.min, mask.dimensions)
+            .map_err(|error| format!("Cannot crop label {}: {error}", mask.label))?;
+        let gpu_resources = gpu_for_mask(&mask.data, mask.dimensions)?;
         let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
-        let (roi, mut metadata) = Roi::new_voxel_with_cache(
+        let (roi, mut metadata) = Roi::new_voxel_in_grid(
             RoiId(next_roi_id),
             label_roi_name(filename, mask.label, label_count),
             geometry,
-            mask.data,
+            VoxelData {
+                geometry: mask_geometry,
+                raw_data: mask.data,
+            },
             gpu_resources,
         );
         metadata.is_visible = already_visible + index < MAX_SIMULTANEOUS_ROI_OVERLAYS;
@@ -187,175 +197,5 @@ pub fn create_empty_contour_roi(
     }
 
     editor.active_roi = Some(entity);
-    Ok(entity)
-}
-
-#[cfg(test)]
-pub fn create_contour_roi_from_voxel_roi(
-    world: &mut World,
-    source_roi: hecs::Entity,
-    family: OrthogonalFamily,
-) -> Result<hecs::Entity, VoxelContourCreationError> {
-    let source_voxel = {
-        let roi = world
-            .get::<&Roi>(source_roi)
-            .map_err(|_| VoxelContourCreationError::MissingRoi)?;
-        match &roi.body {
-            RoiBody::Voxel(VoxelBody { data: voxel }) => voxel.clone(),
-            RoiBody::Contour(_) | RoiBody::Mesh(_) => {
-                return Err(VoxelContourCreationError::NotVoxelRoi);
-            }
-        }
-    };
-
-    let extracted = extract_contours_from_voxel_data(&source_voxel, family)
-        .map_err(VoxelContourCreationError::ExtractionFailed)?;
-
-    let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
-    let source_name = world
-        .get::<&RoiMetadata>(source_roi)
-        .ok()
-        .map(|metadata| metadata.name.clone())
-        .unwrap_or_else(|| "Voxel ROI".to_string());
-    let new_name = format!(
-        "{source_name} ({} Contour)",
-        plane_family_label(family.into())
-    );
-    let reference_geometry = source_voxel.geometry;
-
-    let entity = crate::app::roi::spawn_roi_layer(
-        world,
-        Roi::new_contour_with_geometry(RoiId(next_roi_id), new_name, reference_geometry, extracted),
-        0.5,
-    );
-    if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
-        // Preserve source voxel geometry as the initial contour reference frame.
-        // This keeps extracted contour projection/edit mapping aligned before any
-        // contour->voxel rebuild retargets caches to main-volume geometry.
-        let generation = roi.dirty_state.authoritative.shape;
-        let _ = roi.install_voxel_cache_result(
-            VoxelCache {
-                data: source_voxel,
-                gpu_resources: None,
-            },
-            generation,
-        );
-    }
-    Ok(entity)
-}
-
-#[cfg(test)]
-pub fn create_mesh_roi_from_voxel_roi(
-    world: &mut World,
-    source_roi: hecs::Entity,
-) -> Result<hecs::Entity, VoxelMeshCreationError> {
-    let source_voxel =
-        voxel_data_for_display_surface_extraction(world, source_roi).map_err(|err| match err {
-            DisplayVoxelSourceError::MissingRoi => VoxelMeshCreationError::MissingRoi,
-            DisplayVoxelSourceError::NotVoxelRoi => VoxelMeshCreationError::NotVoxelRoi,
-        })?;
-
-    let source_has_occupancy = source_voxel.raw_data.iter().any(|value| *value != 0);
-    let extracted = extract_mesh_from_voxel_data(&source_voxel)
-        .map_err(VoxelMeshCreationError::ExtractionFailed)?;
-    if source_has_occupancy && (extracted.vertices.is_empty() || extracted.faces.is_empty()) {
-        return Err(VoxelMeshCreationError::EmptyMeshFromNonEmptySource);
-    }
-
-    let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
-    let source_name = world
-        .get::<&RoiMetadata>(source_roi)
-        .ok()
-        .map(|metadata| metadata.name.clone())
-        .unwrap_or_else(|| "Voxel ROI".to_string());
-    let entity = crate::app::roi::spawn_roi_layer(
-        world,
-        Roi::new_mesh_with_geometry(
-            RoiId(next_roi_id),
-            format!("{source_name} (Mesh)"),
-            source_voxel.geometry,
-            extracted,
-        ),
-        0.5,
-    );
-    if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
-        // Preserve source voxel geometry as extraction/provenance context.
-        // Rendering projects mesh world-mm vertices through main display volume geometry.
-        roi.store_stale_voxel_cache(VoxelCache {
-            data: source_voxel,
-            gpu_resources: None,
-        });
-    }
-    Ok(entity)
-}
-
-#[cfg(test)]
-pub fn voxel_data_for_display_surface_extraction(
-    world: &World,
-    source_roi: hecs::Entity,
-) -> Result<VoxelData, DisplayVoxelSourceError> {
-    let source_voxel = {
-        let roi = world
-            .get::<&Roi>(source_roi)
-            .map_err(|_| DisplayVoxelSourceError::MissingRoi)?;
-        match &roi.body {
-            RoiBody::Voxel(VoxelBody { data: voxel }) => voxel.clone(),
-            RoiBody::Contour(_) | RoiBody::Mesh(_) => {
-                return Err(DisplayVoxelSourceError::NotVoxelRoi);
-            }
-        }
-    };
-
-    Ok(source_voxel)
-}
-
-#[cfg(test)]
-pub fn create_mesh_roi_from_contour_roi(
-    world: &mut World,
-    source_roi: hecs::Entity,
-) -> Result<hecs::Entity, ContourMeshCreationError> {
-    let source_voxel = {
-        let roi = world
-            .get::<&Roi>(source_roi)
-            .map_err(|_| ContourMeshCreationError::MissingRoi)?;
-        if !matches!(&roi.body, RoiBody::Contour(_)) {
-            return Err(ContourMeshCreationError::NotContourRoi);
-        }
-        let Some(cache) = roi.voxel_cache() else {
-            return Err(ContourMeshCreationError::MissingCurrentVoxelCache);
-        };
-        if !roi.is_cache_current(RoiCacheKind::Voxel) {
-            return Err(ContourMeshCreationError::MissingCurrentVoxelCache);
-        }
-        cache.data.clone()
-    };
-
-    let extracted = extract_mesh_from_voxel_data(&source_voxel)
-        .map_err(ContourMeshCreationError::ExtractionFailed)?;
-
-    let next_roi_id = world.query::<&Roi>().iter().count() as u64 + 1;
-    let source_name = world
-        .get::<&RoiMetadata>(source_roi)
-        .ok()
-        .map(|metadata| metadata.name.clone())
-        .unwrap_or_else(|| "Contour ROI".to_string());
-    let entity = crate::app::roi::spawn_roi_layer(
-        world,
-        Roi::new_mesh_with_geometry(
-            RoiId(next_roi_id),
-            format!("{source_name} (Mesh)"),
-            source_voxel.geometry,
-            extracted,
-        ),
-        0.5,
-    );
-    if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
-        // Preserve contour-derived voxel geometry as extraction/provenance context.
-        // Rendering projects mesh world-mm vertices through main display volume geometry.
-        roi.store_stale_voxel_cache(VoxelCache {
-            data: source_voxel,
-            gpu_resources: None,
-        });
-    }
     Ok(entity)
 }

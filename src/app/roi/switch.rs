@@ -368,6 +368,21 @@ pub(crate) fn convert_to_contour(
             }
         }
     };
+    // Contours are edited anywhere in the reference grid, so the voxels they are derived from and
+    // rasterized back into cover the whole grid, not just the box an imported label was stored in.
+    let source_voxel = {
+        let reference = world
+            .get::<&Roi>(roi_entity)
+            .map_err(|_| SwitchError::MissingRoi)?
+            .reference_geometry();
+        if source_voxel.geometry.identity() == reference.identity() {
+            source_voxel
+        } else {
+            source_voxel
+                .embedded_in(reference)
+                .ok_or(SwitchError::SourceUnavailable)?
+        }
+    };
     let extracted = extract_contours_from_voxel_data(&source_voxel, family)
         .map_err(SwitchError::ExtractionFailed)?;
 

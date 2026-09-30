@@ -72,11 +72,14 @@ fn liver_label_splits_into_separate_liver_and_tumor_masks() {
     let ids = present_label_ids(&label.data);
     assert_eq!(ids, vec![1, 2]);
 
-    let masks = split_labelmap(&label.data, &ids);
+    let masks = split_labelmap(&label.data, label.geometry.dimensions(), &ids).unwrap();
     let counts: Vec<usize> = masks
         .iter()
         .map(|mask| mask.data.iter().filter(|value| **value != 0).count())
         .collect();
     assert_eq!(counts, vec![113_169, 546]);
-    assert!(masks.iter().all(|mask| mask.data.len() == label.data.len()));
+    // Each mask is cropped to its label: smaller than the volume, and the tumor much smaller
+    // than the liver.
+    assert!(masks.iter().all(|mask| mask.data.len() < label.data.len()));
+    assert!(masks[1].data.len() < masks[0].data.len());
 }

@@ -307,7 +307,6 @@ pub(crate) fn sync_speculative_voxel_cache(world: &mut World, active_roi: Option
     };
     let wanted = world.get::<&Roi>(entity).is_ok_and(|roi| {
         matches!(roi.body, RoiBody::Mesh(_))
-            && roi.voxel_cache().is_some()
             && roi.job_state.speculative_voxel_shape != Some(roi.dirty_state.authoritative.shape)
             && !roi.preview_state.active
             && roi.validated_mesh_generation == Some(roi.dirty_state.authoritative.shape)

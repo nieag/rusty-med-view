@@ -435,10 +435,12 @@ impl Roi {
         }
     }
 
+    /// Voxel data is valid for this ROI when it is the whole reference grid or a box of it.
     fn validate_voxel_data_geometry(&self, data: &VoxelData) -> Result<(), CacheInstallError> {
-        (data.geometry.identity() == self.reference_geometry().identity())
-            .then_some(())
-            .ok_or(CacheInstallError::GeometryMismatch)
+        (data.geometry.identity() == self.reference_geometry().identity()
+            || data.geometry.offset_in(self.reference_geometry()).is_some())
+        .then_some(())
+        .ok_or(CacheInstallError::GeometryMismatch)
     }
 
     fn validate_preview_source(

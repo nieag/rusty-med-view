@@ -473,8 +473,25 @@ impl Roi {
         raw_data: Vec<u8>,
         gpu_resources: Option<GpuVolumeResources>,
     ) -> (Self, RoiMetadata) {
-        let voxel_data = VoxelData { geometry, raw_data };
-        let reference_geometry = voxel_data.geometry;
+        Self::new_voxel_in_grid(
+            roi_id,
+            name,
+            geometry,
+            VoxelData { geometry, raw_data },
+            gpu_resources,
+        )
+    }
+
+    /// A voxel ROI whose data covers only a box of its reference grid. Conversions and edits work
+    /// in the whole reference grid; the stored voxels (and their GPU copy) are just the box.
+    pub fn new_voxel_in_grid(
+        roi_id: RoiId,
+        name: String,
+        reference_geometry: VoxelGeometry,
+        voxel_data: VoxelData,
+        gpu_resources: Option<GpuVolumeResources>,
+    ) -> (Self, RoiMetadata) {
+        debug_assert!(voxel_data.geometry.offset_in(reference_geometry).is_some());
         let roi = Self {
             reference_geometry,
             body: RoiBody::Voxel(VoxelBody {

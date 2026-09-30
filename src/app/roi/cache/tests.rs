@@ -47,10 +47,21 @@ fn test_voxel_cache_result_with_mismatched_reference_geometry_is_rejected() {
     );
     let generation = roi.dirty_state.authoritative.shape;
 
-    let result = roi.install_voxel_cache_result(test_voxel_cache(1), generation);
+    // A grid with another spacing is not part of the reference grid.
+    let mut foreign = test_voxel_cache(1);
+    foreign.data.geometry =
+        VoxelGeometry::new([1, 1, 1], [2.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
+    let result = roi.install_voxel_cache_result(foreign, generation);
 
     assert_eq!(result, Err(CacheInstallError::GeometryMismatch));
     assert!(roi.voxel_cache().is_none());
+
+    // A box of the reference grid is.
+    assert_eq!(
+        roi.install_voxel_cache_result(test_voxel_cache(1), generation),
+        Ok(())
+    );
+    assert!(roi.voxel_cache().is_some());
 }
 
 #[test]

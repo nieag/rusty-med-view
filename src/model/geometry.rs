@@ -133,6 +133,31 @@ pub struct VoxelData {
     pub raw_data: Vec<u8>,
 }
 
+impl VoxelData {
+    /// This data placed in the grid `outer` that contains it (see [`VoxelGeometry::offset_in`]),
+    /// zero everywhere else. `None` when the grids do not fit.
+    pub fn embedded_in(&self, outer: VoxelGeometry) -> Option<VoxelData> {
+        let offset = self.geometry.offset_in(outer)?;
+        let [width, height, depth] = self.geometry.dimensions.map(|value| value as usize);
+        let [outer_width, outer_height, outer_depth] = outer.dimensions.map(|value| value as usize);
+        let mut raw_data = vec![0; outer_width * outer_height * outer_depth];
+        for z in 0..depth {
+            for y in 0..height {
+                let source = (z * height + y) * width;
+                let target = ((z + offset[2] as usize) * outer_height + y + offset[1] as usize)
+                    * outer_width
+                    + offset[0] as usize;
+                raw_data[target..target + width]
+                    .copy_from_slice(&self.raw_data[source..source + width]);
+            }
+        }
+        Some(VoxelData {
+            geometry: outer,
+            raw_data,
+        })
+    }
+}
+
 const GEOMETRY_EPSILON: f64 = 1.0e-12;
 
 /// Validated voxel grid: dimensions plus an IJK-to-world affine.
@@ -216,6 +241,49 @@ impl VoxelGeometry {
             ),
         );
         Self::from_affine(dimensions, affine)
+    }
+
+    /// The grid of the box of `dimensions` voxels whose first voxel is voxel `min` of this grid:
+    /// same spacing, orientation, and world positions, a smaller extent.
+    pub fn cropped(self, min: [u32; 3], dimensions: [u32; 3]) -> Result<Self, VoxelGeometryError> {
+        let shift = DMat4::from_translation(DVec3::new(
+            f64::from(min[0]),
+            f64::from(min[1]),
+            f64::from(min[2]),
+        ));
+        Self::from_affine(dimensions, self.ijk_to_world * shift)
+    }
+
+    /// Where this grid sits inside `outer`: the voxel of `outer` that is this grid's first voxel.
+    /// `None` unless this grid has the same spacing and orientation, starts on a voxel of
+    /// `outer`, and lies entirely inside it.
+    pub fn offset_in(self, outer: Self) -> Option<[u32; 3]> {
+        let same_axes = [
+            (self.ijk_to_world.x_axis, outer.ijk_to_world.x_axis),
+            (self.ijk_to_world.y_axis, outer.ijk_to_world.y_axis),
+            (self.ijk_to_world.z_axis, outer.ijk_to_world.z_axis),
+        ]
+        .iter()
+        .all(|(a, b)| (*a - *b).abs().max_element() <= 1.0e-6 * b.abs().max_element().max(1.0));
+        if !same_axes {
+            return None;
+        }
+        let first = outer
+            .world_to_ijk
+            .transform_point3(self.ijk_to_world.w_axis.truncate());
+        let mut offset = [0u32; 3];
+        for axis in 0..3 {
+            let rounded = first[axis].round();
+            if (first[axis] - rounded).abs() > 1.0e-3 || rounded < 0.0 {
+                return None;
+            }
+            let start = rounded as u64;
+            if start + u64::from(self.dimensions[axis]) > u64::from(outer.dimensions[axis]) {
+                return None;
+            }
+            offset[axis] = start as u32;
+        }
+        Some(offset)
     }
 
     /// Builds a geometry from a full IJK-to-world affine (column-major, millimetres).
@@ -435,5 +503,56 @@ mod tests {
         assert_eq!(geometry.origin(), [12.0, -4.0, 3.0]);
         let recovered = Quat::from_array(geometry.orientation());
         assert!(recovered.dot(Quat::from_array(orientation)).abs() > 0.99999);
+    }
+
+    #[test]
+    fn test_a_cropped_grid_sits_inside_its_parent_and_embeds_back() {
+        let outer = VoxelGeometry::new(
+            [6, 5, 4],
+            [0.7, 1.3, 2.1],
+            [10.0, 20.0, 30.0],
+            Quat::from_rotation_y(0.4).to_array(),
+        )
+        .unwrap();
+        let crop = outer.cropped([2, 1, 3], [3, 2, 1]).unwrap();
+        assert_eq!(crop.dimensions(), [3, 2, 1]);
+        assert_eq!(crop.offset_in(outer), Some([2, 1, 3]));
+        // The same world point is the same voxel of either grid.
+        let world = crop.ijk_to_world_mm([1.0, 1.0, 0.0]);
+        let in_outer = outer
+            .world_to_ijk
+            .transform_point3(glam::DVec3::from_array(world));
+        assert!((in_outer - glam::DVec3::new(3.0, 2.0, 3.0)).length() < 1e-9);
+
+        let data = VoxelData {
+            geometry: crop,
+            raw_data: vec![1, 2, 3, 4, 5, 6],
+        };
+        let embedded = data.embedded_in(outer).unwrap();
+        assert_eq!(embedded.geometry, outer);
+        let at = |x: usize, y: usize, z: usize| embedded.raw_data[(z * 5 + y) * 6 + x];
+        assert_eq!([at(2, 1, 3), at(3, 1, 3), at(4, 1, 3)], [1, 2, 3]);
+        assert_eq!([at(2, 2, 3), at(3, 2, 3), at(4, 2, 3)], [4, 5, 6]);
+        assert_eq!(embedded.raw_data.iter().filter(|v| **v != 0).count(), 6);
+    }
+
+    #[test]
+    fn test_grids_that_do_not_fit_have_no_offset() {
+        let outer =
+            VoxelGeometry::new([4, 4, 4], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
+        // Different spacing.
+        let other_spacing =
+            VoxelGeometry::new([2, 2, 2], [2.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
+        assert_eq!(other_spacing.offset_in(outer), None);
+        // Half a voxel off the grid.
+        let shifted =
+            VoxelGeometry::new([2, 2, 2], [1.0; 3], [0.5, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]).unwrap();
+        assert_eq!(shifted.offset_in(outer), None);
+        // Sticks out past the far side.
+        assert!(outer
+            .cropped([3, 0, 0], [2, 1, 1])
+            .unwrap()
+            .offset_in(outer)
+            .is_none());
     }
 }
