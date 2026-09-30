@@ -17,9 +17,9 @@ Work proceeds in chunks, foundation first. A chunk is a bounded set of plan item
 | Chunk | Plan items | Needs from the owner first |
 | --- | --- | --- |
 | A Structure | 2b.1 layering (done), 2b.2 orthogonal family type | nothing |
-| B Scene model | ADR 0005, 2b.9 (singletons to fields, `Roi` into components, annotations as entities), 2b.7 file split | in-view comment anchoring; whether a session is shared between people |
-| C Completeness | 2b.3 derived forms for all visible ROIs, 2b.4 one viewport mapping, 2b.5 GPU error handling, 2b.6 stale-view policy | confirm 2b.3 and 2b.6 recommendations |
-| D Scale | 2b.10 (cropped ROIs, display beyond 8 slots, layer list, work budget), 4.5 memory | a realistic multi-label case and scan size |
+| B Scene model | ADR 0005, 2b.9 (singletons to fields, `Roi` into components, annotations as entities), 2b.7 file split | answered: comments follow a 3D point; cases are reviewed by several people. Still open: how a case and its comments travel between people (file or server) |
+| C Completeness | 2b.3 derived forms for all visible ROIs, 2b.4 one viewport mapping, 2b.5 GPU error handling, 2b.6 nothing stale, 2b.6b incremental mesh rebuild | nothing (decided) |
+| D Scale | 2b.10 (cropped ROIs, display beyond 8 slots, layer list, work budget), 4.5 memory | nothing: a synthetic many-label case is generated from the liver sample |
 | E Docs | 2b.8, folded into each chunk as it lands, final check here | nothing |
 
 Phase 3 (editing features) starts after chunk D.
@@ -35,6 +35,8 @@ These drive the design.
 - Exactly one contour plane family is primary and editable at a time; all other views are derived and stay consistent with it. The primary family follows the view the user edits in.
 - Oblique views are derived, per-slice views only. They never become the primary contour set.
 - Switching primary view without editing is lossless and instant. A switch is an undo step, never a history wipe.
+- Comments and other annotations are anchored to a 3D point in the ROI's world space and follow the anatomy into every view (decided 2026-09-30). A case is reviewed by several people, so every annotation has a stable id, an author, and a time, and comments are threads.
+- Nothing shown is stale: a frame never draws a derived form that disagrees with the ROI's authoritative revision (decided 2026-09-30; see 2b.6).
 - Scale target (2026-09-30): one case holds 100 to 200 ROIs (for example a multi-organ model output) plus notes, measurements, in-view comments, and points of interest, with hundreds of small annotations. Every design choice below is checked against that, not against the 2-label liver sample.
 
 ## Done
@@ -96,7 +98,7 @@ Exit: the layering is enforced by a test; the scene model is decided and applied
   - *Done when:* no `unreachable!` in `convert/`; `ensure_editable` no longer needs the `UnsupportedTarget` case for Oblique because `EditTarget::Contour` takes an `OrthogonalFamily`.
 - [ ] **2b.3 Derived forms for every visible ROI (M).**
   - *Problem:* `sync_roi_contour_view_caches_for_viewports` and `sync_active_roi_mesh_cache_for_viewports` build contours and the mesh only for the active ROI (and mesh-authority ROIs). The second label of a multi-label import shows a voxel overlay only, in 2D and in 3D. This contradicts the product constraint that all views stay consistent.
-  - *Approach:* decide the rule (proposal: every visible ROI, with the active ROI first and a budget so ten labels do not queue ten mesh builds at once; cached forms of hidden ROIs are kept, not rebuilt). Reuse the existing demand-driven caches; the change is which ROIs create demand.
+  - *Decision (owner, 2026-09-30):* every visible ROI gets its derived contours and mesh. *Approach:* the active ROI first and a budget so ten labels do not queue ten mesh builds at once (under the consistency rule of 2b.6 a form that is not yet built is simply not drawn); cached forms of hidden ROIs are kept, not rebuilt. Reuse the existing demand-driven caches; the change is which ROIs create demand.
   - *Done when:* the liver sample shows contours and a mesh for both labels; a test asserts it; the budget is measured on a many-label volume.
 - [ ] **2b.4 One viewport-mapping implementation (M, moved from 5.4).**
   - *Problem:* the `screen_aspect / slice_aspect` mapping between viewport and volume exists in the shader, `geometry.rs`, `picking.rs`, and `input.rs`, and `ORTHOGRAPHIC_VIEW_SCALE` is duplicated in Rust and WGSL. Disagreement between copies caused earlier bugs (the half-voxel offset, the oblique shear).
@@ -106,10 +108,15 @@ Exit: the layering is enforced by a test; the scene model is decided and applied
   - *Problem:* no device-lost or uncaptured-error handler is installed, so one wgpu validation error panics the wasm module (it happened once this session). `request_device` uses default limits, which normally fail on a WebGL2 adapter.
   - *Approach:* install the handlers; log the error, surface it through `__viewerQa.lastError` and a status message, and keep running where possible. Request downlevel limits with the adapter's values or drop the `webgl` feature.
   - *Done when:* a deliberately invalid GPU call in a test build is reported, not fatal.
-- [ ] **2b.6 Policy for stale derived views (S, decision then small change).**
-  - *Problem:* after an edit, derived contour views in other planes keep rendering the pre-edit contours until the voxel rebuild finishes (200 ms and up on large volumes), and nothing marks them as out of date. That is stale-while-revalidate and may be the right behaviour, but the display can silently disagree with the edit.
-  - *Approach:* decide between keeping stale views visible but marked (dimmed or dashed), and hiding them until current. Implement in `contour_view_data_for_render` and the contour renderer.
-  - *Done when:* the decision is recorded in ADR 0004 and a test pins it.
+- [ ] **2b.6 Revision-consistent rendering: nothing stale (M, decided 2026-09-30; with 4.4).**
+  - *Decision (owner):* nothing should ever be stale. A frame never shows a derived form that disagrees with the ROI's authoritative revision.
+  - *Problem today:* after an edit, derived contour views in other planes keep rendering the pre-edit contours until the voxel rebuild finishes (200 ms and up on large volumes); the voxel overlay and the 3D mesh do the same, and the mesh rebuild is a full one (0.8 s on the liver, see 4.4).
+  - *Approach:*
+    1. *The rule, enforced in one place:* a derived form is drawn only when its `built_from` equals the ROI's current revision, or when it is the in-progress preview of the current edit. Anything else is not drawn; there is no silent fallback to old data. A test renders after every kind of edit and asserts no frame uses an old revision.
+    2. *Make derivation fast enough to be current in the same frame where it can be:* the commit applies the slice-local voxel update inline (milliseconds, it is already slice-local), and derived 2D views of the slices that are on screen are extracted on demand from the updated voxels (well under a millisecond per slice), so 2D views and the voxel overlay are current when the commit returns.
+    3. *The 3D mesh cannot be rebuilt inline on a large ROI today.* Until the incremental rebuild (4.4) lands, the mesh is withdrawn for the part that is being rebuilt and redrawn when current (chunks rebuild independently, so only the affected region goes missing briefly), with a visible "updating" indicator; it is never drawn from the old revision. After 4.4 a local edit rebuilds its chunks in tens of milliseconds.
+  - *Done when:* the rule and its test exist; 2D views and the voxel overlay are current in the frame after a commit; 4.4 is done and the 3D mesh follows a local edit within a stated budget; ADR 0004 records the rule.
+- [ ] **2b.6b Real incremental mesh rebuild (M, moved here from 4.4).** `begin_for_voxel_aabb` ignores its AABB and rebuilds the full SDF plus all chunks on every edit. Implement a banded SDF over the dirty region plus the smoothing margin, rebuild only the intersecting chunks, and keep the result identical to a clean full rebuild (the liver test in `tests/switch_guard.rs` already pins that). This is what makes "nothing stale" affordable for the 3D view.
 - [ ] **2b.9 Make the ECS the scene model for the things that are many and different (ADR first, then M to L; before 2b.7).**
   - *Decision input:* the scale target above. With 100 to 200 ROIs and hundreds of notes, measurements, comments, and points of interest, the scene holds many small entities of different shapes, which is the case an ECS is for. It was not earning its place at 2 ROIs; at this scale it can.
   - *Problem today:* `hecs` is used as a service locator for nine one-off pieces of state (`editor`, `input`, `gui_state`, `cursor`, `volume_windowing`, `annotations`, `overlay`, `protocol`, `window_settings` in `AppEntities`), about 110 fallible lookups that force impossible error variants (`MissingEditorState`, `MissingCursor`, ...) and about 45 `.ok()` calls; nearly every function takes `(world, entities)`, hiding what it touches. Meanwhile the things that are entity-shaped are not entities: annotations live in one `AnnotationState { Vec<Annotation> }` singleton (a `Vec` inside a component), overlay markers are a separate `OverlayManager`, and `Roi` is one 18-field component.
@@ -124,7 +131,7 @@ Exit: the layering is enforced by a test; the scene model is decided and applied
 - [ ] **2b.10 Scale to 100 to 200 ROIs (L; measure first).**
   - *Problem:* three things do not scale, none of them the ECS. (a) Memory: each label imports as its own full-volume mask, cache, and GPU texture, so 200 ROIs on a 512x512x300 scan is far beyond browser memory (100 ROIs times 79 MB is 7.9 GB before GPU copies). (b) Display: the voxel overlay has 8 GPU slots (`MAX_VOXEL_OVERLAY_SLOTS`), so at most 8 ROIs show as voxels; the rest show nothing. (c) Interface: the layer panel lists ROIs with no search, filter, or virtualisation, and the job scheduler has no budget across many ROIs.
   - *Approach:* crop each ROI's voxel data and caches to its bounding box using the ROI's own geometry (the affine model already allows a cropped origin), which is also the real fix noted in 3.1 and 4.5; show ROIs beyond the slots through a shared display labelmap or contours; a searchable, virtualised layer list with visibility groups; a work budget per frame and per queue that favours the active and visible ROIs (with 2b.3).
-  - *Done when:* a synthetic 150-ROI case on a 512x512x300 volume imports, displays, and edits within a stated memory ceiling, measured in the QA spec.
+  - *Done when:* a synthetic 150-ROI case on a 512x512x300 volume (generated from the liver sample by tiling and splitting its mask, so the count and size are real even if the shapes are not) imports, displays, and edits within a stated memory ceiling, measured in the QA spec.
 - [ ] **2b.7 Split `roi_runtime.rs` and `components.rs` by concern (M, moved from 5.1, after 2b.1 and 2b.2).**
   - *Problem:* `roi_runtime.rs` is 2,075 lines (job coordinator, three rebuild pipelines, contour view caches, label import); `components.rs` mixes ECS components with domain types.
   - *Approach:* follow the layering: coordinator, one module per rebuild pipeline, view caches, import; components keep only ECS state. Do it after 2b.1 so the split follows real boundaries instead of guesses.
@@ -154,7 +161,7 @@ Do after Phases 0 to 2 so measurements reflect the final structure. Measure each
 - [ ] **4.1 Loader (M).** Per-voxel `get_f64` loop and up to three CPU copies of the intensities; wasm parse runs on the main thread with no progress. Fast typed path, drop copies, chunk or yield with progress.
 - [ ] **4.2 Image texture format (M).** R32Float is 4 bytes per voxel and nearest-only (oblique slices look blocky). Evaluate R16Float or normalized u16 with `float32-filterable` or linear sampling.
 - [x] **4.3 GPU mesh rendering (L).** Done (commit 8b22220): parts are uploaded once as indexed world-space geometry and a per-draw uniform carries the camera; geometry is rebuilt only when a fingerprint changes. Original scope: Meshes are projected on the CPU every frame, compared and re-uploaded whole, and drawn flat and translucent with no depth or lighting. Upload world-space vertices once, project on the GPU with a uniform matrix, add depth and normals.
-- [ ] **4.4 Real incremental mesh rebuild, or delete the plumbing (M).** `begin_for_voxel_aabb` ignores its AABB and rebuilds the full SDF plus all chunks on every edit. Either implement banded SDF updates or remove the dirty-region machinery around it.
+- [>] **4.4 Real incremental mesh rebuild.** Moved to 2b.6b. Original note: `begin_for_voxel_aabb` ignores its AABB and rebuilds the full SDF plus all chunks on every edit. Either implement banded SDF updates or remove the dirty-region machinery around it.
 - [ ] **4.5 Memory (M).** Undo keeps up to 32 full mesh and contour clones, and a switch snapshot of a voxel body clones the whole volume (up to 32 steps); the SDF path allocates about five full-volume arrays; a mesh rebuild clones the whole voxel volume and the chunk set; each mesh-drag event clones the mesh (the topology is now built once per drag). Use delta or shared-structure snapshots (for example `Arc` for immutable bodies) and avoid the clones.
 - [ ] **4.6 Small hot spots (S).** `roi_voxel_stats` scans every voxel of every ROI per frame while the Layers panel is open; cache by generation. Rebuild of overlay primitives runs twice per frame.
 

@@ -139,13 +139,9 @@ Plan: 2b.10 (memory, display, interface, budget), 3.6 (annotations as entities, 
 
 ## 7. Open decisions
 
-1. **Derived forms for every visible ROI (2b.3).** Recommendation: yes, active first, with a
-   budget.
-2. **Stale derived views (2b.6).** Recommendation: keep them visible but marked, so the display
-   never flickers and never silently disagrees.
-3. **How an in-view comment is anchored (ADR 0005).** Either it belongs to a view position (a
-   comment made in the axial view at slice 50 shows there only), or it is a 3D point that follows
-   the anatomy into every view. This decides the components of the annotation entities.
+1. **Derived forms for every visible ROI (2b.3). Decided: yes,** active first, with a budget.
+2. **Stale derived views (2b.6). Decided: nothing is stale.** A frame never draws a form that disagrees with the authoritative revision; derivation is made fast enough to be current (slice-local voxel update and on-demand slice extraction inline, incremental mesh rebuild 2b.6b), and a form that is not current is not drawn.
+3. **How an in-view comment is anchored (ADR 0005). Decided: a 3D point** that follows the anatomy into every view, and a case is reviewed by several people. Open: how a case and its comments travel between people (a file, or a server).
 4. **Scope of image modalities and the license (6.4, 6.6).** Unchanged from the plan.
 
 ## 8. Order
