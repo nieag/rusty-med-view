@@ -1,11 +1,11 @@
 use crate::app::components::{
-    ContourBody, ContourData, ContourSliceKey, EditorState, MeshBody, MeshData, Roi, RoiBody,
-    RoiDirtyRegion, RoiEditHistoryEntry, RoiEditSnapshot, RoiHistory, RoiJobKind, RoiJobPriority,
-    RoiJobRequest, RoiJobState, VoxelBody,
+    ContourBody, ContourData, EditorState, MeshBody, MeshData, Roi, RoiBody, RoiDirtyRegion,
+    RoiEditHistoryEntry, RoiEditSnapshot, RoiHistory, RoiJobKind, RoiJobPriority, RoiJobRequest,
+    RoiJobState, VoxelBody,
 };
 use crate::app::roi::authority::{
-    replace_contour_data, replace_contour_data_for_slice, replace_mesh_data, ContourMutationError,
-    MeshMutationError,
+    dirty_region_for_slice_swap, replace_contour_data, replace_contour_data_for_slice,
+    replace_mesh_data, ContourMutationError, MeshMutationError,
 };
 use crate::convert::PlaneDefinition;
 use hecs::World;
@@ -55,18 +55,7 @@ fn replace_contour_data_with_history_impl(
         return Ok(());
     }
     let dirty_region = dirty_plane
-        .map(ContourSliceKey::from_plane)
-        .filter(|key| {
-            before
-                .slices
-                .iter()
-                .any(|slice| ContourSliceKey::from_plane(slice.plane) == *key)
-                && contour_data
-                    .slices
-                    .iter()
-                    .any(|slice| ContourSliceKey::from_plane(slice.plane) == *key)
-        })
-        .map(RoiDirtyRegion::ContourSlice)
+        .map(|plane| dirty_region_for_slice_swap(&before, &contour_data, plane))
         .unwrap_or(RoiDirtyRegion::Full);
     match dirty_plane {
         Some(plane) => replace_contour_data_for_slice(world, roi_entity, contour_data, plane)?,

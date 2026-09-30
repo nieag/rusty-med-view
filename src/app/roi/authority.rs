@@ -45,6 +45,43 @@ pub fn replace_contour_data(
     Ok(())
 }
 
+fn has_slice(data: &ContourData, key: ContourSliceKey) -> bool {
+    data.slices
+        .iter()
+        .any(|slice| ContourSliceKey::from_plane(slice.plane) == key)
+}
+
+/// What the voxel cache has to rebuild after a commit that left `after` with edits at `plane`.
+///
+/// One slice can be re-rasterized on its own when it exists after the edit: the rebuild clears and
+/// redraws the slab it covers (a new slice only adds to an empty slab). A slice that was removed
+/// leaves nothing to locate its old slab by, so the whole cache is rebuilt.
+pub fn dirty_region_for_slice_edit(after: &ContourData, plane: PlaneDefinition) -> RoiDirtyRegion {
+    let key = ContourSliceKey::from_plane(plane);
+    if has_slice(after, key) {
+        RoiDirtyRegion::ContourSlice(key)
+    } else {
+        RoiDirtyRegion::Full
+    }
+}
+
+/// The same for an undo or redo step, which swaps two states and may run either way: a
+/// slice-local rebuild is only valid when the slice exists in both.
+pub fn dirty_region_for_slice_swap(
+    a: &ContourData,
+    b: &ContourData,
+    plane: PlaneDefinition,
+) -> RoiDirtyRegion {
+    let key = ContourSliceKey::from_plane(plane);
+    if has_slice(a, key) && has_slice(b, key) {
+        RoiDirtyRegion::ContourSlice(key)
+    } else {
+        RoiDirtyRegion::Full
+    }
+}
+
+/// Replaces the contour data after an edit at `dirty_plane`, rebuilding only as much of the voxel
+/// cache as the edit can have changed (see [`dirty_region_for_slice_edit`]).
 pub fn replace_contour_data_for_slice(
     world: &mut World,
     roi_entity: hecs::Entity,
@@ -55,12 +92,16 @@ pub fn replace_contour_data_for_slice(
         .get::<&mut Roi>(roi_entity)
         .map_err(|_| ContourMutationError::MissingRoi)?;
 
-    match &mut roi.body {
-        RoiBody::Contour(ContourBody { data: existing, .. }) => *existing = contour_data,
+    let dirty_region = match &mut roi.body {
+        RoiBody::Contour(ContourBody { data: existing, .. }) => {
+            let region = dirty_region_for_slice_edit(&contour_data, dirty_plane);
+            *existing = contour_data;
+            region
+        }
         RoiBody::Voxel(_) | RoiBody::Mesh(_) => {
             return Err(ContourMutationError::NotContourRoi);
         }
-    }
+    };
 
     roi.mark_contour_authoritative_changed();
     roi.mark_all_contour_view_caches_stale();
@@ -71,7 +112,7 @@ pub fn replace_contour_data_for_slice(
         source_generation,
         preview_revision: None,
         priority: RoiJobPriority::VisibleCommitted,
-        dirty_region: RoiDirtyRegion::ContourSlice(ContourSliceKey::from_plane(dirty_plane)),
+        dirty_region,
     });
     Ok(())
 }

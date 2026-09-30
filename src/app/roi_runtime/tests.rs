@@ -3286,3 +3286,335 @@ fn test_ensure_editable_converts_a_mesh_roi_to_contours_with_a_loss_report_and_u
     undo_roi_edit(&mut world, editor).unwrap();
     assert_eq!(world.get::<&Roi>(entity).unwrap().mesh_data(), Some(&mesh));
 }
+
+// --- ROI lifecycle: the shape must not drift through conversions, edits, and undo ---
+
+fn lifecycle_blob() -> (VoxelGeometry, Vec<u8>) {
+    let dims = [14_u32, 14, 14];
+    let geometry = VoxelGeometry::new(dims, [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
+    let mut raw = vec![0_u8; 14 * 14 * 14];
+    let inside = |x: i32, y: i32, z: i32, c: [i32; 3], r2: i32| {
+        (x - c[0]).pow(2) + (y - c[1]).pow(2) + (z - c[2]).pow(2) <= r2
+    };
+    for z in 0..14 {
+        for y in 0..14 {
+            for x in 0..14 {
+                // A ball plus a small separate ball, so slices have more than one loop.
+                if inside(x, y, z, [6, 6, 6], 16) || inside(x, y, z, [11, 11, 3], 2) {
+                    raw[((z * 14 + y) * 14 + x) as usize] = 1;
+                }
+            }
+        }
+    }
+    (geometry, raw)
+}
+
+fn settle(world: &mut World) {
+    for _ in 0..400 {
+        if !advance_roi_work(world, None).pending {
+            return;
+        }
+    }
+    panic!("ROI work never settled");
+}
+
+/// Like `assert_eq!` for voxel arrays of the 14^3 lifecycle volume, but prints a summary of the
+/// differing voxels instead of both arrays.
+fn assert_same_voxels(actual: &[u8], expected: &[u8], what: &str) {
+    let differing: Vec<usize> = (0..actual.len().min(expected.len()))
+        .filter(|i| (actual[*i] != 0) != (expected[*i] != 0))
+        .collect();
+    assert!(
+        differing.is_empty() && actual.len() == expected.len(),
+        "{what}: {} voxels differ; first (z,y,x, actual, expected): {:?}",
+        differing.len(),
+        differing
+            .iter()
+            .take(6)
+            .map(|i| (i / 196, (i / 14) % 14, i % 14, actual[*i], expected[*i]))
+            .collect::<Vec<_>>()
+    );
+}
+
+fn dice_of(a: &[u8], b: &[u8]) -> f64 {
+    let (mut both, mut left, mut right) = (0u64, 0u64, 0u64);
+    for (x, y) in a.iter().zip(b) {
+        let (x, y) = (*x != 0, *y != 0);
+        both += u64::from(x && y);
+        left += u64::from(x);
+        right += u64::from(y);
+    }
+    if left + right == 0 {
+        1.0
+    } else {
+        2.0 * both as f64 / (left + right) as f64
+    }
+}
+
+/// The ROI's voxel form once all work has settled: the body for a voxel ROI, else the cache.
+fn settled_voxels(world: &World, entity: hecs::Entity) -> Vec<u8> {
+    let roi = world.get::<&Roi>(entity).unwrap();
+    match &roi.body {
+        RoiBody::Voxel(body) => body.data.raw_data.clone(),
+        _ => {
+            assert!(
+                roi.is_cache_current(RoiCacheKind::Voxel),
+                "voxel cache is not current after settling"
+            );
+            roi.voxel_cache().unwrap().data.raw_data.clone()
+        }
+    }
+}
+
+fn convert_and_settle(
+    world: &mut World,
+    entity: hecs::Entity,
+    target: EditTarget,
+) -> ConversionReport {
+    let mut result = ensure_editable(world, entity, target).expect("switch must not fail");
+    for _ in 0..400 {
+        if let Readiness::Switched(report) = result {
+            settle(world);
+            return report;
+        }
+        // Pending: the coordinator completes it and reports the outcome as a status message.
+        advance_roi_work(world, None);
+        result = ensure_editable(world, entity, target).expect("switch must not fail");
+        if result == Readiness::Ready {
+            settle(world);
+            return ConversionReport {
+                from: PrimaryRepresentation::Voxel,
+                to: PrimaryRepresentation::Voxel,
+                from_family: None,
+                to_family: None,
+                lossless: true,
+            };
+        }
+    }
+    panic!("switch never completed");
+}
+
+#[test]
+fn test_shape_survives_conversions_and_undo_across_every_representation() {
+    let (geometry, original) = lifecycle_blob();
+    let mut world = World::new();
+    spawn_main_volume(&mut world, [1.0; 3], [0.0; 3]);
+    let entity = world.spawn((Roi::new_voxel_with_cache(
+        RoiId(1),
+        "Blob".to_string(),
+        geometry,
+        original.clone(),
+        None,
+    ),));
+    let editor = spawn_editor_for(&mut world, entity);
+    settle(&mut world);
+
+    // Voxel -> axial contours -> coronal contours: lossless, the raster equals the source.
+    convert_and_settle(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial));
+    assert_eq!(
+        dice_of(&settled_voxels(&world, entity), &original),
+        1.0,
+        "axial"
+    );
+    convert_and_settle(
+        &mut world,
+        entity,
+        EditTarget::Contour(PlaneFamily::Coronal),
+    );
+    assert_eq!(
+        dice_of(&settled_voxels(&world, entity), &original),
+        1.0,
+        "coronal"
+    );
+
+    // Undo and redo a family switch, and the shape is still the source.
+    undo_roi_edit(&mut world, editor).unwrap();
+    settle(&mut world);
+    assert_eq!(
+        contour_of(&world, entity).active_plane_family,
+        PlaneFamily::Axial
+    );
+    assert_eq!(
+        dice_of(&settled_voxels(&world, entity), &original),
+        1.0,
+        "undo to axial"
+    );
+    redo_roi_edit(&mut world, editor).unwrap();
+    settle(&mut world);
+    assert_eq!(
+        contour_of(&world, entity).active_plane_family,
+        PlaneFamily::Coronal
+    );
+    assert_eq!(
+        dice_of(&settled_voxels(&world, entity), &original),
+        1.0,
+        "redo to coronal"
+    );
+
+    // Contours -> mesh is a resampling: close, not exact. Its voxel form comes from the mesh.
+    convert_and_settle(&mut world, entity, EditTarget::Mesh);
+    assert!(matches!(
+        world.get::<&Roi>(entity).unwrap().body,
+        RoiBody::Mesh(_)
+    ));
+
+    // Undo back through the mesh, both contour switches, and the voxel import: exact.
+    undo_roi_edit(&mut world, editor).unwrap();
+    settle(&mut world);
+    assert_eq!(
+        dice_of(&settled_voxels(&world, entity), &original),
+        1.0,
+        "undo mesh"
+    );
+    undo_roi_edit(&mut world, editor).unwrap();
+    undo_roi_edit(&mut world, editor).unwrap();
+    settle(&mut world);
+    let roi = world.get::<&Roi>(entity).unwrap();
+    let RoiBody::Voxel(body) = &roi.body else {
+        panic!("undoing every switch must restore the voxel body");
+    };
+    assert_eq!(body.data.raw_data, original, "voxel body restored exactly");
+    drop(roi);
+    assert_eq!(settled_voxels(&world, entity), original);
+}
+
+#[test]
+fn test_edit_updates_every_derived_view_and_undo_restores_the_shape() {
+    let (geometry, original) = lifecycle_blob();
+    let mut world = World::new();
+    spawn_main_volume(&mut world, [1.0; 3], [0.0; 3]);
+    let entity = world.spawn((Roi::new_voxel_with_cache(
+        RoiId(1),
+        "Blob".to_string(),
+        geometry,
+        original.clone(),
+        None,
+    ),));
+    let editor = spawn_editor_for(&mut world, entity);
+    settle(&mut world);
+    convert_and_settle(&mut world, entity, EditTarget::Contour(PlaneFamily::Axial));
+
+    // Edit: erase every loop of one axial slice (the slice through the small ball's centre).
+    let mut edited = contour_of(&world, entity);
+    let erased_plane = edited
+        .slices
+        .iter()
+        .find(|slice| (slice.plane.origin_mm[2] - 3.0).abs() < 0.1)
+        .expect("slice z=3 exists")
+        .plane;
+    edited.slices.retain(|slice| {
+        !crate::convert::planes_are_same_slice(slice.plane, erased_plane, geometry)
+    });
+    replace_contour_data_for_slice_with_history(&mut world, entity, edited, erased_plane).unwrap();
+    settle(&mut world);
+
+    // The voxel form is the original minus that slice.
+    let mut expected = original.clone();
+    for y in 0..14 {
+        for x in 0..14 {
+            expected[(3 * 14 + y) * 14 + x] = 0;
+        }
+    }
+    let after_edit = settled_voxels(&world, entity);
+    assert_same_voxels(&after_edit, &expected, "voxels follow the contour edit");
+
+    // A derived view in another family shows the edited shape, not the original.
+    let coronal_key = ContourViewKey::from_plane(
+        orthogonal_plane_from_volume_uv(PlaneFamily::Coronal, [0.5, 11.5 / 14.0, 0.5], geometry)
+            .unwrap(),
+    );
+    let status = ensure_contour_view_cache(&mut world, entity, &coronal_key);
+    assert_eq!(
+        status.state,
+        RepresentationRequestState::Current,
+        "{status:?}"
+    );
+    let roi = world.get::<&Roi>(entity).unwrap();
+    let view = roi
+        .contour_view_data_for_render(&coronal_key)
+        .unwrap()
+        .clone();
+    drop(roi);
+    let direct = crate::convert::extract_contour_slice_from_voxel_data(
+        &VoxelData {
+            geometry,
+            raw_data: after_edit.clone(),
+        },
+        coronal_key.plane,
+    )
+    .unwrap();
+    assert_eq!(
+        view, direct,
+        "the derived coronal view matches the edited voxels"
+    );
+
+    // Undo restores the original shape everywhere.
+    undo_roi_edit(&mut world, editor).unwrap();
+    settle(&mut world);
+    assert_same_voxels(&settled_voxels(&world, entity), &original, "after undo");
+    let status = ensure_contour_view_cache(&mut world, entity, &coronal_key);
+    assert_eq!(
+        status.state,
+        RepresentationRequestState::Current,
+        "{status:?}"
+    );
+    let restored = world
+        .get::<&Roi>(entity)
+        .unwrap()
+        .contour_view_data_for_render(&coronal_key)
+        .unwrap()
+        .clone();
+    let direct_original = crate::convert::extract_contour_slice_from_voxel_data(
+        &VoxelData {
+            geometry,
+            raw_data: original,
+        },
+        coronal_key.plane,
+    )
+    .unwrap();
+    assert_eq!(
+        restored, direct_original,
+        "the derived view follows the undo"
+    );
+}
+
+#[test]
+fn test_slice_local_rebuild_is_only_chosen_when_it_can_clear_the_old_slab() {
+    let plane = test_plane_definition(PlaneFamily::Axial);
+    let with_slice = ContourData {
+        active_plane_family: PlaneFamily::Axial,
+        slices: vec![ContourSlice {
+            plane,
+            loops: Vec::new(),
+        }],
+    };
+    let without_slice = ContourData {
+        active_plane_family: PlaneFamily::Axial,
+        slices: Vec::new(),
+    };
+    let key = ContourSliceKey::from_plane(plane);
+
+    // A commit that leaves the slice in place (changed or newly added) redraws just that slab.
+    assert_eq!(
+        dirty_region_for_slice_edit(&with_slice, plane),
+        RoiDirtyRegion::ContourSlice(key)
+    );
+    // A commit that removed the slice cannot find its old slab, so everything is rebuilt.
+    assert_eq!(
+        dirty_region_for_slice_edit(&without_slice, plane),
+        RoiDirtyRegion::Full
+    );
+    // Undo and redo swap two states either way, so both must contain the slice.
+    assert_eq!(
+        dirty_region_for_slice_swap(&with_slice, &with_slice, plane),
+        RoiDirtyRegion::ContourSlice(key)
+    );
+    assert_eq!(
+        dirty_region_for_slice_swap(&with_slice, &without_slice, plane),
+        RoiDirtyRegion::Full
+    );
+    assert_eq!(
+        dirty_region_for_slice_swap(&without_slice, &with_slice, plane),
+        RoiDirtyRegion::Full
+    );
+}
