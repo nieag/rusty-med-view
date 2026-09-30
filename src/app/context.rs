@@ -37,7 +37,6 @@ pub struct VolumeResources {
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
     pub num_indices: u32,
-    pub overlay_buffer: wgpu::Buffer,
     pub dummy_r8: (wgpu::Texture, wgpu::TextureView, wgpu::Sampler),
     pub default_lut: (wgpu::Texture, wgpu::TextureView),
 }
@@ -131,7 +130,6 @@ impl RenderingContext {
 
         let uniform_buffer = pipeline::create_uniform_buffer(&device);
         let texture_bind_group_layout = pipeline::create_bind_group_layout(&device);
-        let overlay_buffer = pipeline::create_overlay_buffer(&device);
 
         let diffuse_bind_group = pipeline::create_scene_bind_group(
             &device,
@@ -142,7 +140,6 @@ impl RenderingContext {
                 uniform_buffer: &uniform_buffer,
                 overlay_views: [&dummy_r8.1; MAX_VOXEL_OVERLAY_SLOTS],
                 overlay_lut: &default_lut.1,
-                overlay_buffer: &overlay_buffer,
             },
         );
 
@@ -191,7 +188,6 @@ impl RenderingContext {
                 dummy_view: &dummy_r8.1,
                 dummy_sampler: &dummy_r8.2,
                 default_lut_view: &default_lut.1,
-                overlay_buffer: &overlay_buffer,
             },
             None,
         );
@@ -219,7 +215,6 @@ impl RenderingContext {
                 vertex_buffer,
                 index_buffer,
                 num_indices,
-                overlay_buffer,
                 dummy_r8,
                 default_lut,
             },

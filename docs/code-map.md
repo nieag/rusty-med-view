@@ -7,7 +7,7 @@ This is a navigation guide to the current repository, not a second architecture 
 | Need | Entry point |
 | --- | --- |
 | Application startup and event loop | `src/lib.rs`, `src/app/mod.rs` |
-| ECS components and `Session` (the state that exists once: editor, input, GUI, cursor, windowing, annotations, overlay, protocol, window settings) | `src/app/components.rs` |
+| ECS components and `Session` (the state that exists once: editor, input, GUI, cursor, windowing, annotations, protocol, window settings) | `src/app/components.rs` |
 | ROI domain model and mutations | `src/app/roi/` |
 | Derived ROI work and GPU cache synchronization | `src/app/roi_runtime.rs` (frame order) and `src/app/roi_runtime/` (`contour_voxel`, `mesh_voxel`, `voxel_mesh`, `views`, `create`, `jobs`) |
 | User input and authoring | `src/systems/` |
@@ -40,7 +40,6 @@ src/render/         Render protocols, WGPU pipelines, contour/mesh view preparat
 src/gui/            egui controls only
 src/io/             NIfTI parsing and volume/texture upload (depends on model, convert, util)
 src/util/           Shared orientation helpers
-src/overlay/        Annotation-overlay primitives and management
 ```
 
 `roi_runtime.rs` is deliberately concrete: `advance_roi_work` is the one ordered list of frame steps, and each job kind lives in its own module under `roi_runtime/`. In-flight rebuild state is a component on the ROI entity; `jobs.rs` holds the shared discard, fail, and suspend endings. It is not a general job framework.

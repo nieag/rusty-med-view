@@ -129,10 +129,6 @@ pub struct Uniforms {
     /// millimetre, `w` is the view window length in millimetres (likewise for `v` below).
     pub oblique_u_dir_length: [f32; 4],
     pub oblique_v_dir_length: [f32; 4],
-    // --- Overlay primitive fields ---
-    pub overlay_mouse_uv: [f32; 2], // Mouse position for dragged primitive
-    pub overlay_primitive_count: u32, // Number of active primitives
-    pub overlay_dragging_idx: u32,  // Index being dragged (u32::MAX = none)
     pub zoom: f32,
     pub view_mode: u32,
     pub overlay_flags: u32,
@@ -833,7 +829,6 @@ pub struct Session {
     pub gui: GuiState,
     pub windowing: VolumeWindowing,
     pub annotations: AnnotationState,
-    pub overlay: crate::overlay::OverlayManager,
     pub protocol: ProtocolState,
     pub cursor: Transform,
     pub window_settings: WindowSettings,
@@ -858,7 +853,6 @@ impl Session {
             },
             windowing: VolumeWindowing::default(),
             annotations: AnnotationState::default(),
-            overlay: crate::overlay::OverlayManager::default(),
             protocol: ProtocolState::default(),
             cursor: Transform {
                 position: [0.5, 0.5, 0.5],

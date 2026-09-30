@@ -161,32 +161,9 @@ pub fn sys_prepare_render_data(
         oblique_origin_uv,
         oblique_u_dir_length,
         oblique_v_dir_length,
-        overlay_mouse_uv: mouse_uv,
-        overlay_primitive_count: 0,
-        overlay_dragging_idx: u32::MAX,
         zoom: zoom_val,
         view_mode,
         overlay_flags,
         ray_steps: FULL_RAY_STEPS,
     }
-}
-
-/// Mirrors the annotations into the overlay's marker primitives.
-pub fn sys_sync_annotations_to_overlay(session: &mut Session) {
-    let overlay = &mut session.overlay;
-    overlay.annotations.clear();
-    for annotation in &session.annotations.annotations {
-        overlay.add_annotation(annotation.world_pos);
-    }
-    overlay.rebuild_primitives();
-}
-
-pub fn get_overlay_render_data(session: &Session) -> (Vec<u8>, u32, u32, [f32; 2]) {
-    let overlay = &session.overlay;
-    (
-        bytemuck::cast_slice(&overlay.primitives).to_vec(),
-        overlay.primitives.len() as u32,
-        overlay.dragging_idx.map(|i| i as u32).unwrap_or(u32::MAX),
-        overlay.mouse_screen_uv,
-    )
 }

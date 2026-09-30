@@ -1,6 +1,5 @@
 use crate::components::*;
 use crate::convert::slice_index_from_cursor_uv;
-use crate::overlay::OverlayManager;
 use crate::util::orientation::SlicePlane;
 use crate::AppEvent;
 use hecs::{Entity, World};
@@ -214,7 +213,6 @@ pub fn draw_viewport_overlays(
 
             if let Some(vd) = vol_data {
                 let state = &mut session.annotations;
-                let overlay = &mut session.overlay;
                 let focused_id = state.focused_id;
                 let items = &mut state.annotations;
 
@@ -231,7 +229,6 @@ pub fn draw_viewport_overlays(
                             items,
                             &vs,
                             vd,
-                            overlay,
                             &AnnotationViewCtx {
                                 rect: *rect,
                                 mode: *mode,
@@ -346,7 +343,6 @@ fn draw_annotations(
     annotations: &mut [Annotation],
     view: &ViewportState,
     vol: &VolumeData,
-    overlay: &mut OverlayManager,
     ann_ctx: &AnnotationViewCtx,
 ) -> Option<uuid::Uuid> {
     let rect = ann_ctx.rect;
@@ -379,7 +375,7 @@ fn draw_annotations(
         ViewMode::Oblique => 4,
     };
 
-    for (idx, ann) in annotations.iter_mut().enumerate() {
+    for ann in annotations.iter_mut() {
         if let Some(plane) = crate::util::orientation::SlicePlane::from_mode(mode) {
             let axis = plane.depth_axis();
             let ann_depth = ann.world_pos[axis];
@@ -426,9 +422,6 @@ fn draw_annotations(
             }
 
             if viewport_idx > 0 && response.dragged() {
-                overlay.dragging_idx = Some(idx);
-                overlay.dragging_viewport = viewport_idx as u32;
-
                 if let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                     let screen_w = rect.width();
                     let screen_h = rect.height();
@@ -440,8 +433,6 @@ fn draw_annotations(
 
                     let ndc_x = (mouse_pos.x - rect.min.x) / rect.width();
                     let ndc_y = (mouse_pos.y - rect.min.y) / rect.height();
-
-                    overlay.mouse_screen_uv = [ndc_x, ndc_y];
 
                     let plane_definition = if mode == ViewMode::Oblique {
                         crate::convert::oblique_plane_from_view_rotation(
@@ -477,8 +468,6 @@ fn draw_annotations(
 
                     ann.world_pos = ann.world_pos.clamp(glam::Vec3::ZERO, glam::Vec3::ONE);
                 }
-            } else if response.drag_stopped() {
-                overlay.dragging_idx = None;
             }
 
             let draw_pos = if response.dragged() {

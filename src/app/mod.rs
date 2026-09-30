@@ -425,7 +425,6 @@ impl ApplicationHandler<AppEvent> for App {
                                 dummy_view: &ctx.volume_resources.dummy_r8.1,
                                 dummy_sampler: &ctx.volume_resources.dummy_r8.2,
                                 default_lut_view: &ctx.volume_resources.default_lut.1,
-                                overlay_buffer: &ctx.volume_resources.overlay_buffer,
                             },
                             active_roi,
                         );
@@ -551,7 +550,6 @@ impl ApplicationHandler<AppEvent> for App {
                         dummy_view: &ctx.volume_resources.dummy_r8.1,
                         dummy_sampler: &ctx.volume_resources.dummy_r8.2,
                         default_lut_view: &ctx.volume_resources.default_lut.1,
-                        overlay_buffer: &ctx.volume_resources.overlay_buffer,
                     },
                     active_roi,
                 );

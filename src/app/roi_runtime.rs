@@ -103,7 +103,6 @@ pub struct BindGroupResources<'a> {
     pub dummy_view: &'a wgpu::TextureView,
     pub dummy_sampler: &'a wgpu::Sampler,
     pub default_lut_view: &'a wgpu::TextureView,
-    pub overlay_buffer: &'a wgpu::Buffer,
 }
 
 /// GPU resources available while advancing ROI-derived work for one frame.
@@ -252,7 +251,6 @@ pub fn recreate_scene_bind_groups(
             uniform_buffer: resources.uniform_buffer,
             overlay_views,
             overlay_lut: resources.default_lut_view,
-            overlay_buffer: resources.overlay_buffer,
         },
     );
 
