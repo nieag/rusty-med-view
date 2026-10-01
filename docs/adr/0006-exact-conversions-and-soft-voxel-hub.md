@@ -30,7 +30,7 @@ Voxels stay the conversion hub, but the hub becomes a **soft-valued voxel ROI on
 
 - **Values** are coverage, 0 to 255 (the fraction of the voxel inside the shape). The surface is the 50% level (a ROI is empty when every value is below 127.5, as in RayStation). A label imported as a binary mask is stored as 255 where it is present; its colour lives in the ROI's metadata, not in the voxel value.
 - **Grid** is a refinement of the ROI's snug box: each voxel of the reference grid is split by an integer factor per axis, so fine voxels stay aligned with the world and with the image layers (`VoxelGeometry::refined`, alongside `cropped`). Default spacing is half the smallest image spacing, not below 0.5 mm; it is a setting, not a constant.
-- **Built from the loops** by an exact signed distance to the contour polylines (not a rasterize, fill and distance-transform detour): in each slice the distance to the nearest segment with the sign from the even-odd inside test, linear interpolation of the signed distance between slices, hats half-way to the neighbouring slice (or half a layer when there is none), converted to coverage. Slices need not be on adjacent layers or on image layers.
+- **Built from the loops** by an exact signed distance to the contour polylines (not a rasterize, fill and distance-transform detour): in each slice the distance to the nearest segment with the sign from the even-odd inside test, linear interpolation of the signed distance between slices, hats half-way to the neighbouring slice (or half a layer when there is none), converted to coverage. Slices need not be on image layers. **No interpolation across gaps** (see "Interpolation is explicit" below): a drawn slice stands for one layer, so an end of a stack gets a hat of half a layer, and consecutive layers blend smoothly into each other.
 - **Used for** everything that needs a mask: the fill overlay (coverage becomes the alpha, which anti-aliases the fill), volume (the sum of coverage times the voxel volume instead of a binary count), mesh generation, export, and later ROI algebra, which operates on the coverage directly.
 - **On demand and snug.** It is built only for ROIs that need it, only inside the snug box, and dropped under memory pressure; it is a cache, never authoritative for contour or mesh ROIs.
 
@@ -79,6 +79,16 @@ Each step is a commit series that leaves the lifecycle tests, the guards and the
 - The voxel value stops meaning "label id", which touches the overlay shader, label import, and the voxel tests (round-trip checks become overlap and distance checks outside the exact mesh-to-contours chain).
 - More derived forms depend on the mesh revision (other-family views of a contour ROI), so meshes are built for contour ROIs with visible slice views even when no 3D view is open, under the "nothing stale" rule.
 - Fine hubs cost memory (a liver box at 0.5 mm is about 11 MB), which is why they are on demand and snug.
+
+## Interpolation is explicit (owner, 2026-10-01)
+
+The hub never invents slices. Interpolation between drawn slices is wanted later, but only when the user asks for it, and the result must be recognisable as interpolation:
+
+- A contour slice carries its **origin**: `Drawn` or `Interpolated`. Interpolated slices are real contour data (so every conversion treats them uniformly) but are rendered differently from drawn ones (for example dashed or in another tint), listed as interpolated, and can be discarded or accepted. Editing one turns it into a drawn slice.
+- The tool interpolates between chosen slices with the same signed-distance blend as the hub, extracts the loops, and is one undo step.
+- Until the tool is used, a gap in a contour is a gap: the shape has a hat on each side of it, in the mesh, the fill, and the volume.
+
+This is backlog item 3.8; the hub's field code is written so the blend can be reused for it.
 
 ## Decisions on the open questions (owner, 2026-10-01: go with the recommendations)
 
