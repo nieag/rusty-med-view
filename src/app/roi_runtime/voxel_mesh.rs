@@ -1,6 +1,7 @@
 use super::*;
 use crate::convert::{
-    changed_mesh_chunks, smooth_mesh_field_from_signed_distance, ChunkedMeshData, ContourFieldState,
+    changed_mesh_chunks, smooth_mesh_field_from_signed_distance, ChunkedMeshData,
+    ContourFieldBuild, ContourFieldState,
 };
 
 /// Where the chunks of a mesh rebuild are sampled from.
@@ -11,10 +12,23 @@ enum MeshSource {
     ContourField(Box<ContourFieldState>),
 }
 
+/// A contour ROI's field while it is built (before its chunks are meshed), with the chunks of the
+/// mesh it replaces.
+struct FieldStage {
+    build: Box<ContourFieldBuild>,
+    base_chunks: Option<ChunkedMeshData>,
+}
+
+struct MeshingStage {
+    source: MeshSource,
+    rebuild: Box<IncrementalChunkedMeshRebuild>,
+}
+
+/// A mesh rebuild spread over frames: for a contour ROI first `field`, then `meshing`.
 pub(super) struct VoxelMeshRebuildWork {
     source_generation: u64,
-    source: MeshSource,
-    rebuild: IncrementalChunkedMeshRebuild,
+    field: Option<FieldStage>,
+    meshing: Option<MeshingStage>,
     started_at: Instant,
 }
 
@@ -63,17 +77,17 @@ pub(crate) fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
         .and_then(|roi| roi.job_state.running_request)
         .map(|request| request.dirty_region)
         .unwrap_or(RoiDirtyRegion::Full);
-    let (source, rebuild_result) = if is_contour_roi(world, entity) {
-        match begin_contour_field_rebuild(world, entity, base_chunks) {
-            ContourFieldStart::Rebuild(state, rebuild) => {
-                (MeshSource::ContourField(state), Ok(*rebuild))
-            }
-            ContourFieldStart::Empty => {
+    let (field, meshing) = if is_contour_roi(world, entity) {
+        match begin_contour_field_build(world, entity) {
+            Some(build) => (
+                Some(FieldStage {
+                    build: Box::new(build),
+                    base_chunks,
+                }),
+                None,
+            ),
+            None => {
                 install_empty_contour_mesh(world, entity, source_generation, started_at);
-                return;
-            }
-            ContourFieldStart::Failed => {
-                fail_job(world, entity, RoiJobKind::RebuildMeshCache);
                 return;
             }
         }
@@ -84,13 +98,18 @@ pub(crate) fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
             }
             _ => IncrementalChunkedMeshRebuild::begin_full(&voxel_data, DEFAULT_MESH_CHUNK_SIZE),
         };
-        (MeshSource::Voxels(Box::new(voxel_data)), result)
-    };
-    let rebuild = match rebuild_result {
-        Ok(rebuild) => rebuild,
-        Err(error) => {
-            fail_voxel_mesh_rebuild(world, entity, error);
-            return;
+        match result {
+            Ok(rebuild) => (
+                None,
+                Some(MeshingStage {
+                    source: MeshSource::Voxels(Box::new(voxel_data)),
+                    rebuild: Box::new(rebuild),
+                }),
+            ),
+            Err(error) => {
+                fail_voxel_mesh_rebuild(world, entity, error);
+                return;
+            }
         }
     };
     if world
@@ -98,8 +117,8 @@ pub(crate) fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
             entity,
             VoxelMeshRebuildWork {
                 source_generation,
-                source,
-                rebuild,
+                field,
+                meshing,
                 started_at,
             },
         )
@@ -138,11 +157,30 @@ pub(super) fn resume_voxel_mesh_rebuild_work(
         return;
     }
 
-    let mut completed = work.rebuild.is_complete();
+    if let Some(mut stage) = work.field.take() {
+        let deadline = frame_started_at + frame_budget;
+        if !stage.build.step(Some(deadline)) {
+            work.field = Some(stage);
+            suspend_work(world, entity, RoiJobKind::RebuildMeshCache, work);
+            return;
+        }
+        match plan_contour_meshing(stage) {
+            Ok(meshing) => work.meshing = Some(meshing),
+            Err(error) => {
+                fail_voxel_mesh_rebuild(world, entity, error);
+                return;
+            }
+        }
+    }
+    let Some(mut meshing) = work.meshing.take() else {
+        fail_job(world, entity, RoiJobKind::RebuildMeshCache);
+        return;
+    };
+    let mut completed = meshing.rebuild.is_complete();
     while !completed && frame_started_at.elapsed() < frame_budget {
-        let stepped = match &work.source {
-            MeshSource::Voxels(voxel_data) => work.rebuild.step(voxel_data),
-            MeshSource::ContourField(_) => work.rebuild.step_field(),
+        let stepped = match &meshing.source {
+            MeshSource::Voxels(voxel_data) => meshing.rebuild.step(voxel_data),
+            MeshSource::ContourField(_) => meshing.rebuild.step_field(),
         };
         completed = match stepped {
             Ok(done) => done,
@@ -153,16 +191,17 @@ pub(super) fn resume_voxel_mesh_rebuild_work(
         };
     }
     if !completed {
+        work.meshing = Some(meshing);
         suspend_work(world, entity, RoiJobKind::RebuildMeshCache, work);
         return;
     }
 
     let duration = work.started_at.elapsed();
-    let Some(chunked_mesh) = work.rebuild.into_result() else {
+    let Some(chunked_mesh) = meshing.rebuild.into_result() else {
         return;
     };
     let mesh_data = chunked_mesh.merged_mesh();
-    let field_state = match work.source {
+    let field_state = match meshing.source {
         MeshSource::ContourField(state) => Some(state),
         MeshSource::Voxels(_) => None,
     };
@@ -204,49 +243,30 @@ fn is_contour_roi(world: &World, entity: hecs::Entity) -> bool {
         .is_ok_and(|roi| matches!(roi.body, RoiBody::Contour(_)))
 }
 
-enum ContourFieldStart {
-    Rebuild(Box<ContourFieldState>, Box<IncrementalChunkedMeshRebuild>),
-    /// The contours have no loops: the mesh is empty.
-    Empty,
-    Failed,
-}
-
-/// Builds the field of a contour ROI from the state of the previous revision (only changed slices
-/// are recomputed) and plans the chunks to rebuild: those the changed samples can reach when the
-/// previous mesh is on the same grid, else all.
-fn begin_contour_field_rebuild(
-    world: &mut World,
-    entity: hecs::Entity,
-    base_chunks: Option<ChunkedMeshData>,
-) -> ContourFieldStart {
-    let previous = world
-        .get::<&ContourFieldState>(entity)
-        .ok()
-        .map(|state| (*state).clone());
-    let Ok(roi) = world.get::<&Roi>(entity) else {
-        return ContourFieldStart::Failed;
-    };
-    let Some(contour) = roi.contour_data() else {
-        return ContourFieldStart::Failed;
-    };
+/// Plans the field of a contour ROI from the state of the previous revision, so only changed
+/// slices are recomputed. `None` when the contours have no loops (the mesh is empty) or the
+/// field cannot be planned.
+fn begin_contour_field_build(world: &World, entity: hecs::Entity) -> Option<ContourFieldBuild> {
+    let previous = world.get::<&ContourFieldState>(entity).ok();
+    let roi = world.get::<&Roi>(entity).ok()?;
+    let contour = roi.contour_data()?;
     let keep = previous.as_ref().map(|state| state.field.geometry);
-    let state = match ContourFieldState::build(
-        previous.as_ref(),
-        contour,
-        roi.reference_geometry(),
-        keep,
-    ) {
-        Ok(Some(state)) => state,
-        Ok(None) => return ContourFieldStart::Empty,
+    match ContourFieldBuild::begin(previous.as_deref(), contour, roi.reference_geometry(), keep) {
+        Ok(build) => build,
         Err(error) => {
             log::warn!("Contour field failed for ROI {entity:?}: {error:?}");
-            return ContourFieldStart::Failed;
+            None
         }
-    };
-    drop(roi);
+    }
+}
+
+/// The finished field's chunks to mesh: those the changed samples can reach when the previous
+/// mesh is on the same grid, else all.
+fn plan_contour_meshing(stage: FieldStage) -> Result<MeshingStage, VoxelMeshExtractionError> {
+    let (state, previous) = stage.build.finish();
     let geometry = state.field.geometry;
     let smooth = smooth_mesh_field_from_signed_distance(geometry, &state.field.values);
-    let result = match (base_chunks, previous.as_ref()) {
+    let rebuild = match (stage.base_chunks, previous.as_ref()) {
         (Some(chunks), Some(previous))
             if chunks.grid == geometry.identity()
                 && previous.field.geometry.identity() == geometry.identity() =>
@@ -259,21 +279,18 @@ fn begin_contour_field_rebuild(
             );
             IncrementalChunkedMeshRebuild::begin_changed_from_field(
                 chunks, geometry, smooth, changed,
-            )
+            )?
         }
         _ => IncrementalChunkedMeshRebuild::begin_full_from_field(
             geometry,
             smooth,
             DEFAULT_MESH_CHUNK_SIZE,
-        ),
+        )?,
     };
-    match result {
-        Ok(rebuild) => ContourFieldStart::Rebuild(Box::new(state), Box::new(rebuild)),
-        Err(error) => {
-            log::warn!("Contour mesh extraction failed for ROI {entity:?}: {error:?}");
-            ContourFieldStart::Failed
-        }
-    }
+    Ok(MeshingStage {
+        source: MeshSource::ContourField(Box::new(state)),
+        rebuild: Box::new(rebuild),
+    })
 }
 
 fn install_empty_contour_mesh(
