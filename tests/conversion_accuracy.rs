@@ -8,10 +8,11 @@
 //!
 //! Run with `cargo test --release --test conversion_accuracy -- --nocapture`.
 use rusty_med_view::convert::{
-    contour_distance_field, contours_from_mesh, extract_contours_from_voxel_data,
-    extract_mesh_from_voxel_data, mesh_from_contour_field, orthogonal_plane_from_volume_uv,
-    plane_local_mm_to_world_mm, rasterize_contours_to_voxel_data, slice_center_uv,
-    voxel_index_to_world_mm, IncrementalMeshVoxelization, PlaneFamily,
+    contour_distance_field, contour_volume_mm3, contours_from_mesh,
+    extract_contours_from_voxel_data, extract_mesh_from_voxel_data, mesh_from_contour_field,
+    mesh_volume_mm3 as mesh_volume, orthogonal_plane_from_volume_uv, plane_local_mm_to_world_mm,
+    rasterize_contours_to_voxel_data, slice_center_uv, voxel_index_to_world_mm,
+    IncrementalMeshVoxelization, PlaneFamily,
 };
 use rusty_med_view::model::{
     ContourData, ContourLoop, ContourPoint, ContourSlice, MeshData, OrthogonalFamily, VoxelData,
@@ -173,19 +174,6 @@ fn truth_mask(case: &Case) -> VoxelData {
     }
 }
 
-fn mesh_volume(mesh: &MeshData) -> f32 {
-    let mut volume = 0.0_f64;
-    for face in &mesh.faces {
-        let [a, b, c] = face
-            .vertex_indices
-            .map(|i| mesh.vertices[i as usize].world_mm.map(f64::from));
-        volume += (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
-            + a[2] * (b[0] * c[1] - b[1] * c[0]))
-            / 6.0;
-    }
-    volume.abs() as f32
-}
-
 struct Measure {
     volume_error_percent: f32,
     mean_mm: f32,
@@ -277,6 +265,15 @@ fn test_conversion_chains_against_analytic_shapes() {
         let field_mesh = mesh_from_contour_field(&field);
         let chain4 = mesh_measure(&case.shape, &field_mesh);
         report(case.name, "contours -> field -> mesh", &chain4);
+
+        // The volume of the drawn contours themselves: area times layer thickness, no voxels.
+        let drawn_volume = contour_volume_mm3(&drawn, case.geometry);
+        println!(
+            "{:52} {:34} volume {:+6.1} %",
+            case.name,
+            "contours: area x thickness",
+            100.0 * (drawn_volume - case.shape.volume()) / case.shape.volume()
+        );
 
         // Chain 3: the same mesh cut with the layer planes (what the switch does now).
         let cut = contours_from_mesh(&mesh, case.geometry, OrthogonalFamily::Axial).unwrap();

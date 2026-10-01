@@ -95,3 +95,13 @@ This is backlog item 3.8; the hub's field code is written so the blend can be re
 1. **Hub resolution:** half the smallest image spacing, not below 0.5 mm, as a setting.
 2. **Drag preview:** the coarse (image-resolution) field, with the fine hub built locally after the drag if the measurement shows a thin structure needs it.
 3. **Volume statistics:** both are offered, from the hub (coverage) and from the mesh by the divergence theorem; they are compared in tests.
+
+## Revisions after implementing the field and the volumes (owner agreed 2026-10-01)
+
+Measurements and an audit of the code changed three parts of the plan:
+
+1. **The field is the hub, not a refined voxel grid.** The signed distance field of the loops (`convert/contour_field.rs`, sampled at the snug box of the reference grid) feeds the mesh, and is updated per slice and re-meshed per changed chunk. Distance values already place the surface to a small fraction of a voxel, so the 0.5 mm refined grid is not the default; it stays a possible setting if a measurement shows thin structures need it.
+2. **No 0 to 255 coverage array, and voxel values stay a mask.** Voxel ROIs hold label ids that the overlay looks up in a colour table, and a large part of the tests and code treats a value as "inside or not". Coverage would change all of that for no gain: the volume needs no coverage (below) and the fill is not a primary view (a toggle for showing the voxel form is wanted). If ROI algebra later needs soft values it can work on the field directly.
+3. **Volume comes from the authoritative form.** A contour ROI's volume is the area inside its loops times the layer thickness, summed over slices (`convert/volume.rs`): -0.1 % on the sphere with cubic voxels, +1.8 % with thick slices, exactly the drawn volume for the thin plate. A mesh's volume is exact by the divergence theorem; a voxel ROI's is its count. The plate's +43 % against the analytic shape is not a conversion defect: two drawn layers are two layers thick, so the contours themselves define that volume. The mesh from the field differs by a few percent at the ends of the stack (the half layer caps are smoothed by the iso-surface), which is why the contour volume is the one shown.
+
+The contour ROI's voxel cache is still rasterized from the loops by the existing incremental rasterizer; deriving it from the field instead (so fill and mesh cannot disagree, and the rasterizer can go) is a separate item, and is only worth doing together with making the voxel form on demand.

@@ -37,8 +37,11 @@ pub use self::views::*;
 use self::voxel_mesh::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct VoxelRoiStats {
-    pub occupied_voxels: u64,
+pub struct RoiStats {
+    /// Voxels of the voxel form, when it is current.
+    pub occupied_voxels: Option<u64>,
+    /// The volume of the authoritative shape: a contour ROI's area times layer thickness, a mesh's
+    /// enclosed volume, or a voxel ROI's voxel count times the voxel volume.
     pub volume_mm3: f32,
 }
 
@@ -392,32 +395,40 @@ fn report_roi_status(world: &mut World, roi_entity: hecs::Entity, message: Strin
     }
 }
 
-pub fn roi_voxel_stats(world: &World, roi_entity: hecs::Entity) -> Option<VoxelRoiStats> {
+pub fn roi_stats(world: &World, roi_entity: hecs::Entity) -> Option<RoiStats> {
     let roi = world.get::<&Roi>(roi_entity).ok()?;
-    let voxel_data = match &roi.body {
-        RoiBody::Contour(_) | RoiBody::Mesh(_) => {
-            if !roi.is_cache_current(RoiCacheKind::Voxel) {
-                return None;
-            }
-            &roi.voxel_cache()?.data
-        }
-        RoiBody::Voxel(VoxelBody { data: voxel }) => voxel,
+    let counted =
+        |data: &VoxelData| data.raw_data.iter().filter(|value| **value != 0).count() as u64;
+    let voxel_volume = |data: &VoxelData, count: u64| {
+        let spacing = data.geometry.spacing();
+        count as f32 * spacing[0] * spacing[1] * spacing[2]
     };
-
-    let occupied_voxels = voxel_data
-        .raw_data
-        .iter()
-        .filter(|value| **value != 0)
-        .count() as u64;
-
-    let volume_scale_mm3 = voxel_data.geometry.spacing()[0]
-        * voxel_data.geometry.spacing()[1]
-        * voxel_data.geometry.spacing()[2];
-
-    Some(VoxelRoiStats {
-        occupied_voxels,
-        volume_mm3: occupied_voxels as f32 * volume_scale_mm3,
-    })
+    match &roi.body {
+        RoiBody::Voxel(VoxelBody { data }) => {
+            let count = counted(data);
+            Some(RoiStats {
+                occupied_voxels: Some(count),
+                volume_mm3: voxel_volume(data, count),
+            })
+        }
+        RoiBody::Contour(_) | RoiBody::Mesh(_) => {
+            let occupied_voxels = roi
+                .voxel_cache()
+                .filter(|_| roi.is_cache_current(RoiCacheKind::Voxel))
+                .map(|cache| counted(&cache.data));
+            let volume_mm3 = match &roi.body {
+                RoiBody::Contour(body) => {
+                    crate::convert::contour_volume_mm3(&body.data, roi.reference_geometry())
+                }
+                RoiBody::Mesh(body) => crate::convert::mesh_volume_mm3(&body.data),
+                RoiBody::Voxel(_) => unreachable!("handled above"),
+            };
+            Some(RoiStats {
+                occupied_voxels,
+                volume_mm3,
+            })
+        }
+    }
 }
 
 #[cfg(test)]

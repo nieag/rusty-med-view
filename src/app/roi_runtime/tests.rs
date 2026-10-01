@@ -279,22 +279,32 @@ fn test_voxel_roi_stats_use_nonzero_voxels_and_volume_spacing() {
         None,
     ));
 
-    let stats = roi_voxel_stats(&world, entity).unwrap();
+    let stats = roi_stats(&world, entity).unwrap();
 
-    assert_eq!(stats.occupied_voxels, 4);
+    assert_eq!(stats.occupied_voxels, Some(4));
     assert!((stats.volume_mm3 - 2.0).abs() < f32::EPSILON);
 }
 
 #[test]
-fn test_roi_voxel_stats_contour_primary_returns_none_before_rebuild() {
+fn test_roi_stats_of_a_contour_roi_have_a_volume_before_its_voxels_exist() {
     let mut world = World::new();
     let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, true);
-    let stats = roi_voxel_stats(&world, entity);
-    assert!(stats.is_none());
+    {
+        let mut roi = world.get::<&mut Roi>(entity).unwrap();
+        roi.mark_cache_dirty(RoiCacheKind::Voxel);
+    }
+    let stats = roi_stats(&world, entity).expect("the contours define a volume");
+    // The test loop is a right triangle with legs of 1 mm on a 1 mm layer.
+    assert_eq!(stats.occupied_voxels, None);
+    assert!(
+        (stats.volume_mm3 - 0.5).abs() < 1e-5,
+        "{}",
+        stats.volume_mm3
+    );
 }
 
 #[test]
-fn test_roi_voxel_stats_contour_primary_returns_derived_stats_after_rebuild() {
+fn test_roi_stats_of_a_contour_roi_count_its_voxels_and_use_the_contour_volume() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
     let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
@@ -312,10 +322,15 @@ fn test_roi_voxel_stats_contour_primary_returns_derived_stats_after_rebuild() {
             .filter(|v| **v != 0)
             .count() as u64
     };
-    let stats = roi_voxel_stats(&world, entity).expect("expected derived stats");
+    let stats = roi_stats(&world, entity).expect("expected derived stats");
     assert!(expected_occupied > 0);
-    assert_eq!(stats.occupied_voxels, expected_occupied);
-    assert!((stats.volume_mm3 - expected_occupied as f32).abs() < f32::EPSILON);
+    assert_eq!(stats.occupied_voxels, Some(expected_occupied));
+    // The 2.8 mm square drawn on one 1 mm layer.
+    assert!(
+        (stats.volume_mm3 - 2.8 * 2.8).abs() < 1e-3,
+        "{}",
+        stats.volume_mm3
+    );
 }
 
 #[test]
@@ -902,7 +917,7 @@ fn test_mesh_rebuild_contract_builds_voxel_then_enables_contour_refresh() {
         .unwrap()
         .voxel_cache()
         .is_some_and(|cache| cache.data.raw_data.iter().any(|value| *value != 0)));
-    assert!(roi_voxel_stats(&world, entity).is_some_and(|stats| stats.occupied_voxels > 0));
+    assert!(roi_stats(&world, entity).is_some_and(|stats| stats.occupied_voxels > Some(0)));
 
     world
         .get::<&mut Roi>(entity)

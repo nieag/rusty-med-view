@@ -37,7 +37,7 @@ pub enum ContourFieldError {
     InvalidPlane,
 }
 
-fn family_axes(family: OrthogonalFamily) -> (usize, usize, usize) {
+pub(crate) fn family_axes(family: OrthogonalFamily) -> (usize, usize, usize) {
     match family {
         OrthogonalFamily::Axial => (2, 0, 1),
         OrthogonalFamily::Coronal => (1, 0, 2),
