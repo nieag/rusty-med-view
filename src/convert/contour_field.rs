@@ -428,7 +428,7 @@ pub fn mesh_from_contour_field(field: &ContourField) -> MeshData {
 /// rectangular lattice with columns `us` and rows `vs` to the loops, computed a row at a time.
 struct RowSweep {
     segments: Vec<([f32; 2], [f32; 2])>,
-    nearest: SegmentGrid,
+    nearest: SegmentTree,
     us: Vec<f32>,
     vs: Vec<f32>,
     crossings: Vec<f32>,
@@ -445,7 +445,7 @@ impl RowSweep {
                 segments.push((points[k], points[(k + 1) % points.len()]));
             }
         }
-        let nearest = SegmentGrid::new(&segments, &us, &vs);
+        let nearest = SegmentTree::new(&segments);
         Self {
             result: vec![0.0; us.len() * vs.len()],
             segments,
@@ -493,74 +493,86 @@ impl RowSweep {
     }
 }
 
-/// Segments bucketed in uniform grids of doubling cell size, for exact nearest-segment queries.
+/// Segments in a bounding-box tree, for exact nearest-segment queries.
 ///
-/// A query starts from the nearest segment of the previous sample (a valid upper bound `best`,
-/// since neighbouring samples have the same nearest segment almost always), picks the finest grid
-/// whose cell is at least `best` wide, and scans the 3 x 3 cells around the point there: every
-/// segment closer than `best` lies in one of them, so the result is the exact nearest distance in
-/// a handful of cell visits, near the loops and far from them alike.
-struct SegmentGrid {
-    origin: [f32; 2],
-    levels: Vec<GridLevel>,
+/// A query starts from the nearest segment of the previous sample (a valid upper bound, since
+/// neighbouring samples have the same nearest segment almost always) and visits only the boxes
+/// closer than that bound, nearest first, so near and far samples alike cost a handful of box and
+/// segment tests. The result is the exact minimum (compared as squared distances).
+struct SegmentTree {
+    nodes: Vec<TreeNode>,
+    /// Segment indices, grouped so that every leaf is a contiguous run.
+    order: Vec<u32>,
 }
 
-struct GridLevel {
-    cell: f32,
-    cells: [usize; 2],
-    buckets: Vec<Vec<u32>>,
+struct TreeNode {
+    min: [f32; 2],
+    max: [f32; 2],
+    /// For a leaf the first entry of `order`; for an inner node the index of the left child (the
+    /// right child follows the left one's subtree, so it is stored in `right`).
+    first: u32,
+    /// The right child of an inner node.
+    right: u32,
+    /// Segments in a leaf; 0 for an inner node.
+    count: u32,
 }
 
-impl SegmentGrid {
-    fn new(segments: &[([f32; 2], [f32; 2])], us: &[f32], vs: &[f32]) -> Self {
-        let step = |values: &[f32]| {
-            if values.len() > 1 {
-                (values[1] - values[0]).abs()
-            } else {
-                1.0
-            }
-        };
-        let finest = (2.0 * step(us).max(step(vs))).max(1e-3);
+const LEAF_SEGMENTS: usize = 4;
+
+impl SegmentTree {
+    fn new(segments: &[([f32; 2], [f32; 2])]) -> Self {
+        let mut order: Vec<u32> = (0..segments.len() as u32).collect();
+        let mut nodes = Vec::with_capacity(2 * segments.len() / LEAF_SEGMENTS + 2);
+        let len = order.len();
+        Self::build(segments, &mut order, 0, len, &mut nodes);
+        Self { nodes, order }
+    }
+
+    fn build(
+        segments: &[([f32; 2], [f32; 2])],
+        order: &mut [u32],
+        start: usize,
+        end: usize,
+        nodes: &mut Vec<TreeNode>,
+    ) -> u32 {
         let (mut min, mut max) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
-        for (a, b) in segments {
-            for p in [a, b] {
+        for index in &order[start..end] {
+            let (a, b) = segments[*index as usize];
+            for point in [a, b] {
                 for axis in 0..2 {
-                    min[axis] = min[axis].min(p[axis]);
-                    max[axis] = max[axis].max(p[axis]);
+                    min[axis] = min[axis].min(point[axis]);
+                    max[axis] = max[axis].max(point[axis]);
                 }
             }
         }
-        let origin = [min[0] - finest, min[1] - finest];
-        let extent = [max[0] + finest - origin[0], max[1] + finest - origin[1]];
-        let mut levels = Vec::new();
-        let mut cell = finest;
-        loop {
-            let cells = [
-                ((extent[0] / cell).ceil() as usize).max(1),
-                ((extent[1] / cell).ceil() as usize).max(1),
-            ];
-            let mut level = GridLevel {
-                cell,
-                cells,
-                buckets: vec![Vec::new(); cells[0] * cells[1]],
+        let id = nodes.len() as u32;
+        nodes.push(TreeNode {
+            min,
+            max,
+            first: start as u32,
+            right: 0,
+            count: (end - start) as u32,
+        });
+        if end - start <= LEAF_SEGMENTS {
+            return id;
+        }
+        // Split at the median segment midpoint along the longer side.
+        let axis = usize::from(max[1] - min[1] > max[0] - min[0]);
+        let middle = start + (end - start) / 2;
+        order[start..end].select_nth_unstable_by(middle - start, |x, y| {
+            let centre = |index: &u32| {
+                let (a, b) = segments[*index as usize];
+                a[axis] + b[axis]
             };
-            for (index, (a, b)) in segments.iter().enumerate() {
-                let low = level.cell_of(origin, [a[0].min(b[0]), a[1].min(b[1])]);
-                let high = level.cell_of(origin, [a[0].max(b[0]), a[1].max(b[1])]);
-                for cy in low[1]..=high[1] {
-                    for cx in low[0]..=high[0] {
-                        level.buckets[cx + cells[0] * cy].push(index as u32);
-                    }
-                }
-            }
-            let last = cells == [1, 1];
-            levels.push(level);
-            if last {
-                break;
-            }
-            cell *= 2.0;
-        }
-        Self { origin, levels }
+            centre(x).total_cmp(&centre(y))
+        });
+        let left = Self::build(segments, order, start, middle, nodes);
+        let right = Self::build(segments, order, middle, end, nodes);
+        let node = &mut nodes[id as usize];
+        node.count = 0;
+        node.first = left;
+        node.right = right;
+        id
     }
 
     /// The exact distance from `point` to the nearest segment; `hint` holds the nearest segment of
@@ -572,40 +584,54 @@ impl SegmentGrid {
         hint: &mut usize,
     ) -> f32 {
         let (a, b) = segments[*hint];
-        let mut best = point_segment_distance(point, a, b);
-        let level = self
-            .levels
-            .iter()
-            .find(|level| level.cell >= best)
-            .unwrap_or_else(|| self.levels.last().expect("at least one level"));
-        let [cx, cy] = level.cell_of(self.origin, point);
-        for y in cy.saturating_sub(1)..=(cy + 1).min(level.cells[1] - 1) {
-            for x in cx.saturating_sub(1)..=(cx + 1).min(level.cells[0] - 1) {
-                for index in &level.buckets[x + level.cells[0] * y] {
+        let mut best = point_segment_distance_squared(point, a, b);
+        let mut stack = [0u32; 64];
+        let mut top = 1;
+        while top > 0 {
+            top -= 1;
+            let node = &self.nodes[stack[top] as usize];
+            // The margin keeps a segment whose rounded distance is a hair below the box bound.
+            if box_distance_squared(point, node.min, node.max) > best * (1.0 + 1e-5) {
+                continue;
+            }
+            if node.count > 0 {
+                let run = &self.order[node.first as usize..(node.first + node.count) as usize];
+                for index in run {
                     let (a, b) = segments[*index as usize];
-                    let distance = point_segment_distance(point, a, b);
-                    if distance < best {
-                        best = distance;
+                    let squared = point_segment_distance_squared(point, a, b);
+                    if squared < best {
+                        best = squared;
                         *hint = *index as usize;
                     }
                 }
+            } else {
+                let (left, right) = (node.first, node.right);
+                let left_node = &self.nodes[left as usize];
+                let right_node = &self.nodes[right as usize];
+                let near_left = box_distance_squared(point, left_node.min, left_node.max)
+                    <= box_distance_squared(point, right_node.min, right_node.max);
+                // The nearer child is visited first, so it is pushed last.
+                let (far, near) = if near_left {
+                    (right, left)
+                } else {
+                    (left, right)
+                };
+                stack[top] = far;
+                stack[top + 1] = near;
+                top += 2;
             }
         }
-        best
+        best.sqrt()
     }
 }
 
-impl GridLevel {
-    /// The cell holding `point`, clamped into the grid.
-    fn cell_of(&self, origin: [f32; 2], point: [f32; 2]) -> [usize; 2] {
-        std::array::from_fn(|axis| {
-            (((point[axis] - origin[axis]) / self.cell).floor().max(0.0) as usize)
-                .min(self.cells[axis] - 1)
-        })
-    }
+fn box_distance_squared(p: [f32; 2], min: [f32; 2], max: [f32; 2]) -> f32 {
+    let dx = (min[0] - p[0]).max(p[0] - max[0]).max(0.0);
+    let dy = (min[1] - p[1]).max(p[1] - max[1]).max(0.0);
+    dx * dx + dy * dy
 }
 
-fn point_segment_distance(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+fn point_segment_distance_squared(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
     let ab = [b[0] - a[0], b[1] - a[1]];
     let ap = [p[0] - a[0], p[1] - a[1]];
     let length_squared = ab[0] * ab[0] + ab[1] * ab[1];
@@ -614,7 +640,13 @@ fn point_segment_distance(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
     } else {
         0.0
     };
-    (ap[0] - t * ab[0]).hypot(ap[1] - t * ab[1])
+    let d = [ap[0] - t * ab[0], ap[1] - t * ab[1]];
+    d[0] * d[0] + d[1] * d[1]
+}
+
+#[cfg(test)]
+fn point_segment_distance(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+    point_segment_distance_squared(p, a, b).sqrt()
 }
 
 #[cfg(test)]
