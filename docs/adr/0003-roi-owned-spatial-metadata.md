@@ -1,5 +1,7 @@
 # ROI-Owned Spatial Metadata
 
+The whole spatial model, including grids, slice planes, and views, is explained in `docs/spatial-model.md`; this ADR records the decision on ROI-owned geometry.
+
 Voxel-authoritative ROI data owns its own spatial metadata instead of borrowing dimensions, spacing, origin, or orientation from the current main volume. Imported labelmaps may differ from the displayed image geometry, so ROI conversion, volume measurement, mesh extraction, and overlay projection must use an explicit ROI-native-to-world geometry contract.
 
 ## Import convention

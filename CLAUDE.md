@@ -6,6 +6,7 @@ Follow [AGENTS.md](AGENTS.md) for repository instructions.
 - Proposed product direction: [docs/roi-workstation-plan.md](docs/roi-workstation-plan.md)
 - Ordered backlog: [docs/roi-workstation-todos.md](docs/roi-workstation-todos.md)
 - Foundation review (evidence and reasoning behind Phase 2b): [docs/foundation-review-2026-09-30.md](docs/foundation-review-2026-09-30.md)
+- Spatial model (grids, planes, views): [docs/spatial-model.md](docs/spatial-model.md)
 - Code map: [docs/code-map.md](docs/code-map.md)
 - Rendering boundary: [docs/rendering-architecture.md](docs/rendering-architecture.md)
 - Architecture decisions: [docs/adr/](docs/adr/) (0005 scene entity model is proposed)

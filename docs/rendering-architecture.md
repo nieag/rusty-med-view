@@ -2,6 +2,8 @@
 
 This document records repository-wide rendering rules. It applies to all viewer, ROI, contour, mesh, annotation, and future segmentation work.
 
+This document is about what draws what. How positions are defined and converted is in `spatial-model.md`.
+
 ## Egui Boundary
 
 `egui` is for GUI only.
@@ -21,6 +23,8 @@ Disallowed egui responsibilities:
 - owning projection math for image-space, patient-space, or viewport-space primitives
 
 If a feature appears inside a viewport as part of the viewer scene, it must be rendered through the native rendering stack, not through egui painting.
+
+Known exceptions, until they get native renderers: annotation markers and labels, and the orientation gizmo, are drawn by egui from projections computed by the shared helpers.
 
 ## Native Rendering Ownership
 
