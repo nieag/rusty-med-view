@@ -380,7 +380,9 @@ fn test_add_loop_path_reentering_existing_contour_commits_union_and_fills_voxels
     ));
 
     roi::request_contour_voxel_form(&mut world, roi_entity).unwrap();
-    roi_runtime::process_contour_voxel_rebuild_jobs(&mut world);
+    for _ in 0..100 {
+        roi_runtime::advance_roi_work(&mut world, None, &roi_runtime::ViewFocus::default());
+    }
 
     let plane = merged_contour.slices[0].plane;
     let added_world = plane_local_mm_to_world_mm([8.0, 0.0], plane);
@@ -390,7 +392,14 @@ fn test_add_loop_path_reentering_existing_contour_commits_union_and_fills_voxels
     let linear = ((added_index[2] * dimensions[1] + added_index[1]) * dimensions[0]
         + added_index[0]) as usize;
     let roi = world.get::<&Roi>(roi_entity).unwrap();
-    assert_eq!(roi.voxel_cache().unwrap().data.raw_data[linear], 1);
+    // The voxels are a box of the reference grid.
+    let voxels = roi
+        .voxel_cache()
+        .unwrap()
+        .data
+        .embedded_in(roi.reference_geometry())
+        .expect("a box of the reference grid");
+    assert_eq!(voxels.raw_data[linear], 1);
     assert!(roi.is_cache_current(RoiCacheKind::Voxel));
 }
 
@@ -768,7 +777,9 @@ fn test_move_selected_point_preview_defers_authoritative_commit_until_finalize()
     drop(roi);
 
     roi::request_contour_voxel_form(&mut world, roi_entity).unwrap();
-    roi_runtime::process_contour_voxel_rebuild_jobs(&mut world);
+    for _ in 0..100 {
+        roi_runtime::advance_roi_work(&mut world, None, &roi_runtime::ViewFocus::default());
+    }
 
     let roi = world.get::<&Roi>(roi_entity).unwrap();
     assert!(roi.is_cache_current(RoiCacheKind::Voxel));

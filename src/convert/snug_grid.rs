@@ -15,6 +15,11 @@ pub type VoxelBox = ([u32; 3], [u32; 3]);
 /// Voxels of margin around a shape, so its surface never sits on the box's faces.
 const MARGIN: u32 = 1;
 
+/// Extra voxels added on a side where a box has to grow. Growing invalidates what was computed on
+/// the old box (a contour ROI's whole distance field), so a box grows in steps and an edit a little
+/// further out than the last one does not pay for a rebuild again.
+const GROWTH_SLACK: u32 = 8;
+
 /// The box of `reference` that holds the contour loops (and the depth range of its slices), with
 /// a margin, grown to also cover `keep` when that is given.
 pub fn snug_geometry_for_contour(
@@ -77,8 +82,20 @@ fn snug_geometry(
         let kept_max: [u32; 3] = std::array::from_fn(|axis| offset[axis] + kept.dimensions()[axis]);
         wanted = Some(match wanted {
             Some((min, max)) => (
-                std::array::from_fn(|axis| min[axis].min(offset[axis])),
-                std::array::from_fn(|axis| max[axis].max(kept_max[axis])),
+                std::array::from_fn(|axis| {
+                    if min[axis] < offset[axis] {
+                        min[axis].saturating_sub(GROWTH_SLACK)
+                    } else {
+                        offset[axis]
+                    }
+                }),
+                std::array::from_fn(|axis| {
+                    if max[axis] > kept_max[axis] {
+                        (max[axis] + GROWTH_SLACK).min(dimensions[axis])
+                    } else {
+                        kept_max[axis]
+                    }
+                }),
             ),
             None => (offset, kept_max),
         });

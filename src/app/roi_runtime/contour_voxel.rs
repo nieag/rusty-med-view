@@ -1,4 +1,5 @@
 use super::*;
+use crate::convert::ContourFieldState;
 
 pub(super) struct ContourPreviewMeshWork {
     source_generation: u64,
@@ -62,7 +63,10 @@ pub(super) fn process_contour_voxel_rebuild_jobs_with_hook(
         if !matches!(roi.body, RoiBody::Contour(_)) {
             continue;
         }
-        if roi.running_job_kind().is_none() && roi.has_queued_job(RoiJobKind::RebuildVoxelCache) {
+        if roi.running_job_kind().is_none()
+            && roi.has_queued_job(RoiJobKind::RebuildVoxelCache)
+            && voxel_job_can_start(world, entity, roi)
+        {
             rebuild_entities.push(entity);
         }
     }
@@ -81,6 +85,39 @@ pub(super) fn process_contour_voxel_rebuild_jobs_with_hook(
         );
     }
     rebuilt_any
+}
+
+/// The queued voxel job of a contour ROI can start once what it is derived from exists: a drag
+/// preview is rasterized from its own loops, a committed shape is read off the signed distance
+/// field of the loops (built by the mesh job) and an empty one needs nothing.
+fn voxel_job_can_start(world: &World, entity: hecs::Entity, roi: &Roi) -> bool {
+    let preview = roi
+        .job_state
+        .pending
+        .iter()
+        .find(|request| request.kind == RoiJobKind::RebuildVoxelCache)
+        .is_some_and(|request| request.preview_revision.is_some());
+    preview
+        || !roi
+            .contour_data()
+            .is_some_and(|contour| contour.has_loops())
+        || current_field_voxels(world, entity, roi).is_some()
+}
+
+/// The voxel form read off the field of the ROI's current shape: a voxel is inside where the
+/// field is negative at its centre. Cheap (one comparison per voxel), so it is built in one go.
+fn current_field_voxels(world: &World, entity: hecs::Entity, roi: &Roi) -> Option<VoxelData> {
+    let state = world.get::<&ContourFieldState>(entity).ok()?;
+    (state.generation == roi.dirty_state.authoritative.shape).then(|| VoxelData {
+        geometry: state.field.geometry,
+        raw_data: state
+            .field
+            .values
+            .iter()
+            // A voxel centre exactly on the surface counts as inside, as it always did.
+            .map(|d| u8::from(*d <= 0.0))
+            .collect(),
+    })
 }
 
 pub(super) fn prioritize_entity(entities: &mut [hecs::Entity], preferred: Option<hecs::Entity>) {
@@ -205,7 +242,7 @@ fn process_contour_voxel_rebuild_for_entity_inner(
         roi.dirty_state.authoritative.shape
     };
 
-    if begin_next_job(world, roi_entity) != Some(RoiJobKind::RebuildVoxelCache) {
+    if !begin_job_of_kind(world, roi_entity, RoiJobKind::RebuildVoxelCache) {
         return false;
     }
     let started_at = Instant::now();
@@ -327,7 +364,17 @@ fn process_contour_voxel_rebuild_for_entity_inner(
     }
 
     let raster_started_at = Instant::now();
-    let raster_result = if let Some(base) = base_slice_voxel.as_ref() {
+    let field_voxels = if preview_revision.is_none() {
+        world
+            .get::<&Roi>(roi_entity)
+            .ok()
+            .and_then(|roi| current_field_voxels(world, roi_entity, &roi))
+    } else {
+        None
+    };
+    let raster_result = if let Some(voxels) = field_voxels {
+        Ok(voxels)
+    } else if let Some(base) = base_slice_voxel.as_ref() {
         rasterize_contour_preview_slices_to_voxel_data(&contour_data, base)
     } else {
         rasterize_contours_to_voxel_data(&contour_data, target_geometry)

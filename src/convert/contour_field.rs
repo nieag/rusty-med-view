@@ -29,7 +29,7 @@ const CONSECUTIVE_LAYERS: f32 = 1.5;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContourField {
     pub geometry: VoxelGeometry,
-    pub values: Vec<f32>,
+    pub values: Arc<Vec<f32>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +114,8 @@ fn changed_depth_range(
 #[derive(Debug, Clone)]
 pub struct ContourFieldState {
     pub field: ContourField,
+    /// The shape revision of the ROI the field was built for (set by the owner of the state).
+    pub generation: u64,
     family: OrthogonalFamily,
     slices: Vec<CachedSlice>,
 }
@@ -130,7 +132,7 @@ impl ContourFieldState {
             return Ok(None);
         };
         while !build.step(None) {}
-        Ok(Some(build.finish().0))
+        Ok(Some(build.finish()))
     }
 
     pub fn approx_bytes(&self) -> usize {
@@ -312,7 +314,7 @@ impl ContourFieldBuild {
         // Only depths a changed slice can influence are reassembled; the rest is kept.
         let (values, z_range) = match &self.previous {
             Some(state) => (
-                state.field.values.clone(),
+                (*state.field.values).clone(),
                 changed_depth_range(&state.slices, &slices, depth_samples),
             ),
             None => (
@@ -336,21 +338,20 @@ impl ContourFieldBuild {
         }
     }
 
-    /// The finished state and the one it was built from (whose field it can be diffed against).
-    /// Only valid after `step` returned `true`.
-    pub fn finish(mut self) -> (ContourFieldState, Option<ContourFieldState>) {
+    /// The finished state. Only valid after `step` returned `true`.
+    pub fn finish(mut self) -> ContourFieldState {
         let assembly = self.assembly.take().expect("field build is not finished");
-        (
+        {
             ContourFieldState {
                 field: ContourField {
                     geometry: self.geometry,
-                    values: assembly.values,
+                    values: Arc::new(assembly.values),
                 },
+                generation: 0,
                 family: self.family,
                 slices: assembly.slices,
-            },
-            self.previous,
-        )
+            }
+        }
     }
 }
 
@@ -755,8 +756,7 @@ mod tests {
             assert!(steps < 100_000, "a stopped build must still make progress");
         }
         assert!(steps > 3, "the work was spread over {steps} steps");
-        let (state, from) = build.finish();
+        let state = build.finish();
         assert_eq!(state.field, expected.field);
-        assert_eq!(from.unwrap().field, previous.field);
     }
 }

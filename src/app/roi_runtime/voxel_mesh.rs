@@ -7,9 +7,13 @@ use crate::convert::{
 /// Where the chunks of a mesh rebuild are sampled from.
 enum MeshSource {
     Voxels(Box<VoxelData>),
-    /// The signed distance field of a contour ROI (`convert::contour_field`), installed on the
-    /// ROI together with the finished mesh so the next edit reuses its per-slice work.
-    ContourField(Box<ContourFieldState>),
+    /// The signed distance field of a contour ROI (`convert::contour_field`). Its state is on the
+    /// ROI from the moment it is built (the voxel form is derived from it); once the chunks are
+    /// meshed, `ContourMeshBase` records which field they came from.
+    ContourField {
+        values: std::sync::Arc<Vec<f32>>,
+        geometry: crate::model::GeometryIdentity,
+    },
 }
 
 /// What a mesh build starts from exists: a contour ROI's loops, else a current voxel form.
@@ -21,6 +25,7 @@ pub(super) fn mesh_source_is_ready(roi: &Roi) -> bool {
 /// A contour ROI's field while it is built (before its chunks are meshed), with the chunks of the
 /// mesh it replaces.
 struct FieldStage {
+    generation: u64,
     build: Box<ContourFieldBuild>,
     base_chunks: Option<ChunkedMeshData>,
 }
@@ -56,9 +61,7 @@ pub(crate) fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
     let entity = world.query::<&Roi>().iter().find_map(|(entity, roi)| {
         (!matches!(roi.body, RoiBody::Mesh(_))
             && roi.running_job_kind().is_none()
-            // The mesh job must be the next one in line: starting the queue would otherwise
-            // start a voxel job queued ahead of it, which nothing here would ever run.
-            && roi.job_state.queued_kind() == Some(RoiJobKind::RebuildMeshCache)
+            && roi.has_queued_job(RoiJobKind::RebuildMeshCache)
             && mesh_source_is_ready(roi))
         .then_some(entity)
     });
@@ -75,7 +78,7 @@ pub(crate) fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
             roi.mesh_cache().and_then(|cache| cache.chunks.clone()),
         )
     };
-    if begin_next_job(world, entity) != Some(RoiJobKind::RebuildMeshCache) {
+    if !begin_job_of_kind(world, entity, RoiJobKind::RebuildMeshCache) {
         return;
     }
     let started_at = Instant::now();
@@ -89,6 +92,7 @@ pub(crate) fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
         match begin_contour_field_build(world, entity) {
             Some(build) => (
                 Some(FieldStage {
+                    generation: source_generation,
                     build: Box::new(build),
                     base_chunks,
                 }),
@@ -177,7 +181,7 @@ pub(super) fn resume_voxel_mesh_rebuild_work(
             suspend_work(world, entity, RoiJobKind::RebuildMeshCache, work);
             return;
         }
-        match plan_contour_meshing(stage) {
+        match plan_contour_meshing(world, entity, stage) {
             Ok(meshing) => work.meshing = Some(meshing),
             Err(error) => {
                 fail_voxel_mesh_rebuild(world, entity, error);
@@ -193,7 +197,7 @@ pub(super) fn resume_voxel_mesh_rebuild_work(
     while !completed && frame_started_at.elapsed() < frame_budget {
         let stepped = match &meshing.source {
             MeshSource::Voxels(voxel_data) => meshing.rebuild.step(voxel_data),
-            MeshSource::ContourField(_) => meshing.rebuild.step_field(),
+            MeshSource::ContourField { .. } => meshing.rebuild.step_field(),
         };
         completed = match stepped {
             Ok(done) => done,
@@ -214,8 +218,8 @@ pub(super) fn resume_voxel_mesh_rebuild_work(
         return;
     };
     let mesh_data = chunked_mesh.merged_mesh();
-    let field_state = match meshing.source {
-        MeshSource::ContourField(state) => Some(state),
+    let mesh_base = match meshing.source {
+        MeshSource::ContourField { values, geometry } => Some(ContourMeshBase { geometry, values }),
         MeshSource::Voxels(_) => None,
     };
     let Ok(mut roi) = world.get::<&mut Roi>(entity) else {
@@ -245,12 +249,13 @@ pub(super) fn resume_voxel_mesh_rebuild_work(
     roi.job_metrics.last_completed_kind = Some(RoiJobKind::RebuildMeshCache);
     roi.job_metrics.last_duration_ms = duration.as_secs_f32() * 1000.0;
     drop(roi);
-    if let Some(state) = field_state {
-        let _ = world.insert_one(entity, *state);
+    if let Some(base) = mesh_base {
+        let _ = world.insert_one(entity, base);
     }
 }
 
-/// A contour field built ahead of the first edit, with the revision it is built for.
+/// A contour field built for a ROI that has none for its revision (a mesh just cut into contours
+/// keeps its exact surface, so no mesh job builds one), with the revision it is built for.
 struct FieldWarmup {
     generation: u64,
     build: Box<ContourFieldBuild>,
@@ -284,14 +289,16 @@ fn warm_contour_fields(world: &mut World, frame_started_at: Instant, frame_budge
         None => {
             let candidate = world.query::<&Roi>().iter().find_map(|(entity, roi)| {
                 let generation = roi.dirty_state.authoritative.shape;
-                (roi.contour_data()
-                    .is_some_and(|contour| contour.has_loops())
+                let field_is_current = world
+                    .get::<&ContourFieldState>(entity)
+                    .is_ok_and(|state| state.generation == generation);
+                (roi.contour_data().is_some_and(|contour| contour.has_loops())
                     && roi.running_job_kind().is_none()
-                    && roi.job_state.queued_kind().is_none()
+                    // A mesh job builds the field itself; a voxel job may be waiting for it.
+                    && !roi.has_queued_job(RoiJobKind::RebuildMeshCache)
                     && !roi.preview_state.active
                     && roi.is_cache_current(RoiCacheKind::Mesh)
-                    && roi.mesh_cache().is_some_and(|cache| cache.chunks.is_none())
-                    && world.get::<&ContourFieldState>(entity).is_err()
+                    && !field_is_current
                     && world
                         .get::<&FieldWarmupTried>(entity)
                         .map_or(true, |tried| tried.0 != generation))
@@ -320,13 +327,14 @@ fn warm_contour_fields(world: &mut World, frame_started_at: Instant, frame_budge
     let still_idle = world.get::<&Roi>(entity).is_ok_and(|roi| {
         roi.dirty_state.authoritative.shape == warmup.generation
             && roi.running_job_kind().is_none()
-            && roi.job_state.queued_kind().is_none()
+            && !roi.has_queued_job(RoiJobKind::RebuildMeshCache)
     });
     if !still_idle {
         return;
     }
     if warmup.build.step(Some(frame_started_at + frame_budget)) {
-        let (state, _) = warmup.build.finish();
+        let mut state = warmup.build.finish();
+        state.generation = warmup.generation;
         let _ = world.insert_one(entity, state);
     } else {
         let _ = world.insert_one(entity, warmup);
@@ -356,35 +364,50 @@ fn begin_contour_field_build(world: &World, entity: hecs::Entity) -> Option<Cont
     }
 }
 
-/// The finished field's chunks to mesh: those the changed samples can reach when the previous
-/// mesh is on the same grid, else all.
-fn plan_contour_meshing(stage: FieldStage) -> Result<MeshingStage, VoxelMeshExtractionError> {
-    let (state, previous) = stage.build.finish();
+/// Puts the finished field on the ROI (the voxel form is derived from it) and plans the chunks to
+/// mesh: those the changed samples can reach when the previous chunks came from a field on the
+/// same grid, else all.
+fn plan_contour_meshing(
+    world: &mut World,
+    entity: hecs::Entity,
+    stage: FieldStage,
+) -> Result<MeshingStage, VoxelMeshExtractionError> {
+    let mut state = stage.build.finish();
+    state.generation = stage.generation;
     let geometry = state.field.geometry;
-    let smooth = smooth_mesh_field_from_signed_distance(geometry, &state.field.values);
-    let rebuild = match (stage.base_chunks, previous.as_ref()) {
-        (Some(chunks), Some(previous))
-            if chunks.grid == geometry.identity()
-                && previous.field.geometry.identity() == geometry.identity() =>
-        {
-            let changed = changed_mesh_chunks(
+    let values = state.field.values.clone();
+    let smooth = smooth_mesh_field_from_signed_distance(geometry, &values);
+    let rebuild = {
+        let base = world.get::<&ContourMeshBase>(entity).ok();
+        match (stage.base_chunks, base.as_deref()) {
+            (Some(chunks), Some(base))
+                if chunks.grid == geometry.identity() && base.geometry == geometry.identity() =>
+            {
+                let changed =
+                    changed_mesh_chunks(geometry, &base.values, &values, chunks.chunk_size);
+                IncrementalChunkedMeshRebuild::begin_changed_from_field(
+                    chunks, geometry, smooth, changed,
+                )?
+            }
+            _ => IncrementalChunkedMeshRebuild::begin_full_from_field(
                 geometry,
-                &previous.field.values,
-                &state.field.values,
-                chunks.chunk_size,
-            );
-            IncrementalChunkedMeshRebuild::begin_changed_from_field(
-                chunks, geometry, smooth, changed,
-            )?
+                smooth,
+                DEFAULT_MESH_CHUNK_SIZE,
+            )?,
         }
-        _ => IncrementalChunkedMeshRebuild::begin_full_from_field(
-            geometry,
-            smooth,
-            DEFAULT_MESH_CHUNK_SIZE,
-        )?,
     };
+    // A field for a revision that is already gone is of no use to anyone.
+    let still_current = world
+        .get::<&Roi>(entity)
+        .is_ok_and(|roi| roi.dirty_state.authoritative.shape == stage.generation);
+    if still_current {
+        let _ = world.insert_one(entity, state);
+    }
     Ok(MeshingStage {
-        source: MeshSource::ContourField(Box::new(state)),
+        source: MeshSource::ContourField {
+            values,
+            geometry: geometry.identity(),
+        },
         rebuild: Box::new(rebuild),
     })
 }
@@ -396,6 +419,7 @@ fn install_empty_contour_mesh(
     started_at: Instant,
 ) {
     let _ = world.remove_one::<ContourFieldState>(entity);
+    let _ = world.remove_one::<ContourMeshBase>(entity);
     let Ok(mut roi) = world.get::<&mut Roi>(entity) else {
         return;
     };

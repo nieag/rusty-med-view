@@ -299,6 +299,18 @@ pub(crate) fn begin_next_job(world: &mut World, roi_entity: hecs::Entity) -> Opt
     roi.start_queued_job()
 }
 
+/// Starts the queued job of `kind` on the ROI, if it can run now.
+pub(crate) fn begin_job_of_kind(
+    world: &mut World,
+    roi_entity: hecs::Entity,
+    kind: RoiJobKind,
+) -> bool {
+    world
+        .get::<&mut Roi>(roi_entity)
+        .ok()
+        .is_some_and(|mut roi| roi.start_queued_job_of_kind(kind) == Some(kind))
+}
+
 #[cfg(test)]
 pub fn complete_cache_rebuild(
     world: &mut World,
