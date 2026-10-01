@@ -788,3 +788,81 @@ fn test_oblique_viewport_mapping_round_trips_for_a_rotated_reslice() {
         );
     }
 }
+
+fn axial_plane_at_depth_mm(z: f32) -> PlaneDefinition {
+    PlaneDefinition::new(
+        PlaneFamily::Axial,
+        [3.0, 4.0, z],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    )
+    .unwrap()
+}
+
+#[test]
+fn test_orthogonal_planes_match_within_half_a_layer_in_millimetres() {
+    // Layers are 3 mm thick along z.
+    let grid = VoxelGeometry::new(
+        [10, 10, 10],
+        [1.0, 1.0, 3.0],
+        [0.0; 3],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
+    let base = axial_plane_at_depth_mm(9.0);
+    assert!(planes_are_same_slice(
+        base,
+        axial_plane_at_depth_mm(10.4),
+        grid
+    ));
+    assert!(planes_are_same_slice(
+        base,
+        axial_plane_at_depth_mm(7.6),
+        grid
+    ));
+    assert!(!planes_are_same_slice(
+        base,
+        axial_plane_at_depth_mm(10.6),
+        grid
+    ));
+    assert!(!planes_are_same_slice(
+        base,
+        axial_plane_at_depth_mm(12.0),
+        grid
+    ));
+    // The in-plane position of the origin does not matter.
+    let mut shifted = axial_plane_at_depth_mm(9.2);
+    shifted.origin_mm[0] = -50.0;
+    assert!(planes_are_same_slice(base, shifted, grid));
+    // No seam where two layers meet: a plane just either side of a boundary matches a plane
+    // at the boundary, whichever layer it would round to.
+    assert!(planes_are_same_slice(
+        axial_plane_at_depth_mm(10.49),
+        axial_plane_at_depth_mm(10.51),
+        grid
+    ));
+}
+
+#[test]
+fn test_the_nearest_of_several_matching_slices_is_chosen() {
+    let grid = VoxelGeometry::new(
+        [10, 10, 10],
+        [1.0, 1.0, 3.0],
+        [0.0; 3],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
+    // Slices cut on a grid four times finer than the image: 0.75 mm apart.
+    let slices = [8.25, 9.0, 9.75, 12.0].map(axial_plane_at_depth_mm);
+    let target = axial_plane_at_depth_mm(9.1);
+    let chosen = nearest_matching_slice(slices.iter().copied().enumerate(), target, grid);
+    assert_eq!(chosen, Some(1));
+    assert_eq!(
+        nearest_matching_slice(
+            slices.iter().copied().enumerate(),
+            axial_plane_at_depth_mm(30.0),
+            grid
+        ),
+        None
+    );
+}

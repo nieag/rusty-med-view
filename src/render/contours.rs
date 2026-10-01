@@ -318,12 +318,18 @@ fn append_roi_contour_vertices(
     };
 
     if let Some(contour_slices) = contour_data {
+        // Slices cut on a finer grid than the image can fall into one image layer; the closest
+        // one is the one the view shows (and the one edits go to).
+        let shown_slice = crate::convert::nearest_matching_slice(
+            contour_slices
+                .iter()
+                .enumerate()
+                .map(|(index, slice)| (index, slice.plane)),
+            displayed_plane,
+            context.geometry,
+        );
         for (slice_idx, contour_slice) in contour_slices.iter().enumerate() {
-            if !crate::convert::planes_are_same_slice(
-                displayed_plane,
-                contour_slice.plane,
-                context.geometry,
-            ) {
+            if Some(slice_idx) != shown_slice {
                 continue;
             }
 

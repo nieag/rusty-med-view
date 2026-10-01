@@ -3758,3 +3758,62 @@ fn test_an_edit_outside_the_box_grows_it_and_keeps_what_was_there() {
     assert!(layer(1) > 0, "the original layer is kept");
     assert!(layer(3) > 0, "and the new one is there");
 }
+
+#[test]
+fn test_contours_of_a_label_on_a_finer_grid_than_the_image_match_the_view_by_distance() {
+    let mut world = World::new();
+    // The image: 4 layers of 1 mm along z. The label: 16 layers of 0.25 mm over the same range.
+    spawn_main_volume(&mut world, [1.0; 3], [0.0; 3]);
+    let fine =
+        VoxelGeometry::new([4, 4, 16], [1.0, 1.0, 0.25], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
+    let mut data = vec![0_u8; 4 * 4 * 16];
+    for z in [4, 5] {
+        data[(z * 4 + 1) * 4 + 1] = 1;
+    }
+    let masks = label_masks_for_import(&data, [4, 4, 16]).unwrap();
+    let entity = spawn_label_rois(&mut world, fine, "fine.nii", masks, |_, _| Ok(None)).unwrap()[0];
+    convert_and_settle(
+        &mut world,
+        entity,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    );
+
+    let image = main_volume_geometry(&world).unwrap();
+    let roi = world.get::<&Roi>(entity).unwrap();
+    let slices = &roi.contour_data().unwrap().slices;
+    assert_eq!(
+        slices.len(),
+        2,
+        "one slice per label layer, at the label's own positions"
+    );
+    let depths: Vec<f32> = slices
+        .iter()
+        .map(|slice| slice.plane.origin_mm[2])
+        .collect();
+    assert!(
+        depths.contains(&1.0) && depths.contains(&1.25),
+        "{depths:?}"
+    );
+
+    let view_at = |layer: usize| {
+        orthogonal_plane_from_volume_uv(
+            PlaneFamily::Axial,
+            [0.5, 0.5, crate::convert::slice_center_uv(layer as i32, 4)],
+            image,
+        )
+        .unwrap()
+    };
+    let matching = |layer: usize| {
+        crate::convert::nearest_matching_slice(
+            slices.iter().enumerate().map(|(i, s)| (i, s.plane)),
+            view_at(layer),
+            image,
+        )
+    };
+    // Both label slices fall inside image layer 1; the view and the editor use the closer one.
+    let chosen = matching(1).expect("a slice matches image layer 1");
+    assert_eq!(slices[chosen].plane.origin_mm[2], 1.0);
+    // The neighbouring image layers have nothing.
+    assert_eq!(matching(0), None);
+    assert_eq!(matching(2), None);
+}

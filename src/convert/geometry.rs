@@ -125,10 +125,14 @@ pub(crate) const PLANE_NORMAL_ALIGNMENT_COS: f32 = 0.999;
 
 /// Whether two planes denote the same contour slice on this grid.
 ///
-/// Different families never match and normals must be parallel. Orthogonal planes match when
-/// they select the same voxel layer, so the rule follows the voxel spacing (a fixed millimetre
-/// tolerance merged adjacent slices on sub-half-millimetre grids). Oblique planes have no layers
-/// and match within half the smallest voxel spacing.
+/// Different families never match and normals must be parallel. Orthogonal planes match when they
+/// are less than half a layer apart along their normal, the thickness of one layer being the
+/// grid's spacing along that axis, so the rule follows the voxel spacing (a fixed millimetre
+/// tolerance merged adjacent slices on sub-half-millimetre grids) and has no seams at layer
+/// boundaries. Oblique planes have no layers and match within half the smallest voxel spacing.
+///
+/// Planes of a contour that was cut on a finer grid than `geometry` can match one displayed
+/// plane several at a time; [`nearest_matching_slice`] picks the one that is closest.
 pub fn planes_are_same_slice(
     first: PlaneDefinition,
     second: PlaneDefinition,
@@ -146,20 +150,38 @@ pub fn planes_are_same_slice(
     if first_normal.dot(second_normal).abs() < PLANE_NORMAL_ALIGNMENT_COS {
         return false;
     }
-    if let Some(family) = first.family.orthogonal() {
-        let axis = orthogonal_depth_axis(family);
-        return match (
-            nearest_depth_layer(first.origin_mm, axis, geometry),
-            nearest_depth_layer(second.origin_mm, axis, geometry),
-        ) {
-            (Some(first_layer), Some(second_layer)) => first_layer == second_layer,
-            _ => false,
-        };
-    }
     let spacing = geometry.spacing();
-    let tolerance_mm = 0.5 * spacing[0].min(spacing[1]).min(spacing[2]);
-    let offset = Vec3::from_array(second.origin_mm) - Vec3::from_array(first.origin_mm);
-    offset.dot(first_normal).abs() <= tolerance_mm
+    let tolerance_mm = match first.family.orthogonal() {
+        Some(family) => 0.5 * spacing[orthogonal_depth_axis(family)],
+        None => 0.5 * spacing[0].min(spacing[1]).min(spacing[2]),
+    };
+    plane_offset_mm(first, second) < tolerance_mm
+}
+
+/// How far apart two parallel planes are along the first one's normal, in millimetres.
+pub fn plane_offset_mm(first: PlaneDefinition, second: PlaneDefinition) -> f32 {
+    let Some(normal) = Vec3::from_array(first.normal_mm).try_normalize() else {
+        return f32::INFINITY;
+    };
+    (Vec3::from_array(second.origin_mm) - Vec3::from_array(first.origin_mm))
+        .dot(normal)
+        .abs()
+}
+
+/// The slice (by the index it came with) whose plane is the same slice as `target` and closest to
+/// it, or `None` when no plane matches.
+pub fn nearest_matching_slice(
+    slices: impl IntoIterator<Item = (usize, PlaneDefinition)>,
+    target: PlaneDefinition,
+    geometry: VoxelGeometry,
+) -> Option<usize> {
+    slices
+        .into_iter()
+        .filter(|(_, plane)| planes_are_same_slice(target, *plane, geometry))
+        .min_by(|(_, a), (_, b)| {
+            plane_offset_mm(target, *a).total_cmp(&plane_offset_mm(target, *b))
+        })
+        .map(|(index, _)| index)
 }
 
 pub fn plane_local_mm_to_world_mm(local: [f32; 2], plane: PlaneDefinition) -> [f32; 3] {

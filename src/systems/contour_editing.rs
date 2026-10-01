@@ -9,7 +9,7 @@ use crate::components::{
     EditorState, EditorTool, MainVolumeTag, Roi, ViewMode, Viewport, VoxelGeometry,
 };
 use crate::convert::{
-    contour_slice_contains_point, oblique_plane_from_view_rotation,
+    contour_slice_contains_point, nearest_matching_slice, oblique_plane_from_view_rotation,
     orthogonal_plane_from_volume_uv, plane_local_mm_to_world_mm, planes_are_same_slice,
     reproject_plane_local_mm, union_contour_slice_with_loop, viewport_uv_to_plane_local_mm,
     volume_uv_to_viewport_uv, world_mm_to_volume_uv, PlaneDefinition, PlaneFamily, ViewportMapping,
@@ -329,11 +329,16 @@ pub fn handle_contour_draw_click(
     let viewport = resolve_active_contour_edit_viewport(world, session, &contour_data)?;
     let point_local_mm = viewport_uv_to_contour_plane_local_mm(viewport_uv, viewport)
         .ok_or(ContourDrawClickError::ProjectionFailed)?;
-    let existing_slice = contour_data
-        .slices
-        .iter()
-        .find(|slice| planes_are_same_slice(slice.plane, viewport.plane, viewport.geometry))
-        .cloned();
+    let existing_slice = nearest_matching_slice(
+        contour_data
+            .slices
+            .iter()
+            .enumerate()
+            .map(|(index, slice)| (index, slice.plane)),
+        viewport.plane,
+        viewport.geometry,
+    )
+    .map(|index| contour_data.slices[index].clone());
 
     let viewport_rect = world
         .get::<&Viewport>(viewport.viewport_entity)
@@ -428,10 +433,17 @@ pub fn handle_contour_draw_click(
             is_closed: true,
         };
         let committed_plane;
-        if let Some(existing_slice) = next_contour_data
-            .slices
-            .iter_mut()
-            .find(|slice| planes_are_same_slice(slice.plane, viewport.plane, viewport.geometry))
+        let existing_index = nearest_matching_slice(
+            next_contour_data
+                .slices
+                .iter()
+                .enumerate()
+                .map(|(index, slice)| (index, slice.plane)),
+            viewport.plane,
+            viewport.geometry,
+        );
+        if let Some(existing_slice) =
+            existing_index.map(|index| &mut next_contour_data.slices[index])
         {
             committed_plane = existing_slice.plane;
             for point in &mut loop_to_commit.points {
@@ -588,8 +600,17 @@ pub fn handle_contour_select_click(
 
     let mut candidate_points = Vec::new();
     let mut candidate_loops = Vec::new();
+    let selectable_slice = nearest_matching_slice(
+        contour_data
+            .slices
+            .iter()
+            .enumerate()
+            .map(|(index, slice)| (index, slice.plane)),
+        viewport.plane,
+        viewport.geometry,
+    );
     for (slice_idx, slice) in contour_data.slices.iter().enumerate() {
-        if !planes_are_same_slice(slice.plane, viewport.plane, viewport.geometry) {
+        if Some(slice_idx) != selectable_slice {
             continue;
         }
         for (loop_idx, contour_loop) in slice.loops.iter().enumerate() {
