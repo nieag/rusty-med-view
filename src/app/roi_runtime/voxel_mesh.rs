@@ -39,7 +39,9 @@ pub(super) struct VoxelMeshRebuildWork {
 }
 
 pub(crate) fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
-    const FRAME_JOB_BUDGET: Duration = Duration::from_millis(4);
+    // A committed mesh is what the user waits for after an edit or a switch; a drag preview has
+    // its own, smaller budget.
+    const FRAME_JOB_BUDGET: Duration = Duration::from_millis(8);
     let frame_started_at = Instant::now();
 
     let running_entity = {
