@@ -8,8 +8,9 @@
 //! They take about a second in release and much longer in debug, so debug builds ignore them.
 //! Run with `cargo test --release --test switch_guard` (CI does).
 use rusty_med_view::convert::{
-    contours_from_mesh, extract_contours_from_voxel_data, extract_mesh_from_voxel_data,
-    rasterize_contours_to_voxel_data, IncrementalMeshVoxelization,
+    contour_distance_field, contours_from_mesh, extract_contours_from_voxel_data,
+    extract_mesh_from_voxel_data, mesh_from_contour_field, rasterize_contours_to_voxel_data,
+    IncrementalMeshVoxelization,
 };
 use rusty_med_view::model::{ContourData, OrthogonalFamily, VoxelData, VoxelGeometry};
 use rusty_med_view::nifti_loader::load_label_from_bytes;
@@ -55,6 +56,7 @@ const DEFORM_UPDATE_BUDGET_MS: f64 = 1_000.0;
 const DIRTY_MESH_BUDGET_MS: f64 = 150.0;
 const MESH_VOXELIZE_BUDGET_MS: f64 = 2_000.0;
 const MESH_CUT_BUDGET_MS: f64 = 100.0;
+const CONTOUR_FIELD_BUDGET_MS: f64 = 1_500.0;
 
 fn liver_label() -> VoxelData {
     let bytes =
@@ -356,5 +358,33 @@ fn test_cutting_the_liver_mesh_into_contours_is_fast_and_exact() {
     assert!(
         best_ms < MESH_CUT_BUDGET_MS,
         "cutting took {best_ms:.0} ms (budget {MESH_CUT_BUDGET_MS} ms)"
+    );
+}
+
+/// Contours to a mesh through the signed distance field (ADR 0006): the first full build of a
+/// liver-sized stack. Later edits update only a local region, so this is the worst case.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "slow in debug builds; run with --release")]
+fn test_liver_contour_distance_field_and_mesh_timing() {
+    let _serial = serial();
+    let source = liver_label();
+    let contours =
+        extract_contours_from_voxel_data(&source, OrthogonalFamily::Axial).expect("contours");
+    let (field_ms, field) = best_of(TIMING_RUNS, || {
+        contour_distance_field(&contours, source.geometry, None)
+            .expect("field")
+            .expect("non-empty")
+    });
+    let (mesh_ms, mesh) = best_of(TIMING_RUNS, || mesh_from_contour_field(&field));
+    println!(
+        "liver contours -> field: {field_ms:.0} ms ({} samples), field -> mesh: {mesh_ms:.0} ms ({} triangles)",
+        field.values.len(),
+        mesh.faces.len()
+    );
+    assert!(!mesh.faces.is_empty());
+    assert!(
+        field_ms + mesh_ms < CONTOUR_FIELD_BUDGET_MS,
+        "field and mesh took {:.0} ms (budget {CONTOUR_FIELD_BUDGET_MS} ms)",
+        field_ms + mesh_ms
     );
 }

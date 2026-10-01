@@ -562,3 +562,91 @@ fn test_random_box_edits_match_a_clean_full_rebuild() {
         );
     }
 }
+
+fn blob_field(dimensions: [u32; 3], bump: Option<([u32; 3], f32)>) -> Vec<f32> {
+    let mut values = Vec::new();
+    for z in 0..dimensions[2] {
+        for y in 0..dimensions[1] {
+            for x in 0..dimensions[0] {
+                let d = [x as f32 - 9.3, y as f32 - 8.6, (z as f32 - 8.1) * 1.3];
+                let mut value = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() - 5.2;
+                if let Some((centre, amount)) = bump {
+                    let near = (x as i32 - centre[0] as i32).abs() <= 1
+                        && (y as i32 - centre[1] as i32).abs() <= 1
+                        && (z as i32 - centre[2] as i32).abs() <= 1;
+                    if near {
+                        value += amount;
+                    }
+                }
+                values.push(value);
+            }
+        }
+    }
+    values
+}
+
+#[test]
+fn test_rebuilding_only_the_changed_chunks_of_a_field_matches_a_full_rebuild() {
+    let dimensions = [20, 18, 17];
+    let geometry = geometry(
+        dimensions,
+        [0.7, 1.3, 2.1],
+        [10.0, 20.0, 30.0],
+        Quat::from_rotation_y(0.4).to_array(),
+    );
+    for chunk_size in [3, 4, 5, 16] {
+        let old_values = blob_field(dimensions, None);
+        let old = {
+            let field =
+                crate::convert::smooth_mesh_field_from_signed_distance(geometry, &old_values);
+            let mut rebuild =
+                IncrementalChunkedMeshRebuild::begin_full_from_field(geometry, field, chunk_size)
+                    .unwrap();
+            while !rebuild.step_field().unwrap() {}
+            rebuild.into_result().unwrap()
+        };
+        for (centre, amount) in [([9, 8, 8], 1.5), ([4, 9, 3], -2.0), ([14, 12, 12], 3.0)] {
+            let new_values = blob_field(dimensions, Some((centre, amount)));
+            let field =
+                crate::convert::smooth_mesh_field_from_signed_distance(geometry, &new_values);
+            let changed = changed_mesh_chunks(geometry, &old_values, &new_values, chunk_size);
+            assert!(!changed.is_empty());
+
+            let mut partial = IncrementalChunkedMeshRebuild::begin_changed_from_field(
+                old.clone(),
+                geometry,
+                field.clone(),
+                changed.clone(),
+            )
+            .unwrap();
+            while !partial.step_field().unwrap() {}
+            let partial = partial.into_result().unwrap();
+
+            let mut full =
+                IncrementalChunkedMeshRebuild::begin_full_from_field(geometry, field, chunk_size)
+                    .unwrap();
+            while !full.step_field().unwrap() {}
+            let full = full.into_result().unwrap();
+            assert_eq!(
+                canonical_triangle_bits(&partial.merged_mesh()),
+                canonical_triangle_bits(&full.merged_mesh()),
+                "chunk {chunk_size}, bump at {centre:?}"
+            );
+            // Chunks nothing touched are the very same allocations.
+            let reused = partial
+                .chunks
+                .iter()
+                .filter(|chunk| !changed.contains(&chunk.key))
+                .filter(|chunk| {
+                    old.chunks.iter().any(|before| {
+                        before.key == chunk.key && Arc::ptr_eq(&before.data, &chunk.data)
+                    })
+                })
+                .count();
+            assert!(
+                reused > 0 || chunk_size == 16,
+                "untouched chunks are reused"
+            );
+        }
+    }
+}

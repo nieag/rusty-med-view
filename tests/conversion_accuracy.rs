@@ -8,9 +8,10 @@
 //!
 //! Run with `cargo test --release --test conversion_accuracy -- --nocapture`.
 use rusty_med_view::convert::{
-    contours_from_mesh, extract_contours_from_voxel_data, extract_mesh_from_voxel_data,
-    orthogonal_plane_from_volume_uv, plane_local_mm_to_world_mm, rasterize_contours_to_voxel_data,
-    slice_center_uv, voxel_index_to_world_mm, IncrementalMeshVoxelization, PlaneFamily,
+    contour_distance_field, contours_from_mesh, extract_contours_from_voxel_data,
+    extract_mesh_from_voxel_data, mesh_from_contour_field, orthogonal_plane_from_volume_uv,
+    plane_local_mm_to_world_mm, rasterize_contours_to_voxel_data, slice_center_uv,
+    voxel_index_to_world_mm, IncrementalMeshVoxelization, PlaneFamily,
 };
 use rusty_med_view::model::{
     ContourData, ContourLoop, ContourPoint, ContourSlice, MeshData, OrthogonalFamily, VoxelData,
@@ -268,6 +269,14 @@ fn test_conversion_chains_against_analytic_shapes() {
         let back = extract_contours_from_voxel_data(&voxelized, OrthogonalFamily::Axial).unwrap();
         let chain2 = contour_measure(&case.shape, &back, mask_volume(&voxelized));
         report(case.name, "... -> voxels -> contours", &chain2);
+
+        // Chain 4: drawn contours -> distance field -> mesh (ADR 0006, no mask in between).
+        let field = contour_distance_field(&drawn, case.geometry, None)
+            .unwrap()
+            .unwrap();
+        let field_mesh = mesh_from_contour_field(&field);
+        let chain4 = mesh_measure(&case.shape, &field_mesh);
+        report(case.name, "contours -> field -> mesh", &chain4);
 
         // Chain 3: the same mesh cut with the layer planes (what the switch does now).
         let cut = contours_from_mesh(&mesh, case.geometry, OrthogonalFamily::Axial).unwrap();

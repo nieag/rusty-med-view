@@ -1,9 +1,9 @@
 use crate::convert::{
-    build_smooth_mesh_field, build_smooth_mesh_field_block, extract_smooth_mesh_chunk_from_field,
-    extract_smooth_mesh_from_voxel_data, smooth_mesh_cell_ranges, SmoothMeshExtractionError,
-    SmoothMeshField,
+    build_smooth_mesh_field, build_smooth_mesh_field_block, extract_mesh_chunk_from_field_on_grid,
+    extract_smooth_mesh_chunk_from_field, extract_smooth_mesh_from_voxel_data,
+    smooth_mesh_cell_ranges, SmoothMeshExtractionError, SmoothMeshField,
 };
-use crate::model::{GeometryIdentity, MeshData, MeshFace, VoxelData};
+use crate::model::{GeometryIdentity, MeshData, MeshFace, VoxelData, VoxelGeometry};
 use std::{collections::HashMap, sync::Arc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +39,9 @@ pub struct ChunkedMeshData {
 pub struct IncrementalChunkedMeshRebuild {
     result: ChunkedMeshData,
     smooth_field: SmoothMeshField,
+    /// The grid of the field when it did not come from voxel data (a contour distance field),
+    /// which then also replaces the voxel data `step` takes.
+    field_grid: Option<VoxelGeometry>,
     pending_keys: Vec<MeshChunkKey>,
     next_key: usize,
 }
@@ -62,6 +65,7 @@ impl IncrementalChunkedMeshRebuild {
                 chunks: Vec::new(),
             },
             smooth_field,
+            field_grid: None,
             pending_keys: all_mesh_chunk_keys(dimensions, chunk_size),
             next_key: 0,
         })
@@ -134,6 +138,7 @@ impl IncrementalChunkedMeshRebuild {
             return Ok(Self {
                 result: chunked,
                 smooth_field: SmoothMeshField::empty(),
+                field_grid: None,
                 pending_keys,
                 next_key: 0,
             });
@@ -157,21 +162,85 @@ impl IncrementalChunkedMeshRebuild {
                 chunks: kept,
             },
             smooth_field,
+            field_grid: None,
             pending_keys,
             next_key: 0,
         })
     }
 
-    pub fn step(&mut self, voxel_data: &VoxelData) -> Result<bool, VoxelMeshExtractionError> {
+    /// Every chunk of a signed-distance field (see `smooth_mesh_field_from_signed_distance`) on
+    /// the grid `geometry`.
+    pub fn begin_full_from_field(
+        geometry: VoxelGeometry,
+        smooth_field: SmoothMeshField,
+        chunk_size: u32,
+    ) -> Result<Self, VoxelMeshExtractionError> {
+        if chunk_size == 0 {
+            return Err(VoxelMeshExtractionError::InvalidChunkSize);
+        }
+        Ok(Self {
+            result: ChunkedMeshData {
+                chunk_size,
+                grid: geometry.identity(),
+                chunks: Vec::new(),
+            },
+            smooth_field,
+            field_grid: Some(geometry),
+            pending_keys: all_mesh_chunk_keys(geometry.dimensions, chunk_size),
+            next_key: 0,
+        })
+    }
+
+    /// Only the `changed` chunks of a new field, keeping the rest of `previous` (which must be on
+    /// the same grid).
+    pub fn begin_changed_from_field(
+        previous: ChunkedMeshData,
+        geometry: VoxelGeometry,
+        smooth_field: SmoothMeshField,
+        changed: Vec<MeshChunkKey>,
+    ) -> Result<Self, VoxelMeshExtractionError> {
+        if previous.chunk_size == 0 || previous.grid != geometry.identity() {
+            return Self::begin_full_from_field(geometry, smooth_field, previous.chunk_size);
+        }
+        let kept = previous
+            .chunks
+            .into_iter()
+            .filter(|chunk| !changed.contains(&chunk.key))
+            .collect();
+        Ok(Self {
+            result: ChunkedMeshData {
+                chunk_size: previous.chunk_size,
+                grid: geometry.identity(),
+                chunks: kept,
+            },
+            smooth_field,
+            field_grid: Some(geometry),
+            pending_keys: changed,
+            next_key: 0,
+        })
+    }
+
+    /// Like [`Self::step`] for a rebuild that began from a field, which carries its own grid.
+    pub fn step_field(&mut self) -> Result<bool, VoxelMeshExtractionError> {
+        let geometry = self
+            .field_grid
+            .ok_or(VoxelMeshExtractionError::InvalidChunkSize)?;
         let Some(key) = self.pending_keys.get(self.next_key).copied() else {
             return Ok(true);
         };
-        let data = extract_mesh_chunk_from_voxel_data(
-            voxel_data,
-            &self.smooth_field,
-            key,
-            self.result.chunk_size,
-        )?;
+        let chunk_size = self.result.chunk_size;
+        let min = key.index.map(|index| index.saturating_mul(chunk_size));
+        let max = std::array::from_fn(|axis| {
+            min[axis]
+                .saturating_add(chunk_size)
+                .min(geometry.dimensions[axis])
+        });
+        let data = extract_mesh_chunk_from_field_on_grid(geometry, &self.smooth_field, min, max);
+        self.finish_chunk(key, data);
+        Ok(self.is_complete())
+    }
+
+    fn finish_chunk(&mut self, key: MeshChunkKey, data: MeshData) {
         if !data.faces.is_empty() {
             self.result.chunks.push(MeshChunk {
                 key,
@@ -184,6 +253,19 @@ impl IncrementalChunkedMeshRebuild {
                 .chunks
                 .sort_by_key(|chunk| chunk_sort_key(chunk.key));
         }
+    }
+
+    pub fn step(&mut self, voxel_data: &VoxelData) -> Result<bool, VoxelMeshExtractionError> {
+        let Some(key) = self.pending_keys.get(self.next_key).copied() else {
+            return Ok(true);
+        };
+        let data = extract_mesh_chunk_from_voxel_data(
+            voxel_data,
+            &self.smooth_field,
+            key,
+            self.result.chunk_size,
+        )?;
+        self.finish_chunk(key, data);
         Ok(self.is_complete())
     }
 
@@ -353,3 +435,50 @@ fn voxel_linear_index(dimensions: [u32; 3], x: u32, y: u32, z: u32) -> usize {
 
 #[cfg(test)]
 mod tests;
+
+/// The chunks of a mesh on `geometry` whose surface can differ between two signed-distance fields
+/// of that grid: those with a changed sample at a corner of one of their cells.
+pub fn changed_mesh_chunks(
+    geometry: VoxelGeometry,
+    old_values: &[f32],
+    new_values: &[f32],
+    chunk_size: u32,
+) -> Vec<MeshChunkKey> {
+    let dims = geometry.dimensions;
+    let counts = dims.map(|dimension| dimension.div_ceil(chunk_size.max(1)));
+    // Cell `c` (in the padded grid) belongs to chunk `(c - 1) / chunk_size`, the first cell to 0.
+    let chunk_of_cell = |cell: u32, axis: usize| {
+        if cell == 0 {
+            0
+        } else {
+            ((cell - 1) / chunk_size).min(counts[axis] - 1)
+        }
+    };
+    let mut changed = std::collections::BTreeSet::new();
+    let mut flat = 0usize;
+    for z in 0..dims[2] {
+        for y in 0..dims[1] {
+            for x in 0..dims[0] {
+                if old_values[flat] != new_values[flat] {
+                    // The sample is padded index `v + 1`, a corner of cells `v` and `v + 1`.
+                    for dz in 0..2 {
+                        for dy in 0..2 {
+                            for dx in 0..2 {
+                                changed.insert([
+                                    chunk_of_cell(x + dx, 0),
+                                    chunk_of_cell(y + dy, 1),
+                                    chunk_of_cell(z + dz, 2),
+                                ]);
+                            }
+                        }
+                    }
+                }
+                flat += 1;
+            }
+        }
+    }
+    changed
+        .into_iter()
+        .map(|index| MeshChunkKey { index })
+        .collect()
+}

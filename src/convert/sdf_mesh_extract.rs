@@ -1,7 +1,7 @@
 use crate::convert::{
     signed_distance_from_voxel_data, voxel_index_to_world_mm, SignedDistanceError,
 };
-use crate::model::{MeshData, MeshFace, MeshVertex, VoxelData};
+use crate::model::{MeshData, MeshFace, MeshVertex, VoxelData, VoxelGeometry};
 use std::collections::HashMap;
 
 // Local marching-cubes implementation. The compact case table encodes the
@@ -184,35 +184,75 @@ pub fn extract_smooth_mesh_chunk_from_field(
     min_inclusive: [u32; 3],
     max_exclusive: [u32; 3],
 ) -> Result<MeshData, SmoothMeshExtractionError> {
-    let dimensions = voxel_data.geometry.dimensions;
-    let expected = voxel_count(dimensions);
+    let expected = voxel_count(voxel_data.geometry.dimensions);
     if voxel_data.raw_data.len() != expected {
         return Err(SmoothMeshExtractionError::InvalidRawDataLength {
             expected,
             actual: voxel_data.raw_data.len(),
         });
     }
-    if dimensions.contains(&0) {
-        return Ok(MeshData {
-            vertices: Vec::new(),
-            faces: Vec::new(),
-        });
-    }
+    Ok(extract_mesh_chunk_from_field_on_grid(
+        voxel_data.geometry,
+        field,
+        min_inclusive,
+        max_exclusive,
+    ))
+}
+
+/// The surface of one chunk of `field`, whose samples sit on the voxel centres of `geometry` (the
+/// field is padded by one empty sample on every side, as `build_smooth_mesh_field` makes it).
+pub fn extract_mesh_chunk_from_field_on_grid(
+    geometry: VoxelGeometry,
+    field: &SmoothMeshField,
+    min_inclusive: [u32; 3],
+    max_exclusive: [u32; 3],
+) -> MeshData {
+    let dimensions = geometry.dimensions;
     let mut mesh = MeshData {
         vertices: Vec::new(),
         faces: Vec::new(),
     };
+    if dimensions.contains(&0) {
+        return mesh;
+    }
     let mut edge_vertices = HashMap::new();
     let cell_ranges = smooth_mesh_cell_ranges(dimensions, min_inclusive, max_exclusive);
     for z in cell_ranges[2].clone() {
         for y in cell_ranges[1].clone() {
             for x in cell_ranges[0].clone() {
-                append_cell(&mut mesh, &mut edge_vertices, [x, y, z], field, voxel_data);
+                append_cell(&mut mesh, &mut edge_vertices, [x, y, z], field, geometry);
             }
         }
     }
-    Ok(mesh)
+    mesh
 }
+
+/// A field from signed-distance `values` (millimetres, negative inside) at the voxel centres of
+/// `geometry`, padded with a one-sample border of "far outside" so surfaces that reach the edge
+/// of the box close.
+pub fn smooth_mesh_field_from_signed_distance(
+    geometry: VoxelGeometry,
+    values: &[f32],
+) -> SmoothMeshField {
+    let dimensions = geometry.dimensions;
+    let padded_dimensions = dimensions.map(|value| value + 2);
+    let mut padded = vec![FAR_OUTSIDE_MM; voxel_count(padded_dimensions)];
+    for z in 0..dimensions[2] {
+        for y in 0..dimensions[1] {
+            for x in 0..dimensions[0] {
+                padded[linear_index([x + 1, y + 1, z + 1], padded_dimensions)] =
+                    values[linear_index([x, y, z], dimensions)];
+            }
+        }
+    }
+    SmoothMeshField {
+        origin: [0; 3],
+        padded_dimensions,
+        values: padded,
+    }
+}
+
+const FAR_OUTSIDE_MM: f32 = 1.0e6;
 
 fn padded_voxel_data(voxel_data: &VoxelData) -> VoxelData {
     let dimensions = voxel_data.geometry.dimensions;
@@ -236,7 +276,7 @@ fn append_cell(
     edge_vertices: &mut HashMap<EdgeKey, u32>,
     cell: [u32; 3],
     field: &SmoothMeshField,
-    original: &VoxelData,
+    geometry: VoxelGeometry,
 ) {
     let corner_indices = CORNERS.map(|offset| add(cell, offset));
     let values = corner_indices.map(|index| {
@@ -272,7 +312,7 @@ fn append_cell(
                 let index = lerp_index(corner_indices[a], corner_indices[b], offset);
                 let original_index = index.map(|value| value - 1.0);
                 let vertex = MeshVertex {
-                    world_mm: voxel_index_to_world_mm(original_index, original.geometry),
+                    world_mm: voxel_index_to_world_mm(original_index, geometry),
                 };
                 let result = mesh.vertices.len() as u32;
                 mesh.vertices.push(vertex);
