@@ -8,9 +8,10 @@
 //! They take about a second in release and much longer in debug, so debug builds ignore them.
 //! Run with `cargo test --release --test switch_guard` (CI does).
 use rusty_med_view::convert::{
-    contour_distance_field, contours_from_mesh, extract_contours_from_voxel_data,
-    extract_mesh_from_voxel_data, mesh_from_contour_field, rasterize_contours_to_voxel_data,
-    IncrementalMeshVoxelization,
+    changed_mesh_chunks, contour_distance_field, contours_from_mesh,
+    extract_contours_from_voxel_data, extract_mesh_from_voxel_data, mesh_from_contour_field,
+    rasterize_contours_to_voxel_data, smooth_mesh_field_from_signed_distance, ContourFieldState,
+    IncrementalChunkedMeshRebuild, IncrementalMeshVoxelization, DEFAULT_MESH_CHUNK_SIZE,
 };
 use rusty_med_view::model::{ContourData, OrthogonalFamily, VoxelData, VoxelGeometry};
 use rusty_med_view::nifti_loader::load_label_from_bytes;
@@ -57,6 +58,7 @@ const DIRTY_MESH_BUDGET_MS: f64 = 150.0;
 const MESH_VOXELIZE_BUDGET_MS: f64 = 2_000.0;
 const MESH_CUT_BUDGET_MS: f64 = 100.0;
 const CONTOUR_FIELD_BUDGET_MS: f64 = 1_500.0;
+const FIELD_EDIT_BUDGET_MS: f64 = 60.0;
 
 fn liver_label() -> VoxelData {
     let bytes =
@@ -386,5 +388,78 @@ fn test_liver_contour_distance_field_and_mesh_timing() {
         field_ms + mesh_ms < CONTOUR_FIELD_BUDGET_MS,
         "field and mesh took {:.0} ms (budget {CONTOUR_FIELD_BUDGET_MS} ms)",
         field_ms + mesh_ms
+    );
+}
+
+/// One edited slice of a liver stack: the field is updated from the previous state (only that
+/// slice's distances are recomputed) and only the chunks the change reaches are re-meshed.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "slow in debug builds; run with --release")]
+fn test_editing_one_liver_contour_slice_updates_the_field_locally() {
+    let _serial = serial();
+    let source = liver_label();
+    let contours =
+        extract_contours_from_voxel_data(&source, OrthogonalFamily::Axial).expect("contours");
+    let before = ContourFieldState::build(None, &contours, source.geometry, None)
+        .expect("field")
+        .expect("non-empty");
+    let mut edited = contours.clone();
+    let middle = edited.slices.len() / 2;
+    for contour_loop in &mut edited.slices[middle].loops {
+        for point in &mut contour_loop.points {
+            point.local_mm[0] += 1.7;
+        }
+    }
+    let keep = Some(before.field.geometry);
+    let (build_ms, after) = best_of(TIMING_RUNS, || {
+        ContourFieldState::build(Some(&before), &edited, source.geometry, keep)
+            .expect("field")
+            .expect("non-empty")
+    });
+    let (reuse_ms, _) = best_of(TIMING_RUNS, || {
+        ContourFieldState::build(Some(&before), &contours, source.geometry, keep)
+            .expect("field")
+            .expect("non-empty")
+    });
+    println!("liver field rebuilt with nothing changed: {reuse_ms:.0} ms");
+    let (diff_ms, changed) = best_of(TIMING_RUNS, || {
+        changed_mesh_chunks(
+            after.field.geometry,
+            &before.field.values,
+            &after.field.values,
+            DEFAULT_MESH_CHUNK_SIZE,
+        )
+    });
+    let smooth = smooth_mesh_field_from_signed_distance(after.field.geometry, &after.field.values);
+    let old_mesh = IncrementalChunkedMeshRebuild::begin_full_from_field(
+        before.field.geometry,
+        smooth_mesh_field_from_signed_distance(before.field.geometry, &before.field.values),
+        DEFAULT_MESH_CHUNK_SIZE,
+    )
+    .map(|mut rebuild| {
+        while !rebuild.step_field().expect("step") {}
+        rebuild.into_result().expect("mesh")
+    })
+    .expect("full mesh");
+    let (mesh_ms, _) = best_of(TIMING_RUNS, || {
+        let mut rebuild = IncrementalChunkedMeshRebuild::begin_changed_from_field(
+            old_mesh.clone(),
+            after.field.geometry,
+            smooth.clone(),
+            changed.clone(),
+        )
+        .expect("rebuild");
+        while !rebuild.step_field().expect("step") {}
+        rebuild.into_result().expect("mesh")
+    });
+    println!(
+        "liver slice edit: field {build_ms:.0} ms, diff {diff_ms:.0} ms, {} chunks re-meshed in {mesh_ms:.0} ms",
+        changed.len()
+    );
+    assert!(!changed.is_empty());
+    let total = build_ms + diff_ms + mesh_ms;
+    assert!(
+        total < FIELD_EDIT_BUDGET_MS,
+        "a slice edit took {total:.0} ms (budget {FIELD_EDIT_BUDGET_MS} ms)"
     );
 }

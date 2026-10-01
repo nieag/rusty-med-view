@@ -1395,6 +1395,125 @@ fn test_contour_commit_converges_voxel_and_mesh_through_work_coordinator() {
     assert!(roi.mesh_cache().is_some_and(|cache| cache.chunks.is_some()));
 }
 
+fn canonical_mesh_bits(mesh: &MeshData) -> Vec<[[u32; 3]; 3]> {
+    let mut triangles = mesh
+        .faces
+        .iter()
+        .map(|face| {
+            let mut points = face
+                .vertex_indices
+                .map(|index| mesh.vertices[index as usize].world_mm.map(f32::to_bits));
+            points.sort();
+            points
+        })
+        .collect::<Vec<_>>();
+    triangles.sort();
+    triangles
+}
+
+fn square_slices(geometry: VoxelGeometry, layers: &[(f32, f32)]) -> ContourData {
+    let slices = layers
+        .iter()
+        .map(|(layer, half_extent)| {
+            let plane = orthogonal_plane_from_volume_uv(
+                PlaneFamily::Axial,
+                [0.5, 0.5, (layer + 0.5) / geometry.dimensions[2] as f32],
+                geometry,
+            )
+            .expect("axial plane should resolve");
+            let h = *half_extent;
+            ContourSlice {
+                plane,
+                loops: vec![ContourLoop {
+                    points: [[-h, -h], [h, -h], [h, h], [-h, h]]
+                        .map(|local_mm| ContourPoint { local_mm })
+                        .to_vec(),
+                    is_closed: true,
+                }],
+            }
+        })
+        .collect();
+    ContourData {
+        active_plane_family: OrthogonalFamily::Axial,
+        slices,
+    }
+}
+
+fn settle_contour_roi(world: &mut World) {
+    for _ in 0..400 {
+        if !advance_roi_work(world, None, &ViewFocus::default()).pending {
+            return;
+        }
+    }
+    panic!("ROI work did not settle");
+}
+
+#[test]
+fn test_contour_mesh_from_incremental_field_updates_equals_a_fresh_build() {
+    let mut world = World::new();
+    let geometry = VoxelGeometry::new(
+        [48, 48, 40],
+        [1.0, 1.0, 1.5],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
+    let entity = world.spawn(Roi::new_contour_with_geometry(
+        RoiId(200),
+        "Field".to_string(),
+        geometry,
+        square_slices(geometry, &[]),
+    ));
+    replace_contour_data(
+        &mut world,
+        entity,
+        square_slices(geometry, &[(10.0, 6.0), (11.0, 8.0), (12.0, 7.0)]),
+    )
+    .expect("replace should succeed");
+    settle_contour_roi(&mut world);
+    assert!(world
+        .get::<&Roi>(entity)
+        .unwrap()
+        .is_cache_current(RoiCacheKind::Mesh));
+
+    // Resize one slice, add a slice (touching the stack), add a detached one, drop one.
+    let edits = [
+        vec![(10.0, 6.0), (11.0, 9.5), (12.0, 7.0)],
+        vec![(10.0, 6.0), (11.0, 9.5), (12.0, 7.0), (13.0, 5.0)],
+        vec![
+            (10.0, 6.0),
+            (11.0, 9.5),
+            (12.0, 7.0),
+            (13.0, 5.0),
+            (20.0, 4.0),
+        ],
+        vec![(11.0, 9.5), (12.0, 7.0), (13.0, 5.0), (20.0, 4.0)],
+    ];
+    for layers in edits {
+        let data = square_slices(geometry, &layers);
+        replace_contour_data(&mut world, entity, data.clone()).expect("replace should succeed");
+        settle_contour_roi(&mut world);
+
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert!(roi.is_cache_current(RoiCacheKind::Mesh), "{layers:?}");
+        let got = roi.mesh_cache().expect("mesh cache").data.clone();
+        let state = world
+            .get::<&crate::convert::ContourFieldState>(entity)
+            .unwrap();
+        let fresh_field =
+            crate::convert::contour_distance_field(&data, geometry, Some(state.field.geometry))
+                .unwrap()
+                .unwrap();
+        assert_eq!(fresh_field, state.field, "{layers:?}");
+        let expected = crate::convert::mesh_from_contour_field(&fresh_field);
+        assert_eq!(
+            canonical_mesh_bits(&got),
+            canonical_mesh_bits(&expected),
+            "{layers:?}"
+        );
+    }
+}
+
 #[test]
 fn test_set_active_contour_plane_family_updates_empty_contour_and_marks_derived_dirty() {
     let mut world = World::new();

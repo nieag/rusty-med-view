@@ -18,7 +18,8 @@ use crate::convert::{
     snug_geometry_for_contour, voxel_index_to_world_mm, world_mm_to_plane_local_mm,
     world_mm_to_voxel_index,
 };
-use crate::model::{ContourData, MeshData, OrthogonalFamily, VoxelGeometry};
+use crate::model::{ContourData, MeshData, OrthogonalFamily, PlaneDefinition, VoxelGeometry};
+use std::sync::Arc;
 
 /// Slices closer than this many layers (centre to centre) are consecutive and blend.
 const CONSECUTIVE_LAYERS: f32 = 1.5;
@@ -50,114 +51,227 @@ pub fn contour_distance_field(
     reference: VoxelGeometry,
     keep: Option<VoxelGeometry>,
 ) -> Result<Option<ContourField>, ContourFieldError> {
-    if !contour.has_loops() {
-        return Ok(None);
-    }
-    let geometry = snug_geometry_for_contour(contour, reference, keep);
-    let (depth_axis, a_axis, b_axis) = family_axes(contour.active_plane_family);
-    let dims = geometry.dimensions;
-    let (na, nb, nd) = (
-        dims[a_axis] as usize,
-        dims[b_axis] as usize,
-        dims[depth_axis] as usize,
-    );
-    let depth_spacing = geometry.spacing()[depth_axis];
+    Ok(ContourFieldState::build(None, contour, reference, keep)?.map(|state| state.field))
+}
 
-    // Per slice: where it is along the depth axis (in voxel-index units of the box) and its
-    // in-plane distance at every sample of the box.
-    struct SliceField {
-        depth: f32,
-        distance: Vec<f32>,
-    }
-    let mut slices: Vec<SliceField> = Vec::new();
-    for slice in &contour.slices {
-        let loops: Vec<Vec<[f32; 2]>> = slice
-            .loops
+/// One drawn slice with its in-plane distances, kept so an edit elsewhere does not redo it.
+#[derive(Debug, Clone)]
+struct CachedSlice {
+    plane: PlaneDefinition,
+    loops: Vec<Vec<[f32; 2]>>,
+    /// Position along the depth axis, in voxel-index units of the box.
+    depth: f32,
+    distance: Arc<Vec<f32>>,
+}
+
+/// The depth samples whose values can differ between two lists of slices (sorted by depth, in the
+/// same box): those between a changed slice and its neighbours, and beyond it up to the edge of
+/// the box when it ends a stack (the distance outside a stack grows with the distance to its end).
+fn changed_depth_range(
+    old: &[CachedSlice],
+    new: &[CachedSlice],
+    depth_samples: usize,
+) -> std::ops::Range<usize> {
+    let shared = |slice: &CachedSlice, other: &[CachedSlice]| {
+        other
             .iter()
-            .filter(|contour_loop| contour_loop.is_valid_closed_loop())
-            .map(|contour_loop| contour_loop.points.iter().map(|p| p.local_mm).collect())
-            .collect();
-        if loops.is_empty() {
-            continue;
-        }
-        let depth = world_mm_to_voxel_index(slice.plane.origin_mm, geometry)[depth_axis];
-        if !depth.is_finite() {
-            return Err(ContourFieldError::InvalidPlane);
-        }
-        // In-plane position of every sample column and row, in the slice's own millimetres. The
-        // box's axes are the plane's, so columns share one `u` and rows share one `v`.
-        let local = |i: usize, j: usize| {
-            let mut index = [0.0_f32; 3];
-            index[a_axis] = i as f32;
-            index[b_axis] = j as f32;
-            index[depth_axis] = depth;
-            world_mm_to_plane_local_mm(voxel_index_to_world_mm(index, geometry), slice.plane)
-        };
-        let us: Vec<f32> = (0..na).map(|i| local(i, 0)[0]).collect();
-        let vs: Vec<f32> = (0..nb).map(|j| local(0, j)[1]).collect();
-        slices.push(SliceField {
-            depth,
-            distance: slice_signed_distances(&loops, &us, &vs),
-        });
-    }
-    slices.sort_by(|a, b| a.depth.total_cmp(&b.depth));
-
-    // Stacks of consecutive layers.
-    let mut stacks: Vec<std::ops::Range<usize>> = Vec::new();
-    let mut start = 0;
-    for k in 1..=slices.len() {
-        if k == slices.len() || slices[k].depth - slices[k - 1].depth > CONSECUTIVE_LAYERS {
-            stacks.push(start..k);
-            start = k;
-        }
-    }
-
-    let mut values = vec![f32::INFINITY; na * nb * nd];
-    let index_of = |i: usize, j: usize, z: usize| {
-        let mut index = [0usize; 3];
-        index[a_axis] = i;
-        index[b_axis] = j;
-        index[depth_axis] = z;
-        (index[2] * dims[1] as usize + index[1]) * dims[0] as usize + index[0]
+            .any(|candidate| Arc::ptr_eq(&candidate.distance, &slice.distance))
     };
-    for stack in &stacks {
-        let first = slices[stack.start].depth;
-        let last = slices[stack.end - 1].depth;
-        for z in 0..nd {
-            let zf = z as f32;
-            // Distance along the depth axis to the stack's slab (half a layer beyond its end
-            // slices): negative inside, so it is minus the distance to the nearest cap.
-            let along = ((first - 0.5 - zf).max(zf - (last + 0.5))) * depth_spacing;
-            // The slices that blend at this depth.
-            let (low, high, alpha) = if zf <= first {
-                (stack.start, stack.start, 0.0)
-            } else if zf >= last {
-                (stack.end - 1, stack.end - 1, 0.0)
-            } else {
-                let upper = (stack.start..stack.end)
-                    .find(|k| slices[*k].depth > zf)
-                    .unwrap_or(stack.end - 1);
-                let lower = upper - 1;
-                let span = slices[upper].depth - slices[lower].depth;
-                (lower, upper, (zf - slices[lower].depth) / span)
+    let (mut low, mut high) = (usize::MAX, 0usize);
+    let mut include = |slices: &[CachedSlice], k: usize| {
+        let depth = slices[k].depth;
+        let reach = |neighbour: Option<&CachedSlice>, towards_end: usize| match neighbour {
+            Some(other) if (other.depth - depth).abs() <= CONSECUTIVE_LAYERS => {
+                other.depth.round().clamp(0.0, depth_samples as f32) as usize
+            }
+            _ => towards_end,
+        };
+        let below = reach(k.checked_sub(1).map(|k| &slices[k]), 0);
+        let above = reach(slices.get(k + 1), depth_samples);
+        low = low.min(below.min(depth.floor().max(0.0) as usize));
+        high = high.max(above.max(depth.ceil().max(0.0) as usize + 1));
+    };
+    for k in 0..new.len() {
+        if !shared(&new[k], old) {
+            include(new, k);
+        }
+    }
+    for k in 0..old.len() {
+        if !shared(&old[k], new) {
+            include(old, k);
+        }
+    }
+    if low == usize::MAX {
+        return 0..0;
+    }
+    low.saturating_sub(1)..(high + 1).min(depth_samples)
+}
+
+/// A contour field together with the per-slice work behind it. Building from the state of the
+/// previous revision recomputes only the slices that changed (about 6 ms each on the liver) and
+/// reassembles the field from the cached slices.
+#[derive(Debug, Clone)]
+pub struct ContourFieldState {
+    pub field: ContourField,
+    family: OrthogonalFamily,
+    slices: Vec<CachedSlice>,
+}
+
+impl ContourFieldState {
+    pub fn build(
+        previous: Option<&Self>,
+        contour: &ContourData,
+        reference: VoxelGeometry,
+        keep: Option<VoxelGeometry>,
+    ) -> Result<Option<Self>, ContourFieldError> {
+        if !contour.has_loops() {
+            return Ok(None);
+        }
+        let geometry = snug_geometry_for_contour(contour, reference, keep);
+        let family = contour.active_plane_family;
+        let (depth_axis, a_axis, b_axis) = family_axes(family);
+        let dims = geometry.dimensions;
+        let (na, nb, nd) = (
+            dims[a_axis] as usize,
+            dims[b_axis] as usize,
+            dims[depth_axis] as usize,
+        );
+        let depth_spacing = geometry.spacing()[depth_axis];
+        // Cached slices are valid only in the same box and family.
+        let reusable = previous.filter(|state| {
+            state.family == family && state.field.geometry.identity() == geometry.identity()
+        });
+
+        let mut slices: Vec<CachedSlice> = Vec::new();
+        for slice in &contour.slices {
+            let loops: Vec<Vec<[f32; 2]>> = slice
+                .loops
+                .iter()
+                .filter(|contour_loop| contour_loop.is_valid_closed_loop())
+                .map(|contour_loop| contour_loop.points.iter().map(|p| p.local_mm).collect())
+                .collect();
+            if loops.is_empty() {
+                continue;
+            }
+            let cached = reusable.and_then(|state| {
+                state
+                    .slices
+                    .iter()
+                    .find(|cached| cached.plane == slice.plane && cached.loops == loops)
+            });
+            if let Some(cached) = cached {
+                slices.push(cached.clone());
+                continue;
+            }
+            let depth = world_mm_to_voxel_index(slice.plane.origin_mm, geometry)[depth_axis];
+            if !depth.is_finite() {
+                return Err(ContourFieldError::InvalidPlane);
+            }
+            // In-plane position of every sample column and row, in the slice's own millimetres.
+            // The box's axes are the plane's, so columns share one `u` and rows share one `v`.
+            let local = |i: usize, j: usize| {
+                let mut index = [0.0_f32; 3];
+                index[a_axis] = i as f32;
+                index[b_axis] = j as f32;
+                index[depth_axis] = depth;
+                world_mm_to_plane_local_mm(voxel_index_to_world_mm(index, geometry), slice.plane)
             };
+            let us: Vec<f32> = (0..na).map(|i| local(i, 0)[0]).collect();
+            let vs: Vec<f32> = (0..nb).map(|j| local(0, j)[1]).collect();
+            let distance = Arc::new(slice_signed_distances(&loops, &us, &vs));
+            slices.push(CachedSlice {
+                plane: slice.plane,
+                loops,
+                depth,
+                distance,
+            });
+        }
+        slices.sort_by(|a, b| a.depth.total_cmp(&b.depth));
+
+        // Stacks of consecutive layers.
+        let mut stacks: Vec<std::ops::Range<usize>> = Vec::new();
+        let mut start = 0;
+        for k in 1..=slices.len() {
+            if k == slices.len() || slices[k].depth - slices[k - 1].depth > CONSECUTIVE_LAYERS {
+                stacks.push(start..k);
+                start = k;
+            }
+        }
+
+        // Only depths a changed slice can influence are reassembled; the rest is kept.
+        let (mut values, z_range) = match reusable {
+            Some(state) => (
+                state.field.values.clone(),
+                changed_depth_range(&state.slices, &slices, nd),
+            ),
+            None => (vec![f32::INFINITY; na * nb * nd], 0..nd),
+        };
+        let index_of = |i: usize, j: usize, z: usize| {
+            let mut index = [0usize; 3];
+            index[a_axis] = i;
+            index[b_axis] = j;
+            index[depth_axis] = z;
+            (index[2] * dims[1] as usize + index[1]) * dims[0] as usize + index[0]
+        };
+        for z in z_range.clone() {
             for j in 0..nb {
                 for i in 0..na {
-                    let cell = i + na * j;
-                    let in_plane = slices[low].distance[cell] * (1.0 - alpha)
-                        + slices[high].distance[cell] * alpha;
-                    let distance = if in_plane > 0.0 && along > 0.0 {
-                        in_plane.hypot(along)
-                    } else {
-                        in_plane.max(along)
-                    };
-                    let slot = &mut values[index_of(i, j, z)];
-                    *slot = slot.min(distance);
+                    values[index_of(i, j, z)] = f32::INFINITY;
                 }
             }
         }
+        for stack in &stacks {
+            let first = slices[stack.start].depth;
+            let last = slices[stack.end - 1].depth;
+            for z in z_range.clone() {
+                let zf = z as f32;
+                // Distance along the depth axis to the stack's slab (half a layer beyond its end
+                // slices): negative inside, so it is minus the distance to the nearest cap.
+                let along = ((first - 0.5 - zf).max(zf - (last + 0.5))) * depth_spacing;
+                // The slices that blend at this depth.
+                let (low, high, alpha) = if zf <= first {
+                    (stack.start, stack.start, 0.0)
+                } else if zf >= last {
+                    (stack.end - 1, stack.end - 1, 0.0)
+                } else {
+                    let upper = (stack.start..stack.end)
+                        .find(|k| slices[*k].depth > zf)
+                        .unwrap_or(stack.end - 1);
+                    let lower = upper - 1;
+                    let span = slices[upper].depth - slices[lower].depth;
+                    (lower, upper, (zf - slices[lower].depth) / span)
+                };
+                for j in 0..nb {
+                    for i in 0..na {
+                        let cell = i + na * j;
+                        let in_plane = slices[low].distance[cell] * (1.0 - alpha)
+                            + slices[high].distance[cell] * alpha;
+                        let distance = if in_plane > 0.0 && along > 0.0 {
+                            in_plane.hypot(along)
+                        } else {
+                            in_plane.max(along)
+                        };
+                        let slot = &mut values[index_of(i, j, z)];
+                        *slot = slot.min(distance);
+                    }
+                }
+            }
+        }
+        Ok(Some(Self {
+            field: ContourField { geometry, values },
+            family,
+            slices,
+        }))
     }
-    Ok(Some(ContourField { geometry, values }))
+
+    pub fn approx_bytes(&self) -> usize {
+        self.field.values.len() * 4
+            + self
+                .slices
+                .iter()
+                .map(|slice| slice.distance.len() * 4)
+                .sum::<usize>()
+    }
 }
 
 /// The zero-level surface of the field (marching cubes, linear along each edge).
