@@ -21,7 +21,7 @@ Work proceeds in chunks, foundation first. A chunk is a bounded set of plan item
 | C Completeness (done) | 2b.3 derived forms for all visible ROIs, 2b.4 one viewport mapping, 2b.5 GPU error handling, 2b.6 nothing stale, 2b.6b incremental mesh rebuild | nothing (decided) |
 | D Scale (done; 4.5 partly) | 2b.10 (cropped ROIs, display beyond 8 slots, layer list, work budget), 4.5 memory | nothing: a synthetic many-label case is generated from the liver sample |
 | F Exact conversions | ADR 0006: measurement test, mesh to contours by cut, distance field from loops with incremental updates, volumes, real-time budgets | done (tag `chunk-f`); open items moved to the backlog below |
-| E Docs | 2b.8, folded into each chunk as it lands, final check here | nothing |
+| E Docs (done) | 2b.8: current-state, code map, backlog cleaned after chunk F | nothing |
 
 Phase 3 (editing features) starts after chunk D.
 
@@ -51,7 +51,7 @@ These drive the design.
 - [x] QA snapshot and sample bootstrap moved out of `app/mod.rs` into `app/qa/`.
 - [x] Phase 2 (automatic switching), the ROI lifecycle tests, and the 3D performance work (mesh on the GPU, cached 3D view, mesh deform that stops at contact); see the commit log.
 - [x] R1 (found by the lifecycle tests, 4cdf8ff): a slice-scoped contour commit that removed the slice left stale voxels; the rebuild rule now lives in `authority.rs`.
-- [x] Baseline: 331 tests pass, 6 ignored milestone tests pass in release (about 3 s), clippy, wasm, and rustfmt clean.
+- [x] Baseline (after chunk F, 2026-10-01): about 400 unit tests, the release guards, and the 7-test QA spec pass; clippy, wasm, and rustfmt clean.
 
 ## Phase 0: Correctness and crashes (do first, all small)
 
@@ -122,7 +122,7 @@ Exit: the layering is enforced by a test; the scene model is decided and applied
     3. *The 3D mesh cannot be rebuilt inline on a large ROI today.* Until the incremental rebuild (4.4) lands, the mesh is withdrawn for the part that is being rebuilt and redrawn when current (chunks rebuild independently, so only the affected region goes missing briefly), with a visible "updating" indicator; it is never drawn from the old revision. After 4.4 a local edit rebuilds its chunks in tens of milliseconds.
   - *Done when:* the rule and its test exist; 2D views and the voxel overlay are current in the frame after a commit; 4.4 is done and the 3D mesh follows a local edit within a stated budget; ADR 0004 records the rule.
 - [x] **2b.6b Real incremental mesh rebuild (M, moved here from 4.4).** Done on `chunk/c-completeness`: `begin_for_voxel_aabb` rebuilds only the chunks within the largest voxel spacing of the dirty box (plus the cell corner) and computes the signed-distance field only over those chunks plus the same margin (`build_smooth_mesh_field_block`); the other chunks are reused by pointer. A cell that crosses the surface reads values no larger than the largest spacing, and such a value changes only when a voxel that close changes, which is why this is exact. Verified against a clean full rebuild on 600 random box edits (dense random masks, three spacings including anisotropic, three chunk sizes), the existing single-voxel stress test, and the liver (7 ms against about 800 ms; guard budget 150 ms). Original note: `begin_for_voxel_aabb` ignores its AABB and rebuilds the full SDF plus all chunks on every edit. Implement a banded SDF over the dirty region plus the smoothing margin, rebuild only the intersecting chunks, and keep the result identical to a clean full rebuild (the liver test in `tests/switch_guard.rs` already pins that). This is what makes "nothing stale" affordable for the 3D view.
-- [ ] **2b.9 Make the ECS the scene model for the things that are many and different (ADR first, then M to L; before 2b.7).**
+- [x] **2b.9 Done (ADR 0005 accepted; stages 1 to 4 landed, see the progress note). Original: Make the ECS the scene model for the things that are many and different (ADR first, then M to L; before 2b.7).**
   - *Decision input:* the scale target above. With 100 to 200 ROIs and hundreds of notes, measurements, comments, and points of interest, the scene holds many small entities of different shapes, which is the case an ECS is for. It was not earning its place at 2 ROIs; at this scale it can.
   - *Problem today:* `hecs` is used as a service locator for nine one-off pieces of state (`editor`, `input`, `gui_state`, `cursor`, `volume_windowing`, `annotations`, `overlay`, `protocol`, `window_settings` in `AppEntities`), about 110 fallible lookups that force impossible error variants (`MissingEditorState`, `MissingCursor`, ...) and about 45 `.ok()` calls; nearly every function takes `(world, entities)`, hiding what it touches. Meanwhile the things that are entity-shaped are not entities: annotations live in one `AnnotationState { Vec<Annotation> }` singleton (a `Vec` inside a component), overlay markers are a separate `OverlayManager`, and `Roi` is one 18-field component.
   - *Measured (2026-09-30):* 291 component lookups by entity handle (131 `Roi`, 42 `EditorState`, 32 `InputState`, 16 `Viewport`, 15 `Transform`); 64 queries, 9 spanning several components; 16 spawn sites; in-flight jobs attach temporary work components to ROI entities.
@@ -138,11 +138,11 @@ Exit: the layering is enforced by a test; the scene model is decided and applied
   - *Problem:* three things do not scale, none of them the ECS. (a) Memory: each label imports as its own full-volume mask, cache, and GPU texture, so 200 ROIs on a 512x512x300 scan is far beyond browser memory (100 ROIs times 79 MB is 7.9 GB before GPU copies). (b) Display: the voxel overlay has 8 GPU slots (`MAX_VOXEL_OVERLAY_SLOTS`), so at most 8 ROIs show as voxels; the rest show nothing. (c) Interface: the layer panel lists ROIs with no search, filter, or virtualisation, and the job scheduler has no budget across many ROIs.
   - *Approach:* crop each ROI's voxel data and caches to its bounding box using the ROI's own geometry (the affine model already allows a cropped origin), which is also the real fix noted in 3.1 and 4.5; show ROIs beyond the slots through a shared display labelmap or contours; a searchable, virtualised layer list with visibility groups; a work budget per frame and per queue that favours the active and visible ROIs (with 2b.3).
   - *Done when:* a synthetic 150-ROI case on a 512x512x300 volume (generated from the liver sample by tiling and splitting its mask, so the count and size are real even if the shapes are not) imports, displays, and edits within a stated memory ceiling, measured in the QA spec.
-- [ ] **2b.7 Split `roi_runtime.rs` and `components.rs` by concern (M, moved from 5.1, after 2b.1 and 2b.2).**
+- [x] **2b.7 Done (`roi_runtime/` has one module per job kind, `components/` holds the ROI types; the largest non-test file is `systems/contour_editing.rs` at about 980 lines). Original: Split `roi_runtime.rs` and `components.rs` by concern (M, moved from 5.1, after 2b.1 and 2b.2).**
   - *Problem:* `roi_runtime.rs` is 2,075 lines (job coordinator, three rebuild pipelines, contour view caches, label import); `components.rs` mixes ECS components with domain types.
   - *Approach:* follow the layering: coordinator, one module per rebuild pipeline, view caches, import; components keep only ECS state. Do it after 2b.1 so the split follows real boundaries instead of guesses.
   - *Done when:* no source file over about 800 lines except generated tables.
-- [ ] **2b.8 Docs and architecture record (S, last).**
+- [x] **2b.8 Docs and architecture record (S, last).** Done (2026-10-01): `current-state.md`, `code-map.md`, and this backlog describe the code after chunk F; ADR 0004 records the nothing-stale rule; ADR 0006 records the field as hub. Original scope:
   - *Problem:* `docs/current-state.md` and `docs/code-map.md` do not describe `app/roi/switch.rs`, `render/view3d_cache.rs`, `convert/mesh_deform.rs`, or the GPU mesh renderer.
   - *Approach:* update both, add the layering diagram, and record the decisions of 2b.3 and 2b.6 in the ADRs.
 
@@ -181,7 +181,7 @@ Do after Phases 0 to 2 so measurements reflect the final structure. Measure each
 - [x] **4.3 GPU mesh rendering (L).** Done (commit 8b22220): parts are uploaded once as indexed world-space geometry and a per-draw uniform carries the camera; geometry is rebuilt only when a fingerprint changes. Original scope: Meshes are projected on the CPU every frame, compared and re-uploaded whole, and drawn flat and translucent with no depth or lighting. Upload world-space vertices once, project on the GPU with a uniform matrix, add depth and normals.
 - [>] **4.4 Real incremental mesh rebuild.** Moved to 2b.6b. Original note: `begin_for_voxel_aabb` ignores its AABB and rebuilds the full SDF plus all chunks on every edit. Either implement banded SDF updates or remove the dirty-region machinery around it.
 - [ ] **4.5 Memory (M).** Undo keeps up to 32 full mesh and contour clones, and a switch snapshot of a voxel body clones the whole volume (up to 32 steps); the SDF path allocates about five full-volume arrays; a mesh rebuild clones the whole voxel volume and the chunk set; each mesh-drag event clones the mesh (the topology is now built once per drag). Use delta or shared-structure snapshots (for example `Arc` for immutable bodies) and avoid the clones.
-- [ ] **4.6 Small hot spots (S).** `roi_voxel_stats` scans every voxel of every ROI per frame while the Layers panel is open; cache by generation. Rebuild of overlay primitives runs twice per frame.
+- [ ] **4.6 Small hot spots (S).** `roi_stats` counts every voxel of the active ROI per frame while the Layers panel is open (and measures a mesh's volume); cache by generation. Rebuild of overlay primitives runs twice per frame.
 
 ## Phase 5: Structure cleanup
 

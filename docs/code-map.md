@@ -11,7 +11,7 @@ This is a navigation guide to the current repository, not a second architecture 
 | How grids, planes, and views are defined | `docs/spatial-model.md` |
 | ECS components and `Session` (the state that exists once: editor, input, GUI, cursor, windowing, annotations, protocol, window settings) | `src/app/components.rs` (ROI data types in `components/roi_types.rs`) |
 | ROI domain model and mutations | `src/app/roi/` |
-| Derived ROI work and GPU cache synchronization | `src/app/roi_runtime.rs` (frame order) and `src/app/roi_runtime/` (`contour_voxel`, `mesh_voxel`, `voxel_mesh`, `views`, `create`, `jobs`) |
+| Derived ROI work and GPU cache synchronization | `src/app/roi_runtime.rs` (frame order) and `src/app/roi_runtime/` (`contour_voxel` rasterizes contour ROIs, `mesh_voxel` voxelizes meshes, `voxel_mesh` meshes voxel bodies and builds contour ROIs' field and mesh and warms the field in idle time, `views` derived contour views, `create` import, `jobs` shared endings) |
 | User input and authoring | `src/systems/` |
 | Coordinate/conversion algorithms | `src/convert/` |
 | WGPU rendering | `src/render/`, `src/shaders/` |
@@ -84,7 +84,13 @@ Useful files by concern:
 | Work demand and job ordering | `app/roi/scheduler.rs`, `app/roi_runtime.rs` |
 | Contour ↔ voxel | `convert/contour_raster.rs`, `convert/voxel_contour_extract.rs` |
 | Voxel ↔ mesh | `convert/voxel_mesh_extract.rs`, `convert/mesh_voxelize.rs` |
-| Mesh ↔ displayed plane | `convert/mesh_plane_intersect.rs` |
+| Mesh → contours (exact cut by the layer planes) and mesh ↔ displayed plane | `convert/mesh_plane_intersect.rs` |
+| Contours → signed distance field → mesh (per-slice cache, time-sliced build) | `convert/contour_field.rs`, `convert/sdf_mesh_extract.rs`, the field-source rebuild in `convert/voxel_mesh_extract.rs`; driven by `app/roi_runtime/voxel_mesh.rs` |
+| Snug boxes of a ROI's voxel forms | `convert/snug_grid.rs` |
+| Volumes (contour area x thickness, mesh divergence theorem) | `convert/volume.rs` |
+| Mesh editing (deform that stops at contact) | `convert/mesh_deform.rs` |
+| Cached 3D view | `render/view3d_cache.rs` |
+| Conversion accuracy and speed records | `tests/conversion_accuracy.rs`, `tests/switch_guard.rs`, `tests/scale_guard.rs` |
 
 ## Coordinate rule
 
