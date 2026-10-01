@@ -265,13 +265,8 @@ impl Roi {
     pub(crate) fn rebase_after_switch_to_contour(
         &mut self,
         source_voxel: VoxelData,
-        replacement_mesh: Option<MeshCache>,
         mesh_cache_is_current: bool,
     ) {
-        if let Some(mesh) = replacement_mesh {
-            self.session_caches.mesh = Some(mesh);
-            self.session_caches.mesh_geometry_identity = Some(self.reference_geometry().identity());
-        }
         self.session_caches.contour = None;
         if let Some(voxel_cache) = self.session_caches.voxel.as_mut() {
             voxel_cache.data = source_voxel;
@@ -293,6 +288,24 @@ impl Roi {
             } else {
                 CacheFreshness::invalidated()
             },
+        };
+    }
+
+    /// A mesh ROI became contours by cutting its mesh, which keeps the mesh as the current mesh
+    /// cache. The voxels are no longer those of the shape (they were made from the mesh, not from
+    /// the new contours), so they are stale until rebuilt from the contours.
+    pub(crate) fn rebase_after_cut_to_contour(&mut self, previous_mesh: MeshCache) {
+        self.validated_mesh_generation = None;
+        self.session_caches.mesh = Some(previous_mesh);
+        self.session_caches.mesh_geometry_identity = Some(self.reference_geometry().identity());
+        self.session_caches.contour = None;
+        let revision = self.dirty_state.authoritative.next_shape();
+        self.dirty_state = RoiDirtyState {
+            authoritative_dirty: true,
+            authoritative: revision,
+            voxel: CacheFreshness::invalidated(),
+            contour: CacheFreshness::built_from(revision),
+            mesh: CacheFreshness::built_from(revision),
         };
     }
 

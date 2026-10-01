@@ -380,22 +380,21 @@ fn point_in_polygon(point: [f32; 2], polygon: &[[f32; 2]]) -> bool {
     inside
 }
 
+/// Whether `point` lies on the segment `a` to `b`, to within 1e-5 mm. The tolerance is a distance,
+/// not a cross product: a short edge (two nearly equal points) must not claim far-away points
+/// lie on it, which an area-scaled tolerance does.
 fn point_on_segment(point: [f32; 2], a: [f32; 2], b: [f32; 2]) -> bool {
+    const TOLERANCE_MM: f32 = 1e-5;
     let ap = Vec3::new(point[0] - a[0], point[1] - a[1], 0.0);
     let ab = Vec3::new(b[0] - a[0], b[1] - a[1], 0.0);
-    let cross = ap.cross(ab).z.abs();
-    if cross > 1e-5 {
-        return false;
+    let length = ab.length();
+    if length <= TOLERANCE_MM {
+        // A zero-length edge (a repeated point) is a point: it contains only itself.
+        return ap.length() <= TOLERANCE_MM;
     }
-
-    let dot = ap.dot(ab);
-    if dot < -1e-5 {
-        return false;
-    }
-    if dot > ab.length_squared() + 1e-5 {
-        return false;
-    }
-    true
+    let along = ap.dot(ab) / length;
+    let across = ap.cross(ab).z.abs() / length;
+    across <= TOLERANCE_MM && along >= -TOLERANCE_MM && along <= length + TOLERANCE_MM
 }
 
 fn slice_slab_tolerance_mm(geometry: VoxelGeometry, plane_normal: Vec3) -> f32 {

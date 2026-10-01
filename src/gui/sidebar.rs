@@ -315,11 +315,11 @@ pub fn draw_sidebar(
 
         if let Some(entity) = new_active_roi {
             ui.separator();
-            if let Some(stats) = roi_runtime::roi_voxel_stats(world, entity) {
-                ui.label(format!(
-                    "{} voxels, {:.2} mm^3",
-                    stats.occupied_voxels, stats.volume_mm3
-                ));
+            if let Some(stats) = roi_runtime::roi_stats(world, entity) {
+                ui.label(match stats.occupied_voxels {
+                    Some(voxels) => format!("{:.2} mm^3 ({voxels} voxels)", stats.volume_mm3),
+                    None => format!("{:.2} mm^3", stats.volume_mm3),
+                });
             }
             let is_visible = crate::app::roi::is_roi_visible(world, entity);
             let mut opacity = world

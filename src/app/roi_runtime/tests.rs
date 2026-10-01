@@ -279,22 +279,32 @@ fn test_voxel_roi_stats_use_nonzero_voxels_and_volume_spacing() {
         None,
     ));
 
-    let stats = roi_voxel_stats(&world, entity).unwrap();
+    let stats = roi_stats(&world, entity).unwrap();
 
-    assert_eq!(stats.occupied_voxels, 4);
+    assert_eq!(stats.occupied_voxels, Some(4));
     assert!((stats.volume_mm3 - 2.0).abs() < f32::EPSILON);
 }
 
 #[test]
-fn test_roi_voxel_stats_contour_primary_returns_none_before_rebuild() {
+fn test_roi_stats_of_a_contour_roi_have_a_volume_before_its_voxels_exist() {
     let mut world = World::new();
     let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, true);
-    let stats = roi_voxel_stats(&world, entity);
-    assert!(stats.is_none());
+    {
+        let mut roi = world.get::<&mut Roi>(entity).unwrap();
+        roi.mark_cache_dirty(RoiCacheKind::Voxel);
+    }
+    let stats = roi_stats(&world, entity).expect("the contours define a volume");
+    // The test loop is a right triangle with legs of 1 mm on a 1 mm layer.
+    assert_eq!(stats.occupied_voxels, None);
+    assert!(
+        (stats.volume_mm3 - 0.5).abs() < 1e-5,
+        "{}",
+        stats.volume_mm3
+    );
 }
 
 #[test]
-fn test_roi_voxel_stats_contour_primary_returns_derived_stats_after_rebuild() {
+fn test_roi_stats_of_a_contour_roi_count_its_voxels_and_use_the_contour_volume() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
     let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
@@ -312,10 +322,15 @@ fn test_roi_voxel_stats_contour_primary_returns_derived_stats_after_rebuild() {
             .filter(|v| **v != 0)
             .count() as u64
     };
-    let stats = roi_voxel_stats(&world, entity).expect("expected derived stats");
+    let stats = roi_stats(&world, entity).expect("expected derived stats");
     assert!(expected_occupied > 0);
-    assert_eq!(stats.occupied_voxels, expected_occupied);
-    assert!((stats.volume_mm3 - expected_occupied as f32).abs() < f32::EPSILON);
+    assert_eq!(stats.occupied_voxels, Some(expected_occupied));
+    // The 2.8 mm square drawn on one 1 mm layer.
+    assert!(
+        (stats.volume_mm3 - 2.8 * 2.8).abs() < 1e-3,
+        "{}",
+        stats.volume_mm3
+    );
 }
 
 #[test]
@@ -902,7 +917,7 @@ fn test_mesh_rebuild_contract_builds_voxel_then_enables_contour_refresh() {
         .unwrap()
         .voxel_cache()
         .is_some_and(|cache| cache.data.raw_data.iter().any(|value| *value != 0)));
-    assert!(roi_voxel_stats(&world, entity).is_some_and(|stats| stats.occupied_voxels > 0));
+    assert!(roi_stats(&world, entity).is_some_and(|stats| stats.occupied_voxels > Some(0)));
 
     world
         .get::<&mut Roi>(entity)
@@ -1393,6 +1408,125 @@ fn test_contour_commit_converges_voxel_and_mesh_through_work_coordinator() {
     assert_eq!(roi.queued_job_kind(), None);
     assert!(roi.is_cache_current(RoiCacheKind::Mesh));
     assert!(roi.mesh_cache().is_some_and(|cache| cache.chunks.is_some()));
+}
+
+fn canonical_mesh_bits(mesh: &MeshData) -> Vec<[[u32; 3]; 3]> {
+    let mut triangles = mesh
+        .faces
+        .iter()
+        .map(|face| {
+            let mut points = face
+                .vertex_indices
+                .map(|index| mesh.vertices[index as usize].world_mm.map(f32::to_bits));
+            points.sort();
+            points
+        })
+        .collect::<Vec<_>>();
+    triangles.sort();
+    triangles
+}
+
+fn square_slices(geometry: VoxelGeometry, layers: &[(f32, f32)]) -> ContourData {
+    let slices = layers
+        .iter()
+        .map(|(layer, half_extent)| {
+            let plane = orthogonal_plane_from_volume_uv(
+                PlaneFamily::Axial,
+                [0.5, 0.5, (layer + 0.5) / geometry.dimensions[2] as f32],
+                geometry,
+            )
+            .expect("axial plane should resolve");
+            let h = *half_extent;
+            ContourSlice {
+                plane,
+                loops: vec![ContourLoop {
+                    points: [[-h, -h], [h, -h], [h, h], [-h, h]]
+                        .map(|local_mm| ContourPoint { local_mm })
+                        .to_vec(),
+                    is_closed: true,
+                }],
+            }
+        })
+        .collect();
+    ContourData {
+        active_plane_family: OrthogonalFamily::Axial,
+        slices,
+    }
+}
+
+fn settle_contour_roi(world: &mut World) {
+    for _ in 0..400 {
+        if !advance_roi_work(world, None, &ViewFocus::default()).pending {
+            return;
+        }
+    }
+    panic!("ROI work did not settle");
+}
+
+#[test]
+fn test_contour_mesh_from_incremental_field_updates_equals_a_fresh_build() {
+    let mut world = World::new();
+    let geometry = VoxelGeometry::new(
+        [48, 48, 40],
+        [1.0, 1.0, 1.5],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    )
+    .unwrap();
+    let entity = world.spawn(Roi::new_contour_with_geometry(
+        RoiId(200),
+        "Field".to_string(),
+        geometry,
+        square_slices(geometry, &[]),
+    ));
+    replace_contour_data(
+        &mut world,
+        entity,
+        square_slices(geometry, &[(10.0, 6.0), (11.0, 8.0), (12.0, 7.0)]),
+    )
+    .expect("replace should succeed");
+    settle_contour_roi(&mut world);
+    assert!(world
+        .get::<&Roi>(entity)
+        .unwrap()
+        .is_cache_current(RoiCacheKind::Mesh));
+
+    // Resize one slice, add a slice (touching the stack), add a detached one, drop one.
+    let edits = [
+        vec![(10.0, 6.0), (11.0, 9.5), (12.0, 7.0)],
+        vec![(10.0, 6.0), (11.0, 9.5), (12.0, 7.0), (13.0, 5.0)],
+        vec![
+            (10.0, 6.0),
+            (11.0, 9.5),
+            (12.0, 7.0),
+            (13.0, 5.0),
+            (20.0, 4.0),
+        ],
+        vec![(11.0, 9.5), (12.0, 7.0), (13.0, 5.0), (20.0, 4.0)],
+    ];
+    for layers in edits {
+        let data = square_slices(geometry, &layers);
+        replace_contour_data(&mut world, entity, data.clone()).expect("replace should succeed");
+        settle_contour_roi(&mut world);
+
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert!(roi.is_cache_current(RoiCacheKind::Mesh), "{layers:?}");
+        let got = roi.mesh_cache().expect("mesh cache").data.clone();
+        let state = world
+            .get::<&crate::convert::ContourFieldState>(entity)
+            .unwrap();
+        let fresh_field =
+            crate::convert::contour_distance_field(&data, geometry, Some(state.field.geometry))
+                .unwrap()
+                .unwrap();
+        assert_eq!(fresh_field, state.field, "{layers:?}");
+        let expected = crate::convert::mesh_from_contour_field(&fresh_field);
+        assert_eq!(
+            canonical_mesh_bits(&got),
+            canonical_mesh_bits(&expected),
+            "{layers:?}"
+        );
+    }
 }
 
 #[test]
@@ -2028,27 +2162,7 @@ fn test_voxel_primary_roi_can_build_and_request_orthogonal_contour_view_cache() 
 #[test]
 fn test_ensure_contour_view_cache_builds_orthogonal_view_from_current_voxel_cache() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
-    {
-        let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let mut raw_data = vec![0_u8; 64];
-        raw_data[(2 * 4 + 1) * 4 + 1] = 1;
-        roi.session_caches.voxel = Some(VoxelCache {
-            data: VoxelData {
-                geometry: VoxelGeometry::new(
-                    [4, 4, 4],
-                    [1.0, 1.0, 1.0],
-                    [0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 1.0],
-                )
-                .unwrap(),
-                raw_data,
-            },
-            gpu_resources: None,
-        });
-        roi.dirty_state.voxel.dirty = false;
-        roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
-    }
+    let entity = spawn_sparse_voxel_roi(&mut world);
     let plane = orthogonal_plane_from_volume_uv(
         PlaneFamily::Coronal,
         [0.5, 2.0 / 3.0, 0.5],
@@ -2241,19 +2355,27 @@ fn test_request_contour_view_state_marks_generation_mismatch_stale() {
 fn test_oblique_contour_view_builds_current_and_is_not_editable() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
-    seed_current_voxel_cache_for_contour_roi(&mut world, entity);
-    {
-        let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let voxel = &mut roi.session_caches.voxel.as_mut().unwrap().data;
-        for z in 1..=2 {
-            for y in 1..=2 {
-                for x in 1..=2 {
-                    voxel.raw_data[(z * 16 + y * 4 + x) as usize] = 1;
-                }
+    let mut raw = vec![0_u8; 64];
+    for z in 1..=2 {
+        for y in 1..=2 {
+            for x in 1..=2 {
+                raw[z * 16 + y * 4 + x] = 1;
             }
         }
     }
+    let entity = world.spawn(Roi::new_voxel_with_cache(
+        RoiId(3),
+        "Cube".to_string(),
+        VoxelGeometry::new(
+            [4, 4, 4],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
+        raw,
+        None,
+    ));
     let inverse_sqrt_two = std::f32::consts::FRAC_1_SQRT_2;
     let key = ContourViewKey::from_plane(PlaneDefinition {
         family: PlaneFamily::Oblique,
@@ -2967,7 +3089,7 @@ fn test_ensure_editable_refuses_locked_rois() {
 }
 
 #[test]
-fn test_ensure_editable_converts_a_mesh_roi_to_contours_with_a_loss_report_and_undo() {
+fn test_ensure_editable_cuts_a_mesh_roi_into_contours_at_once_and_undo_restores_it() {
     let mut world = World::new();
     let entity = spawn_sparse_voxel_roi(&mut world);
     let mesh = closed_tetra_mesh_data();
@@ -2983,19 +3105,98 @@ fn test_ensure_editable_converts_a_mesh_roi_to_contours_with_a_loss_report_and_u
         entity,
         EditTarget::Contour(OrthogonalFamily::Axial),
     );
-    assert_eq!(first, Ok(Readiness::Pending));
-    let mut report = None;
-    for _ in 0..40 {
-        advance_roi_work(&mut world, None, &ViewFocus::default());
-        if world.get::<&Roi>(entity).unwrap().contour_data().is_some() {
-            report = Some(());
-            break;
-        }
-    }
 
-    assert!(report.is_some(), "the switch completes once voxels exist");
+    // No voxels are needed: the surface is cut directly, so the switch is immediate.
+    assert!(matches!(first, Ok(Readiness::Switched(report)) if report.lossless));
+    {
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert!(roi.contour_data().is_some_and(|data| data.has_loops()));
+        assert!(
+            roi.is_cache_current(RoiCacheKind::Mesh),
+            "the 3D surface is unchanged"
+        );
+        assert!(
+            !roi.is_cache_current(RoiCacheKind::Voxel),
+            "the voxels are rebuilt from the new contours, and not drawn until then"
+        );
+    }
+    settle(&mut world);
+    {
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert!(roi.is_cache_current(RoiCacheKind::Voxel));
+        assert!(
+            roi.is_cache_current(RoiCacheKind::Mesh),
+            "the kept surface is not rebuilt from the voxels"
+        );
+    }
     undo_roi_edit(&mut world, &mut editor).unwrap();
     assert_eq!(world.get::<&Roi>(entity).unwrap().mesh_data(), Some(&mesh));
+}
+
+#[test]
+fn test_a_mesh_cut_into_contours_warms_its_field_so_the_first_edit_is_incremental() {
+    let mut world = World::new();
+    let entity = spawn_sparse_voxel_roi(&mut world);
+    let mesh = closed_tetra_mesh_data();
+    {
+        let mut roi = world.get::<&mut Roi>(entity).unwrap();
+        roi.body = RoiBody::Mesh(MeshBody::new(mesh.clone()));
+        roi.mark_mesh_authoritative_changed();
+    }
+    ensure_editable(
+        &mut world,
+        entity,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    )
+    .unwrap();
+    settle(&mut world);
+    // Idle frames build the field without touching the surface that is shown.
+    for _ in 0..50 {
+        advance_roi_work(&mut world, None, &ViewFocus::default());
+    }
+    assert!(world
+        .get::<&crate::convert::ContourFieldState>(entity)
+        .is_ok());
+    assert_eq!(
+        world
+            .get::<&Roi>(entity)
+            .unwrap()
+            .mesh_cache()
+            .map(|cache| &cache.data),
+        Some(&mesh)
+    );
+
+    // The first edit meshes from the warmed field and equals a fresh build.
+    let mut edited = world
+        .get::<&Roi>(entity)
+        .unwrap()
+        .contour_data()
+        .unwrap()
+        .clone();
+    for contour_loop in &mut edited.slices[0].loops {
+        for point in &mut contour_loop.points {
+            point.local_mm[0] *= 0.9;
+        }
+    }
+    replace_contour_data(&mut world, entity, edited.clone()).unwrap();
+    settle(&mut world);
+    let roi = world.get::<&Roi>(entity).unwrap();
+    assert!(roi.is_cache_current(RoiCacheKind::Mesh));
+    let state = world
+        .get::<&crate::convert::ContourFieldState>(entity)
+        .unwrap();
+    let fresh = crate::convert::contour_distance_field(
+        &edited,
+        roi.reference_geometry(),
+        Some(state.field.geometry),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(fresh, state.field);
+    assert_eq!(
+        canonical_mesh_bits(&roi.mesh_cache().unwrap().data),
+        canonical_mesh_bits(&crate::convert::mesh_from_contour_field(&fresh))
+    );
 }
 
 // --- ROI lifecycle: the shape must not drift through conversions, edits, and undo ---
@@ -3392,17 +3593,18 @@ fn test_edit_updates_every_derived_view_and_undo_restores_the_shape() {
         .unwrap()
         .to_vec();
     drop(roi);
-    let direct = crate::convert::extract_contour_slice_from_voxel_data(
-        &VoxelData {
-            geometry,
-            raw_data: after_edit.clone(),
-        },
+    // A contour ROI's other-family views are its surface cut with the plane (the true section).
+    let roi = world.get::<&Roi>(entity).unwrap();
+    let direct = crate::convert::intersect_mesh_with_plane(
+        &roi.mesh_cache().expect("surface").data,
         coronal_key.plane,
     )
     .unwrap();
+    drop(roi);
+    assert!(!view.is_empty());
     assert_eq!(
         view, direct,
-        "the derived coronal view matches the edited voxels"
+        "the derived coronal view is the cut of the edited surface"
     );
 
     // Undo restores the original shape everywhere.
@@ -3421,14 +3623,13 @@ fn test_edit_updates_every_derived_view_and_undo_restores_the_shape() {
         .contour_view_data_for_render(&coronal_key)
         .unwrap()
         .to_vec();
-    let direct_original = crate::convert::extract_contour_slice_from_voxel_data(
-        &VoxelData {
-            geometry,
-            raw_data: original,
-        },
+    let roi = world.get::<&Roi>(entity).unwrap();
+    let direct_original = crate::convert::intersect_mesh_with_plane(
+        &roi.mesh_cache().expect("surface").data,
         coronal_key.plane,
     )
     .unwrap();
+    drop(roi);
     assert_eq!(
         restored, direct_original,
         "the derived view follows the undo"

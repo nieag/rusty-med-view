@@ -1,0 +1,111 @@
+# Exact Conversions and the Soft Voxel Hub
+
+Status: Accepted (2026-10-01), with the revisions at the end (the field is the hub; no coverage array). Follows ADR 0001 (one authoritative form per ROI), ADR 0004 (automatic switching), and `docs/spatial-model.md`.
+
+## Context
+
+Every conversion between a ROI's forms goes through a binary voxel mask on the ROI's own grid (the image resolution). That loses what is finer than a voxel at every step:
+
+- contours to voxels samples voxel centres, so a loop edge moves by up to half a voxel;
+- voxels to mesh smooths a quantised mask, so the surface only approximates the drawn shape;
+- mesh to contours voxelizes and then extracts voxel-face loops, a staircase, even though the mesh could simply be cut with the layer planes.
+
+Owner decisions (2026-10-01): a drawn contour is the truth and is never snapped to the voxel grid; conversions should be as exact and as fast as possible; the viewer is real time; ROI algebra (margins, union, intersection, subtraction) will be wanted later.
+
+Reference: RayStation (`git show b1361d0:src/convert/segmentaiton_rep.md`) keeps a primary shape per ROI, cuts meshes with planes for contours, and turns contours into a **soft-valued voxel ROI on a fine reconstruction grid** by shape-based interpolation (signed distance per slice, linear interpolation between slices, "hats" half-way to the next slice); mesh and volume come from that voxel ROI. The older vector-authoritative plan in this repository's history baked a signed distance field straight from the loops. This ADR combines the two.
+
+## Decision
+
+### 1. Mesh to contours is a direct cut
+
+Switching a mesh ROI to contours cuts the mesh with the reference-grid layer planes of the target family. No voxels are involved. A vertex exactly on a plane counts as above it (a symbolic nudge), so every cut triangle gives one segment and the segments of a closed surface link into closed loops without a tolerance; crossing points are shared through the mesh edge they lie on. Where shells touch along an edge, any pairing of the segments is valid because the even-odd fill is the same.
+
+The cut contours are the true cross-sections: they are not a voxel staircase and not "lossless against a mask". The switch report says how the new form was made (cut from a surface, extracted from a mask, sampled from loops) instead of a lossless flag.
+
+After the switch the voxel form is rebuilt from the contours in the background, like any derived form, and is not drawn until it is current.
+
+### 2. The soft voxel hub
+
+Voxels stay the conversion hub, but the hub becomes a **soft-valued voxel ROI on a refined grid**:
+
+- **Values** are coverage, 0 to 255 (the fraction of the voxel inside the shape). The surface is the 50% level (a ROI is empty when every value is below 127.5, as in RayStation). A label imported as a binary mask is stored as 255 where it is present; its colour lives in the ROI's metadata, not in the voxel value.
+- **Grid** is a refinement of the ROI's snug box: each voxel of the reference grid is split by an integer factor per axis, so fine voxels stay aligned with the world and with the image layers (`VoxelGeometry::refined`, alongside `cropped`). Default spacing is half the smallest image spacing, not below 0.5 mm; it is a setting, not a constant.
+- **Built from the loops** by an exact signed distance to the contour polylines (not a rasterize, fill and distance-transform detour): in each slice the distance to the nearest segment with the sign from the even-odd inside test, linear interpolation of the signed distance between slices, hats half-way to the neighbouring slice (or half a layer when there is none), converted to coverage. Slices need not be on image layers. **No interpolation across gaps** (see "Interpolation is explicit" below): a drawn slice stands for one layer, so an end of a stack gets a hat of half a layer, and consecutive layers blend smoothly into each other.
+- **Used for** everything that needs a mask: the fill overlay (coverage becomes the alpha, which anti-aliases the fill), volume (the sum of coverage times the voxel volume instead of a binary count), mesh generation, export, and later ROI algebra, which operates on the coverage directly.
+- **On demand and snug.** It is built only for ROIs that need it, only inside the snug box, and dropped under memory pressure; it is a cache, never authoritative for contour or mesh ROIs.
+
+### 3. The mesh comes from the hub
+
+A contour ROI's 3D mesh is the 50% iso-surface of the hub (marching cubes on coverage with linear interpolation along edges), sub-voxel accurate and aligned with the loops. Other-family contour views of a contour ROI come from cutting that mesh (decision 1's cutter), not from rasterized voxels. A mesh ROI's own mesh is its authority and is untouched.
+
+### 4. Real time
+
+The targets below are what the implementation is judged by, on the liver sample, native release builds (the browser is expected to be 1.5 to 2 times slower). They go into `tests/switch_guard.rs` as budgets with generous margins, like the existing ones.
+
+| Operation | Target |
+| --- | --- |
+| Mesh to contours switch | at most 20 ms (one pass over the triangles, bucketed by layer) |
+| One contour slice edit (commit) to updated hub region and mesh chunks | at most one frame (16 ms) of main-thread work, the rest time-sliced over following frames |
+| Contour drag preview | at most 8 ms per frame |
+| Full hub of a large ROI, first build | progressive: a coarse pass at image resolution first, refinement in the background in chunk-sized steps, never a single stall |
+| Mesh rebuild after an edit | local chunks only (already about 7 ms on the liver) |
+
+How:
+
+- **Local updates.** An edit changes the field only near the edited slice (its neighbours in the interpolation, and a narrow band of distance around the old and new loops). The hub region and the mesh chunks that it reaches are rebuilt, the rest is reused, the same locality argument as the incremental mesh rebuild. Away from the loops the value is just inside or outside, set by scanline parity, not by a distance search.
+- **Spatial lookup** of loop segments (a grid per slice) so a sample looks at nearby segments only.
+- **Progressive refinement.** During a drag and right after a commit the mesh is built from a coarse field (image resolution) so the 3D view follows immediately; a finer pass replaces it when idle. Time-sliced steps use the existing frame budget (4 ms) so the browser stays responsive, and native builds may use threads where it helps.
+- **No hidden full-grid work:** every step runs on the snug box.
+
+### 5. Verification
+
+Baseline measured 2026-10-01 with `tests/conversion_accuracy.rs` (sphere of radius 5.3 mm and a plate 1.4 voxels thick, exact contours on every layer, grids of 1 mm cubes and of 1 x 1 x 2.5 mm voxels), current chains: contours to voxels to mesh puts mesh vertices 0.17 to 0.20 mm from the true surface on average (up to 0.6 mm) for the sphere, with a volume error of -1.8 % (cubes) and -5.4 % (thick slices); the thin plate is the real failure, with a **volume error of +30 % to +43 %** (it becomes two voxels thick) and up to 1.0 mm surface error; a mesh to voxels to contours switch adds the staircase (mean 0.22 to 0.27 mm, up to 0.69 mm). These are the numbers the new chains must beat.
+
+Before the hub is built, a test passes smooth shapes (a sphere of 5.3 voxels radius, a thin plate, a shape with a hole and a branch) through every chain and reports the overlap and the surface distance against the original. Acceptance for the new chains: a contours to hub to contours round trip stays within half a hub voxel, as RayStation claims for theirs; mesh to contours to fill is exact (the surface passes midway between voxel centres); the performance targets above hold.
+
+## Staging
+
+Each step is a commit series that leaves the lifecycle tests, the guards and the QA spec green.
+
+1. The measurement test (decision 5), run on the current chains for the baseline.
+2. Mesh to contours by direct cut (decision 1), with the exactness test and the guard budget.
+3. `VoxelGeometry::refined`, coverage-valued voxel data, and the label import to coverage; the overlay shader reads coverage as alpha.
+4. The hub from loops with local updates and progressive refinement (decision 2 and 4), then the mesh from the hub and the other-family views from the cut mesh (decision 3).
+5. Volume from coverage; ROI algebra is a separate later item on top of the hub.
+
+## Consequences
+
+- Sub-voxel detail survives every conversion between contours and meshes; staircases only appear for imported binary labels.
+- The voxel value stops meaning "label id", which touches the overlay shader, label import, and the voxel tests (round-trip checks become overlap and distance checks outside the exact mesh-to-contours chain).
+- More derived forms depend on the mesh revision (other-family views of a contour ROI), so meshes are built for contour ROIs with visible slice views even when no 3D view is open, under the "nothing stale" rule.
+- Fine hubs cost memory (a liver box at 0.5 mm is about 11 MB), which is why they are on demand and snug.
+
+## Interpolation is explicit (owner, 2026-10-01)
+
+The hub never invents slices. Interpolation between drawn slices is wanted later, but only when the user asks for it, and the result must be recognisable as interpolation:
+
+- A contour slice carries its **origin**: `Drawn` or `Interpolated`. Interpolated slices are real contour data (so every conversion treats them uniformly) but are rendered differently from drawn ones (for example dashed or in another tint), listed as interpolated, and can be discarded or accepted. Editing one turns it into a drawn slice.
+- The tool interpolates between chosen slices with the same signed-distance blend as the hub, extracts the loops, and is one undo step.
+- Until the tool is used, a gap in a contour is a gap: the shape has a hat on each side of it, in the mesh, the fill, and the volume.
+
+This is backlog item 3.8; the hub's field code is written so the blend can be reused for it.
+
+## Decisions on the open questions (owner, 2026-10-01: go with the recommendations)
+
+1. **Hub resolution:** half the smallest image spacing, not below 0.5 mm, as a setting.
+2. **Drag preview:** the coarse (image-resolution) field, with the fine hub built locally after the drag if the measurement shows a thin structure needs it.
+3. **Volume statistics:** both are offered, from the hub (coverage) and from the mesh by the divergence theorem; they are compared in tests.
+
+## Revisions after implementing the field and the volumes (owner agreed 2026-10-01)
+
+Measurements and an audit of the code changed three parts of the plan:
+
+1. **The field is the hub, not a refined voxel grid.** The signed distance field of the loops (`convert/contour_field.rs`, sampled at the snug box of the reference grid) feeds the mesh, and is updated per slice and re-meshed per changed chunk. Distance values already place the surface to a small fraction of a voxel, so the 0.5 mm refined grid is not the default; it stays a possible setting if a measurement shows thin structures need it.
+2. **No 0 to 255 coverage array, and voxel values stay a mask.** Voxel ROIs hold label ids that the overlay looks up in a colour table, and a large part of the tests and code treats a value as "inside or not". Coverage would change all of that for no gain: the volume needs no coverage (below) and the fill is not a primary view (a toggle for showing the voxel form is wanted). If ROI algebra later needs soft values it can work on the field directly.
+3. **Volume comes from the authoritative form.** A contour ROI's volume is the area inside its loops times the layer thickness, summed over slices (`convert/volume.rs`): -0.1 % on the sphere with cubic voxels, +1.8 % with thick slices, exactly the drawn volume for the thin plate. A mesh's volume is exact by the divergence theorem; a voxel ROI's is its count. The plate's +43 % against the analytic shape is not a conversion defect: two drawn layers are two layers thick, so the contours themselves define that volume. The mesh from the field differs by a few percent at the ends of the stack (the half layer caps are smoothed by the iso-surface), which is why the contour volume is the one shown.
+
+The contour ROI's voxel cache is still rasterized from the loops by the existing incremental rasterizer; deriving it from the field instead (so fill and mesh cannot disagree, and the rasterizer can go) is a separate item, and is only worth doing together with making the voxel form on demand.
+
+### ROI algebra works on the field (owner agreed 2026-10-01)
+
+Union is `min`, intersection `max`, subtraction `max(a, -b)`, a margin of m mm a shift by `-m`; the zero level stays exact and nothing is quantised between steps. After a combination the values are not true distances away from the surface, so a later margin may re-distance first. Voxel ROIs get a field from `signed_distance_from_voxel_data`, mesh ROIs by voxelizing or by exact distance to the mesh; the field's box grows for margins. Partial-volume weights (dose statistics, DVH) are derived from the field on demand, about `clamp(0.5 - d / voxel_size, 0, 1)`, and are not stored. Exact mesh booleans and binary voxel algebra were considered and rejected (fragile and slow, and a return of the staircase).
