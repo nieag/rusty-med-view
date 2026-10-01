@@ -59,6 +59,8 @@ How:
 
 ### 5. Verification
 
+Baseline measured 2026-10-01 with `tests/conversion_accuracy.rs` (sphere of radius 5.3 mm and a plate 1.4 voxels thick, exact contours on every layer, grids of 1 mm cubes and of 1 x 1 x 2.5 mm voxels), current chains: contours to voxels to mesh puts mesh vertices 0.17 to 0.20 mm from the true surface on average (up to 0.6 mm) for the sphere, with a volume error of -1.8 % (cubes) and -5.4 % (thick slices); the thin plate is the real failure, with a **volume error of +30 % to +43 %** (it becomes two voxels thick) and up to 1.0 mm surface error; a mesh to voxels to contours switch adds the staircase (mean 0.22 to 0.27 mm, up to 0.69 mm). These are the numbers the new chains must beat.
+
 Before the hub is built, a test passes smooth shapes (a sphere of 5.3 voxels radius, a thin plate, a shape with a hole and a branch) through every chain and reports the overlap and the surface distance against the original. Acceptance for the new chains: a contours to hub to contours round trip stays within half a hub voxel, as RayStation claims for theirs; mesh to contours to fill is exact (the surface passes midway between voxel centres); the performance targets above hold.
 
 ## Staging
@@ -78,8 +80,8 @@ Each step is a commit series that leaves the lifecycle tests, the guards and the
 - More derived forms depend on the mesh revision (other-family views of a contour ROI), so meshes are built for contour ROIs with visible slice views even when no 3D view is open, under the "nothing stale" rule.
 - Fine hubs cost memory (a liver box at 0.5 mm is about 11 MB), which is why they are on demand and snug.
 
-## Open questions
+## Decisions on the open questions (owner, 2026-10-01: go with the recommendations)
 
-1. Default hub resolution: half the smallest image spacing with a 0.5 mm floor, or a fixed 0.5 mm.
-2. Whether the coarse preview field is enough for drags on thin structures, or the preview needs the fine hub locally.
-3. Whether volume statistics should read the hub or integrate the mesh directly (exact by the divergence theorem); both can be offered.
+1. **Hub resolution:** half the smallest image spacing, not below 0.5 mm, as a setting.
+2. **Drag preview:** the coarse (image-resolution) field, with the fine hub built locally after the drag if the measurement shows a thin structure needs it.
+3. **Volume statistics:** both are offered, from the hub (coverage) and from the mesh by the divergence theorem; they are compared in tests.
