@@ -369,7 +369,12 @@ fn test_mesh_viewport_sync_keeps_current_mesh_cache_current() {
 #[test]
 fn test_advance_roi_work_reports_pending_queued_work() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
+    // A mesh ROI's mesh is its authority, so a queued mesh rebuild never starts.
+    let entity = world.spawn(Roi::new_mesh(
+        RoiId(7),
+        "Mesh".to_string(),
+        closed_tetra_mesh_data(),
+    ));
     world
         .get::<&mut Roi>(entity)
         .unwrap()

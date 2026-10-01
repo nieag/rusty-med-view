@@ -12,6 +12,12 @@ enum MeshSource {
     ContourField(Box<ContourFieldState>),
 }
 
+/// What a mesh build starts from exists: a contour ROI's loops, else a current voxel form.
+pub(super) fn mesh_source_is_ready(roi: &Roi) -> bool {
+    matches!(roi.body, RoiBody::Contour(_))
+        || (roi.voxel_cache().is_some() && roi.is_cache_current(RoiCacheKind::Voxel))
+}
+
 /// A contour ROI's field while it is built (before its chunks are meshed), with the chunks of the
 /// mesh it replaces.
 struct FieldStage {
@@ -49,8 +55,7 @@ pub(crate) fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
         (!matches!(roi.body, RoiBody::Mesh(_))
             && roi.running_job_kind().is_none()
             && roi.has_queued_job(RoiJobKind::RebuildMeshCache)
-            && roi.voxel_cache().is_some()
-            && roi.is_cache_current(RoiCacheKind::Voxel))
+            && mesh_source_is_ready(roi))
         .then_some(entity)
     });
     let Some(entity) = entity else {
@@ -61,10 +66,8 @@ pub(crate) fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
         let roi = world.get::<&Roi>(entity).expect("queued ROI must exist");
         (
             roi.dirty_state.authoritative.shape,
-            roi.voxel_cache()
-                .expect("current voxel cache must exist")
-                .data
-                .clone(),
+            // A contour ROI meshes from its own loops and needs no voxels.
+            roi.voxel_cache().map(|cache| cache.data.clone()),
             roi.mesh_cache().and_then(|cache| cache.chunks.clone()),
         )
     };
@@ -93,6 +96,10 @@ pub(crate) fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
             }
         }
     } else {
+        let Some(voxel_data) = voxel_data else {
+            fail_job(world, entity, RoiJobKind::RebuildMeshCache);
+            return;
+        };
         let result = match (dirty_region, base_chunks) {
             (RoiDirtyRegion::VoxelAabb { min, max }, Some(chunks)) => {
                 IncrementalChunkedMeshRebuild::begin_for_voxel_aabb(chunks, &voxel_data, min, max)
@@ -142,7 +149,8 @@ pub(super) fn resume_voxel_mesh_rebuild_work(
     };
     let is_current = world.get::<&Roi>(entity).is_ok_and(|roi| {
         roi.dirty_state.authoritative.shape == work.source_generation
-            && roi.is_cache_current(RoiCacheKind::Voxel)
+            && (matches!(roi.body, RoiBody::Contour(_))
+                || roi.is_cache_current(RoiCacheKind::Voxel))
             && roi.job_state.running_request.is_some_and(|request| {
                 request.kind == RoiJobKind::RebuildMeshCache
                     && request.source_generation == work.source_generation

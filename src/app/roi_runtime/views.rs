@@ -298,8 +298,7 @@ pub(crate) fn sync_mesh_caches_for_viewports(world: &mut World, active_roi: Opti
     // others, or one stuck ROI would starve every label.
     let busy = world.query::<&Roi>().iter().any(|(_, roi)| {
         roi.running_job_kind() == Some(RoiJobKind::RebuildMeshCache)
-            || (roi.has_queued_job(RoiJobKind::RebuildMeshCache)
-                && roi.is_cache_current(RoiCacheKind::Voxel))
+            || (roi.has_queued_job(RoiJobKind::RebuildMeshCache) && mesh_source_is_ready(roi))
     });
     if busy {
         return;
@@ -312,10 +311,7 @@ pub(crate) fn sync_mesh_caches_for_viewports(world: &mut World, active_roi: Opti
         let Ok(mut roi) = world.get::<&mut Roi>(entity) else {
             continue;
         };
-        if !roi.is_cache_current(RoiCacheKind::Mesh)
-            && roi.voxel_cache().is_some()
-            && roi.is_cache_current(RoiCacheKind::Voxel)
-        {
+        if !roi.is_cache_current(RoiCacheKind::Mesh) && mesh_source_is_ready(&roi) {
             roi.mark_cache_dirty(RoiCacheKind::Mesh);
             roi.enqueue_rebuild(RoiJobKind::RebuildMeshCache);
             return;
