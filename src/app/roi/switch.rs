@@ -12,6 +12,7 @@ use crate::app::components::{
 use crate::app::roi::history::record_authority_change;
 use crate::app::roi::model::is_roi_locked;
 use crate::convert::{contours_from_mesh, extract_contours_in_grid, VoxelContourExtractionError};
+use crate::model::MeshData;
 use crate::model::OrthogonalFamily;
 use hecs::World;
 
@@ -153,7 +154,7 @@ pub fn ensure_editable(
         EditTarget::Mesh => mesh_source_is_ready(world, roi_entity),
     };
     if !ready {
-        request_source(world, roi_entity, target)?;
+        request_source(world, roi_entity)?;
         set_pending(world, roi_entity, Some(wanted));
         return Ok(Readiness::Pending);
     }
@@ -228,16 +229,26 @@ fn set_pending(world: &mut World, roi_entity: hecs::Entity, pending: Option<Pend
     }
 }
 
-/// What a switch to contours starts from exists: the voxel body of a voxel ROI, the mesh of a
-/// mesh ROI (cut directly, no voxels needed), else a current voxel cache.
+/// What a switch to contours starts from exists: the voxel body of a voxel ROI, else the surface
+/// (a mesh ROI's body, or a contour ROI's current mesh), which is cut directly with no voxels.
 fn voxel_source_is_ready(world: &World, roi_entity: hecs::Entity) -> bool {
-    world.get::<&Roi>(roi_entity).is_ok_and(|roi| {
-        matches!(roi.body, RoiBody::Voxel(_))
-            || roi
-                .mesh_data()
-                .is_some_and(|mesh| !mesh.vertices.is_empty() && !mesh.faces.is_empty())
-            || (roi.voxel_cache().is_some() && roi.is_cache_current(RoiCacheKind::Voxel))
-    })
+    world
+        .get::<&Roi>(roi_entity)
+        .is_ok_and(|roi| matches!(roi.body, RoiBody::Voxel(_)) || surface_for_cut(&roi).is_some())
+}
+
+/// The surface a switch to contours cuts: a mesh ROI's own mesh, or a contour ROI's mesh when it
+/// is current for the contours.
+fn surface_for_cut(roi: &Roi) -> Option<&MeshData> {
+    let mesh = match &roi.body {
+        RoiBody::Mesh(body) => Some(&body.data),
+        RoiBody::Contour(_) => roi
+            .mesh_cache()
+            .filter(|_| roi.is_cache_current(RoiCacheKind::Mesh))
+            .map(|cache| &cache.data),
+        RoiBody::Voxel(_) => None,
+    }?;
+    (!mesh.vertices.is_empty() && !mesh.faces.is_empty()).then_some(mesh)
 }
 
 fn mesh_source_is_ready(world: &World, roi_entity: hecs::Entity) -> bool {
@@ -248,37 +259,17 @@ fn mesh_source_is_ready(world: &World, roi_entity: hecs::Entity) -> bool {
     })
 }
 
-/// Queues whatever builds the derived data the conversion needs.
-fn request_source(
-    world: &mut World,
-    roi_entity: hecs::Entity,
-    target: EditTarget,
-) -> Result<(), SwitchError> {
-    match target {
-        EditTarget::Contour(_) => {
-            let mut roi = world
-                .get::<&mut Roi>(roi_entity)
-                .map_err(|_| SwitchError::MissingRoi)?;
-            roi.mark_cache_dirty(RoiCacheKind::Voxel);
-            roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
-            Ok(())
-        }
-        EditTarget::Mesh => {
-            if !voxel_source_is_ready(world, roi_entity) {
-                return request_source(
-                    world,
-                    roi_entity,
-                    EditTarget::Contour(OrthogonalFamily::Axial),
-                );
-            }
-            let mut roi = world
-                .get::<&mut Roi>(roi_entity)
-                .map_err(|_| SwitchError::MissingRoi)?;
-            roi.mark_cache_dirty(RoiCacheKind::Mesh);
-            roi.enqueue_rebuild(RoiJobKind::RebuildMeshCache);
-            Ok(())
-        }
+/// Queues whatever builds the derived data the conversion needs: the mesh (of a contour ROI, from
+/// its field; of a voxel ROI, from its voxels). No switch needs a voxel form built from contours.
+fn request_source(world: &mut World, roi_entity: hecs::Entity) -> Result<(), SwitchError> {
+    let mut roi = world
+        .get::<&mut Roi>(roi_entity)
+        .map_err(|_| SwitchError::MissingRoi)?;
+    if !roi.is_cache_current(RoiCacheKind::Mesh) {
+        roi.mark_cache_dirty(RoiCacheKind::Mesh);
+        roi.enqueue_rebuild(RoiJobKind::RebuildMeshCache);
     }
+    Ok(())
 }
 
 /// The body as an undo snapshot, or `None` for an ROI that no longer exists.
@@ -348,7 +339,7 @@ pub(crate) fn convert_to_contour(
         let roi = world
             .get::<&Roi>(roi_entity)
             .map_err(|_| SwitchError::MissingRoi)?;
-        (roi.mesh_data().cloned(), roi.reference_geometry())
+        (surface_for_cut(&roi).cloned(), roi.reference_geometry())
     };
     if let Some(mesh) = mesh {
         let extracted =
@@ -363,8 +354,9 @@ pub(crate) fn convert_to_contour(
             data: mesh,
             chunks: None,
         });
-        // The voxels are rebuilt from the new contours in the background.
-        roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
+        drop(roi);
+        // The field of the old contours is of no use to the new ones; the idle warm-up builds one.
+        let _ = world.remove_one::<crate::convert::ContourFieldState>(roi_entity);
         return Ok(());
     }
 

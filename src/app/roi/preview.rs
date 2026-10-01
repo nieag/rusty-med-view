@@ -3,9 +3,7 @@ use crate::app::components::{
     RoiDirtyRegion, RoiJobKind, RoiJobPriority, RoiJobRequest,
 };
 use crate::app::roi::authority::{ContourMutationError, MeshMutationError};
-use crate::app::roi::history::{
-    replace_contour_data_for_slice_with_history, replace_mesh_data_with_history,
-};
+use crate::app::roi::history::{replace_contour_data_with_history, replace_mesh_data_with_history};
 use crate::convert::PlaneDefinition;
 use hecs::World;
 
@@ -91,7 +89,6 @@ pub fn begin_contour_move_preview(
 pub fn commit_contour_move_preview(
     world: &mut World,
     editor: &EditorState,
-    dirty_plane: PlaneDefinition,
 ) -> Result<(), ContourMutationError> {
     let roi_entity = editor
         .active_roi
@@ -101,12 +98,7 @@ pub fn commit_contour_move_preview(
         .map_err(|_| ContourMutationError::MissingRoi)?
         .take_contour_move_preview()
         .ok_or(ContourMutationError::MissingPreview)?;
-    let result = replace_contour_data_for_slice_with_history(
-        world,
-        roi_entity,
-        preview.contour_data,
-        dirty_plane,
-    );
+    let result = replace_contour_data_with_history(world, roi_entity, preview.contour_data);
     end_roi_preview(world, roi_entity);
     result
 }

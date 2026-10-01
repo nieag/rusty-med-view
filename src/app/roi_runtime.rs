@@ -12,11 +12,11 @@ pub use crate::app::roi::requests::{
 #[cfg(test)]
 use crate::convert::PlaneDefinition;
 use crate::convert::{
-    contour_geometry_voxel_aabb, contour_slices_voxel_aabb, extract_contour_slice_from_voxel_data,
-    intersect_mesh_with_plane, rasterize_contour_preview_slices_to_voxel_data,
-    rasterize_contours_to_voxel_data, snug_geometry_for_contour, snug_geometry_for_mesh,
-    IncrementalChunkedMeshRebuild, IncrementalMeshVoxelization, PlaneFamily,
-    VoxelContourExtractionError, VoxelMeshExtractionError, DEFAULT_MESH_CHUNK_SIZE,
+    contour_geometry_voxel_aabb, extract_contour_slice_from_voxel_data, intersect_mesh_with_plane,
+    rasterize_contour_preview_slices_to_voxel_data, rasterize_contours_to_voxel_data,
+    snug_geometry_for_contour, snug_geometry_for_mesh, IncrementalChunkedMeshRebuild,
+    IncrementalMeshVoxelization, PlaneFamily, VoxelContourExtractionError,
+    VoxelMeshExtractionError, DEFAULT_MESH_CHUNK_SIZE,
 };
 use crate::model::OrthogonalFamily;
 use crate::render::roi_views::{RenderRepresentationRequest, RoiRenderViews};
@@ -146,7 +146,7 @@ pub fn advance_roi_work(
     // its mesh in this same frame.
     sync_roi_contour_view_caches_for_viewports(world, focus);
     sync_mesh_caches_for_viewports(world, focus.active_roi);
-    sync_speculative_voxel_cache(world, focus.active_roi);
+    sync_voxel_fill_demand(world);
     process_voxel_mesh_rebuild_jobs(world);
     // A mesh that just finished frees the next visible ROI to be demanded; doing it here keeps
     // `pending` true so the frame loop continues instead of idling with a ROI still unbuilt.
@@ -155,7 +155,9 @@ pub fn advance_roi_work(
 
     let mut pending = false;
     for (_, roi) in world.query_mut::<&mut Roi>() {
-        pending |= roi.running_job_kind().is_some() || !roi.job_state.pending.is_empty();
+        pending |= roi.running_job_kind().is_some()
+            || !roi.job_state.pending.is_empty()
+            || roi.job_state.pending_switch.is_some();
         messages.append(&mut roi.job_state.messages);
     }
     RoiWorkStatus { pending, messages }

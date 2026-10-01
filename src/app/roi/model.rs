@@ -28,10 +28,14 @@ pub fn spawn_roi_layer(
     (roi, metadata): (crate::app::components::Roi, RoiMetadata),
     opacity: f32,
 ) -> hecs::Entity {
+    let show_voxel_fill = matches!(roi.body, crate::app::components::RoiBody::Voxel(_));
     world.spawn((
         roi,
         metadata,
-        crate::app::components::LayerSettings { opacity },
+        crate::app::components::LayerSettings {
+            opacity,
+            show_voxel_fill,
+        },
         crate::app::components::RoiTag,
     ))
 }

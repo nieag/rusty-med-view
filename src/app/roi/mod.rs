@@ -9,13 +9,12 @@ pub mod scheduler;
 pub mod switch;
 
 pub use authority::{
-    replace_contour_data, replace_contour_data_for_slice, replace_mesh_data,
+    replace_contour_data, replace_mesh_data, request_contour_voxel_form,
     request_mesh_voxel_cache_rebuild, ContourMutationError, MeshMutationError,
 };
 pub use cache::CacheInstallError;
 pub use history::{
-    can_redo_roi_edit, can_undo_roi_edit, redo_roi_edit,
-    replace_contour_data_for_slice_with_history, replace_contour_data_with_history,
+    can_redo_roi_edit, can_undo_roi_edit, redo_roi_edit, replace_contour_data_with_history,
     replace_mesh_data_with_history, undo_roi_edit, RoiEditHistoryError,
 };
 pub use preview::{

@@ -5,6 +5,9 @@ use super::*;
 
 pub struct LayerSettings {
     pub opacity: f32,
+    /// Draw the voxel form as a filled overlay. A voxel ROI is its voxels and shows them; for a
+    /// contour or mesh ROI the voxel form is derived, so it is built and drawn only on request.
+    pub show_voxel_fill: bool,
 }
 
 #[derive(Clone)]
@@ -44,12 +47,6 @@ pub enum RoiEditSnapshot {
     Mesh(MeshData),
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct RoiEditHistoryEntry {
-    pub snapshot: RoiEditSnapshot,
-    pub dirty_region: RoiDirtyRegion,
-}
-
 /// Most undo (and redo) steps kept per ROI.
 pub const MAX_ROI_EDIT_HISTORY: usize = 32;
 
@@ -58,14 +55,14 @@ pub const MAX_ROI_EDIT_HISTORY: usize = 32;
 /// independent of every other ROI's.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RoiHistory {
-    pub undo: Vec<RoiEditHistoryEntry>,
-    pub redo: Vec<RoiEditHistoryEntry>,
+    pub undo: Vec<RoiEditSnapshot>,
+    pub redo: Vec<RoiEditSnapshot>,
 }
 
 impl RoiHistory {
     /// Records a new edit: it becomes the latest undo step and invalidates redo.
-    pub fn record(&mut self, entry: RoiEditHistoryEntry) {
-        self.undo.push(entry);
+    pub fn record(&mut self, snapshot: RoiEditSnapshot) {
+        self.undo.push(snapshot);
         Self::trim(&mut self.undo);
         self.redo.clear();
     }
@@ -78,11 +75,8 @@ impl RoiHistory {
         } else {
             (&mut self.redo, &mut self.undo)
         };
-        if let Some(entry) = source.pop() {
-            destination.push(RoiEditHistoryEntry {
-                snapshot: current,
-                dirty_region: entry.dirty_region,
-            });
+        if source.pop().is_some() {
+            destination.push(current);
             Self::trim(destination);
         }
     }
@@ -92,7 +86,7 @@ impl RoiHistory {
         self.redo.clear();
     }
 
-    fn trim(stack: &mut Vec<RoiEditHistoryEntry>) {
+    fn trim(stack: &mut Vec<RoiEditSnapshot>) {
         if stack.len() > MAX_ROI_EDIT_HISTORY {
             stack.remove(0);
         }
@@ -422,9 +416,9 @@ pub struct RoiJobState {
     pub pending_switch: Option<crate::app::roi::switch::PendingSwitch>,
     /// Outcomes of this ROI's work for the user, drained by `advance_roi_work`.
     pub messages: Vec<String>,
-    /// The shape revision whose voxels were last rebuilt on speculation; a failed attempt is not
-    /// repeated every frame for the same revision.
-    pub speculative_voxel_shape: Option<u64>,
+    /// The shape revision whose voxel form was last requested on demand (fill shown); a failed
+    /// attempt is not repeated every frame for the same revision.
+    pub voxel_requested_shape: Option<u64>,
 }
 
 pub struct Roi {
