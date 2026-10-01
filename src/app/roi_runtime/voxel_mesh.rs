@@ -54,6 +54,7 @@ pub(crate) fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
         .then_some(entity)
     });
     let Some(entity) = entity else {
+        warm_contour_fields(world, frame_started_at, FRAME_JOB_BUDGET);
         return;
     };
     let (source_generation, voxel_data, base_chunks) = {
@@ -234,6 +235,89 @@ pub(super) fn resume_voxel_mesh_rebuild_work(
     drop(roi);
     if let Some(state) = field_state {
         let _ = world.insert_one(entity, *state);
+    }
+}
+
+/// A contour field built ahead of the first edit, with the revision it is built for.
+struct FieldWarmup {
+    generation: u64,
+    build: Box<ContourFieldBuild>,
+}
+
+/// Marks the revision a warm-up was tried for, so one that cannot finish is not retried forever.
+struct FieldWarmupTried(u64);
+
+/// Builds the field of an idle contour ROI that has none (a mesh just cut into contours keeps its
+/// exact surface and has no field), a little each frame, so the first edit updates it instead of
+/// building all of it. The surface shown is not touched; only the per-slice work is kept.
+fn warm_contour_fields(world: &mut World, frame_started_at: Instant, frame_budget: Duration) {
+    // A field is only useful to a contour ROI; drop it when the ROI is something else.
+    let stale: Vec<hecs::Entity> = world
+        .query::<(&Roi, &ContourFieldState)>()
+        .iter()
+        .filter(|(_, (roi, _))| !matches!(roi.body, RoiBody::Contour(_)))
+        .map(|(entity, _)| entity)
+        .collect();
+    for entity in stale {
+        let _ = world.remove_one::<ContourFieldState>(entity);
+    }
+
+    let running = world
+        .query::<&FieldWarmup>()
+        .iter()
+        .map(|(entity, _)| entity)
+        .next();
+    let entity = match running {
+        Some(entity) => entity,
+        None => {
+            let candidate = world.query::<&Roi>().iter().find_map(|(entity, roi)| {
+                let generation = roi.dirty_state.authoritative.shape;
+                (roi.contour_data()
+                    .is_some_and(|contour| contour.has_loops())
+                    && roi.running_job_kind().is_none()
+                    && roi.job_state.queued_kind().is_none()
+                    && !roi.preview_state.active
+                    && roi.is_cache_current(RoiCacheKind::Mesh)
+                    && roi.mesh_cache().is_some_and(|cache| cache.chunks.is_none())
+                    && world.get::<&ContourFieldState>(entity).is_err()
+                    && world
+                        .get::<&FieldWarmupTried>(entity)
+                        .map_or(true, |tried| tried.0 != generation))
+                .then_some((entity, generation))
+            });
+            let Some((entity, generation)) = candidate else {
+                return;
+            };
+            let _ = world.insert_one(entity, FieldWarmupTried(generation));
+            let Some(build) = begin_contour_field_build(world, entity) else {
+                return;
+            };
+            let warmup = FieldWarmup {
+                generation,
+                build: Box::new(build),
+            };
+            if world.insert_one(entity, warmup).is_err() {
+                return;
+            }
+            entity
+        }
+    };
+    let Ok(mut warmup) = world.remove_one::<FieldWarmup>(entity) else {
+        return;
+    };
+    let still_idle = world.get::<&Roi>(entity).is_ok_and(|roi| {
+        roi.dirty_state.authoritative.shape == warmup.generation
+            && roi.running_job_kind().is_none()
+            && roi.job_state.queued_kind().is_none()
+    });
+    if !still_idle {
+        return;
+    }
+    if warmup.build.step(Some(frame_started_at + frame_budget)) {
+        let (state, _) = warmup.build.finish();
+        let _ = world.insert_one(entity, state);
+    } else {
+        let _ = world.insert_one(entity, warmup);
     }
 }
 

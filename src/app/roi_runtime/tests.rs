@@ -2147,27 +2147,7 @@ fn test_voxel_primary_roi_can_build_and_request_orthogonal_contour_view_cache() 
 #[test]
 fn test_ensure_contour_view_cache_builds_orthogonal_view_from_current_voxel_cache() {
     let mut world = World::new();
-    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
-    {
-        let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let mut raw_data = vec![0_u8; 64];
-        raw_data[(2 * 4 + 1) * 4 + 1] = 1;
-        roi.session_caches.voxel = Some(VoxelCache {
-            data: VoxelData {
-                geometry: VoxelGeometry::new(
-                    [4, 4, 4],
-                    [1.0, 1.0, 1.0],
-                    [0.0, 0.0, 0.0],
-                    [0.0, 0.0, 0.0, 1.0],
-                )
-                .unwrap(),
-                raw_data,
-            },
-            gpu_resources: None,
-        });
-        roi.dirty_state.voxel.dirty = false;
-        roi.dirty_state.voxel.built_from = roi.dirty_state.authoritative;
-    }
+    let entity = spawn_sparse_voxel_roi(&mut world);
     let plane = orthogonal_plane_from_volume_uv(
         PlaneFamily::Coronal,
         [0.5, 2.0 / 3.0, 0.5],
@@ -2360,19 +2340,27 @@ fn test_request_contour_view_state_marks_generation_mismatch_stale() {
 fn test_oblique_contour_view_builds_current_and_is_not_editable() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0, 1.0, 1.0], [0.0, 0.0, 0.0]);
-    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, false);
-    seed_current_voxel_cache_for_contour_roi(&mut world, entity);
-    {
-        let mut roi = world.get::<&mut Roi>(entity).unwrap();
-        let voxel = &mut roi.session_caches.voxel.as_mut().unwrap().data;
-        for z in 1..=2 {
-            for y in 1..=2 {
-                for x in 1..=2 {
-                    voxel.raw_data[(z * 16 + y * 4 + x) as usize] = 1;
-                }
+    let mut raw = vec![0_u8; 64];
+    for z in 1..=2 {
+        for y in 1..=2 {
+            for x in 1..=2 {
+                raw[z * 16 + y * 4 + x] = 1;
             }
         }
     }
+    let entity = world.spawn(Roi::new_voxel_with_cache(
+        RoiId(3),
+        "Cube".to_string(),
+        VoxelGeometry::new(
+            [4, 4, 4],
+            [1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap(),
+        raw,
+        None,
+    ));
     let inverse_sqrt_two = std::f32::consts::FRAC_1_SQRT_2;
     let key = ContourViewKey::from_plane(PlaneDefinition {
         family: PlaneFamily::Oblique,
@@ -3130,6 +3118,72 @@ fn test_ensure_editable_cuts_a_mesh_roi_into_contours_at_once_and_undo_restores_
     assert_eq!(world.get::<&Roi>(entity).unwrap().mesh_data(), Some(&mesh));
 }
 
+#[test]
+fn test_a_mesh_cut_into_contours_warms_its_field_so_the_first_edit_is_incremental() {
+    let mut world = World::new();
+    let entity = spawn_sparse_voxel_roi(&mut world);
+    let mesh = closed_tetra_mesh_data();
+    {
+        let mut roi = world.get::<&mut Roi>(entity).unwrap();
+        roi.body = RoiBody::Mesh(MeshBody::new(mesh.clone()));
+        roi.mark_mesh_authoritative_changed();
+    }
+    ensure_editable(
+        &mut world,
+        entity,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    )
+    .unwrap();
+    settle(&mut world);
+    // Idle frames build the field without touching the surface that is shown.
+    for _ in 0..50 {
+        advance_roi_work(&mut world, None, &ViewFocus::default());
+    }
+    assert!(world
+        .get::<&crate::convert::ContourFieldState>(entity)
+        .is_ok());
+    assert_eq!(
+        world
+            .get::<&Roi>(entity)
+            .unwrap()
+            .mesh_cache()
+            .map(|cache| &cache.data),
+        Some(&mesh)
+    );
+
+    // The first edit meshes from the warmed field and equals a fresh build.
+    let mut edited = world
+        .get::<&Roi>(entity)
+        .unwrap()
+        .contour_data()
+        .unwrap()
+        .clone();
+    for contour_loop in &mut edited.slices[0].loops {
+        for point in &mut contour_loop.points {
+            point.local_mm[0] *= 0.9;
+        }
+    }
+    replace_contour_data(&mut world, entity, edited.clone()).unwrap();
+    settle(&mut world);
+    let roi = world.get::<&Roi>(entity).unwrap();
+    assert!(roi.is_cache_current(RoiCacheKind::Mesh));
+    let state = world
+        .get::<&crate::convert::ContourFieldState>(entity)
+        .unwrap();
+    let fresh = crate::convert::contour_distance_field(
+        &edited,
+        roi.reference_geometry(),
+        Some(state.field.geometry),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(fresh, state.field);
+    assert_eq!(
+        canonical_mesh_bits(&roi.mesh_cache().unwrap().data),
+        canonical_mesh_bits(&crate::convert::mesh_from_contour_field(&fresh))
+    );
+}
+
 // --- ROI lifecycle: the shape must not drift through conversions, edits, and undo ---
 
 fn lifecycle_blob() -> (VoxelGeometry, Vec<u8>) {
@@ -3524,17 +3578,18 @@ fn test_edit_updates_every_derived_view_and_undo_restores_the_shape() {
         .unwrap()
         .to_vec();
     drop(roi);
-    let direct = crate::convert::extract_contour_slice_from_voxel_data(
-        &VoxelData {
-            geometry,
-            raw_data: after_edit.clone(),
-        },
+    // A contour ROI's other-family views are its surface cut with the plane (the true section).
+    let roi = world.get::<&Roi>(entity).unwrap();
+    let direct = crate::convert::intersect_mesh_with_plane(
+        &roi.mesh_cache().expect("surface").data,
         coronal_key.plane,
     )
     .unwrap();
+    drop(roi);
+    assert!(!view.is_empty());
     assert_eq!(
         view, direct,
-        "the derived coronal view matches the edited voxels"
+        "the derived coronal view is the cut of the edited surface"
     );
 
     // Undo restores the original shape everywhere.
@@ -3553,14 +3608,13 @@ fn test_edit_updates_every_derived_view_and_undo_restores_the_shape() {
         .contour_view_data_for_render(&coronal_key)
         .unwrap()
         .to_vec();
-    let direct_original = crate::convert::extract_contour_slice_from_voxel_data(
-        &VoxelData {
-            geometry,
-            raw_data: original,
-        },
+    let roi = world.get::<&Roi>(entity).unwrap();
+    let direct_original = crate::convert::intersect_mesh_with_plane(
+        &roi.mesh_cache().expect("surface").data,
         coronal_key.plane,
     )
     .unwrap();
+    drop(roi);
     assert_eq!(
         restored, direct_original,
         "the derived view follows the undo"

@@ -110,6 +110,9 @@ pub(crate) fn ensure_contour_view_cache(
             }
         };
     }
+    if matches!(roi.body, RoiBody::Contour(_)) {
+        return cut_contour_roi_view(&mut roi, view_key);
+    }
     if roi.running_job_kind() == Some(RoiJobKind::RebuildVoxelCache) {
         if let Some(cache) = roi.contour_view_cache_mut(view_key) {
             if !matches!(
@@ -183,12 +186,46 @@ pub(crate) fn ensure_contour_view_cache(
     }
 }
 
+/// The contours of a contour ROI in a plane of another family: its surface (the mesh of the
+/// field of its loops) cut with that plane, so they are the true section and not a voxel
+/// staircase. The surface is built for contour ROIs for exactly this; until it is current for the
+/// ROI's revision, no view is drawn (nothing stale is ever drawn).
+fn cut_contour_roi_view(roi: &mut Roi, view_key: &ContourViewKey) -> RepresentationRequestStatus {
+    let built_from = roi.dirty_state.authoritative;
+    if roi.contour_view_cache(view_key).is_some_and(|cache| {
+        cache.built_from == built_from && cache.state == CacheViewState::Current
+    }) {
+        return RepresentationRequestStatus::current();
+    }
+    if !roi.is_cache_current(RoiCacheKind::Mesh) {
+        if let Some(cache) = roi.contour_view_cache_mut(view_key) {
+            if !matches!(
+                cache.state,
+                CacheViewState::Blocked { .. } | CacheViewState::Unsupported { .. }
+            ) {
+                cache.state = CacheViewState::Stale;
+            }
+        }
+        return RepresentationRequestStatus::stale("mesh_cache_pending_for_contour_view");
+    }
+    let Some(mesh) = roi.mesh_cache().map(|cache| &cache.data) else {
+        return RepresentationRequestStatus::blocked("mesh_cache_missing_for_contour_view");
+    };
+    match intersect_mesh_with_plane(mesh, view_key.plane) {
+        Ok(data) => {
+            match roi.install_current_contour_view_result(view_key.clone(), data, built_from) {
+                Ok(()) => RepresentationRequestStatus::current(),
+                Err(_) => RepresentationRequestStatus::stale("contour_view_result_superseded"),
+            }
+        }
+        Err(_) => RepresentationRequestStatus::blocked("mesh_plane_intersection_failed"),
+    }
+}
+
 pub(crate) fn sync_roi_contour_view_caches_for_viewports(world: &mut World, focus: &ViewFocus) {
     // Every visible ROI is shown in every view, so every visible ROI that does not carry its own
     // contours gets derived ones; the active ROI first. Hidden ROIs keep what they have.
-    let roi_entities = demanded_roi_order(world, focus.active_roi, |roi| {
-        !matches!(roi.body, RoiBody::Contour(_))
-    });
+    let roi_entities = demanded_roi_order(world, focus.active_roi, |_| true);
     let main_geometry = main_volume_geometry(world);
 
     let cursor_uv = focus.cursor_uv;
@@ -238,6 +275,11 @@ fn demanded_roi_order(
         .collect();
     others.sort_unstable();
     active_roi
+        .filter(|entity| {
+            world
+                .get::<&Roi>(*entity)
+                .is_ok_and(|roi| is_roi_visible(world, *entity) && wanted(&roi))
+        })
         .into_iter()
         .chain(others.into_iter().map(|(_, entity)| entity))
         .collect()
@@ -246,13 +288,12 @@ fn demanded_roi_order(
 /// Demands a derived mesh for visible ROIs while a 3D view exists: the active ROI first, then
 /// the others one at a time, so ten labels never queue ten builds at once.
 pub(crate) fn sync_mesh_caches_for_viewports(world: &mut World, active_roi: Option<hecs::Entity>) {
-    if !world
+    // Contour ROIs always need their surface (the contours of the other plane families are cut
+    // from it); the other kinds only when a 3D view shows it.
+    let has_three_d = world
         .query::<&Viewport>()
         .iter()
-        .any(|(_, viewport)| viewport.mode == ViewMode::ThreeD)
-    {
-        return;
-    }
+        .any(|(_, viewport)| viewport.mode == ViewMode::ThreeD);
     // A queued build that cannot start yet (its voxel cache is not current) must not block the
     // others, or one stuck ROI would starve every label.
     let busy = world.query::<&Roi>().iter().any(|(_, roi)| {
@@ -265,6 +306,7 @@ pub(crate) fn sync_mesh_caches_for_viewports(world: &mut World, active_roi: Opti
     }
     let candidates = demanded_roi_order(world, active_roi, |roi| {
         !matches!(roi.body, RoiBody::Mesh(_))
+            && (has_three_d || matches!(roi.body, RoiBody::Contour(_)))
     });
     for entity in candidates {
         let Ok(mut roi) = world.get::<&mut Roi>(entity) else {
