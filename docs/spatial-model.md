@@ -1,6 +1,6 @@
 # Spatial Model
 
-How the viewer places everything in space: the image volume, the grids of ROIs, contours, meshes, slice planes, the views, and the annotations. Read this before touching any code that converts between spaces. The decisions behind it are in ADR 0003 (ROI-owned spatial metadata) and ADR 0004 (ROI bodies); the rendering rules are in `rendering-architecture.md`.
+How the viewer places everything in space: the image volume, the ROI forms (contours, meshes, voxels), the grids their voxels use, slice planes, the views, and the annotations. Read this before touching any code that converts between spaces. The decisions behind it are in ADR 0003 (ROI-owned spatial metadata) and ADR 0004 (ROI bodies); the rendering rules are in `rendering-architecture.md`.
 
 ## 1. Spaces and what lives in them
 
@@ -27,25 +27,37 @@ One main volume is loaded. Its grid defines the **display grid**: the layers of 
 
 Views are **index-space views**, not resampled to anatomical axes. An axial view shows the grid's `k` layers, with the grid's `i` axis across and `j` axis up, in radiological style (screen-left is the larger index; see `convert::screen_uv_to_volume_uv_for_family`). For a volume stored in another orientation the view still shows the grid's layers; the edge letters (R, L, A, P, S, I) come from the affine (`orientation::index_axis_letters`), so they are always true to the data, and `anatomical_plane_name` reports which anatomical plane a view really shows.
 
-## 3. ROIs: the reference grid and the voxel boxes
+## 3. ROIs: one shape, three forms
 
-A ROI is one structure (a label, a drawn contour, an edited mesh). Its shape lives in exactly one authoritative form, the **body** (voxels, contours or mesh; ADR 0004). The other forms are derived caches.
+A ROI is one structure (a label, a drawn contour, an edited mesh). It is a shape in world space, and it can be held in three forms. **Any of them can be the authoritative one**; the other two are derived from it and rebuilt when it changes (ADR 0001 and ADR 0004).
 
-**The reference grid** of a ROI is a lattice: spacing, orientation and origin, stored as a `VoxelGeometry` and never changed. It defines how the ROI's voxels line up in the world and how far they may reach.
+| Form | Coordinates | Natural for | Becomes authoritative when |
+| --- | --- | --- | --- |
+| **Contours** | loops of points in plane-local mm, on planes in world mm (section 4) | drawing and editing slice by slice | you draw or edit in a slice view |
+| **Mesh** | vertices in world mm | 3D editing, smooth surfaces | you deform it in the 3D view |
+| **Voxels** | a mask on a grid | import, display of fill, measurement, and as the common currency between the other two | a labelmap is imported (then it is a read-only source) |
 
-- An imported label's reference grid is the label file's own grid. It is usually the image's grid but need not be: a label can have another resolution or origin, and nothing assumes otherwise.
+Switching authority is automatic and one undo step: the first gesture that needs a different form converts the ROI (`ensure_editable`). Contours and meshes are first-class; imported voxels are the only form that cannot be edited directly, and the first edit converts them.
+
+Only the voxel form needs a grid. Contours and meshes live in world millimetres and need none.
+
+### The voxel form and the reference lattice
+
+Every ROI still carries a **reference grid**, a lattice (spacing, orientation, origin, stored as a `VoxelGeometry`, never changed), because voxels are how the forms are converted into each other and how fill is displayed. It defines how a ROI's voxels line up in the world.
+
+- An imported label's reference grid is the label file's own grid. It is usually the image's grid but need not be.
 - A ROI drawn from scratch uses the image's grid.
 - The reference grid is a *definition*, not storage. **No ROI holds voxels over all of it.**
 
-**Voxel forms are snug boxes of the reference grid.** A voxel body or cache is a box: the same spacing and orientation as the reference grid, shifted by a whole number of voxels, smaller in extent (`VoxelGeometry::cropped`, `offset_in`, `VoxelData::embedded_in`). The box is chosen by `convert/snug_grid.rs`:
+A ROI's voxels are a **snug box** of its lattice: the same spacing and orientation, shifted by a whole number of voxels, smaller in extent (`VoxelGeometry::cropped`, `offset_in`, `VoxelData::embedded_in`). The box is chosen by `convert/snug_grid.rs`:
 
 - an imported label: the bounding box of that label at import (`app/roi/label_import.rs`);
-- a contour ROI: the box around its loops and slice depths when the contours are rasterized to voxels;
+- a contour ROI: the box around its loops and slice depths when its contours are rasterized;
 - a mesh ROI: the box around its vertices when it is voxelized.
 
-A box has a one-voxel margin and **only grows** while the ROI is edited, so the retained voxel cache and the mesh chunks stay usable. Mesh chunk sets record the grid they came from and are reused only on the same grid (`ChunkedMeshData::grid`). The synthetic 150-label case (512 x 512 x 300) holds 132 MB this way against 35 GB with full-size copies.
+A box has a one-voxel margin and only grows while the ROI is edited, so the retained voxel cache and the mesh chunks stay usable. Mesh chunk sets record the grid they came from and are reused only on the same grid (`ChunkedMeshData::grid`). The synthetic 150-label case (512 x 512 x 300) holds 132 MB this way against 35 GB with full-size copies.
 
-Voxels are a **hub** between the forms, never the shape itself once a ROI is edited: contours and meshes are converted through them (contour to voxels to mesh, mesh to voxels to contours). Every derived cache records the geometry identity it was built on and is rejected if it does not match (`GeometryIdentity`, `CacheInstallError::GeometryMismatch`).
+Voxels are a **conversion hub**, not the shape: contour to voxels to mesh, mesh to voxels to contours. They are derived on demand and kept only as long as something needs them (for example the overlay fill, or the next conversion). Every derived cache records the geometry identity it was built on and is rejected if it does not match (`GeometryIdentity`, `CacheInstallError::GeometryMismatch`).
 
 ## 4. Contours and slice planes
 
