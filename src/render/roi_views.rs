@@ -87,7 +87,7 @@ impl RoiRenderViews {
                 } else if crate::app::roi::is_roi_visible(world, active) {
                     views.voxel_skips.push(RoiRenderSkip {
                         entity: active,
-                        reason: voxel_non_renderable_reason(&active_roi),
+                        reason: voxel_skip_reason(world, active, &active_roi),
                     });
                 }
             }
@@ -112,7 +112,9 @@ impl RoiRenderViews {
                 continue;
             }
             if let Ok(settings) = world.get::<&LayerSettings>(entity) {
-                if roi.renderable_voxel_cache(metadata.is_visible).is_some() {
+                if settings.show_voxel_fill
+                    && roi.renderable_voxel_cache(metadata.is_visible).is_some()
+                {
                     voxel_candidates.push(VoxelOverlayView {
                         entity,
                         opacity: settings.opacity,
@@ -120,13 +122,13 @@ impl RoiRenderViews {
                 } else if metadata.is_visible {
                     views.voxel_skips.push(RoiRenderSkip {
                         entity,
-                        reason: voxel_non_renderable_reason(roi),
+                        reason: voxel_skip_reason(world, entity, roi),
                     });
                 }
             } else if metadata.is_visible {
                 views.voxel_skips.push(RoiRenderSkip {
                     entity,
-                    reason: voxel_non_renderable_reason(roi),
+                    reason: voxel_skip_reason(world, entity, roi),
                 });
             }
 
@@ -196,11 +198,25 @@ impl RoiRenderViews {
 fn voxel_overlay_candidate(world: &World, entity: Entity) -> Option<VoxelOverlayView> {
     let roi = world.get::<&Roi>(entity).ok()?;
     let settings = world.get::<&LayerSettings>(entity).ok()?;
+    if !settings.show_voxel_fill {
+        return None;
+    }
     roi.renderable_voxel_cache(crate::app::roi::is_roi_visible(world, entity))?;
     Some(VoxelOverlayView {
         entity,
         opacity: settings.opacity,
     })
+}
+
+fn voxel_skip_reason(world: &World, entity: Entity, roi: &Roi) -> &'static str {
+    let fill_hidden = world
+        .get::<&LayerSettings>(entity)
+        .is_ok_and(|settings| !settings.show_voxel_fill);
+    if fill_hidden {
+        "voxel_fill_hidden"
+    } else {
+        voxel_non_renderable_reason(roi)
+    }
 }
 
 fn voxel_non_renderable_reason(roi: &Roi) -> &'static str {

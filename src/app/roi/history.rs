@@ -1,14 +1,11 @@
 use crate::app::components::{
-    ContourBody, ContourData, EditorState, MeshBody, MeshData, Roi, RoiBody, RoiDirtyRegion,
-    RoiEditHistoryEntry, RoiEditSnapshot, RoiHistory, RoiJobKind, RoiJobPriority, RoiJobRequest,
-    RoiJobState, VoxelBody,
+    ContourBody, ContourData, EditorState, MeshBody, MeshData, Roi, RoiBody, RoiEditSnapshot,
+    RoiHistory, RoiJobState, VoxelBody,
 };
 use crate::app::roi::authority::{
-    dirty_region_for_slice_swap, replace_contour_data, replace_contour_data_for_slice,
-    replace_mesh_data, ContourMutationError, MeshMutationError,
+    replace_contour_data, replace_mesh_data, ContourMutationError, MeshMutationError,
 };
 use crate::app::roi::model::is_roi_locked;
-use crate::convert::PlaneDefinition;
 use hecs::World;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,25 +23,6 @@ pub fn replace_contour_data_with_history(
     roi_entity: hecs::Entity,
     contour_data: ContourData,
 ) -> Result<(), ContourMutationError> {
-    replace_contour_data_with_history_impl(world, roi_entity, contour_data, None)
-}
-
-/// Like [`replace_contour_data_with_history`], with a rebuild scoped to the changed slice.
-pub fn replace_contour_data_for_slice_with_history(
-    world: &mut World,
-    roi_entity: hecs::Entity,
-    contour_data: ContourData,
-    dirty_plane: PlaneDefinition,
-) -> Result<(), ContourMutationError> {
-    replace_contour_data_with_history_impl(world, roi_entity, contour_data, Some(dirty_plane))
-}
-
-fn replace_contour_data_with_history_impl(
-    world: &mut World,
-    roi_entity: hecs::Entity,
-    contour_data: ContourData,
-    dirty_plane: Option<PlaneDefinition>,
-) -> Result<(), ContourMutationError> {
     let before = world
         .get::<&Roi>(roi_entity)
         .map_err(|_| ContourMutationError::MissingRoi)?
@@ -54,22 +32,9 @@ fn replace_contour_data_with_history_impl(
     if before == contour_data {
         return Ok(());
     }
-    let dirty_region = dirty_plane
-        .map(|plane| dirty_region_for_slice_swap(&before, &contour_data, plane))
-        .unwrap_or(RoiDirtyRegion::Full);
-    match dirty_plane {
-        Some(plane) => replace_contour_data_for_slice(world, roi_entity, contour_data, plane)?,
-        None => replace_contour_data(world, roi_entity, contour_data)?,
-    }
-    record_history_entry(
-        world,
-        roi_entity,
-        RoiEditHistoryEntry {
-            snapshot: RoiEditSnapshot::Contour(before),
-            dirty_region,
-        },
-    )
-    .map_err(|_| ContourMutationError::MissingRoi)
+    replace_contour_data(world, roi_entity, contour_data)?;
+    record_history_entry(world, roi_entity, RoiEditSnapshot::Contour(before))
+        .map_err(|_| ContourMutationError::MissingRoi)
 }
 
 /// Replaces the ROI's mesh data and records the previous data as an undo step.
@@ -88,15 +53,8 @@ pub fn replace_mesh_data_with_history(
         return Ok(());
     }
     replace_mesh_data(world, roi_entity, mesh_data)?;
-    record_history_entry(
-        world,
-        roi_entity,
-        RoiEditHistoryEntry {
-            snapshot: RoiEditSnapshot::Mesh(before),
-            dirty_region: RoiDirtyRegion::Full,
-        },
-    )
-    .map_err(|_| MeshMutationError::MissingRoi)
+    record_history_entry(world, roi_entity, RoiEditSnapshot::Mesh(before))
+        .map_err(|_| MeshMutationError::MissingRoi)
 }
 
 /// Whether the active ROI has an edit to undo.
@@ -139,7 +97,7 @@ fn apply_roi_edit_history(
     undo: bool,
 ) -> Result<hecs::Entity, RoiEditHistoryError> {
     let roi_entity = editor.active_roi.ok_or(RoiEditHistoryError::NoActiveRoi)?;
-    let entry = {
+    let snapshot = {
         let roi = world
             .get::<&Roi>(roi_entity)
             .map_err(|_| RoiEditHistoryError::MissingRoi)?;
@@ -155,12 +113,7 @@ fn apply_roi_edit_history(
         })?
     };
     let current = capture_roi_edit_snapshot(world, roi_entity)?;
-    restore_roi_edit_snapshot(
-        world,
-        roi_entity,
-        entry.snapshot.clone(),
-        entry.dirty_region,
-    )?;
+    restore_roi_edit_snapshot(world, roi_entity, snapshot)?;
 
     if let Ok(mut roi) = world.get::<&mut Roi>(roi_entity) {
         roi.history.step(undo, current);
@@ -193,7 +146,6 @@ fn restore_roi_edit_snapshot(
     world: &mut World,
     roi_entity: hecs::Entity,
     snapshot: RoiEditSnapshot,
-    dirty_region: RoiDirtyRegion,
 ) -> Result<(), RoiEditHistoryError> {
     if is_roi_locked(world, roi_entity) {
         return Err(RoiEditHistoryError::Locked);
@@ -207,23 +159,9 @@ fn restore_roi_edit_snapshot(
     // replaced, and every derived cache is rebuilt from the restored one.
     match snapshot {
         RoiEditSnapshot::Contour(contour) => {
-            let same_authority = matches!(roi.body, RoiBody::Contour(_));
             roi.body = RoiBody::Contour(ContourBody::new(contour));
             roi.mark_contour_authoritative_changed();
             roi.mark_all_contour_view_caches_stale();
-            let source_generation = roi.dirty_state.authoritative.shape;
-            roi.enqueue_job(RoiJobRequest {
-                kind: RoiJobKind::RebuildVoxelCache,
-                source_generation,
-                preview_revision: None,
-                priority: RoiJobPriority::VisibleCommitted,
-                dirty_region: match dirty_region {
-                    RoiDirtyRegion::ContourSlice(key) if same_authority => {
-                        RoiDirtyRegion::ContourSlice(key)
-                    }
-                    _ => RoiDirtyRegion::Full,
-                },
-            });
         }
         RoiEditSnapshot::Mesh(mesh) => {
             roi.body = RoiBody::Mesh(MeshBody::new(mesh));
@@ -245,24 +183,17 @@ pub(crate) fn record_authority_change(
     roi_entity: hecs::Entity,
     previous: RoiEditSnapshot,
 ) {
-    let _ = record_history_entry(
-        world,
-        roi_entity,
-        RoiEditHistoryEntry {
-            snapshot: previous,
-            dirty_region: RoiDirtyRegion::Full,
-        },
-    );
+    let _ = record_history_entry(world, roi_entity, previous);
 }
 
 fn record_history_entry(
     world: &mut World,
     roi_entity: hecs::Entity,
-    entry: RoiEditHistoryEntry,
+    snapshot: RoiEditSnapshot,
 ) -> Result<(), RoiEditHistoryError> {
     let mut roi = world
         .get::<&mut Roi>(roi_entity)
         .map_err(|_| RoiEditHistoryError::MissingRoi)?;
-    roi.history.record(entry);
+    roi.history.record(snapshot);
     Ok(())
 }

@@ -1,8 +1,8 @@
 use crate::app::components::{
-    ContourBody, ContourData, ContourSliceKey, MeshBody, MeshData, Roi, RoiBody, RoiCacheKind,
-    RoiDirtyRegion, RoiJobKind, RoiJobPriority, RoiJobRequest, RoiJobState,
+    ContourBody, ContourData, MeshBody, MeshData, Roi, RoiBody, RoiCacheKind, RoiJobKind,
+    RoiJobState,
 };
-use crate::convert::{MeshVoxelizationError, PlaneDefinition};
+use crate::convert::MeshVoxelizationError;
 use hecs::World;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,79 +41,7 @@ pub fn replace_contour_data(
 
     roi.mark_contour_authoritative_changed();
     roi.mark_all_contour_view_caches_stale();
-    roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
-    Ok(())
-}
-
-fn has_slice(data: &ContourData, key: ContourSliceKey) -> bool {
-    data.slices
-        .iter()
-        .any(|slice| ContourSliceKey::from_plane(slice.plane) == key)
-}
-
-/// What the voxel cache has to rebuild after a commit that left `after` with edits at `plane`.
-///
-/// One slice can be re-rasterized on its own when it exists after the edit: the rebuild clears and
-/// redraws the slab it covers (a new slice only adds to an empty slab). A slice that was removed
-/// leaves nothing to locate its old slab by, so the whole cache is rebuilt.
-pub fn dirty_region_for_slice_edit(after: &ContourData, plane: PlaneDefinition) -> RoiDirtyRegion {
-    let key = ContourSliceKey::from_plane(plane);
-    if has_slice(after, key) {
-        RoiDirtyRegion::ContourSlice(key)
-    } else {
-        RoiDirtyRegion::Full
-    }
-}
-
-/// The same for an undo or redo step, which swaps two states and may run either way: a
-/// slice-local rebuild is only valid when the slice exists in both.
-pub fn dirty_region_for_slice_swap(
-    a: &ContourData,
-    b: &ContourData,
-    plane: PlaneDefinition,
-) -> RoiDirtyRegion {
-    let key = ContourSliceKey::from_plane(plane);
-    if has_slice(a, key) && has_slice(b, key) {
-        RoiDirtyRegion::ContourSlice(key)
-    } else {
-        RoiDirtyRegion::Full
-    }
-}
-
-/// Replaces the contour data after an edit at `dirty_plane`, rebuilding only as much of the voxel
-/// cache as the edit can have changed (see [`dirty_region_for_slice_edit`]).
-pub fn replace_contour_data_for_slice(
-    world: &mut World,
-    roi_entity: hecs::Entity,
-    contour_data: ContourData,
-    dirty_plane: PlaneDefinition,
-) -> Result<(), ContourMutationError> {
-    let mut roi = world
-        .get::<&mut Roi>(roi_entity)
-        .map_err(|_| ContourMutationError::MissingRoi)?;
-
-    let dirty_region = match &mut roi.body {
-        RoiBody::Contour(ContourBody { data: existing, .. }) => {
-            let region = dirty_region_for_slice_edit(&contour_data, dirty_plane);
-            *existing = contour_data;
-            region
-        }
-        RoiBody::Voxel(_) | RoiBody::Mesh(_) => {
-            return Err(ContourMutationError::NotContourRoi);
-        }
-    };
-
-    roi.mark_contour_authoritative_changed();
-    roi.mark_all_contour_view_caches_stale();
     roi.job_state = RoiJobState::default();
-    let source_generation = roi.dirty_state.authoritative.shape;
-    roi.enqueue_job(RoiJobRequest {
-        kind: RoiJobKind::RebuildVoxelCache,
-        source_generation,
-        preview_revision: None,
-        priority: RoiJobPriority::VisibleCommitted,
-        dirty_region,
-    });
     Ok(())
 }
 
@@ -138,6 +66,23 @@ pub fn replace_mesh_data(
     // the optional voxel cache here can take nearly a second for a liver ROI,
     // so only an explicit voxel/export request may schedule it.
     roi.job_state = RoiJobState::default();
+    Ok(())
+}
+
+/// Asks for the voxel form of a contour ROI (the fill overlay, an export). It is derived from the
+/// loops and not built by an edit; the revision it is built for is the current one.
+pub fn request_contour_voxel_form(
+    world: &mut World,
+    roi_entity: hecs::Entity,
+) -> Result<(), ContourMutationError> {
+    let mut roi = world
+        .get::<&mut Roi>(roi_entity)
+        .map_err(|_| ContourMutationError::MissingRoi)?;
+    if !matches!(roi.body, RoiBody::Contour(_)) {
+        return Err(ContourMutationError::NotContourRoi);
+    }
+    roi.mark_cache_dirty(RoiCacheKind::Voxel);
+    roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
     Ok(())
 }
 

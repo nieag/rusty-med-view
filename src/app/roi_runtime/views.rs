@@ -298,8 +298,7 @@ pub(crate) fn sync_mesh_caches_for_viewports(world: &mut World, active_roi: Opti
     // others, or one stuck ROI would starve every label.
     let busy = world.query::<&Roi>().iter().any(|(_, roi)| {
         roi.running_job_kind() == Some(RoiJobKind::RebuildMeshCache)
-            || (roi.has_queued_job(RoiJobKind::RebuildMeshCache)
-                && roi.is_cache_current(RoiCacheKind::Voxel))
+            || (roi.has_queued_job(RoiJobKind::RebuildMeshCache) && mesh_source_is_ready(roi))
     });
     if busy {
         return;
@@ -312,10 +311,7 @@ pub(crate) fn sync_mesh_caches_for_viewports(world: &mut World, active_roi: Opti
         let Ok(mut roi) = world.get::<&mut Roi>(entity) else {
             continue;
         };
-        if !roi.is_cache_current(RoiCacheKind::Mesh)
-            && roi.voxel_cache().is_some()
-            && roi.is_cache_current(RoiCacheKind::Voxel)
-        {
+        if !roi.is_cache_current(RoiCacheKind::Mesh) && mesh_source_is_ready(&roi) {
             roi.mark_cache_dirty(RoiCacheKind::Mesh);
             roi.enqueue_rebuild(RoiJobKind::RebuildMeshCache);
             return;
@@ -323,30 +319,37 @@ pub(crate) fn sync_mesh_caches_for_viewports(world: &mut World, active_roi: Opti
     }
 }
 
-/// After an edit of the active mesh ROI, rebuilds its voxels while the user is idle, so that a
-/// switch to a contour tool finds them ready instead of starting a rebuild then. It only acts on
-/// a mesh that edit validation already passed (checking an unvalidated mesh would itself stall
-/// the frame) and that has a voxel grid to rebuild onto, when no edit preview is running and no
-/// rebuild is queued or running. It tries each revision once: a failure is reported by the job and
-/// not retried every frame.
-pub(crate) fn sync_speculative_voxel_cache(world: &mut World, active_roi: Option<hecs::Entity>) {
-    let Some(entity) = active_roi else {
-        return;
-    };
-    let wanted = world.get::<&Roi>(entity).is_ok_and(|roi| {
-        matches!(roi.body, RoiBody::Mesh(_))
-            && roi.job_state.speculative_voxel_shape != Some(roi.dirty_state.authoritative.shape)
-            && !roi.preview_state.active
-            && roi.validated_mesh_generation == Some(roi.dirty_state.authoritative.shape)
-            && !roi.is_cache_current(RoiCacheKind::Voxel)
-            && !roi.has_queued_job(RoiJobKind::RebuildVoxelCache)
-            && roi.running_job_kind().is_none()
-            && roi.job_state.pending_switch.is_none()
-    });
-    if wanted {
-        if let Ok(mut roi) = world.get::<&mut Roi>(entity) {
-            roi.job_state.speculative_voxel_shape = Some(roi.dirty_state.authoritative.shape);
+/// The voxel form of a contour or mesh ROI is derived, so it is built only for a visible ROI whose
+/// fill is shown (`LayerSettings::show_voxel_fill`). Each revision is requested once: a failure is
+/// reported by the job and not retried every frame.
+pub(crate) fn sync_voxel_fill_demand(world: &mut World) {
+    let wanted: Vec<hecs::Entity> = world
+        .query::<(&Roi, &RoiMetadata, &LayerSettings)>()
+        .iter()
+        .filter(|(_, (roi, metadata, settings))| {
+            !matches!(roi.body, RoiBody::Voxel(_))
+                && metadata.is_visible
+                && settings.show_voxel_fill
+                && !roi.preview_state.active
+                && roi.job_state.voxel_requested_shape != Some(roi.dirty_state.authoritative.shape)
+                && !roi.is_cache_current(RoiCacheKind::Voxel)
+                && !roi.has_queued_job(RoiJobKind::RebuildVoxelCache)
+                && roi.running_job_kind().is_none()
+                && roi.job_state.pending_switch.is_none()
+        })
+        .map(|(entity, _)| entity)
+        .collect();
+    for entity in wanted {
+        let Ok(mut roi) = world.get::<&mut Roi>(entity) else {
+            continue;
+        };
+        roi.job_state.voxel_requested_shape = Some(roi.dirty_state.authoritative.shape);
+        if matches!(roi.body, RoiBody::Mesh(_)) {
+            drop(roi);
+            let _ = crate::app::roi::request_mesh_voxel_cache_rebuild(world, entity);
+        } else {
+            drop(roi);
+            let _ = crate::app::roi::request_contour_voxel_form(world, entity);
         }
-        let _ = crate::app::roi::request_mesh_voxel_cache_rebuild(world, entity);
     }
 }

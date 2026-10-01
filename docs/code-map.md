@@ -11,7 +11,7 @@ This is a navigation guide to the current repository, not a second architecture 
 | How grids, planes, and views are defined | `docs/spatial-model.md` |
 | ECS components and `Session` (the state that exists once: editor, input, GUI, cursor, windowing, annotations, protocol, window settings) | `src/app/components.rs` (ROI data types in `components/roi_types.rs`) |
 | ROI domain model and mutations | `src/app/roi/` |
-| Derived ROI work and GPU cache synchronization | `src/app/roi_runtime.rs` (frame order) and `src/app/roi_runtime/` (`contour_voxel` rasterizes contour ROIs, `mesh_voxel` voxelizes meshes, `voxel_mesh` meshes voxel bodies and builds contour ROIs' field and mesh and warms the field in idle time, `views` derived contour views, `create` import, `jobs` shared endings) |
+| Derived ROI work and GPU cache synchronization | `src/app/roi_runtime.rs` (frame order) and `src/app/roi_runtime/` (`contour_voxel` rasterizes contour ROIs on request (the fill, the drag preview), `mesh_voxel` voxelizes meshes, `voxel_mesh` meshes voxel bodies and builds contour ROIs' field and mesh and warms the field in idle time, `views` derived contour views, `create` import, `jobs` shared endings) |
 | User input and authoring | `src/systems/` |
 | Coordinate/conversion algorithms | `src/convert/` |
 | WGPU rendering | `src/render/`, `src/shaders/` |

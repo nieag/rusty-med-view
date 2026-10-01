@@ -340,16 +340,6 @@ pub(super) fn process_contour_voxel_rebuild_for_entity(
             return false;
         }
     };
-    let slice_local_rebuild_lost_base = dirty_slice_key.is_some() && base_slice_voxel.is_none();
-    let committed_mesh_dirty_region =
-        if preview_revision.is_none() && !slice_local_rebuild_lost_base {
-            contour_slices_voxel_aabb(&contour_data, voxel_data.geometry)
-                .map(|(min, max)| RoiDirtyRegion::VoxelAabb { min, max })
-                .unwrap_or(RoiDirtyRegion::Full)
-        } else {
-            RoiDirtyRegion::Full
-        };
-
     if let Some(revision) = preview_revision {
         let (base_chunks, prior_preview_aabb) = world
             .get::<&Roi>(roi_entity)
@@ -520,18 +510,6 @@ pub(super) fn process_contour_voxel_rebuild_for_entity(
         roi.job_metrics.discarded_count = roi.job_metrics.discarded_count.saturating_add(1);
         roi.finish_job(RoiJobKind::RebuildVoxelCache);
         return false;
-    }
-    // A mesh that is already current for this revision (the surface a switch to contours kept)
-    // is not rebuilt from the voxels just made from the contours.
-    if !roi.is_cache_current(RoiCacheKind::Mesh) {
-        roi.mark_cache_dirty(RoiCacheKind::Mesh);
-        roi.enqueue_job(RoiJobRequest {
-            kind: RoiJobKind::RebuildMeshCache,
-            source_generation: authoritative_generation,
-            preview_revision: None,
-            priority: RoiJobPriority::VisibleCommitted,
-            dirty_region: committed_mesh_dirty_region,
-        });
     }
     roi.job_metrics.completed_count = roi.job_metrics.completed_count.saturating_add(1);
     roi.job_metrics.last_completed_kind = Some(RoiJobKind::RebuildVoxelCache);

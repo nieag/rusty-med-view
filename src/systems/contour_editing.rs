@@ -432,7 +432,6 @@ pub fn handle_contour_draw_click(
             points: loop_points,
             is_closed: true,
         };
-        let committed_plane;
         let existing_index = nearest_matching_slice(
             next_contour_data
                 .slices
@@ -445,7 +444,6 @@ pub fn handle_contour_draw_click(
         if let Some(existing_slice) =
             existing_index.map(|index| &mut next_contour_data.slices[index])
         {
-            committed_plane = existing_slice.plane;
             for point in &mut loop_to_commit.points {
                 point.local_mm =
                     reproject_plane_local_mm(point.local_mm, viewport.plane, existing_slice.plane);
@@ -453,20 +451,14 @@ pub fn handle_contour_draw_click(
             *existing_slice = union_contour_slice_with_loop(existing_slice, &loop_to_commit)
                 .map_err(|_| ContourDrawClickError::CommitFailed)?;
         } else {
-            committed_plane = viewport.plane;
             next_contour_data.slices.push(ContourSlice {
                 plane: viewport.plane,
                 loops: vec![loop_to_commit],
             });
         }
 
-        roi::replace_contour_data_for_slice_with_history(
-            world,
-            roi_entity,
-            next_contour_data,
-            committed_plane,
-        )
-        .map_err(|_| ContourDrawClickError::CommitFailed)?;
+        roi::replace_contour_data_with_history(world, roi_entity, next_contour_data)
+            .map_err(|_| ContourDrawClickError::CommitFailed)?;
         {
             let editor = &mut session.editor;
             editor.contour_draft = None;
@@ -758,15 +750,9 @@ pub fn move_selected_point(
     viewport_uv: [f32; 2],
 ) -> Result<(), ContourEditOperationError> {
     let (selection, mut contour_data, viewport) = selected_context(world, session)?;
-    let dirty_plane =
-        update_selected_point_in_data(&selection, &mut contour_data, viewport, viewport_uv)?;
-    roi::replace_contour_data_for_slice_with_history(
-        world,
-        selection.roi_entity,
-        contour_data,
-        dirty_plane,
-    )
-    .map_err(|_| ContourEditOperationError::ReplaceFailed)
+    update_selected_point_in_data(&selection, &mut contour_data, viewport, viewport_uv)?;
+    roi::replace_contour_data_with_history(world, selection.roi_entity, contour_data)
+        .map_err(|_| ContourEditOperationError::ReplaceFailed)
 }
 
 pub fn move_selected_point_preview(
@@ -816,7 +802,7 @@ pub fn finalize_selected_point_move(
     world: &mut World,
     session: &Session,
 ) -> Result<(), ContourEditOperationError> {
-    let dirty_plane = {
+    {
         let editor = &session.editor;
         let selection = editor
             .contour_selection
@@ -832,10 +818,9 @@ pub fn finalize_selected_point_move(
             .contour_data
             .slices
             .get(selection.slice_index)
-            .map(|slice| slice.plane)
-            .ok_or(ContourEditOperationError::InvalidSelection)?
-    };
-    roi::commit_contour_move_preview(world, &session.editor, dirty_plane)
+            .ok_or(ContourEditOperationError::InvalidSelection)?;
+    }
+    roi::commit_contour_move_preview(world, &session.editor)
         .map_err(|_| ContourEditOperationError::ReplaceFailed)
 }
 
@@ -890,7 +875,6 @@ pub fn insert_point_into_selected_loop(
             let end = contour_loop.points[segment_end_index].local_mm;
             [(start[0] + end[0]) * 0.5, (start[1] + end[1]) * 0.5]
         });
-    let dirty_plane = slice.plane;
 
     let insert_index = segment_start_index + 1;
     contour_loop.points.insert(
@@ -900,13 +884,8 @@ pub fn insert_point_into_selected_loop(
         },
     );
 
-    roi::replace_contour_data_for_slice_with_history(
-        world,
-        selection.roi_entity,
-        contour_data,
-        dirty_plane,
-    )
-    .map_err(|_| ContourEditOperationError::ReplaceFailed)?;
+    roi::replace_contour_data_with_history(world, selection.roi_entity, contour_data)
+        .map_err(|_| ContourEditOperationError::ReplaceFailed)?;
     {
         let editor = &mut session.editor;
         editor.contour_selection = Some(ContourSelection {

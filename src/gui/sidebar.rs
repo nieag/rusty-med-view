@@ -334,6 +334,22 @@ pub fn draw_sidebar(
                     set.opacity = opacity;
                 }
             }
+            // The voxel form of a contour or mesh ROI is derived: it is built and drawn only
+            // while this is on.
+            let mut show_voxel_fill = world
+                .get::<&LayerSettings>(entity)
+                .is_ok_and(|settings| settings.show_voxel_fill);
+            if is_visible
+                && ui
+                    .checkbox(&mut show_voxel_fill, "Voxel fill")
+                    .on_hover_text("Show the voxel form of this ROI (built on demand)")
+                    .changed()
+            {
+                if let Ok(mut set) = world.get::<&mut LayerSettings>(entity) {
+                    set.show_voxel_fill = show_voxel_fill;
+                }
+                let _ = event_proxy.send_event(AppEvent::RebuildBindGroups);
+            }
 
             let show_contour_point_controls = Some(entity) == new_active_roi
                 && world.get::<&Roi>(entity).is_ok_and(|roi| {

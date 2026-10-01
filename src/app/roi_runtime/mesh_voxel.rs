@@ -263,7 +263,7 @@ pub(super) fn resume_mesh_voxel_rebuild_work(
     // A rebuild nobody asked for is quiet; only an explicit one (a switch, an export) is reported.
     let speculative = world
         .get::<&Roi>(roi_entity)
-        .is_ok_and(|roi| roi.job_state.speculative_voxel_shape == Some(source_generation));
+        .is_ok_and(|roi| roi.job_state.voxel_requested_shape == Some(source_generation));
     if !speculative {
         report_roi_status(world, roi_entity, "Mesh voxel cache rebuilt.".to_string());
     }

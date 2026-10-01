@@ -308,14 +308,13 @@ fn test_contour_draw_loop_commit_adds_slice_loop_and_queues_voxel_rebuild() {
     assert_eq!(contour.slices.len(), 1);
     assert_eq!(contour.slices[0].loops.len(), 1);
     assert!(contour.slices[0].loops[0].is_closed);
-    assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
-    assert!(roi.job_state.pending.iter().any(|request| {
-        request.kind == RoiJobKind::RebuildVoxelCache
-            && request.dirty_region
-                == crate::components::RoiDirtyRegion::ContourSlice(
-                    crate::components::ContourSliceKey::from_plane(contour.slices[0].plane),
-                )
-    }));
+    assert_eq!(
+        roi.queued_job_kind(),
+        None,
+        "the voxel form is built on demand"
+    );
+    assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
+    assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
     assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
     assert!(&session.editor.contour_draft.is_none());
 }
@@ -380,6 +379,7 @@ fn test_add_loop_path_reentering_existing_contour_commits_union_and_fills_voxels
         [8.0, 0.0]
     ));
 
+    roi::request_contour_voxel_form(&mut world, roi_entity).unwrap();
     roi_runtime::process_contour_voxel_rebuild_jobs(&mut world);
 
     let plane = merged_contour.slices[0].plane;
@@ -432,13 +432,7 @@ fn test_add_loop_reprojects_display_points_into_existing_coplanar_slice_frame() 
     let added_in_slice =
         crate::convert::world_mm_to_plane_local_mm(added_world, merged_slice.plane);
     assert!(contour_slice_contains_point(merged_slice, added_in_slice));
-    assert!(roi.job_state.pending.iter().any(|request| {
-        request.kind == RoiJobKind::RebuildVoxelCache
-            && request.dirty_region
-                == crate::components::RoiDirtyRegion::ContourSlice(
-                    crate::components::ContourSliceKey::from_plane(merged_slice.plane),
-                )
-    }));
+    assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
 }
 
 #[test]
@@ -573,7 +567,12 @@ fn test_move_selected_point_updates_only_selected_point() {
     assert_ne!(after_points[1].local_mm, before_points[1].local_mm);
     assert_eq!(after_points[0].local_mm, before_points[0].local_mm);
     assert_eq!(after_points[2].local_mm, before_points[2].local_mm);
-    assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
+    assert_eq!(
+        roi.queued_job_kind(),
+        None,
+        "the voxel form is built on demand"
+    );
+    assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
 }
 
 #[test]
@@ -612,13 +611,7 @@ fn test_move_selected_point_reprojects_display_point_into_slice_frame() {
     for axis in 0..3 {
         assert!((actual_world[axis] - expected_world[axis]).abs() < 1e-4);
     }
-    assert!(roi.job_state.pending.iter().any(|request| {
-        request.kind == RoiJobKind::RebuildVoxelCache
-            && request.dirty_region
-                == crate::components::RoiDirtyRegion::ContourSlice(
-                    crate::components::ContourSliceKey::from_plane(slice.plane),
-                )
-    }));
+    assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
 }
 
 #[test]
@@ -763,18 +756,24 @@ fn test_move_selected_point_preview_defers_authoritative_commit_until_finalize()
     let roi = world.get::<&Roi>(roi_entity).unwrap();
     let after_points = &roi.contour_data().unwrap().slices[0].loops[0].points;
     assert_ne!(after_points[1].local_mm, before_points[1].local_mm);
-    assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
+    assert_eq!(
+        roi.queued_job_kind(),
+        None,
+        "the voxel form is built on demand"
+    );
+    assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
     assert!(!roi.preview_state.active);
     assert!(roi.contour_move_preview().is_none());
     assert_eq!(roi.history.undo.len(), 1);
     drop(roi);
 
+    roi::request_contour_voxel_form(&mut world, roi_entity).unwrap();
     roi_runtime::process_contour_voxel_rebuild_jobs(&mut world);
 
     let roi = world.get::<&Roi>(roi_entity).unwrap();
     assert!(roi.is_cache_current(RoiCacheKind::Voxel));
     assert_eq!(roi.running_job_kind(), None);
-    assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildMeshCache));
+    assert_eq!(roi.queued_job_kind(), None);
 }
 
 #[test]
@@ -808,7 +807,12 @@ fn test_insert_point_adds_at_expected_loop_position() {
             point_index: Some(2),
         })
     );
-    assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
+    assert_eq!(
+        roi.queued_job_kind(),
+        None,
+        "the voxel form is built on demand"
+    );
+    assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
 }
 
 #[test]
@@ -871,7 +875,12 @@ fn test_delete_selected_point_removes_expected_point() {
     let roi = world.get::<&Roi>(roi_entity).unwrap();
     let points = &roi.contour_data().unwrap().slices[0].loops[0].points;
     assert_eq!(points.len(), 3);
-    assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
+    assert_eq!(
+        roi.queued_job_kind(),
+        None,
+        "the voxel form is built on demand"
+    );
+    assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
 }
 
 #[test]
@@ -928,5 +937,10 @@ fn test_delete_below_valid_size_removes_loop_and_clears_selection() {
     let roi = world.get::<&Roi>(roi_entity).unwrap();
     assert!(roi.contour_data().unwrap().slices.is_empty());
     assert!(&session.editor.contour_selection.is_none());
-    assert_eq!(roi.queued_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
+    assert_eq!(
+        roi.queued_job_kind(),
+        None,
+        "the voxel form is built on demand"
+    );
+    assert!(roi.is_cache_dirty(RoiCacheKind::Voxel));
 }

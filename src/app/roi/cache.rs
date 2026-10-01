@@ -528,7 +528,7 @@ impl Roi {
             .undo
             .iter()
             .chain(&self.history.redo)
-            .map(|entry| snapshot(&entry.snapshot))
+            .map(&snapshot)
             .sum();
         body + voxel_cache + mesh_cache + contour_cache + history
     }
