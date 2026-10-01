@@ -3367,6 +3367,113 @@ fn convert_and_settle(
     panic!("switch never completed");
 }
 
+fn mesh_bounds(mesh: &MeshData) -> ([f32; 3], [f32; 3]) {
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for vertex in &mesh.vertices {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(vertex.world_mm[axis]);
+            max[axis] = max[axis].max(vertex.world_mm[axis]);
+        }
+    }
+    (min, max)
+}
+
+#[test]
+fn test_a_loop_drawn_far_from_a_cut_mesh_keeps_the_whole_shape_in_mesh_and_voxels() {
+    for same_layer in [false, true] {
+        a_loop_is_added_to_a_cut_mesh(same_layer);
+    }
+}
+
+fn a_loop_is_added_to_a_cut_mesh(same_layer: bool) {
+    let (geometry, original) = lifecycle_blob();
+    let mut world = World::new();
+    spawn_main_volume(&mut world, [1.0; 3], [0.0; 3]);
+    let entity = world.spawn(Roi::new_voxel_with_cache(
+        RoiId(1),
+        "Blob".to_string(),
+        geometry,
+        original,
+        None,
+    ));
+    settle(&mut world);
+    convert_and_settle(&mut world, entity, EditTarget::Mesh);
+    convert_and_settle(
+        &mut world,
+        entity,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    );
+    // Idle frames warm the field of the cut contours.
+    for _ in 0..50 {
+        advance_roi_work(&mut world, None, &ViewFocus::default());
+    }
+    let (min_before, max_before) = mesh_bounds(
+        &world
+            .get::<&Roi>(entity)
+            .unwrap()
+            .mesh_cache()
+            .unwrap()
+            .data,
+    );
+    let voxels_before = settled_voxels(&world, entity)
+        .iter()
+        .filter(|v| **v != 0)
+        .count();
+
+    // A small loop off to one side: on a new layer above the shape, or on a layer it occupies.
+    let reference = world.get::<&Roi>(entity).unwrap().reference_geometry();
+    let mut contour = contour_of(&world, entity);
+    let layer = if same_layer { 6 } else { 12 };
+    let plane = orthogonal_plane_from_volume_uv(
+        PlaneFamily::Axial,
+        [0.5, 0.5, crate::convert::slice_center_uv(layer, 14)],
+        reference,
+    )
+    .unwrap();
+    let loop_ = ContourLoop {
+        points: [[4.0, 4.0], [6.0, 4.0], [6.0, 6.0], [4.0, 6.0]]
+            .map(|local_mm| ContourPoint { local_mm })
+            .to_vec(),
+        is_closed: true,
+    };
+    match contour
+        .slices
+        .iter_mut()
+        .find(|slice| crate::convert::planes_are_same_slice(slice.plane, plane, reference))
+    {
+        Some(slice) => slice.loops.push(loop_),
+        None => contour.slices.push(ContourSlice {
+            plane,
+            loops: vec![loop_],
+        }),
+    }
+    replace_contour_data_with_history(&mut world, entity, contour).unwrap();
+    settle(&mut world);
+
+    let roi = world.get::<&Roi>(entity).unwrap();
+    let (min_after, max_after) = mesh_bounds(&roi.mesh_cache().unwrap().data);
+    for axis in 0..3 {
+        assert!(
+            min_after[axis] <= min_before[axis] + 1.5 && max_after[axis] >= max_before[axis] - 1.5,
+            "axis {axis}: mesh was {:?}..{:?}, is now {:?}..{:?}",
+            min_before[axis],
+            max_before[axis],
+            min_after[axis],
+            max_after[axis]
+        );
+    }
+    drop(roi);
+    let voxels_after = settled_voxels(&world, entity)
+        .iter()
+        .filter(|v| **v != 0)
+        .count();
+    assert!(
+        voxels_after + 10 >= voxels_before,
+        "voxels {voxels_before} before, {voxels_after} after adding a small loop"
+    );
+}
+
 #[test]
 fn test_shape_survives_conversions_and_undo_across_every_representation() {
     let (geometry, original) = lifecycle_blob();
