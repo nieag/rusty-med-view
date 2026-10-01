@@ -20,6 +20,7 @@ Work proceeds in chunks, foundation first. A chunk is a bounded set of plan item
 | B Scene model (done) | ADR 0005, 2b.9 (singletons to fields, `Roi` into components, annotations as entities), 2b.7 file split | nothing (decided: comments follow a 3D point; several reviewers; mocked author name; local files now, a server later; ROI conflicts are reported) |
 | C Completeness (done) | 2b.3 derived forms for all visible ROIs, 2b.4 one viewport mapping, 2b.5 GPU error handling, 2b.6 nothing stale, 2b.6b incremental mesh rebuild | nothing (decided) |
 | D Scale (done; 4.5 partly) | 2b.10 (cropped ROIs, display beyond 8 slots, layer list, work budget), 4.5 memory | nothing: a synthetic many-label case is generated from the liver sample |
+| F Exact conversions | ADR 0006: measurement test, mesh to contours by cut, refined soft-valued hub, mesh from the hub, real-time budgets | owner answers to the ADR's open questions (hub resolution default, coverage semantics are agreed) |
 | E Docs | 2b.8, folded into each chunk as it lands, final check here | nothing |
 
 Phase 3 (editing features) starts after chunk D.
@@ -144,6 +145,16 @@ Exit: the layering is enforced by a test; the scene model is decided and applied
 - [ ] **2b.8 Docs and architecture record (S, last).**
   - *Problem:* `docs/current-state.md` and `docs/code-map.md` do not describe `app/roi/switch.rs`, `render/view3d_cache.rs`, `convert/mesh_deform.rs`, or the GPU mesh renderer.
   - *Approach:* update both, add the layering diagram, and record the decisions of 2b.3 and 2b.6 in the ADRs.
+
+## Phase 2c: Exact conversions (chunk F, proposed in ADR 0006)
+
+Owner direction (2026-10-01): a drawn contour is the truth and is never snapped to the voxel grid; conversions as exact and as fast as possible, real time; ROI algebra later.
+
+- [ ] **2c.1 Measure the current chains (S).** Smooth shapes (sphere of 5.3 voxels radius, thin plate, shape with a hole and a branch) through contours, voxels, mesh and back; report overlap and surface distance. The baseline for everything below.
+- [ ] **2c.2 Mesh to contours by direct cut (M).** One bucketed pass over the triangles per family, symbolic nudge for vertices on a plane, shared crossing edges, no voxels. Budget: at most 20 ms on the liver. The switch never goes Pending; the voxel form is rebuilt from the contours in the background. An earlier attempt failed the cut-and-fill round trip on touching voxels (stashed); redo with the touching-edge cases as the first tests.
+- [ ] **2c.3 Soft voxel data (M).** `VoxelGeometry::refined`; coverage values 0 to 255; label import stores 255; the overlay shader uses coverage as alpha; colour from ROI metadata.
+- [ ] **2c.4 The hub from loops, local and progressive (L).** Exact distance to loops per slice, interpolation with hats, coverage; local updates after an edit; coarse pass first, refinement in the background; mesh from the 50% iso-surface; other-family views of contour ROIs from the cut mesh. Budgets in ADR 0006.
+- [ ] **2c.5 Volume from coverage (S), and later ROI algebra on the hub (separate item).**
 
 ## Phase 3: Editing features and data completeness
 
