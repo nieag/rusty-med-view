@@ -1,6 +1,6 @@
 # Exact Conversions and the Soft Voxel Hub
 
-Status: Proposed (2026-10-01). Not yet implemented. Follows ADR 0001 (one authoritative form per ROI), ADR 0004 (automatic switching), and `docs/spatial-model.md`.
+Status: Accepted (2026-10-01), with the revisions at the end (the field is the hub; no coverage array). Follows ADR 0001 (one authoritative form per ROI), ADR 0004 (automatic switching), and `docs/spatial-model.md`.
 
 ## Context
 
@@ -105,3 +105,7 @@ Measurements and an audit of the code changed three parts of the plan:
 3. **Volume comes from the authoritative form.** A contour ROI's volume is the area inside its loops times the layer thickness, summed over slices (`convert/volume.rs`): -0.1 % on the sphere with cubic voxels, +1.8 % with thick slices, exactly the drawn volume for the thin plate. A mesh's volume is exact by the divergence theorem; a voxel ROI's is its count. The plate's +43 % against the analytic shape is not a conversion defect: two drawn layers are two layers thick, so the contours themselves define that volume. The mesh from the field differs by a few percent at the ends of the stack (the half layer caps are smoothed by the iso-surface), which is why the contour volume is the one shown.
 
 The contour ROI's voxel cache is still rasterized from the loops by the existing incremental rasterizer; deriving it from the field instead (so fill and mesh cannot disagree, and the rasterizer can go) is a separate item, and is only worth doing together with making the voxel form on demand.
+
+### ROI algebra works on the field (owner agreed 2026-10-01)
+
+Union is `min`, intersection `max`, subtraction `max(a, -b)`, a margin of m mm a shift by `-m`; the zero level stays exact and nothing is quantised between steps. After a combination the values are not true distances away from the surface, so a later margin may re-distance first. Voxel ROIs get a field from `signed_distance_from_voxel_data`, mesh ROIs by voxelizing or by exact distance to the mesh; the field's box grows for margins. Partial-volume weights (dose statistics, DVH) are derived from the field on demand, about `clamp(0.5 - d / voxel_size, 0, 1)`, and are not stored. Exact mesh booleans and binary voxel algebra were considered and rejected (fragile and slow, and a return of the staircase).

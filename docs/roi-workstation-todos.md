@@ -20,7 +20,7 @@ Work proceeds in chunks, foundation first. A chunk is a bounded set of plan item
 | B Scene model (done) | ADR 0005, 2b.9 (singletons to fields, `Roi` into components, annotations as entities), 2b.7 file split | nothing (decided: comments follow a 3D point; several reviewers; mocked author name; local files now, a server later; ROI conflicts are reported) |
 | C Completeness (done) | 2b.3 derived forms for all visible ROIs, 2b.4 one viewport mapping, 2b.5 GPU error handling, 2b.6 nothing stale, 2b.6b incremental mesh rebuild | nothing (decided) |
 | D Scale (done; 4.5 partly) | 2b.10 (cropped ROIs, display beyond 8 slots, layer list, work budget), 4.5 memory | nothing: a synthetic many-label case is generated from the liver sample |
-| F Exact conversions | ADR 0006: measurement test, mesh to contours by cut, refined soft-valued hub, mesh from the hub, real-time budgets | owner answers to the ADR's open questions (hub resolution default, coverage semantics are agreed) |
+| F Exact conversions | ADR 0006: measurement test, mesh to contours by cut, distance field from loops with incremental updates, volumes, real-time budgets | done (tag `chunk-f`); open items moved to the backlog below |
 | E Docs | 2b.8, folded into each chunk as it lands, final check here | nothing |
 
 Phase 3 (editing features) starts after chunk D.
@@ -146,7 +146,7 @@ Exit: the layering is enforced by a test; the scene model is decided and applied
   - *Problem:* `docs/current-state.md` and `docs/code-map.md` do not describe `app/roi/switch.rs`, `render/view3d_cache.rs`, `convert/mesh_deform.rs`, or the GPU mesh renderer.
   - *Approach:* update both, add the layering diagram, and record the decisions of 2b.3 and 2b.6 in the ADRs.
 
-## Phase 2c: Exact conversions (chunk F, proposed in ADR 0006)
+## Phase 2c: Exact conversions (chunk F, ADR 0006)
 
 Owner direction (2026-10-01): a drawn contour is the truth and is never snapped to the voxel grid; conversions as exact and as fast as possible, real time; ROI algebra later.
 
@@ -161,6 +161,7 @@ Owner direction (2026-10-01): a drawn contour is the truth and is never snapped 
 Starts after Phase 2b (decision 2026-09-30). Exit: a deep-learning multi-organ segmentation can be imported, corrected, and exported without merging structures.
 
 - [x] **3.1 Multi-label ROIs (M).** A labelmap now imports as one voxel ROI per non-zero label (`create_voxel_rois_from_label`, `app/roi/label_import.rs`): each ROI keeps its label id as the voxel value so the overlay colormap still colours it, gets that colour as its ROI colour, and is named `<file> [label N]` (the plain file name for a single label). The first eight start visible; the first label becomes active. A map with no labels imports as one empty ROI. A memory budget (`MAX_IMPORT_LABEL_VOXELS`, 256M mask voxels) fails an oversized split with a message instead of exhausting memory; cropping masks to their bounds is the real fix (4.5). On the QA liver sample this separates liver (113,169 voxels) from tumor (546). The QA snapshot now lists ROIs in creation order and the strict QA spec asserts the split.
+- [ ] **3.9 ROI algebra on the field (L, later; ADR 0006).** Union, intersection, subtraction, margins as operations on signed distance fields; fields for voxel and mesh ROIs; partial-volume weights derived on demand.
 - [ ] **3.8 Explicit contour interpolation (M, after 2c.4; owner direction 2026-10-01).** Interpolation between drawn slices is a tool the user invokes, not something the conversions do silently. `ContourSlice` gets an origin (`Drawn` or `Interpolated`); interpolated slices are rendered differently (dashed or tinted), listed as interpolated, can be discarded, accepted, or edited (editing makes them drawn), and the tool is one undo step. It reuses the signed-distance blend of the hub (ADR 0006). Until then a gap in a contour stays a gap, with a half-layer hat on each side.
 - [ ] **3.6 Notes, measurements, points of interest, and in-view comments as scene entities (L; after 2b.9).** Today annotations are one `Vec` in a singleton with a world position, label, note, and comment list, and drawn markers go through a shader array capped at 64 primitives (`MAX_OVERLAY_PRIMITIVES`), which cannot hold hundreds. Model each item as an entity with shared components (world or view anchor, text, colour, visibility, author and time). Kinds: note, distance or angle measurement, point of interest, comment anchored to a view position. Draw them in batches (or through the egui painter) with no fixed cap; list, search, and jump to them in a panel.
 - [ ] **3.7 Session save and load (M to L; after 3.6).** Persist a working case (ROIs with their bodies, annotations, view state) in a versioned format with stable ids, and reload it exactly. Needed before the tool is more than a demo; the entity ids from ADR 0005 are the keys.

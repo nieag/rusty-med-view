@@ -9,6 +9,6 @@ Follow [AGENTS.md](AGENTS.md) for repository instructions.
 - Spatial model (grids, planes, views): [docs/spatial-model.md](docs/spatial-model.md)
 - Code map: [docs/code-map.md](docs/code-map.md)
 - Rendering boundary: [docs/rendering-architecture.md](docs/rendering-architecture.md)
-- Architecture decisions: [docs/adr/](docs/adr/) (0005 scene entity model is accepted; 0006 exact conversions and the soft voxel hub is proposed)
+- Architecture decisions: [docs/adr/](docs/adr/) (0005 scene entity model is accepted; 0006 exact conversions, the distance field as hub, is accepted)
 - Accepted ROI-core record: [docs/roi-core-restructure-plan.md](docs/roi-core-restructure-plan.md)
 - Historical plans and handoffs: [docs/archive/](docs/archive/)
