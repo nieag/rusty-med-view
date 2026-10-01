@@ -418,3 +418,78 @@ test("qa-7 a 150-label case imports within the memory ceiling and stays responsi
   }
   expect((await frames()) - before).toBeGreaterThanOrEqual(5);
 });
+
+test("qa-8 deform a mesh, then add an axial loop: every derived form of the ROI comes back", async ({ page }) => {
+  // Drives the real UI by pixel position (window 1600x1000): Nav, Deform Mesh and Add Loop are in
+  // the toolbar; the deform drag is on the 3D view and the loop is drawn on the axial view.
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.goto(`${BASE_URL}/?qa=1&sample=liver_0&preset=image_label_mpr_basic`, {
+    waitUntil: "domcontentloaded",
+  });
+  await page.waitForFunction(() => window.__viewerQa?.state()?.qa?.ready === true, null, {
+    timeout: 60000,
+  });
+  const settled = () =>
+    page.waitForFunction(
+      () => {
+        const rois = window.__viewerQa.state().rois;
+        return rois.every((roi) => !roi.running_job && roi.pending_jobs.length === 0);
+      },
+      null,
+      { timeout: 30000 },
+    );
+  await settled();
+  await page.waitForTimeout(1500);
+
+  await page.mouse.click(650, 12); // Nav tool
+  await page.mouse.click(350, 300); // put the cursor on the liver
+  await page.mouse.click(875, 12); // Deform Mesh
+  await page.waitForTimeout(500);
+  await page.mouse.move(1235, 712);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) {
+    await page.mouse.move(1235 + i * 2, 712 + i * 2);
+    await page.waitForTimeout(60);
+  }
+  await page.mouse.up();
+  await settled();
+
+  await page.mouse.click(786, 12); // Add Loop
+  await page.waitForTimeout(500);
+  await page.mouse.click(300, 430); // the first click converts the ROI to contours
+  await page.waitForTimeout(1500);
+  for (const [x, y] of [
+    [540, 410],
+    [600, 410],
+    [600, 450],
+    [540, 450],
+    [541, 411],
+  ]) {
+    await page.mouse.click(x, y);
+    await page.waitForTimeout(300);
+  }
+
+  // The edited ROI converges: no job is stuck, and all of its derived forms are current.
+  await page.waitForFunction(
+    () => {
+      const roi = window.__viewerQa.state().rois[0];
+      return (
+        roi.authority === "Contour" &&
+        !roi.running_job &&
+        roi.pending_jobs.length === 0 &&
+        roi.mesh_cache_current &&
+        roi.voxel_cache_current
+      );
+    },
+    null,
+    { timeout: 30000 },
+  );
+  const { rois, render } = await page.evaluate(() => ({
+    rois: window.__viewerQa.state().rois,
+    render: window.__viewerQa.state().render,
+  }));
+  expect(rois[0].failed_job_count).toBe(0);
+  expect(rois[0].non_empty_voxel_bounds).toBeTruthy();
+  expect(render.mesh_batch_count).toBeGreaterThan(rois.length);
+  expect(render.last_error).toBeNull();
+});

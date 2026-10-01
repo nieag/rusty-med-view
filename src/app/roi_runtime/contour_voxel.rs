@@ -186,6 +186,15 @@ pub(super) fn process_contour_voxel_rebuild_for_entity(
     before_commit: &mut impl FnMut(&mut World, hecs::Entity),
     upload_context: Option<(&wgpu::Device, &wgpu::Queue)>,
 ) -> bool {
+    process_contour_voxel_rebuild_for_entity_inner(world, roi_entity, before_commit, upload_context)
+}
+
+fn process_contour_voxel_rebuild_for_entity_inner(
+    world: &mut World,
+    roi_entity: hecs::Entity,
+    before_commit: &mut impl FnMut(&mut World, hecs::Entity),
+    upload_context: Option<(&wgpu::Device, &wgpu::Queue)>,
+) -> bool {
     let authoritative_generation = {
         let Ok(roi) = world.get::<&Roi>(roi_entity) else {
             return false;

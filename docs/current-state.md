@@ -52,7 +52,7 @@ These drive the design.
 - [x] QA snapshot and sample bootstrap moved out of `app/mod.rs` into `app/qa/`.
 - [x] Phase 2 (automatic switching), the ROI lifecycle tests, and the 3D performance work (mesh on the GPU, cached 3D view, mesh deform that stops at contact); see the commit log.
 - [x] R1 (found by the lifecycle tests, 4cdf8ff): a slice-scoped contour commit that removed the slice left stale voxels; the rebuild rule now lives in `authority.rs`.
-- [x] Baseline (after chunk F, 2026-10-01): about 400 unit tests, the release guards, and the 7-test QA spec pass; clippy, wasm, and rustfmt clean.
+- [x] Baseline (after chunk F, 2026-10-01): about 400 unit tests, the release guards, and the 8-test QA spec pass; clippy, wasm, and rustfmt clean.
 
 ## Phase 0: Correctness and crashes (do first, all small)
 

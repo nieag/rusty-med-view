@@ -3542,6 +3542,20 @@ fn test_with_every_view_open_a_loop_added_to_a_cut_mesh_keeps_mesh_and_other_vie
     replace_contour_data_with_history(&mut world, entity, contour).unwrap();
     settle_with_focus(&mut world, &focus);
 
+    {
+        let views = crate::render::roi_views::RoiRenderViews::for_world(
+            &world,
+            crate::render::roi_views::RenderRepresentationRequest::default(),
+        );
+        assert!(
+            views
+                .mesh_overlays
+                .iter()
+                .any(|overlay| overlay.entity == entity),
+            "the mesh is drawn: skips {:?}",
+            views.mesh_skips
+        );
+    }
     let roi = world.get::<&Roi>(entity).unwrap();
     assert!(roi.is_cache_current(RoiCacheKind::Mesh), "mesh is current");
     assert!(
@@ -3563,6 +3577,30 @@ fn test_with_every_view_open_a_loop_added_to_a_cut_mesh_keeps_mesh_and_other_vie
             view.key.family
         );
     }
+}
+
+#[test]
+fn test_a_queued_mesh_job_behind_a_voxel_job_does_not_start_the_voxel_job() {
+    let mut world = World::new();
+    spawn_main_volume(&mut world, [1.0; 3], [0.0; 3]);
+    let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, true);
+    {
+        let mut roi = world.get::<&mut Roi>(entity).unwrap();
+        roi.enqueue_rebuild(RoiJobKind::RebuildMeshCache);
+        roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
+    }
+
+    // The mesh stage runs while the voxel job is still first in line.
+    process_voxel_mesh_rebuild_jobs(&mut world);
+
+    let roi = world.get::<&Roi>(entity).unwrap();
+    assert_eq!(
+        roi.running_job_kind(),
+        None,
+        "no job is left running unattended"
+    );
+    assert!(roi.has_queued_job(RoiJobKind::RebuildVoxelCache));
+    assert!(roi.has_queued_job(RoiJobKind::RebuildMeshCache));
 }
 
 #[test]

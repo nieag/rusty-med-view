@@ -56,7 +56,9 @@ pub(crate) fn process_voxel_mesh_rebuild_jobs(world: &mut World) {
     let entity = world.query::<&Roi>().iter().find_map(|(entity, roi)| {
         (!matches!(roi.body, RoiBody::Mesh(_))
             && roi.running_job_kind().is_none()
-            && roi.has_queued_job(RoiJobKind::RebuildMeshCache)
+            // The mesh job must be the next one in line: starting the queue would otherwise
+            // start a voxel job queued ahead of it, which nothing here would ever run.
+            && roi.job_state.queued_kind() == Some(RoiJobKind::RebuildMeshCache)
             && mesh_source_is_ready(roi))
         .then_some(entity)
     });
