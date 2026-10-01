@@ -311,3 +311,61 @@ fn test_full_and_slice_local_rasterizers_agree_for_every_plane_depth() {
         }
     }
 }
+
+#[test]
+fn test_a_repeated_point_in_a_loop_does_not_fill_the_whole_slice() {
+    let geometry = VoxelGeometry::new([5, 5, 3], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
+    let plane =
+        orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry).unwrap();
+    // A square around one voxel centre, with its second corner entered twice (a double click).
+    let corners = [
+        [-0.4, -0.4],
+        [0.4, -0.4],
+        [0.4, -0.4],
+        [0.4, 0.4],
+        [-0.4, 0.4],
+    ];
+    let contour = ContourData {
+        active_plane_family: OrthogonalFamily::Axial,
+        slices: vec![ContourSlice {
+            plane,
+            loops: vec![ContourLoop {
+                points: corners.map(|local_mm| ContourPoint { local_mm }).to_vec(),
+                is_closed: true,
+            }],
+        }],
+    };
+
+    let filled = rasterize_contours_to_voxel_data(&contour, geometry).unwrap();
+
+    assert_eq!(filled.raw_data.iter().filter(|v| **v != 0).count(), 1);
+}
+
+#[test]
+fn test_a_very_short_edge_does_not_claim_distant_points() {
+    let geometry = VoxelGeometry::new([5, 5, 3], [1.0; 3], [0.0; 3], [0.0, 0.0, 0.0, 1.0]).unwrap();
+    let plane =
+        orthogonal_plane_from_volume_uv(PlaneFamily::Axial, [0.5, 0.5, 0.5], geometry).unwrap();
+    // A square around one voxel centre with a corner entered twice, a hair apart.
+    let corners = [
+        [-0.4, -0.4],
+        [0.4, -0.4],
+        [0.4000086, -0.3999962],
+        [0.4, 0.4],
+        [-0.4, 0.4],
+    ];
+    let contour = ContourData {
+        active_plane_family: OrthogonalFamily::Axial,
+        slices: vec![ContourSlice {
+            plane,
+            loops: vec![ContourLoop {
+                points: corners.map(|local_mm| ContourPoint { local_mm }).to_vec(),
+                is_closed: true,
+            }],
+        }],
+    };
+
+    let filled = rasterize_contours_to_voxel_data(&contour, geometry).unwrap();
+
+    assert_eq!(filled.raw_data.iter().filter(|v| **v != 0).count(), 1);
+}

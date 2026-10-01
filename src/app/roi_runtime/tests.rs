@@ -2967,7 +2967,7 @@ fn test_ensure_editable_refuses_locked_rois() {
 }
 
 #[test]
-fn test_ensure_editable_converts_a_mesh_roi_to_contours_with_a_loss_report_and_undo() {
+fn test_ensure_editable_cuts_a_mesh_roi_into_contours_at_once_and_undo_restores_it() {
     let mut world = World::new();
     let entity = spawn_sparse_voxel_roi(&mut world);
     let mesh = closed_tetra_mesh_data();
@@ -2983,17 +2983,30 @@ fn test_ensure_editable_converts_a_mesh_roi_to_contours_with_a_loss_report_and_u
         entity,
         EditTarget::Contour(OrthogonalFamily::Axial),
     );
-    assert_eq!(first, Ok(Readiness::Pending));
-    let mut report = None;
-    for _ in 0..40 {
-        advance_roi_work(&mut world, None, &ViewFocus::default());
-        if world.get::<&Roi>(entity).unwrap().contour_data().is_some() {
-            report = Some(());
-            break;
-        }
-    }
 
-    assert!(report.is_some(), "the switch completes once voxels exist");
+    // No voxels are needed: the surface is cut directly, so the switch is immediate.
+    assert!(matches!(first, Ok(Readiness::Switched(report)) if report.lossless));
+    {
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert!(roi.contour_data().is_some_and(|data| data.has_loops()));
+        assert!(
+            roi.is_cache_current(RoiCacheKind::Mesh),
+            "the 3D surface is unchanged"
+        );
+        assert!(
+            !roi.is_cache_current(RoiCacheKind::Voxel),
+            "the voxels are rebuilt from the new contours, and not drawn until then"
+        );
+    }
+    settle(&mut world);
+    {
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert!(roi.is_cache_current(RoiCacheKind::Voxel));
+        assert!(
+            roi.is_cache_current(RoiCacheKind::Mesh),
+            "the kept surface is not rebuilt from the voxels"
+        );
+    }
     undo_roi_edit(&mut world, &mut editor).unwrap();
     assert_eq!(world.get::<&Roi>(entity).unwrap().mesh_data(), Some(&mesh));
 }

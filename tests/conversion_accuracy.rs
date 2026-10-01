@@ -8,7 +8,7 @@
 //!
 //! Run with `cargo test --release --test conversion_accuracy -- --nocapture`.
 use rusty_med_view::convert::{
-    extract_contours_from_voxel_data, extract_mesh_from_voxel_data,
+    contours_from_mesh, extract_contours_from_voxel_data, extract_mesh_from_voxel_data,
     orthogonal_plane_from_volume_uv, plane_local_mm_to_world_mm, rasterize_contours_to_voxel_data,
     slice_center_uv, voxel_index_to_world_mm, IncrementalMeshVoxelization, PlaneFamily,
 };
@@ -268,6 +268,11 @@ fn test_conversion_chains_against_analytic_shapes() {
         let back = extract_contours_from_voxel_data(&voxelized, OrthogonalFamily::Axial).unwrap();
         let chain2 = contour_measure(&case.shape, &back, mask_volume(&voxelized));
         report(case.name, "... -> voxels -> contours", &chain2);
+
+        // Chain 3: the same mesh cut with the layer planes (what the switch does now).
+        let cut = contours_from_mesh(&mesh, case.geometry, OrthogonalFamily::Axial).unwrap();
+        let chain3 = contour_measure(&case.shape, &cut, mesh_volume(&mesh));
+        report(case.name, "mesh -> contours (cut)", &chain3);
 
         // Order-of-magnitude guards on the current chains (a voxel is at least 1 mm here).
         assert!(

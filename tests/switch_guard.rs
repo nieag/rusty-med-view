@@ -8,7 +8,7 @@
 //! They take about a second in release and much longer in debug, so debug builds ignore them.
 //! Run with `cargo test --release --test switch_guard` (CI does).
 use rusty_med_view::convert::{
-    extract_contours_from_voxel_data, extract_mesh_from_voxel_data,
+    contours_from_mesh, extract_contours_from_voxel_data, extract_mesh_from_voxel_data,
     rasterize_contours_to_voxel_data, IncrementalMeshVoxelization,
 };
 use rusty_med_view::model::{ContourData, OrthogonalFamily, VoxelData, VoxelGeometry};
@@ -54,6 +54,7 @@ const DEFORM_BASE_BUDGET_MS: f64 = 1_000.0;
 const DEFORM_UPDATE_BUDGET_MS: f64 = 1_000.0;
 const DIRTY_MESH_BUDGET_MS: f64 = 150.0;
 const MESH_VOXELIZE_BUDGET_MS: f64 = 2_000.0;
+const MESH_CUT_BUDGET_MS: f64 = 100.0;
 
 fn liver_label() -> VoxelData {
     let bytes =
@@ -328,5 +329,32 @@ fn test_mesh_to_voxels_is_fast_and_exact_on_the_liver() {
     assert!(
         best_ms < MESH_VOXELIZE_BUDGET_MS,
         "mesh voxelization took {best_ms:.0} ms (budget {MESH_VOXELIZE_BUDGET_MS} ms)"
+    );
+}
+
+/// Mesh to contours by cutting the mesh with the layer planes: no voxels, exact. The cut contours
+/// of the liver surface, filled back into voxels, must give the liver mask again, and the cut must
+/// take a few tens of milliseconds at most (about 15 ms idle).
+#[test]
+#[cfg_attr(debug_assertions, ignore = "slow in debug builds; run with --release")]
+fn test_cutting_the_liver_mesh_into_contours_is_fast_and_exact() {
+    let _serial = serial();
+    let source = liver_label();
+    let mesh = extract_mesh_from_voxel_data(&source).expect("mesh");
+    let (best_ms, cut) = best_of(TIMING_RUNS, || {
+        contours_from_mesh(&mesh, source.geometry, OrthogonalFamily::Axial).expect("cut")
+    });
+    println!(
+        "liver mesh to contours by cutting: {best_ms:.1} ms ({} slices)",
+        cut.slices.len()
+    );
+    let filled = rasterize_contours_to_voxel_data(&cut, source.geometry).expect("raster");
+    assert_eq!(
+        filled.raw_data, source.raw_data,
+        "cut and fill must reproduce the mask"
+    );
+    assert!(
+        best_ms < MESH_CUT_BUDGET_MS,
+        "cutting took {best_ms:.0} ms (budget {MESH_CUT_BUDGET_MS} ms)"
     );
 }

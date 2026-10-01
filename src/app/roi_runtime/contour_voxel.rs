@@ -521,14 +521,18 @@ pub(super) fn process_contour_voxel_rebuild_for_entity(
         roi.finish_job(RoiJobKind::RebuildVoxelCache);
         return false;
     }
-    roi.mark_cache_dirty(RoiCacheKind::Mesh);
-    roi.enqueue_job(RoiJobRequest {
-        kind: RoiJobKind::RebuildMeshCache,
-        source_generation: authoritative_generation,
-        preview_revision: None,
-        priority: RoiJobPriority::VisibleCommitted,
-        dirty_region: committed_mesh_dirty_region,
-    });
+    // A mesh that is already current for this revision (the surface a switch to contours kept)
+    // is not rebuilt from the voxels just made from the contours.
+    if !roi.is_cache_current(RoiCacheKind::Mesh) {
+        roi.mark_cache_dirty(RoiCacheKind::Mesh);
+        roi.enqueue_job(RoiJobRequest {
+            kind: RoiJobKind::RebuildMeshCache,
+            source_generation: authoritative_generation,
+            preview_revision: None,
+            priority: RoiJobPriority::VisibleCommitted,
+            dirty_region: committed_mesh_dirty_region,
+        });
+    }
     roi.job_metrics.completed_count = roi.job_metrics.completed_count.saturating_add(1);
     roi.job_metrics.last_completed_kind = Some(RoiJobKind::RebuildVoxelCache);
     roi.job_metrics.last_duration_ms = started_at.elapsed().as_secs_f32() * 1000.0;

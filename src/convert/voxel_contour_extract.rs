@@ -205,20 +205,11 @@ pub fn extract_contours_in_grid(
     let offset = geometry
         .offset_in(reference)
         .ok_or(VoxelContourExtractionError::UnsupportedPlaneGeometry)?;
-    let reference_depth_len = reference.dimensions()[depth_axis];
     let mut slices = Vec::new();
 
     for depth_index in 0..depth_len {
-        let plane = orthogonal_plane_from_volume_uv(
-            family.into(),
-            family_slice_cursor_uv(
-                family,
-                depth_index + offset[depth_axis],
-                reference_depth_len,
-            ),
-            reference,
-        )
-        .ok_or(VoxelContourExtractionError::UnsupportedPlaneGeometry)?;
+        let plane = reference_layer_plane(family, depth_index + offset[depth_axis], reference)
+            .ok_or(VoxelContourExtractionError::UnsupportedPlaneGeometry)?;
 
         if let Some(slice) = extract_slice_at_depth(voxel_data, family, depth_index, plane) {
             slices.push(slice);
@@ -290,6 +281,22 @@ fn family_axes(family: OrthogonalFamily) -> (usize, usize, usize) {
         OrthogonalFamily::Coronal => (1, 0, 2),
         OrthogonalFamily::Sagittal => (0, 1, 2),
     }
+}
+
+/// The plane of layer `layer` of `family` on the reference grid: through the layer's centre, with
+/// the grid's centre in the other two directions. Extraction and cutting use the same planes, so
+/// a slice has one plane however it was made.
+pub(crate) fn reference_layer_plane(
+    family: OrthogonalFamily,
+    layer: u32,
+    reference: crate::model::VoxelGeometry,
+) -> Option<PlaneDefinition> {
+    let (depth_axis, _, _) = family_axes(family);
+    orthogonal_plane_from_volume_uv(
+        family.into(),
+        family_slice_cursor_uv(family, layer, reference.dimensions()[depth_axis]),
+        reference,
+    )
 }
 
 fn family_slice_cursor_uv(family: OrthogonalFamily, depth_index: u32, depth_len: u32) -> [f32; 3] {
