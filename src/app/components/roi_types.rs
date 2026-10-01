@@ -194,6 +194,13 @@ pub struct MeshCache {
     pub chunks: Option<ChunkedMeshData>,
 }
 
+/// A component of a contour ROI: the field its current mesh chunks were built from. The next mesh
+/// rebuild diffs the new field against it, whatever happened to the field state in between.
+pub struct ContourMeshBase {
+    pub geometry: crate::model::GeometryIdentity,
+    pub values: std::sync::Arc<Vec<f32>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoiCacheKind {
     Voxel,

@@ -311,7 +311,7 @@ fn test_roi_stats_of_a_contour_roi_count_its_voxels_and_use_the_contour_volume()
     let replacement = square_contour_data_for_main_volume(&world, 1.4);
     replace_contour_data(&mut world, entity, replacement).unwrap();
     request_contour_voxel_form(&mut world, entity).unwrap();
-    process_contour_voxel_rebuild_jobs(&mut world);
+    settle(&mut world);
 
     let expected_occupied = {
         let roi = world.get::<&Roi>(entity).unwrap();
@@ -1397,7 +1397,7 @@ fn test_contour_commit_converges_voxel_and_mesh_through_work_coordinator() {
     replace_contour_data(&mut world, extracted, replacement.clone())
         .expect("replace should succeed");
     request_contour_voxel_form(&mut world, extracted).unwrap();
-    for _ in 0..32 {
+    for _ in 0..100 {
         if !advance_roi_work(&mut world, None, &ViewFocus::default()).pending {
             break;
         }
@@ -1858,7 +1858,7 @@ fn test_process_contour_voxel_rebuild_jobs_builds_current_voxel_cache_for_contou
         .job_metrics
         .last_cpu_cache_install_ms = 42.0;
 
-    process_contour_voxel_rebuild_jobs(&mut world);
+    settle(&mut world);
 
     let roi = world.get::<&Roi>(entity).unwrap();
     assert_eq!(roi.contour_data(), Some(&replacement));
@@ -1893,7 +1893,7 @@ fn test_process_contour_voxel_rebuild_jobs_uses_roi_reference_grid_without_main_
         roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
     }
 
-    process_contour_voxel_rebuild_jobs(&mut world);
+    settle(&mut world);
 
     let roi = world.get::<&Roi>(entity).unwrap();
     assert_eq!(roi.contour_data(), Some(&contour_before));
@@ -1943,7 +1943,7 @@ fn test_process_contour_voxel_rebuild_jobs_clears_running_state_on_success() {
     replace_contour_data(&mut world, entity, replacement).unwrap();
     request_contour_voxel_form(&mut world, entity).unwrap();
 
-    process_contour_voxel_rebuild_jobs(&mut world);
+    settle(&mut world);
 
     let roi = world.get::<&Roi>(entity).unwrap();
     assert_eq!(roi.running_job_kind(), None);
@@ -2441,7 +2441,7 @@ fn test_the_voxel_form_built_after_several_commits_holds_every_slice() {
     let square_slice = |z: f32| ContourSlice {
         plane: plane_at(z),
         loops: vec![ContourLoop {
-            points: [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]
+            points: [[-0.5, -0.5], [2.5, -0.5], [2.5, 2.5], [-0.5, 2.5]]
                 .into_iter()
                 .map(|local_mm| ContourPoint { local_mm })
                 .collect(),
@@ -2472,7 +2472,7 @@ fn test_the_voxel_form_built_after_several_commits_holds_every_slice() {
     };
     replace_contour_data_with_history(&mut world, entity, contour.clone()).unwrap();
     request_contour_voxel_form(&mut world, entity).unwrap();
-    process_contour_voxel_rebuild_jobs(&mut world);
+    settle(&mut world);
     assert_eq!(occupied_per_layer(&world), vec![9, 0, 0, 0]);
 
     // Two more commits land before the voxel form is asked for again.
@@ -2481,7 +2481,7 @@ fn test_the_voxel_form_built_after_several_commits_holds_every_slice() {
     contour.slices.push(square_slice(2.0));
     replace_contour_data_with_history(&mut world, entity, contour.clone()).unwrap();
     request_contour_voxel_form(&mut world, entity).unwrap();
-    process_contour_voxel_rebuild_jobs(&mut world);
+    settle(&mut world);
 
     assert_eq!(
         occupied_per_layer(&world),
@@ -3334,7 +3334,13 @@ fn settled_voxels(world: &World, entity: hecs::Entity) -> Vec<u8> {
                 roi.is_cache_current(RoiCacheKind::Voxel),
                 "voxel cache is not current after settling"
             );
-            roi.voxel_cache().unwrap().data.raw_data.clone()
+            // The voxels are a box of the reference grid; compare on the whole grid.
+            roi.voxel_cache()
+                .unwrap()
+                .data
+                .embedded_in(roi.reference_geometry())
+                .expect("the voxels are a box of the reference grid")
+                .raw_data
         }
     }
 }
@@ -3580,7 +3586,7 @@ fn test_with_every_view_open_a_loop_added_to_a_cut_mesh_keeps_mesh_and_other_vie
 }
 
 #[test]
-fn test_a_queued_mesh_job_behind_a_voxel_job_does_not_start_the_voxel_job() {
+fn test_a_mesh_job_runs_ahead_of_a_queued_voxel_job_which_waits_for_its_field() {
     let mut world = World::new();
     spawn_main_volume(&mut world, [1.0; 3], [0.0; 3]);
     let entity = spawn_test_contour_roi(&mut world, OrthogonalFamily::Axial, true);
@@ -3590,17 +3596,21 @@ fn test_a_queued_mesh_job_behind_a_voxel_job_does_not_start_the_voxel_job() {
         roi.enqueue_rebuild(RoiJobKind::RebuildVoxelCache);
     }
 
-    // The mesh stage runs while the voxel job is still first in line.
+    // The voxel job is first in line but has no field yet, so it does not start...
+    process_contour_voxel_rebuild_jobs(&mut world);
+    assert_eq!(world.get::<&Roi>(entity).unwrap().running_job_kind(), None);
+    // ... and the mesh stage starts its own job, never the voxel job queued ahead of it.
     process_voxel_mesh_rebuild_jobs(&mut world);
-
+    {
+        let roi = world.get::<&Roi>(entity).unwrap();
+        assert_ne!(roi.running_job_kind(), Some(RoiJobKind::RebuildVoxelCache));
+        assert!(roi.has_queued_job(RoiJobKind::RebuildVoxelCache));
+    }
+    // Once the field is built the voxel job runs and reads its voxels off it.
+    settle(&mut world);
     let roi = world.get::<&Roi>(entity).unwrap();
-    assert_eq!(
-        roi.running_job_kind(),
-        None,
-        "no job is left running unattended"
-    );
-    assert!(roi.has_queued_job(RoiJobKind::RebuildVoxelCache));
-    assert!(roi.has_queued_job(RoiJobKind::RebuildMeshCache));
+    assert!(roi.is_cache_current(RoiCacheKind::Voxel));
+    assert!(roi.is_cache_current(RoiCacheKind::Mesh));
 }
 
 #[test]

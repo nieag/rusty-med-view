@@ -272,6 +272,12 @@ fn request_source(world: &mut World, roi_entity: hecs::Entity) -> Result<(), Swi
     Ok(())
 }
 
+/// Drops the field of the old contours and the record of what the mesh chunks came from.
+fn forget_contour_field(world: &mut World, roi_entity: hecs::Entity) {
+    let _ = world.remove_one::<crate::convert::ContourFieldState>(roi_entity);
+    let _ = world.remove_one::<crate::app::components::ContourMeshBase>(roi_entity);
+}
+
 /// The body as an undo snapshot, or `None` for an ROI that no longer exists.
 fn snapshot_of_body(world: &World, roi_entity: hecs::Entity) -> Option<RoiEditSnapshot> {
     let roi = world.get::<&Roi>(roi_entity).ok()?;
@@ -356,7 +362,7 @@ pub(crate) fn convert_to_contour(
         });
         drop(roi);
         // The field of the old contours is of no use to the new ones; the idle warm-up builds one.
-        let _ = world.remove_one::<crate::convert::ContourFieldState>(roi_entity);
+        forget_contour_field(world, roi_entity);
         return Ok(());
     }
 
@@ -392,6 +398,8 @@ pub(crate) fn convert_to_contour(
     if !mesh_cache_is_current {
         roi.enqueue_rebuild(RoiJobKind::RebuildMeshCache);
     }
+    drop(roi);
+    forget_contour_field(world, roi_entity);
     Ok(())
 }
 

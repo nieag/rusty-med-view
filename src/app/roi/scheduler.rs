@@ -69,11 +69,22 @@ impl Roi {
     }
 
     pub fn start_queued_job(&mut self) -> Option<RoiJobKind> {
+        let first = self.job_state.pending.first()?.kind;
+        self.start_queued_job_of_kind(first)
+    }
+
+    /// Starts the queued job of `kind`, whatever its place in the queue. A stage that runs one
+    /// kind of job must use this, so that it never starts (and then abandons) another kind.
+    pub fn start_queued_job_of_kind(&mut self, kind: RoiJobKind) -> Option<RoiJobKind> {
         if self.job_state.running_request.is_some() {
             return None;
         }
-        let request = self.job_state.pending.first().copied()?;
-        self.job_state.pending.remove(0);
+        let index = self
+            .job_state
+            .pending
+            .iter()
+            .position(|request| request.kind == kind)?;
+        let request = self.job_state.pending.remove(index);
         if let Some(queued_at) = self.job_state.oldest_pending_since.take() {
             self.job_metrics.last_queue_delay_ms = queued_at.elapsed().as_secs_f32() * 1000.0;
         }
