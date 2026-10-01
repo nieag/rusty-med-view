@@ -151,6 +151,9 @@ pub fn advance_roi_work(
     // A mesh that just finished frees the next visible ROI to be demanded; doing it here keeps
     // `pending` true so the frame loop continues instead of idling with a ROI still unbuilt.
     sync_mesh_caches_for_viewports(world, focus.active_roi);
+    // The contours of a contour ROI in the other plane families are cut from its mesh, so they
+    // follow the mesh in the frame it finishes (a later frame may never come once work is done).
+    sync_roi_contour_view_caches_for_viewports(world, focus);
     record_completed_work_cycles(world);
 
     let mut pending = false;

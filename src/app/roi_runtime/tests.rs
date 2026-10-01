@@ -3475,6 +3475,97 @@ fn a_loop_is_added_to_a_cut_mesh(same_layer: bool) {
 }
 
 #[test]
+fn test_with_every_view_open_a_loop_added_to_a_cut_mesh_keeps_mesh_and_other_views() {
+    let (geometry, original) = lifecycle_blob();
+    let mut world = World::new();
+    world.spawn((
+        VolumeData {
+            dimensions: [14, 14, 14],
+            geometry: Some(geometry),
+            intensities: vec![],
+            intensity_range: [0.0, 1.0],
+        },
+        MainVolumeTag,
+    ));
+    for mode in [
+        ViewMode::Axial,
+        ViewMode::Coronal,
+        ViewMode::Sagittal,
+        ViewMode::ThreeD,
+    ] {
+        world.spawn((
+            Viewport {
+                mode,
+                rect: [0.0, 0.0, 400.0, 300.0],
+                uniform_index: 0,
+            },
+            ViewportState::default(),
+        ));
+    }
+    let entity = crate::app::roi::spawn_roi_layer(
+        &mut world,
+        Roi::new_voxel_with_cache(RoiId(1), "Blob".to_string(), geometry, original, None),
+        0.5,
+    );
+    let focus = ViewFocus {
+        active_roi: Some(entity),
+        cursor_uv: [0.5; 3],
+    };
+    settle_with_focus(&mut world, &focus);
+    ensure_editable(&mut world, entity, EditTarget::Mesh).unwrap();
+    settle_with_focus(&mut world, &focus);
+    ensure_editable(
+        &mut world,
+        entity,
+        EditTarget::Contour(OrthogonalFamily::Axial),
+    )
+    .unwrap();
+    for _ in 0..3 {
+        advance_roi_work(&mut world, None, &focus);
+    }
+
+    let reference = world.get::<&Roi>(entity).unwrap().reference_geometry();
+    let mut contour = contour_of(&world, entity);
+    let plane = contour.slices[contour.slices.len() / 2].plane;
+    contour
+        .slices
+        .iter_mut()
+        .find(|slice| crate::convert::planes_are_same_slice(slice.plane, plane, reference))
+        .unwrap()
+        .loops
+        .push(ContourLoop {
+            points: [[10.0, 10.0], [12.0, 10.0], [12.0, 12.0], [10.0, 12.0]]
+                .map(|local_mm| ContourPoint { local_mm })
+                .to_vec(),
+            is_closed: true,
+        });
+    replace_contour_data_with_history(&mut world, entity, contour).unwrap();
+    settle_with_focus(&mut world, &focus);
+
+    let roi = world.get::<&Roi>(entity).unwrap();
+    assert!(roi.is_cache_current(RoiCacheKind::Mesh), "mesh is current");
+    assert!(
+        roi.mesh_cache()
+            .is_some_and(|cache| !cache.data.faces.is_empty()),
+        "and not empty"
+    );
+    assert!(
+        roi.is_cache_current(RoiCacheKind::Voxel),
+        "voxel fill is current"
+    );
+    let views = &roi.contour_cache().expect("derived views").views;
+    assert_eq!(views.len(), 2, "one view per other plane family");
+    for view in views {
+        assert!(
+            roi.contour_view_data_for_render(&view.key)
+                .is_some_and(|slices| slices.iter().any(|slice| !slice.loops.is_empty())),
+            "{:?} contours are drawn",
+            view.key.family
+        );
+    }
+}
+
+#[test]
 fn test_shape_survives_conversions_and_undo_across_every_representation() {
     let (geometry, original) = lifecycle_blob();
     let mut world = World::new();
