@@ -199,6 +199,14 @@ impl ContourFieldBuild {
             state.family == family && state.field.geometry.identity() == geometry.identity()
         });
 
+        // A previous state on a box inside this one (the box grew): its slices' distances are
+        // kept where they are valid, and only the new border is computed.
+        let embeddable = previous.filter(|state| {
+            state.family == family
+                && state.field.geometry.identity() != geometry.identity()
+                && state.field.geometry.offset_in(geometry).is_some()
+        });
+
         let mut work = Vec::new();
         for slice in &contour.slices {
             let loops: Vec<Vec<[f32; 2]>> = slice
@@ -235,9 +243,31 @@ impl ContourFieldBuild {
             };
             let us: Vec<f32> = (0..na).map(|i| local(i, 0)[0]).collect();
             let vs: Vec<f32> = (0..nb).map(|j| local(0, j)[1]).collect();
+            let grown = embeddable.and_then(|state| {
+                let cached = state
+                    .slices
+                    .iter()
+                    .find(|cached| cached.plane == slice.plane && cached.loops == loops)?;
+                let offset = state.field.geometry.offset_in(geometry)?;
+                let old = state.field.geometry.dimensions();
+                Some((cached, offset, old))
+            });
+            let rows = match grown {
+                Some((cached, offset, old)) => RowSweep::grown_from(
+                    &loops,
+                    us,
+                    vs,
+                    &cached.distance,
+                    old[a_axis] as usize,
+                    old[b_axis] as usize,
+                    offset[a_axis] as usize,
+                    offset[b_axis] as usize,
+                ),
+                None => RowSweep::new(&loops, us, vs),
+            };
             work.push(SliceWork::Computing(Box::new(SliceSweep {
                 plane: slice.plane,
-                rows: RowSweep::new(&loops, us, vs),
+                rows,
                 loops,
                 depth,
             })));
@@ -250,6 +280,16 @@ impl ContourFieldBuild {
             next_work: 0,
             assembly: None,
         }))
+    }
+
+    #[cfg(test)]
+    fn slices_grown_from_a_smaller_box(&self) -> usize {
+        self.work
+            .iter()
+            .filter(
+                |work| matches!(work, SliceWork::Computing(sweep) if sweep.rows.known.is_some()),
+            )
+            .count()
     }
 
     /// Works until done (`true`) or until `deadline` has passed (`false`); `None` never stops.
@@ -436,9 +476,37 @@ struct RowSweep {
     result: Vec<f32>,
     next_row: usize,
     hint: usize,
+    /// A rectangle of samples (`first column`, `first row`, `columns`, `rows`) whose values were
+    /// copied in and are not computed again.
+    known: Option<(usize, usize, usize, usize)>,
 }
 
 impl RowSweep {
+    /// A sweep over the lattice that keeps `old` (laid out as `old_columns` by `old_rows`, for the
+    /// same loops) at (`first_column`, `first_row`) and computes only the samples around it: the
+    /// distance of a sample depends on nothing but its position and the loops.
+    #[allow(clippy::too_many_arguments)]
+    fn grown_from(
+        loops: &[Vec<[f32; 2]>],
+        us: Vec<f32>,
+        vs: Vec<f32>,
+        old: &[f32],
+        old_columns: usize,
+        old_rows: usize,
+        first_column: usize,
+        first_row: usize,
+    ) -> Self {
+        let mut sweep = Self::new(loops, us, vs);
+        let columns = sweep.us.len();
+        for row in 0..old_rows {
+            let target = first_column + columns * (first_row + row);
+            sweep.result[target..target + old_columns]
+                .copy_from_slice(&old[row * old_columns..(row + 1) * old_columns]);
+        }
+        sweep.known = Some((first_column, first_row, old_columns, old_rows));
+        sweep
+    }
+
     fn new(loops: &[Vec<[f32; 2]>], us: Vec<f32>, vs: Vec<f32>) -> Self {
         let mut segments: Vec<([f32; 2], [f32; 2])> = Vec::new();
         for points in loops {
@@ -456,6 +524,7 @@ impl RowSweep {
             crossings: Vec::new(),
             next_row: 0,
             hint: 0,
+            known: None,
         }
     }
 
@@ -464,6 +533,20 @@ impl RowSweep {
         while self.next_row < self.vs.len() {
             let j = self.next_row;
             let v = self.vs[j];
+            // The columns of this row that were copied in and need no work.
+            let known_columns = self
+                .known
+                .and_then(|(first_column, first_row, columns, rows)| {
+                    (j >= first_row && j < first_row + rows)
+                        .then_some(first_column..first_column + columns)
+                });
+            if known_columns
+                .as_ref()
+                .is_some_and(|known| known.start == 0 && known.end == self.us.len())
+            {
+                self.next_row += 1;
+                continue;
+            }
             // Where the row crosses the loops (half-open, so a vertex on the row counts once).
             self.crossings.clear();
             for (a, b) in &self.segments {
@@ -474,6 +557,12 @@ impl RowSweep {
             }
             self.crossings.sort_by(f32::total_cmp);
             for (i, u) in self.us.iter().enumerate() {
+                if known_columns
+                    .as_ref()
+                    .is_some_and(|known| known.contains(&i))
+                {
+                    continue;
+                }
                 let to_the_right =
                     self.crossings.len() - self.crossings.partition_point(|x| x <= u);
                 let distance = self
@@ -723,6 +812,65 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_a_grown_box_keeps_the_distances_of_unchanged_slices_and_matches_a_fresh_build() {
+        let geometry = VoxelGeometry::new(
+            [60, 50, 30],
+            [1.0, 1.0, 1.5],
+            [0.0; 3],
+            [0.0, 0.0, 0.0, 1.0],
+        )
+        .unwrap();
+        let before = squares(geometry, &[(10.0, 4.0), (11.0, 6.0), (12.0, 5.0)]);
+        // A loop far from the others on the same stack of layers grows the box sideways and in depth.
+        let mut after = squares(
+            geometry,
+            &[(10.0, 4.0), (11.0, 6.0), (12.0, 5.0), (20.0, 3.0)],
+        );
+        after.slices[1].loops.push(ContourLoop {
+            points: [[18.0, 18.0], [24.0, 18.0], [24.0, 24.0], [18.0, 24.0]]
+                .map(|local_mm| ContourPoint { local_mm })
+                .to_vec(),
+            is_closed: true,
+        });
+        let previous = ContourFieldState::build(None, &before, geometry, None)
+            .unwrap()
+            .unwrap();
+        let keep = Some(previous.field.geometry);
+
+        let mut build = ContourFieldBuild::begin(Some(&previous), &after, geometry, keep)
+            .unwrap()
+            .unwrap();
+        // Slices 0 and 2 are unchanged (slice 1 has a new loop, slice 3 is new).
+        assert_eq!(build.slices_grown_from_a_smaller_box(), 2);
+        while !build.step(None) {}
+        let grown = build.finish();
+
+        let fresh = ContourFieldState::build(None, &after, geometry, keep)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            grown.field.geometry.identity(),
+            fresh.field.geometry.identity()
+        );
+        assert_ne!(
+            grown.field.geometry.identity(),
+            previous.field.geometry.identity(),
+            "the box grew"
+        );
+        let worst = grown
+            .field
+            .values
+            .iter()
+            .zip(fresh.field.values.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            worst < 1e-3,
+            "the grown field differs from a fresh one by {worst} mm"
+        );
     }
 
     #[test]

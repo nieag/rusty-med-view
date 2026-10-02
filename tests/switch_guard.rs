@@ -10,8 +10,9 @@
 use rusty_med_view::convert::{
     changed_mesh_chunks, contour_distance_field, contours_from_mesh,
     extract_contours_from_voxel_data, extract_mesh_from_voxel_data, mesh_from_contour_field,
-    rasterize_contours_to_voxel_data, smooth_mesh_field_from_signed_distance, ContourFieldState,
-    IncrementalChunkedMeshRebuild, IncrementalMeshVoxelization, DEFAULT_MESH_CHUNK_SIZE,
+    rasterize_contours_to_voxel_data, smooth_mesh_field_from_signed_distance, ContourFieldBuild,
+    ContourFieldState, IncrementalChunkedMeshRebuild, IncrementalMeshVoxelization,
+    DEFAULT_MESH_CHUNK_SIZE,
 };
 use rusty_med_view::model::{ContourData, OrthogonalFamily, VoxelData, VoxelGeometry};
 use rusty_med_view::nifti_loader::load_label_from_bytes;
@@ -461,5 +462,57 @@ fn test_editing_one_liver_contour_slice_updates_the_field_locally() {
     assert!(
         total < FIELD_EDIT_BUDGET_MS,
         "a slice edit took {total:.0} ms (budget {FIELD_EDIT_BUDGET_MS} ms)"
+    );
+}
+
+/// An edit that grows the box (a loop drawn well outside the shape): the per-slice distances of
+/// the unchanged slices are kept and only the new border is computed, so this is far cheaper than
+/// the first build.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "slow in debug builds; run with --release")]
+fn test_a_box_growing_edit_of_the_liver_field_does_not_rebuild_every_slice() {
+    let _serial = serial();
+    let source = liver_label();
+    let contours =
+        extract_contours_from_voxel_data(&source, OrthogonalFamily::Axial).expect("contours");
+    let before = ContourFieldState::build(None, &contours, source.geometry, None)
+        .expect("field")
+        .expect("non-empty");
+    let mut edited = contours.clone();
+    let middle = edited.slices.len() / 2;
+    let mut far = edited.slices[middle].loops[0].clone();
+    for point in &mut far.points {
+        point.local_mm[0] += 25.0;
+        point.local_mm[1] += 20.0;
+    }
+    edited.slices[middle].loops.push(far);
+    let keep = Some(before.field.geometry);
+    let (grow_ms, after) = best_of(TIMING_RUNS, || {
+        ContourFieldBuild::begin(Some(&before), &edited, source.geometry, keep)
+            .expect("field")
+            .map(|mut build| {
+                while !build.step(None) {}
+                build.finish()
+            })
+            .expect("non-empty")
+    });
+    let (full_ms, _) = best_of(TIMING_RUNS, || {
+        ContourFieldState::build(None, &edited, source.geometry, keep)
+            .expect("field")
+            .expect("non-empty")
+    });
+    println!(
+        "liver box-growing edit: {grow_ms:.0} ms with the old slices kept, {full_ms:.0} ms from scratch ({:?} -> {:?})",
+        before.field.geometry.dimensions(),
+        after.field.geometry.dimensions()
+    );
+    assert_ne!(
+        before.field.geometry.identity(),
+        after.field.geometry.identity(),
+        "the box grew"
+    );
+    assert!(
+        grow_ms < full_ms * 0.6,
+        "growing took {grow_ms:.0} ms against {full_ms:.0} ms from scratch"
     );
 }
